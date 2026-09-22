@@ -47,7 +47,7 @@ fn metadata() -> Value {
 fn record() -> Value {
     json!({
         "sequence":1,"id":"decode-bounds", "provider":{"name":"fixture","model_id":"model","context":"workspace"},
-        "provider_session_id":"provider", "invocation_count":1, "queue_from":0, "queue_history":[],
+        "provider_context":"provider", "invocation_count":1, "queue_from":0, "queue_history":[],
         "invocations":[{"index":0,"metadata":metadata(),"events_from":0,"events":[],"scheduling_from":0,"scheduling":[]}]
     })
 }
@@ -76,7 +76,7 @@ fn oversized_provider_field_is_rejected_before_reading_its_owned_payload() {
     for escaped in [false, true] {
         let unit = if escaped { "\\u0061" } else { "a" };
         let text = unit.repeat(2 * 1024 * 1024);
-        let bytes = format!("{{\"provider\":{{\"name\":\"{text}\",\"model_id\":\"model\",\"context\":\"workspace\"}},\"sequence\":1,\"id\":\"decode-bounds\",\"provider_session_id\":\"provider\",\"invocation_count\":0,\"queue_from\":0,\"queue_history\":[],\"invocations\":[]}}\n").into_bytes();
+        let bytes = format!("{{\"provider\":{{\"name\":\"{text}\",\"model_id\":\"model\",\"context\":\"workspace\"}},\"sequence\":1,\"id\":\"decode-bounds\",\"provider_context\":\"provider\",\"invocation_count\":0,\"queue_from\":0,\"queue_history\":[],\"invocations\":[]}}\n").into_bytes();
         let length = bytes.len();
         let (result, decoded) = load(bytes);
         assert!(matches!(result, Err(StorageError::Corrupt(_))));
@@ -161,7 +161,7 @@ fn escaped_provider_identity_counts_decoded_utf8_bytes() {
         ("\\ud83d\\ude00".repeat(64), true),
         ("\\ud83d\\ude00".repeat(65), false),
     ] {
-        let bytes = format!("{{\"sequence\":1,\"id\":\"decode-bounds\",\"provider\":{{\"name\":\"{encoded_name}\",\"model_id\":\"model\",\"context\":\"workspace\"}},\"provider_session_id\":\"provider\",\"invocation_count\":0,\"queue_from\":0,\"queue_history\":[],\"invocations\":[]}}\n").into_bytes();
+        let bytes = format!("{{\"sequence\":1,\"id\":\"decode-bounds\",\"provider\":{{\"name\":\"{encoded_name}\",\"model_id\":\"model\",\"context\":\"workspace\"}},\"provider_context\":\"provider\",\"invocation_count\":0,\"queue_from\":0,\"queue_history\":[],\"invocations\":[]}}\n").into_bytes();
         assert_eq!(load(bytes).0.is_ok(), accepted);
     }
 }

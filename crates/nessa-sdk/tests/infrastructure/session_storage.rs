@@ -63,7 +63,9 @@ fn snapshot(name: &str) -> SessionSnapshot {
         queue_history: Vec::new(),
         id: id(name),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        provider_session_id: ExecutionSessionId::new("native-session").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("native-session").unwrap(),
+        ),
         invocations: vec![InvocationRecord {
             target_event_offset: None,
             provider_report: None,
@@ -137,7 +139,7 @@ fn cancelled_request(
 fn assert_same(actual: &SessionSnapshot, expected: &SessionSnapshot) {
     assert_eq!(actual.id, expected.id);
     assert_eq!(actual.provider, expected.provider);
-    assert_eq!(actual.provider_session_id, expected.provider_session_id);
+    assert_eq!(actual.provider_context, expected.provider_context);
     assert_eq!(actual.invocations.len(), expected.invocations.len());
     for (actual, expected) in actual.invocations.iter().zip(&expected.invocations) {
         assert_eq!(actual.submission, expected.submission);
@@ -348,7 +350,7 @@ async fn snapshots_round_trip_tool_updates_reviews_and_every_cancellation_cause(
         };
         let request = cancelled_request(request, reason);
         let record = PermissionCancellation::from_record(
-            value.provider_session_id.clone(),
+            value.provider_context.recorded().unwrap().clone(),
             request,
             input.clone(),
             origin,

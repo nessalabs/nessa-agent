@@ -31,6 +31,9 @@ impl AgentProvider for TextProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("batch", "batch", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             Ok(OpenedProviderSession {
@@ -79,7 +82,7 @@ impl StreamingTest {
                 started_sender.send_replace(true);
             }
         });
-        let agent = Agent::new(
+        let agent = attached_agent(
             Arc::new(TextProvider {
                 backend: backend.clone(),
                 chunks: Mutex::new(Some(receiver)),

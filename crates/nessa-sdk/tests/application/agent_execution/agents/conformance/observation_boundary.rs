@@ -219,6 +219,9 @@ impl AgentProvider for FailedPreflight {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("preflight", "fixture", "local").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
@@ -253,7 +256,7 @@ async fn preflight_reader_failure_keeps_its_cause_without_dispatch() {
         ] {
             let storage = MemoryStorage::default();
             let backend = workflow_backend();
-            let agent = Agent::new(
+            let agent = attached_agent(
                 Arc::new(FailedPreflight {
                     backend: backend.clone(),
                     cause,

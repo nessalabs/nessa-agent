@@ -35,6 +35,7 @@ function view(ids: string[]): ConversationView {
       permissions: true,
       imageInput: false,
     },
+    lifecycle: { phase: "attached" },
   }
 }
 for (const outcome of [

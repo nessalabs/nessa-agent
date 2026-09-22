@@ -1,8 +1,15 @@
 //! Deliberately unchecked storage proves application validation protects custom adapters.
 use super::*;
 use nessa_sdk::application::agent_execution::{
-    agents::Agent,
+    agents::{Agent, AgentFuture, AttachmentRequest},
+    executions::{ExecutionAudit, ExecutionAuditRecord},
     providers::{AgentProvider, ProviderOpenError, ProviderOpenFuture},
+};
+use nessa_sdk::application::dto::{ModalitiesDto, ModelMetadataDto};
+use nessa_sdk::domain::{
+    common::value_objects::TokenLimits,
+    effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},
+    model_metadata::entities::ModelMetadata,
 };
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -41,11 +48,15 @@ impl SessionStorageLease for UncheckedLease {
 }
 struct OpeningProbe {
     identity: ProviderIdentity,
+    capabilities: EffectiveCapabilities,
     opens: AtomicUsize,
 }
 impl AgentProvider for OpeningProbe {
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
     }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         self.opens.fetch_add(1, Ordering::SeqCst);
@@ -56,6 +67,38 @@ impl AgentProvider for OpeningProbe {
         })
     }
 }
+struct AcceptingAudit;
+impl ExecutionAudit for AcceptingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn capabilities() -> EffectiveCapabilities {
+    let text = ModalitiesDto {
+        text: true,
+        image: false,
+        audio: false,
+    };
+    let model = ModelMetadata::try_from(ModelMetadataDto {
+        provider: "fixture".into(),
+        model_id: "model".into(),
+        display_name: "Fixture".into(),
+        input: text,
+        image_input: None,
+        output: text,
+        tool_use: true,
+        reasoning: false,
+        max_context_window_tokens: 1000,
+        max_output_tokens: 100,
+        knowledge_cutoff: "2026-01".into(),
+        documentation_url: "https://example.com".into(),
+    })
+    .unwrap();
+    let features = model.features();
+    let limits = TokenLimits::new(1000, 100).unwrap();
+    EffectiveCapabilities::new(&model, BindingRestrictions::new(features, limits), limits).unwrap()
+}
 
 pub(super) async fn assert_custom_retention_admission(
     value: SessionSnapshot,
@@ -64,6 +107,7 @@ pub(super) async fn assert_custom_retention_admission(
     let saves = Arc::new(AtomicUsize::new(0));
     let provider = Arc::new(OpeningProbe {
         identity: value.provider.clone(),
+        capabilities: capabilities(),
         opens: AtomicUsize::new(0),
     });
     let storage = Arc::new(UncheckedStorage {
@@ -74,13 +118,22 @@ pub(super) async fn assert_custom_retention_admission(
     let manager = SessionManager::open(Some(value.id.clone()), storage.clone())
         .await
         .unwrap();
-    let error = Agent::new(provider.clone(), manager).await.err().unwrap();
+    let prepared = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit)).await;
     if accepted {
+        let agent = prepared.expect("valid custom snapshot must prepare");
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(
+                ActionContext::new("test", "custom-storage", "attach").unwrap(),
+            ))
+            .unwrap();
         assert_eq!(
-            error.cause(),
-            &AgentError::Unsupported("opening probe".into())
+            agent.start_attachment(authorization).unwrap().wait().await,
+            Err(AgentError::Unsupported("opening probe".into()))
         );
     } else {
+        let error = prepared
+            .err()
+            .expect("invalid snapshot must fail preparation");
         assert!(
             matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_))),
             "{:?}",
@@ -127,6 +180,7 @@ impl SessionStorageLease for MovingLease {
 pub(super) async fn assert_moved_retention_admission(value: SessionSnapshot, accepted: bool) {
     let provider = Arc::new(OpeningProbe {
         identity: value.provider.clone(),
+        capabilities: capabilities(),
         opens: AtomicUsize::new(0),
     });
     let id = value.id.clone();
@@ -136,10 +190,22 @@ pub(super) async fn assert_moved_retention_admission(value: SessionSnapshot, acc
         saves: saves.clone(),
     });
     let manager = SessionManager::open(Some(id), storage).await.unwrap();
-    let error = Agent::new(provider.clone(), manager).await.err().unwrap();
+    let prepared = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit)).await;
     if accepted {
-        assert!(matches!(error.cause(), AgentError::Unsupported(_)));
+        let agent = prepared.expect("valid moved snapshot must prepare");
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(
+                ActionContext::new("test", "moving-storage", "attach").unwrap(),
+            ))
+            .unwrap();
+        assert!(matches!(
+            agent.start_attachment(authorization).unwrap().wait().await,
+            Err(AgentError::Unsupported(_))
+        ));
     } else {
+        let error = prepared
+            .err()
+            .expect("invalid snapshot must fail preparation");
         assert!(
             matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_))),
             "{:?}",
@@ -163,6 +229,7 @@ async fn provider_identity_mismatch_from_custom_storage_prevents_open_and_rewrit
         let saves = Arc::new(AtomicUsize::new(0));
         let provider = Arc::new(OpeningProbe {
             identity: ProviderIdentity::new(components[0], components[1], components[2]).unwrap(),
+            capabilities: capabilities(),
             opens: AtomicUsize::new(0),
         });
         let storage = Arc::new(UncheckedStorage {
@@ -173,7 +240,10 @@ async fn provider_identity_mismatch_from_custom_storage_prevents_open_and_rewrit
         let manager = SessionManager::open(Some(value.id.clone()), storage.clone())
             .await
             .unwrap();
-        let error = Agent::new(provider.clone(), manager).await.err().unwrap();
+        let error = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit))
+            .await
+            .err()
+            .unwrap();
         assert_eq!(
             error.cause(),
             &AgentError::Storage(StorageError::IdentityMismatch)

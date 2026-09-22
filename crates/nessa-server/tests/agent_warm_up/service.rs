@@ -3,7 +3,7 @@ use super::{AgentWarmUp, RuntimeFingerprint, WarmUpCause, WarmUpState};
 use crate::agent_warm_up::application::{
     ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
 };
-use crate::conversation_test_support::{Provider, ProviderFactory, TestClock};
+use crate::conversation_test_support::{AcceptingAudit, Provider, ProviderFactory, TestClock};
 use nessa_sdk::application::agent_execution::agents::{
     AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
 };
@@ -84,6 +84,7 @@ fn fixture() -> Fixture {
     Fixture {
         warm_up: AgentWarmUp::new(
             Arc::new(Provider(provider.clone())),
+            Arc::new(AcceptingAudit),
             Arc::new(InMemoryStorage::new()),
             records.clone(),
             audit.clone(),

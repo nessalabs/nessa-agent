@@ -1,658 +1,677 @@
-//! Constructor cancellation and cleanup retain the same exclusive storage lease.
-mod cleanup_panics;
-mod open_panics;
-mod save_panics;
+//! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
-use std::sync::atomic::AtomicBool;
-use tokio::{sync::Notify, time::advance};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::AtomicBool,
+    task::{Context, Poll},
+};
 
-struct CleanupProbe {
-    started: AtomicBool,
-    panic: Mutex<Option<cleanup_panics::Failure>>,
-    result: Mutex<CleanupReport>,
-    attempts: AtomicUsize,
+#[derive(Default)]
+struct AttachmentAuditProbe {
+    records: Mutex<Vec<AttachmentAuditRecord>>,
+    reject: AtomicBool,
+    reject_after: Mutex<Option<AttachmentAuditStage>>,
     entered: Notify,
-    gate: Mutex<Option<oneshot::Receiver<()>>>,
-    reasons: Mutex<Vec<SessionCloseRequest>>,
-    execution_result: Mutex<ProviderExecutionReply>,
+    completed: Notify,
+    gate_after: Mutex<Option<AttachmentAuditStage>>,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
 }
-impl CleanupProbe {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            started: AtomicBool::new(false),
-            panic: Mutex::new(None),
-            result: Mutex::new(CleanupReport::unconfirmed(AgentError::CleanupUncertain)),
-            attempts: AtomicUsize::new(0),
-            entered: Notify::new(),
-            gate: Mutex::new(None),
-            reasons: Mutex::new(Vec::new()),
-            execution_result: Mutex::new(ProviderExecutionReply::Rejected(
-                AgentError::Unsupported("initialization test".into()),
-            )),
+impl ExecutionAudit for AttachmentAuditProbe {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            let attachment_after = match &record {
+                ExecutionAuditRecord::Attachment(record) => Some(record.after()),
+                _ => None,
+            };
+            if let ExecutionAuditRecord::Attachment(record) = &record {
+                let gated = self
+                    .gate_after
+                    .lock()
+                    .unwrap()
+                    .map_or(true, |stage| stage == record.after());
+                self.records.lock().unwrap().push(record.clone());
+                if gated {
+                    self.entered.notify_one();
+                    if let Some(release) = self.release.lock().unwrap().take() {
+                        let _ = release.await;
+                    }
+                }
+            }
+            let reject = self.reject.load(Ordering::SeqCst)
+                && match attachment_after {
+                    Some(after) => self
+                        .reject_after
+                        .lock()
+                        .unwrap()
+                        .map_or(true, |stage| stage == after),
+                    _ => self.reject_after.lock().unwrap().is_none(),
+                };
+            let result = if reject {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            };
+            self.completed.notify_one();
+            result
         })
     }
-    async fn cleanup(&self, request: SessionCloseRequest) -> CleanupReport {
-        self.attempts.fetch_add(1, Ordering::SeqCst);
-        self.reasons.lock().unwrap().push(request);
-        let gate = self.gate.lock().unwrap().take();
-        self.entered.notify_one();
-        if let Some(gate) = gate {
-            gate.await.unwrap();
+}
+
+#[derive(Clone, Copy)]
+enum AuditPanic {
+    Construct,
+    Poll,
+    Drop,
+}
+struct PanickingAudit(AuditPanic);
+struct QueuePanickingAudit(AuditPanic);
+struct PanickingAuditFuture(AuditPanic);
+impl ExecutionAudit for PanickingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if matches!(self.0, AuditPanic::Construct) {
+            panic!("audit construction panic");
         }
-        self.result.lock().unwrap().clone()
+        Box::pin(PanickingAuditFuture(self.0))
     }
 }
-impl ProviderCleanup for CleanupProbe {
-    fn retry_cleanup(&self) -> CleanupFuture<'_> {
-        self.cleanup_future(SessionCloseRequest::SessionFailed)
+impl ExecutionAudit for QueuePanickingAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if !matches!(record, ExecutionAuditRecord::QueueAdmitted(_)) {
+            return Box::pin(async { Ok(()) });
+        }
+        if matches!(self.0, AuditPanic::Construct) {
+            panic!("queue audit construction panic");
+        }
+        Box::pin(PanickingAuditFuture(self.0))
     }
 }
-impl ProviderSessionBackend for CleanupProbe {
+
+#[derive(Clone, Copy)]
+enum OpenPanic {
+    Construct,
+    Poll,
+    Drop,
+}
+struct PanickingProvider(OpenPanic);
+struct PanickingOpen(OpenPanic);
+#[derive(Clone, Copy)]
+enum CleanupPanic {
+    Construct,
+    Poll,
+    Drop,
+}
+#[derive(Clone, Copy)]
+enum SavePanic {
+    Construct,
+    Poll,
+    Drop,
+}
+#[derive(Clone)]
+struct PanickingStorage {
+    backing: MemoryStorage,
+    failure: Arc<Mutex<Option<SavePanic>>>,
+}
+struct PanickingStorageLease {
+    backing: Box<dyn SessionStorageLease>,
+    failure: Arc<Mutex<Option<SavePanic>>>,
+}
+struct PanickingSaveFuture<'a> {
+    backing: StorageFuture<'a, ()>,
+    failure: SavePanic,
+}
+struct PanickingCleanupProvider {
+    failure: CleanupPanic,
+}
+struct PanickingCleanupBackend(Mutex<Option<CleanupPanic>>);
+struct PanickingCleanupFuture(CleanupPanic);
+impl AgentProvider for PanickingProvider {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("panic-open", "fixture", "test").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        if matches!(self.0, OpenPanic::Construct) {
+            panic!("open construction panic");
+        }
+        Box::pin(PanickingOpen(self.0))
+    }
+}
+impl Future for PanickingOpen {
+    type Output = Result<OpenedProviderSession, ProviderOpenError>;
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.0, OpenPanic::Poll) {
+            panic!("open poll panic");
+        }
+        Poll::Ready(Err(ProviderOpenError::no_resources(AgentError::Closed)))
+    }
+}
+impl Drop for PanickingOpen {
+    fn drop(&mut self) {
+        if matches!(self.0, OpenPanic::Drop) {
+            panic!("open drop panic");
+        }
+    }
+}
+impl AgentProvider for PanickingCleanupProvider {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("panic-cleanup", "fixture", "test").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        Box::pin(async move {
+            let (_, events) = mpsc::unbounded_channel();
+            Ok(OpenedProviderSession {
+                session: ProviderSession::new(
+                    ExecutionSessionId::new("panic-cleanup-context").unwrap(),
+                    Arc::new(PanickingCleanupBackend(Mutex::new(Some(self.failure)))),
+                    capabilities(),
+                    Arc::new(AcceptingAudit),
+                ),
+                events: Box::new(TestEvents(events)),
+            })
+        })
+    }
+}
+impl ProviderSessionBackend for PanickingCleanupBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
-        Box::pin(async move {
-            self.started.store(true, Ordering::SeqCst);
-            self.execution_result.lock().unwrap().clone()
-        })
+    fn execute(&self, _input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+        Box::pin(async { ProviderExecutionReply::Rejected(AgentError::Closed) })
     }
     fn answer_permission(
         &self,
-        _: PermissionAnswer,
+        _answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async {
             Err(ProviderOperationFailure::new(
-                AgentError::StalePermission,
+                AgentError::Closed,
                 ProviderSessionState::Usable,
             ))
         })
     }
     fn cancel_permission(
         &self,
-        _: PermissionCancellationRequest,
+        _input: PermissionCancellationRequest,
     ) -> ProviderOperationFuture<'_, PermissionCancellation> {
         Box::pin(async {
             Err(ProviderOperationFailure::new(
-                AgentError::StalePermission,
+                AgentError::Closed,
                 ProviderSessionState::Usable,
             ))
         })
     }
-    fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
-        self.cleanup_future(request)
+    fn close(&self, _origin: SessionCloseRequest) -> CleanupFuture<'_> {
+        let Some(failure) = self.0.lock().unwrap().take() else {
+            return Box::pin(async { CleanupReport::confirmed(CloseOutcome { forced: false }) });
+        };
+        if matches!(failure, CleanupPanic::Construct) {
+            panic!("cleanup construction panic");
+        }
+        Box::pin(PanickingCleanupFuture(failure))
     }
 }
-struct OpeningProbe {
-    cleanup: Arc<CleanupProbe>,
-    gate: Mutex<Option<oneshot::Receiver<()>>>,
-    entered: Notify,
-    fail_open: AtomicBool,
-    events: Mutex<Option<Box<dyn ExecutionEventStream>>>,
+impl Future for PanickingCleanupFuture {
+    type Output = CleanupReport;
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.0, CleanupPanic::Poll) {
+            panic!("cleanup poll panic");
+        }
+        Poll::Ready(CleanupReport::confirmed(CloseOutcome { forced: false }))
+    }
 }
-impl OpeningProbe {
-    fn new(cleanup: Arc<CleanupProbe>) -> Arc<Self> {
-        Arc::new(Self {
-            cleanup,
-            gate: Mutex::new(None),
-            entered: Notify::new(),
-            fail_open: AtomicBool::new(false),
-            events: Mutex::new(None),
+impl Drop for PanickingCleanupFuture {
+    fn drop(&mut self) {
+        if matches!(self.0, CleanupPanic::Drop) {
+            panic!("cleanup drop panic");
+        }
+    }
+}
+impl SessionStorage for PanickingStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(PanickingStorageLease {
+                backing: self.backing.open(id).await?,
+                failure: self.failure.clone(),
+            }) as Box<dyn SessionStorageLease>)
         })
     }
 }
-impl AgentProvider for OpeningProbe {
-    fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("cleanup-probe", "none", "local").unwrap()
+impl SessionStorageLease for PanickingStorageLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.backing.load()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
-        Box::pin(async {
-            let gate = self.gate.lock().unwrap().take();
-            self.entered.notify_one();
-            if let Some(gate) = gate {
-                gate.await.unwrap();
-            }
-            if self.fail_open.load(Ordering::SeqCst) {
-                return Err(ProviderOpenError::with_cleanup(
-                    AgentError::CleanupUncertain,
-                    self.cleanup.clone(),
-                ));
-            }
-            let (_, events) = mpsc::unbounded_channel();
-            Ok(OpenedProviderSession {
-                session: ProviderSession::new(
-                    ExecutionSessionId::new("returned-context").unwrap(),
-                    self.cleanup.clone(),
-                    capabilities(),
-                    Arc::new(AcceptingAudit),
-                ),
-                events: self
-                    .events
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap_or_else(|| Box::new(TestEvents(events))),
-            })
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        let Some(failure) = self.failure.lock().unwrap().take() else {
+            return self.backing.save(snapshot);
+        };
+        if matches!(failure, SavePanic::Construct) {
+            panic!("save construction panic");
+        }
+        Box::pin(PanickingSaveFuture {
+            backing: self.backing.save(snapshot),
+            failure,
         })
     }
 }
-async fn assert_busy(storage: &MemoryStorage) {
+impl Future for PanickingSaveFuture<'_> {
+    type Output = Result<(), StorageError>;
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.failure, SavePanic::Poll) {
+            panic!("save poll panic");
+        }
+        self.backing.as_mut().poll(context)
+    }
+}
+impl Drop for PanickingSaveFuture<'_> {
+    fn drop(&mut self) {
+        if matches!(self.failure, SavePanic::Drop) {
+            panic!("save drop panic");
+        }
+    }
+}
+impl Future for PanickingAuditFuture {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.0, AuditPanic::Poll) {
+            panic!("audit poll panic");
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+impl Drop for PanickingAuditFuture {
+    fn drop(&mut self) {
+        if matches!(self.0, AuditPanic::Drop) {
+            panic!("audit drop panic");
+        }
+    }
+}
+
+async fn prepared(
+    provider: Arc<TestProvider>,
+    storage: &MemoryStorage,
+    audit: Arc<dyn ExecutionAudit>,
+) -> Agent {
+    Agent::prepare(provider, storage.manager().await, audit)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn prepare_is_durable_without_opening_provider() {
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let agent = prepared(provider.clone(), &storage, Arc::new(AcceptingAudit)).await;
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
     assert!(matches!(
-        SessionManager::open(
-            Some(SessionId::new("conversation").unwrap()),
-            Arc::new(storage.clone())
-        )
-        .await,
-        Err(StorageError::Busy)
+        storage.snapshot().provider_context,
+        ProviderContext::Absent
     ));
 }
-async fn assert_released(storage: &MemoryStorage) {
-    drop(storage.manager().await);
-}
 
 #[tokio::test]
-async fn failed_initialization_retains_lease_until_explicit_cleanup_recovers() {
-    for failure in ["fresh-save", "restored-save", "restore-identity", "open"] {
-        let storage = MemoryStorage::default();
-        let cleanup = CleanupProbe::new();
-        let provider = OpeningProbe::new(cleanup.clone());
-        if failure.starts_with("restore") {
-            storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
-                queue_history: Vec::new(),
-                id: SessionId::new("conversation").unwrap(),
-                provider: provider.identity(),
-                provider_session_id: ExecutionSessionId::new(if failure == "restore-identity" {
-                    "different-context"
-                } else {
-                    "returned-context"
-                })
-                .unwrap(),
-                invocations: Vec::new(),
-            });
-        }
-        if failure.ends_with("save") {
-            storage.fail_next();
-        }
-        provider
-            .fail_open
-            .store(failure == "open", Ordering::SeqCst);
-        let error = Agent::new(provider, storage.manager().await)
-            .await
-            .err()
-            .unwrap();
-        let original = error.cause().clone();
-        assert!(error.needs_cleanup(), "{failure}");
-        assert_busy(&storage).await;
-        assert_eq!(
-            error.retry_cleanup().await,
-            Err(AgentError::CleanupUncertain)
-        );
-        assert_busy(&storage).await;
-        *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-        error.retry_cleanup().await.unwrap();
-        assert!(!error.needs_cleanup());
-        assert_released(&storage).await;
-        let attempts = cleanup.attempts.load(Ordering::SeqCst);
-        error.retry_cleanup().await.unwrap();
-        assert_eq!(cleanup.attempts.load(Ordering::SeqCst), attempts);
-        assert_eq!(error.cause(), &original);
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn dropping_agent_or_initialization_error_retries_cleanup_without_releasing_lease_early() {
-    for initialization_error in [false, true] {
-        let storage = MemoryStorage::default();
-        let cleanup = CleanupProbe::new();
-        let provider = OpeningProbe::new(cleanup.clone());
-        if initialization_error {
-            storage.fail_next();
-        }
-        let opened = Agent::new(provider, storage.manager().await).await;
-        if initialization_error {
-            cleanup.entered.notified().await;
-        }
-        drop(opened);
-        cleanup.entered.notified().await;
-        assert_busy(&storage).await;
-        let attempts = cleanup.attempts.load(Ordering::SeqCst);
-        advance(Duration::from_millis(99)).await;
-        tokio::task::yield_now().await;
-        assert_eq!(cleanup.attempts.load(Ordering::SeqCst), attempts);
-        *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-        advance(Duration::from_millis(1)).await;
-        cleanup.entered.notified().await;
-        assert_released(&storage).await;
-        assert_eq!(
-            cleanup.reasons.lock().unwrap().last().unwrap(),
-            &if initialization_error {
-                SessionCloseRequest::SessionFailed
-            } else {
-                SessionCloseRequest::SessionHandlesDropped
-            }
-        );
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn abandoned_constructor_retains_ownership_during_open_save_and_cleanup() {
-    for phase in ["open", "failed-open", "save", "cleanup"] {
-        let storage = MemoryStorage::default();
-        let cleanup = CleanupProbe::new();
-        let provider = OpeningProbe::new(cleanup.clone());
-        let (release, wait) = oneshot::channel();
-        let mut wait = Some(wait);
-        let save_gate = if phase == "save" {
-            Some(storage.pause_next_save())
-        } else {
-            None
-        };
-        provider
-            .fail_open
-            .store(phase == "failed-open", Ordering::SeqCst);
-        if phase == "open" || phase == "failed-open" {
-            *provider.gate.lock().unwrap() = wait.take();
-        }
-        if phase == "cleanup" {
-            storage.fail_next();
-            *cleanup.gate.lock().unwrap() = wait.take();
-        }
-        let manager = storage.manager().await;
-        let caller = tokio::spawn({
-            let provider = provider.clone();
-            async move { Agent::new(provider, manager).await }
-        });
-        match phase {
-            "open" | "failed-open" => provider.entered.notified().await,
-            "save" => {}
-            _ => cleanup.entered.notified().await,
-        }
-        let save_release = if let Some((started, release)) = save_gate {
-            started.await.unwrap();
-            Some(release)
-        } else {
-            None
-        };
-        caller.abort();
-        assert!(caller.await.err().unwrap().is_cancelled());
-        assert_busy(&storage).await;
-        if let Some(save_release) = save_release {
-            save_release.send(()).unwrap();
-        } else {
-            release.send(()).unwrap();
-        }
-        cleanup.entered.notified().await;
-        assert_busy(&storage).await;
-        *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-        advance(Duration::from_millis(100)).await;
-        cleanup.entered.notified().await;
-        assert_released(&storage).await;
-    }
-}
-
-#[tokio::test]
-async fn audit_only_initialization_cleanup_failure_does_not_keep_a_confirmed_lease() {
+async fn authorization_wait_and_start_publish_one_coherent_status() {
     let storage = MemoryStorage::default();
-    storage.fail_next();
-    let cleanup = CleanupProbe::new();
-    *cleanup.result.lock().unwrap() = cleaned_with_error(AgentError::AuditFailure);
-    let error = Agent::new(OpeningProbe::new(cleanup.clone()), storage.manager().await)
-        .await
-        .err()
+    let provider = TestProvider::new();
+    let agent = prepared(provider.clone(), &storage, Arc::new(AcceptingAudit)).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
         .unwrap();
-    assert!(!error.needs_cleanup());
-    assert!(
-        matches!(error.cause(), AgentError::StorageInitialization { cleanup_result, .. } if **cleanup_result == Err(AgentError::AuditFailure))
-    );
-    assert_released(&storage).await;
-    let attempts = cleanup.attempts.load(Ordering::SeqCst);
-    for _ in 0..3 {
-        assert_eq!(error.retry_cleanup().await, Err(AgentError::AuditFailure));
-        assert!(!error.needs_cleanup());
-        assert_eq!(cleanup.attempts.load(Ordering::SeqCst), attempts);
-        assert_released(&storage).await;
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn confirmed_close_releases_immediately_but_resume_rearms_drop_protection() {
-    let storage = MemoryStorage::default();
-    let cleanup = CleanupProbe::new();
-    *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-    let provider = OpeningProbe::new(cleanup.clone());
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let status = agent.attachment_status();
+    assert_eq!(status.phase(), AttachmentPhase::Waiting);
+    assert_eq!(status.failure(), None);
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
         .await
         .unwrap();
-    agent.close(close_action()).await.unwrap();
-    cleanup.entered.notified().await;
-    drop(agent);
-    assert_released(&storage).await;
-
-    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
-    agent.close(close_action()).await.unwrap();
-    cleanup.entered.notified().await;
+    let status = agent.attachment_status();
+    assert_eq!(status.phase(), AttachmentPhase::Attached);
+    assert_eq!(status.failure(), None);
+    assert_eq!(provider.calls.opens.lock().unwrap().len(), 1);
     assert!(matches!(
-        agent.invoke(request("restore"), close_action()).await,
-        Err(AgentError::Unsupported(_))
+        storage.snapshot().provider_context,
+        ProviderContext::Recorded(_)
     ));
-    *cleanup.result.lock().unwrap() = CleanupReport::unconfirmed(AgentError::CleanupUncertain);
-    drop(agent);
-    cleanup.entered.notified().await;
-    assert_busy(&storage).await;
-    *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-    advance(Duration::from_millis(100)).await;
-    cleanup.entered.notified().await;
-    assert_released(&storage).await;
 }
 
 #[tokio::test]
-async fn cleanup_retry_serializes_and_cancellation_preserves_recovery_ownership() {
+async fn close_before_attachment_task_runs_preserves_close_without_failed_transition() {
     let storage = MemoryStorage::default();
-    storage.fail_next();
-    let cleanup = CleanupProbe::new();
-    let error = Arc::new(
-        Agent::new(OpeningProbe::new(cleanup.clone()), storage.manager().await)
-            .await
-            .err()
-            .unwrap(),
-    );
-    cleanup.entered.notified().await;
-    let (release, wait) = oneshot::channel();
-    *cleanup.gate.lock().unwrap() = Some(wait);
-    let first = tokio::spawn({
-        let error = error.clone();
-        async move { error.retry_cleanup().await }
-    });
-    cleanup.entered.notified().await;
-    let attempts = cleanup.attempts.load(Ordering::SeqCst);
-    let second = tokio::spawn({
-        let error = error.clone();
-        async move { error.retry_cleanup().await }
-    });
-    tokio::task::yield_now().await;
-    assert_eq!(cleanup.attempts.load(Ordering::SeqCst), attempts);
-    assert_busy(&storage).await;
-    first.abort();
-    assert!(first.await.err().unwrap().is_cancelled());
-    drop(release);
-    assert_eq!(second.await.unwrap(), Err(AgentError::CleanupUncertain));
-    assert!(error.needs_cleanup());
-    assert_busy(&storage).await;
-    *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-    error.retry_cleanup().await.unwrap();
-    assert_released(&storage).await;
+    let provider = TestProvider::new();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::Starting);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(provider.clone(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    agent.close(close_action()).await.unwrap();
+    release.send(()).unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert!(provider.calls.closes.lock().unwrap().is_empty());
+    assert!(audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|record| record.after() != AttachmentAuditStage::Failed));
 }
 
-#[tokio::test(start_paused = true)]
-async fn uncertain_explicit_close_retains_its_actor_through_retry_and_final_drop() {
+#[tokio::test]
+async fn published_context_is_not_dispatchable_before_audit_acknowledgement() {
     let storage = MemoryStorage::default();
-    let cleanup = CleanupProbe::new();
-    let agent = Agent::new(OpeningProbe::new(cleanup.clone()), storage.manager().await)
-        .await
+    let provider = TestProvider::new();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    audit.reject.store(true, Ordering::SeqCst);
+    *audit.reject_after.lock().unwrap() = Some(AttachmentAuditStage::ContextPublished);
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::ContextPublished);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(provider.clone(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
         .unwrap();
-    let actor = ActionContext::new("initiator", "surface", "first-close").unwrap();
-    let request = SessionCloseRequest::Explicit(actor.clone());
-    assert_eq!(agent.close(actor).await, Err(AgentError::CleanupUncertain));
-    cleanup.entered.notified().await;
-    assert_busy(&storage).await;
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    let status = agent.attachment_status();
+    assert_eq!(status.phase(), AttachmentPhase::Starting);
     assert_eq!(
-        agent.close(close_action()).await,
-        Err(AgentError::CleanupUncertain)
+        agent.invoke(request("direct-before-audit"), actor()).await,
+        Err(AgentError::AttachmentUnavailable(AttachmentPhase::Starting))
     );
-    cleanup.entered.notified().await;
-    drop(agent);
-    cleanup.entered.notified().await;
-    assert_busy(&storage).await;
-    *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-    advance(Duration::from_millis(100)).await;
-    cleanup.entered.notified().await;
-    assert_released(&storage).await;
-    assert_eq!(*cleanup.reasons.lock().unwrap(), vec![request; 4]);
+    let queued = agent
+        .enqueue(request("queued-before-audit"), actor())
+        .await
+        .unwrap();
+    assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+
+    release.send(()).unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::AuditFailure));
+    assert!(queued.wait().await.is_err());
+    assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        agent
+            .attachment_status()
+            .evidence_failure()
+            .map(AttachmentFailure::code),
+        Some(AttachmentFailureCode::Audit)
+    );
 }
 
-struct FailureEvents(Option<ObservationFailure>, Arc<CleanupProbe>);
-impl ExecutionEventStream for FailureEvents {
-    fn next(&mut self) -> ProviderObservationFuture<'_> {
-        Box::pin(async {
-            // This fixture produces invocation observations only after execute starts.
-            if !self.1.started.load(Ordering::SeqCst) {
-                return std::future::pending().await;
-            }
-            self.0.take().map_or(Ok(None), Err)
-        })
+#[tokio::test]
+async fn close_fences_and_wakes_only_its_held_authorization() {
+    let first_storage = MemoryStorage::default();
+    let second_storage = MemoryStorage::default();
+    let first = prepared(
+        TestProvider::new(),
+        &first_storage,
+        Arc::new(AcceptingAudit),
+    )
+    .await;
+    let second = prepared(
+        TestProvider::new(),
+        &second_storage,
+        Arc::new(AcceptingAudit),
+    )
+    .await;
+    let first_authorization = first
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let second_authorization = second
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let first_cancelled = first_authorization.cancellation().wait();
+    let second_cancelled = second_authorization.cancellation().wait();
+    tokio::pin!(first_cancelled, second_cancelled);
+    let closing = tokio::spawn({
+        let first = first.clone();
+        async move { first.close(close_action()).await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), &mut first_cancelled)
+        .await
+        .expect("matching authorization woke");
+    tokio::select! {
+        biased;
+        _ = &mut second_cancelled => panic!("unrelated authorization woke"),
+        _ = tokio::task::yield_now() => {}
+    }
+    assert!(matches!(
+        first.start_attachment(first_authorization),
+        Err(AgentError::AttachmentAuthorizationStale)
+    ));
+    closing.await.unwrap().unwrap();
+    second
+        .start_attachment(second_authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn abandoned_authorization_blocks_replacement_until_audit_settles() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(TestProvider::new(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    drop(authorization);
+    audit.entered.notified().await;
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Waiting);
+    assert!(matches!(
+        agent.authorize_attachment(AttachmentRequest::CallerRequested(actor())),
+        Err(AgentError::AttachmentAuthorizationStale)
+    ));
+    release.send(()).unwrap();
+    audit.completed.notified().await;
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+}
+
+#[tokio::test]
+async fn superseded_abandonment_failure_remains_visible_without_revival() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    audit.reject.store(true, Ordering::SeqCst);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(TestProvider::new(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    drop(authorization);
+    audit.entered.notified().await;
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    while agent.attachment_status().phase() == AttachmentPhase::Waiting {
+        tokio::task::yield_now().await;
+    }
+    release.send(()).unwrap();
+    assert_eq!(closing.await.unwrap(), Err(AgentError::AuditFailure));
+    audit.completed.notified().await;
+    let status = agent.attachment_status();
+    assert_ne!(status.phase(), AttachmentPhase::Attached);
+    assert_eq!(
+        status.evidence_failure().map(AttachmentFailure::code),
+        Some(AttachmentFailureCode::Audit)
+    );
+}
+
+#[tokio::test]
+async fn attachment_audit_construction_poll_and_drop_panics_settle_failed() {
+    for failure in [AuditPanic::Construct, AuditPanic::Poll, AuditPanic::Drop] {
+        let storage = MemoryStorage::default();
+        let agent = prepared(
+            TestProvider::new(),
+            &storage,
+            Arc::new(PanickingAudit(failure)),
+        )
+        .await;
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert_eq!(
+            agent.start_attachment(authorization).unwrap().wait().await,
+            Err(AgentError::AuditFailure)
+        );
+        let status = agent.attachment_status();
+        assert_eq!(
+            status.phase(),
+            AttachmentPhase::Failed(AttachmentFailureCode::Audit)
+        );
+        assert_eq!(status.failure().unwrap().cause(), AttachmentCause::Initial);
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn uncertain_failure_cleanup_retains_its_cause_through_explicit_retry_and_drop() {
-    for (failure, cause, close_request) in [
-        (
-            AgentError::Deadline,
-            ObservationFailureCause::DeadlineExceeded,
-            SessionCloseRequest::DeadlineExceeded,
-        ),
-        (
-            AgentError::Transport("reader failed".into()),
-            ObservationFailureCause::ExecutionFailed,
-            SessionCloseRequest::ExecutionFailed,
-        ),
-        // Lifecycle cause belongs to the observation report, independently of
-        // misleading or bounded provider diagnostics.
-        (
-            AgentError::Deadline,
-            ObservationFailureCause::ExecutionFailed,
-            SessionCloseRequest::ExecutionFailed,
-        ),
-        (
-            AgentError::Transport("x".repeat(1024 * 1024)),
-            ObservationFailureCause::DeadlineExceeded,
-            SessionCloseRequest::DeadlineExceeded,
-        ),
+#[tokio::test]
+async fn provider_open_construction_poll_and_drop_panics_settle_without_unwind() {
+    for failure in [OpenPanic::Construct, OpenPanic::Poll, OpenPanic::Drop] {
+        let storage = MemoryStorage::default();
+        let agent = Agent::prepare(
+            Arc::new(PanickingProvider(failure)),
+            storage.manager().await,
+            Arc::new(AcceptingAudit),
+        )
+        .await
+        .unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert!(agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .is_err());
+        assert!(matches!(
+            agent.attachment_status().phase(),
+            AttachmentPhase::Failed(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn cleanup_construction_poll_and_drop_panics_remain_retryable() {
+    for failure in [
+        CleanupPanic::Construct,
+        CleanupPanic::Poll,
+        CleanupPanic::Drop,
     ] {
         let storage = MemoryStorage::default();
-        let cleanup = CleanupProbe::new();
-        *cleanup.execution_result.lock().unwrap() =
-            ProviderExecutionReply::Finished(ExecutionReport::new(
-                Some(Err(AgentError::Transport("execution failed".into()))),
-                None,
-                ProviderSessionState::Usable,
-            ));
-        let provider = OpeningProbe::new(cleanup.clone());
-        *provider.events.lock().unwrap() = Some(Box::new(FailureEvents(
-            Some(ObservationFailure::new(failure, cause)),
-            cleanup.clone(),
-        )));
-        let agent = Agent::new(provider, storage.manager().await).await.unwrap();
-        assert!(matches!(
-            agent
-                .invoke(request("failure-cleanup"), close_action())
-                .await,
-            Err(AgentError::ExecutionObservation { .. })
-        ));
-        cleanup.entered.notified().await;
+        let agent = Agent::prepare(
+            Arc::new(PanickingCleanupProvider { failure }),
+            storage.manager().await,
+            Arc::new(AcceptingAudit),
+        )
+        .await
+        .unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+
         assert_eq!(
             agent.close(close_action()).await,
             Err(AgentError::CleanupUncertain)
         );
-        cleanup.entered.notified().await;
+        agent.close(close_action()).await.unwrap();
         drop(agent);
-        cleanup.entered.notified().await;
-        assert_busy(&storage).await;
-        *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-        advance(Duration::from_millis(100)).await;
-        cleanup.entered.notified().await;
-        assert_released(&storage).await;
-        assert_eq!(*cleanup.reasons.lock().unwrap(), vec![close_request; 4]);
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn confirmed_cleanup_allows_a_resumed_attachment_to_record_a_new_drop_cause() {
-    let storage = MemoryStorage::default();
-    let cleanup = CleanupProbe::new();
-    let agent = Agent::new(OpeningProbe::new(cleanup.clone()), storage.manager().await)
-        .await
-        .unwrap();
-    let first = SessionCloseRequest::Explicit(close_action());
-    assert_eq!(
-        agent.close(close_action()).await,
-        Err(AgentError::CleanupUncertain)
-    );
-    cleanup.entered.notified().await;
-    *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-    agent
-        .close(ActionContext::new("other", "surface", "retry").unwrap())
-        .await
-        .unwrap();
-    cleanup.entered.notified().await;
-    assert!(matches!(
-        agent.invoke(request("resume"), close_action()).await,
-        Err(AgentError::Unsupported(_))
-    ));
-    drop(agent);
-    cleanup.entered.notified().await;
-    assert_released(&storage).await;
-    assert_eq!(
-        *cleanup.reasons.lock().unwrap(),
-        vec![
-            first.clone(),
-            first,
-            SessionCloseRequest::SessionHandlesDropped
-        ]
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn abandoning_failure_cleanup_preserves_its_request_before_provider_settlement() {
-    let storage = MemoryStorage::default();
-    let cleanup = CleanupProbe::new();
-    *cleanup.execution_result.lock().unwrap() =
-        ProviderExecutionReply::Finished(ExecutionReport::new(
-            Some(Err(AgentError::Transport("execution failed".into()))),
-            None,
-            ProviderSessionState::Usable,
-        ));
-    let provider = OpeningProbe::new(cleanup.clone());
-    *provider.events.lock().unwrap() = Some(Box::new(FailureEvents(
-        Some(ObservationFailure::new(
-            AgentError::Deadline,
-            ObservationFailureCause::DeadlineExceeded,
-        )),
-        cleanup.clone(),
-    )));
-    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
-    let (release, wait) = oneshot::channel();
-    *cleanup.gate.lock().unwrap() = Some(wait);
-    let invoking = tokio::spawn({
-        let agent = agent.clone();
-        async move {
-            agent
-                .invoke(request("abandoned-cleanup"), close_action())
-                .await
-        }
-    });
-    cleanup.entered.notified().await;
-    invoking.abort();
-    assert!(invoking.await.unwrap_err().is_cancelled());
-    release.send(()).unwrap();
-    drop(agent);
-    cleanup.entered.notified().await;
-    assert_busy(&storage).await;
-    *cleanup.result.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced: false });
-    advance(Duration::from_millis(100)).await;
-    cleanup.entered.notified().await;
-    assert_released(&storage).await;
-    assert_eq!(
-        *cleanup.reasons.lock().unwrap(),
-        vec![SessionCloseRequest::DeadlineExceeded; 3]
-    );
-}
-
-struct FailedOpening {
-    cause: AgentError,
-    cleanup: Arc<CleanupProbe>,
-}
-impl AgentProvider for FailedOpening {
-    fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("failed-opening", "fixture", "local").unwrap()
-    }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
-        Box::pin(async {
-            Err(ProviderOpenError::with_cleanup(
-                self.cause.clone(),
-                self.cleanup.clone(),
-            ))
-        })
+        drop(storage.manager().await);
     }
 }
 
 #[tokio::test]
-async fn every_uncertain_opening_cause_retains_lease_on_fresh_and_restored_sessions() {
-    for restored in [false, true] {
-        for cause in [
-            AgentError::CleanupUncertain,
-            AgentError::AuditAndCleanupFailure,
-            AgentError::OperationAndCleanupFailure {
-                operation_error: Box::new(AgentError::Deadline),
-                cleanup_error: Box::new(AgentError::Transport("termination failed".into())),
-            },
-            AgentError::DiagnosticLimit,
-        ] {
-            let storage = MemoryStorage::default();
-            let cleanup = CleanupProbe::new();
-            let provider = Arc::new(FailedOpening {
-                cause: cause.clone(),
-                cleanup: cleanup.clone(),
-            });
-            if restored {
-                storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
-                    queue_history: Vec::new(),
-                    id: SessionId::new("conversation").unwrap(),
-                    provider: provider.identity(),
-                    provider_session_id: ExecutionSessionId::new("restored-context").unwrap(),
-                    invocations: Vec::new(),
-                });
-            }
-            let error = Agent::new(provider, storage.manager().await)
-                .await
-                .err()
-                .unwrap();
-            assert_eq!(error.cause(), &cause);
-            assert!(error.needs_cleanup());
-            assert_busy(&storage).await;
-            assert_eq!(
-                error.retry_cleanup().await,
-                Err(AgentError::CleanupUncertain)
-            );
-            assert_busy(&storage).await;
-            // The explicit unconfirmed report retains ownership even when diagnostics
-            // are opaque or nested; their shape supplies no cleanup authority.
-            let contradiction = AgentError::DiagnosticLimit;
-            for cleanup_error in [
-                contradiction.clone(),
-                AgentError::StorageDuringClose {
-                    error: StorageError::Io("cleanup evidence failed".into()),
-                    cleanup_result: Box::new(Err(contradiction)),
-                },
-            ] {
-                *cleanup.result.lock().unwrap() = CleanupReport::unconfirmed(cleanup_error.clone());
-                assert_eq!(error.retry_cleanup().await, Err(cleanup_error));
-                assert!(error.needs_cleanup());
-                assert_busy(&storage).await;
-            }
-            // Audit rejection must remain visible even when cleanup is confirmed.
-            *cleanup.result.lock().unwrap() = cleaned_with_error(AgentError::AuditFailure);
-            assert_eq!(error.retry_cleanup().await, Err(AgentError::AuditFailure));
-            assert!(!error.needs_cleanup());
-            assert_released(&storage).await;
-            let attempts = cleanup.attempts.load(Ordering::SeqCst);
-            for _ in 0..3 {
-                assert_eq!(error.retry_cleanup().await, Err(AgentError::AuditFailure));
-                assert_eq!(cleanup.attempts.load(Ordering::SeqCst), attempts);
-                assert!(!error.needs_cleanup());
-                assert_released(&storage).await;
-            }
-            assert_eq!(error.cause(), &cause);
-        }
+async fn provider_context_save_panics_fail_durably_and_cleanup_provider() {
+    for failure in [SavePanic::Construct, SavePanic::Poll, SavePanic::Drop] {
+        let backing = MemoryStorage::default();
+        let failures = Arc::new(Mutex::new(None));
+        let storage = Arc::new(PanickingStorage {
+            backing: backing.clone(),
+            failure: failures.clone(),
+        });
+        let manager = SessionManager::open(
+            Some(SessionId::new("panic-save-conversation").unwrap()),
+            storage,
+        )
+        .await
+        .unwrap();
+        let provider = TestProvider::new();
+        let agent = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit))
+            .await
+            .unwrap();
+        *failures.lock().unwrap() = Some(failure);
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert!(agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .is_err());
+        assert_eq!(provider.calls.opens.lock().unwrap().len(), 1);
+        assert_eq!(provider.calls.closes.lock().unwrap().len(), 1);
+        assert!(matches!(
+            agent.attachment_status().phase(),
+            AttachmentPhase::Failed(AttachmentFailureCode::Storage)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn queue_audit_panics_preserve_owned_receipt_and_prevent_dispatch() {
+    for failure in [AuditPanic::Construct, AuditPanic::Poll, AuditPanic::Drop] {
+        let storage = MemoryStorage::default();
+        let provider = TestProvider::new();
+        let agent = Agent::prepare(
+            provider.clone(),
+            storage.manager().await,
+            Arc::new(QueuePanickingAudit(failure)),
+        )
+        .await
+        .unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+
+        let admission = agent
+            .enqueue(request("queue-audit-panic"), actor())
+            .await
+            .unwrap();
+        assert!(
+            matches!(admission.evidence(), AdmissionEvidence::Failed(failure)
+            if failure.audit() == Some(&AgentError::AuditFailure))
+        );
+        assert!(admission.wait().await.is_err());
+        assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
     }
 }

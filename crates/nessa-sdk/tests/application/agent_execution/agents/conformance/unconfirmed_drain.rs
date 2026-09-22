@@ -17,6 +17,9 @@ impl AgentProvider for ReadyOutputProvider {
     fn identity(&self) -> ProviderIdentity {
         WorkflowProvider(self.backend.clone()).identity()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let mut opened = WorkflowProvider(self.backend.clone()).open(restore).await?;
@@ -83,7 +86,7 @@ async fn unconfirmed_cleanup_stops_ready_output_and_preserves_settlement() {
                 let (release, gate) = oneshot::channel();
                 *backend.execution_gate.lock().unwrap() = Some(gate);
                 let polls = Arc::new(AtomicUsize::new(0));
-                let agent = Agent::new(
+                let agent = attached_agent(
                     Arc::new(ReadyOutputProvider {
                         backend: backend.clone(),
                         polls: polls.clone(),

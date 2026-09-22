@@ -70,6 +70,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
             permissions: false,
             imageInput: true,
           },
+          lifecycle: { phase: "attached" },
           truncated: false,
           queueComplete: true,
         })

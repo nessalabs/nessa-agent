@@ -518,7 +518,7 @@ pub(super) fn providers(
         // known to use it: the runtime sends an image only to an agent that
         // advertised `promptCapabilities.image`, so an agent that takes none is
         // offered none without this having to know which those are.
-        let provider = match build::provider(
+        let (provider, execution_audit) = match build::provider(
             agent,
             config,
             runtime,
@@ -552,6 +552,7 @@ pub(super) fn providers(
             agent,
             ConversationAgent {
                 provider,
+                execution_audit,
                 reserved_output_tokens: runtime.output_tokens,
                 // Filled in by whoever has somewhere to keep warm-up records.
                 // This builds providers and knows nothing about the durable
@@ -611,6 +612,7 @@ mod build {
     use nessa_sdk::{
         application::agent_execution::{
             agents::AgentError,
+            executions::ExecutionAudit,
             providers::{AgentProvider, UserImageSource},
         },
         domain::{
@@ -740,7 +742,7 @@ mod build {
         directory: &Path,
         clock: Arc<dyn Clock>,
         images: Arc<dyn UserImageSource>,
-    ) -> Result<Arc<dyn AgentProvider>, RunError> {
+    ) -> Result<(Arc<dyn AgentProvider>, Arc<dyn ExecutionAudit>), RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
         let model = super::model(agent, config, runtime)?;
         let workspace = config
@@ -769,12 +771,12 @@ mod build {
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         let provider: Arc<dyn AgentProvider> = match agent {
             AgentId::Claude => Arc::new(
-                ClaudeAcpProvider::new(acp, &model, limits, audit)
+                ClaudeAcpProvider::new(acp, &model, limits, audit.clone())
                     .map_err(failed)?
                     .with_system_prompt(prompt),
             ),
             AgentId::Codex => Arc::new(
-                CodexAcpProvider::new(acp, &model, limits, audit)
+                CodexAcpProvider::new(acp, &model, limits, audit.clone())
                     .map_err(failed)?
                     .with_system_prompt(prompt),
             ),
@@ -787,11 +789,11 @@ mod build {
             // only denies edits, but the permission policy its binding launches
             // it with: reading and searching allowed, everything else denied,
             // including this server's own MCP shell tool.
-            AgentId::Opencode => {
-                Arc::new(OpencodeAcpProvider::new(acp, &model, limits, audit).map_err(failed)?)
-            }
+            AgentId::Opencode => Arc::new(
+                OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
+            ),
         };
-        Ok(provider)
+        Ok((provider, audit))
     }
 }
 

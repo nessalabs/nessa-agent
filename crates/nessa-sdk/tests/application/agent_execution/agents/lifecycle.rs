@@ -24,7 +24,9 @@ async fn close_waits_for_direct_settlement_save() {
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
     Arc::get_mut(&mut provider).unwrap().wait_for_close = true;
-    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
+    let agent = attached_agent(provider, storage.manager().await)
+        .await
+        .unwrap();
     let mut events = agent.subscribe();
     let runner = agent.clone();
     let running = tokio::spawn(async move { runner.invoke(request("direct"), actor()).await });
@@ -111,7 +113,7 @@ async fn cancelled_caller_during_admission_still_executes_committed_input() {
     )
     .await
     .unwrap();
-    let agent = Agent::new(TestProvider::new(), manager).await.unwrap();
+    let agent = attached_agent(TestProvider::new(), manager).await.unwrap();
     let (committed, observing) = oneshot::channel();
     let (release, waiting) = oneshot::channel();
     *storage.pause.lock().unwrap() = Some(SavePause {
@@ -169,7 +171,7 @@ async fn verify_uncertain_admission(fail_load: bool) {
     .await
     .unwrap();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), manager).await.unwrap();
+    let agent = attached_agent(provider.clone(), manager).await.unwrap();
     let (committed, observing) = oneshot::channel();
     let (release, waiting) = oneshot::channel();
     *storage.pause.lock().unwrap() = Some(SavePause {
@@ -224,7 +226,7 @@ async fn close_joins_admission_save_after_the_invoke_caller_disappears() {
     .await
     .unwrap();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), manager).await.unwrap();
+    let agent = attached_agent(provider.clone(), manager).await.unwrap();
     let (committed, observing) = oneshot::channel();
     let (release, waiting) = oneshot::channel();
     *storage.pause.lock().unwrap() = Some(SavePause {
@@ -270,7 +272,7 @@ async fn abandoned_admission_retains_exclusive_lease_until_save_settles() {
     let manager = SessionManager::open(Some(id.clone()), Arc::new(storage.clone()))
         .await
         .unwrap();
-    let agent = Agent::new(TestProvider::new(), manager).await.unwrap();
+    let agent = attached_agent(TestProvider::new(), manager).await.unwrap();
     let (committed, observing) = oneshot::channel();
     let (release, waiting) = oneshot::channel();
     *storage.pause.lock().unwrap() = Some(SavePause {
@@ -320,7 +322,7 @@ async fn corrupt_reconciliation_cannot_prove_absence_and_deep_errors_are_safely_
         .await
         .unwrap();
         let provider = TestProvider::new();
-        let agent = Agent::new(provider.clone(), manager).await.unwrap();
+        let agent = attached_agent(provider.clone(), manager).await.unwrap();
         invoke(&agent, "previous").await.unwrap();
         let mut corrupt = storage.backing.snapshot();
         if deep {

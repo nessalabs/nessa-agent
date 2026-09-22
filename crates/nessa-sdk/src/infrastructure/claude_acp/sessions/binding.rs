@@ -138,6 +138,9 @@ impl AgentProvider for ClaudeAcpProvider {
         )
         .expect("validated model and fixed-size context fingerprint")
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let factory = self.clone();

@@ -84,6 +84,9 @@ impl AgentProvider for WorkflowProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("workflow-conformance", "fixture", "local").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
@@ -247,7 +250,7 @@ async fn workflow_from_storage(
     storage: MemoryStorage,
 ) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
     let backend = workflow_backend();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(WorkflowProvider(backend.clone())),
         storage.manager().await,
     )

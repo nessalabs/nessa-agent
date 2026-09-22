@@ -1,5 +1,5 @@
 //! Explicit host composition for a local smoke run. Permissions default to deny.
-use nessa_sdk::application::agent_execution::agents::AgentFuture;
+use nessa_sdk::application::agent_execution::agents::{AgentFuture, AttachmentRequest};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, ExecutionUpdate,
 };
@@ -78,6 +78,20 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "Review declined without being offered"
                     );
                 }
+                ExecutionAuditRecord::Attachment(record) => {
+                    tracing::info!(session = record.session_id().as_str(), before = ?record.before(), after = ?record.after(), cause = ?record.cause(), "Attachment lifecycle changed");
+                }
+                ExecutionAuditRecord::QueueAdmitted(record) => {
+                    tracing::info!(session = record.session_id().as_str(), execution = record.execution_id().as_str(), mode = ?record.mode(), "Queue admission owned");
+                }
+                ExecutionAuditRecord::SteeringAcknowledged(record) => {
+                    tracing::info!(
+                        session = record.session_id().as_str(),
+                        execution = record.execution_id().as_str(),
+                        target = record.target().as_str(),
+                        "Native steering acknowledged"
+                    );
+                }
             }
             Ok(())
         })
@@ -152,6 +166,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Admission window (input + reserved output), then per-response output cap.
     // These small smoke-test values are not model defaults or elapsed-time limits.
     let limits = TokenLimits::new(100_000, 1000)?;
+    let audit: Arc<dyn ExecutionAudit> = Arc::new(TracingExecutionAudit);
     let binding = ClaudeAcpProvider::new(
         AcpConfig {
             executable: PathBuf::from(&args[1]),
@@ -176,7 +191,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         },
         &model,
         limits,
-        Arc::new(TracingExecutionAudit),
+        audit.clone(),
     )?
     .with_system_prompt(
         SystemPromptBuilder::new()
@@ -187,11 +202,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
             .build()?,
     );
     let storage = Arc::new(LocalFileStorage::new(workspace.join(".nessa/sessions"))?);
-    let session = Agent::new(
+    let session = Agent::prepare(
         Arc::new(binding),
         SessionManager::open(Some(SessionId::new("smoke")?), storage).await?,
+        audit,
     )
     .await?;
+    let attachment = session.authorize_attachment(AttachmentRequest::CallerRequested(
+        ActionContext::new("nessa.smoke-host", "nessa.cli", "attach-smoke-session")?,
+    ))?;
+    session.start_attachment(attachment)?.wait().await?;
     let mut events = session.subscribe();
     tracing::info!(
         model = session.capabilities().model().model_id(),

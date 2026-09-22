@@ -276,6 +276,17 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
             ConversationErrorCode::ConversationConfigurationChanged
         }
         ConversationError::Audit => ConversationErrorCode::AuditUnavailable,
+        ConversationError::AdmissionEvidence { audit: Some(_), .. } => {
+            ConversationErrorCode::AuditUnavailable
+        }
+        ConversationError::AdmissionEvidence {
+            audit: None,
+            storage: Some(_),
+        } => ConversationErrorCode::ConversationStorageUnavailable,
+        ConversationError::AdmissionEvidence {
+            audit: None,
+            storage: None,
+        } => ConversationErrorCode::AgentOperationFailed,
         ConversationError::Metadata | ConversationError::Storage(_) => {
             ConversationErrorCode::ConversationStorageUnavailable
         }

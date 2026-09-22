@@ -25,10 +25,13 @@ pub use service::{
     ConversationLimits, ConversationService, RequestedAgent, SubmissionMode,
 };
 pub use view::{
-    ConversationAttachment, ConversationCapabilities, ConversationDisposition,
-    ConversationLinkedFile, ConversationMessage, ConversationMessageStatus, ConversationPending,
-    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationReorderOutcome, ConversationTool, ConversationView, SubmissionReceipt,
+    ConversationAttachment, ConversationAttachmentEvidenceFailure,
+    ConversationAttachmentEvidenceFailureCode, ConversationCapabilities, ConversationDisposition,
+    ConversationLifecycle, ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
+    ConversationMessageStatus, ConversationPending, ConversationPendingMode,
+    ConversationPermission, ConversationPermissionOption, ConversationReorderOutcome,
+    ConversationStartupFailure, ConversationStartupFailureCode, ConversationTool, ConversationView,
+    SubmissionReceipt,
 };
 
 #[cfg(test)]

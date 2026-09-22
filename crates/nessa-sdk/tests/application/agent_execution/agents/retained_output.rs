@@ -23,6 +23,9 @@ impl AgentProvider for OutputProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("output", "model", "").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
@@ -158,7 +161,7 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
             closed: watch::channel(false).0,
             shutdowns: Mutex::new(Vec::new()),
         });
-        let agent = Agent::new(
+        let agent = attached_agent(
             Arc::new(OutputProvider(state.clone())),
             storage.manager().await,
         )
@@ -227,7 +230,7 @@ async fn explicit_close_racing_output_cutoff_keeps_its_barrier_after_audit_failu
         closed: watch::channel(false).0,
         shutdowns: Mutex::new(Vec::new()),
     });
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(OutputProvider(state.clone())),
         storage.manager().await,
     )

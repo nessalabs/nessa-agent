@@ -295,6 +295,7 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
                 .map_err(|error| RunError::Agent(error.to_string()))?;
         let prepared = AgentWarmUp::new(
             agent.provider.clone(),
+            agent.execution_audit.clone(),
             // A throwaway context: the warm-up must not leave a snapshot on
             // disk and must not take an exclusive lease on a conversation a
             // user owns.

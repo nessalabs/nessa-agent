@@ -75,7 +75,7 @@ impl Shape {
             (Record, "invocation_count") => Count,
             (Change, "index") => Index,
             (Record, "invocations") => Changes,
-            (Record, "id" | "provider_session_id") => Text(256),
+            (Record, "id" | "provider_context") => Text(256),
             (Provider, "name" | "model_id") => Text(256),
             (Provider, "context") => Text(4096),
             (Actor, _) => Text(256),

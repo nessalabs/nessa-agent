@@ -227,6 +227,9 @@ impl AgentProvider for TestProvider {
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             self.calls.opens.lock().unwrap().push(restore.clone());
@@ -367,7 +370,7 @@ async fn invoke(agent: &Agent, id: &str) -> Result<ExecutionOutcome, AgentError>
 async fn invocation_drains_and_persists_without_any_subscriber() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     for id in ["first", "second"] {
@@ -407,13 +410,13 @@ async fn invocation_drains_and_persists_without_any_subscriber() {
 async fn reconstruction_restores_provider_context_without_replaying_inputs() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     invoke(&agent, "first").await.unwrap();
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let restored = Agent::new(provider.clone(), storage.manager().await)
+    let restored = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 1);
@@ -433,7 +436,7 @@ async fn reconstruction_restores_provider_context_without_replaying_inputs() {
 async fn lease_and_provider_mismatch_fail_before_opening_another_context() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     assert!(matches!(
@@ -451,8 +454,8 @@ async fn lease_and_provider_mismatch_fail_before_opening_another_context() {
     *identity =
         ProviderIdentity::new("another-provider", identity.model_id(), identity.context()).unwrap();
     assert!(matches!(
-        Agent::new(other.clone(), storage.manager().await).await,
-        Err(error) if !error.needs_cleanup() && matches!(error.cause(), AgentError::Storage(StorageError::IdentityMismatch))
+        attached_agent(other.clone(), storage.manager().await).await,
+        Err(error) if matches!(error, AgentError::Storage(StorageError::IdentityMismatch))
     ));
     assert!(other.calls.opens.lock().unwrap().is_empty());
 }
@@ -463,8 +466,8 @@ async fn failed_initial_save_closes_the_opened_provider_context() {
     storage.fail_next();
     let provider = TestProvider::new();
     assert!(matches!(
-        Agent::new(provider.clone(), storage.manager().await).await,
-        Err(error) if !error.needs_cleanup() && matches!(error.cause(), AgentError::StorageInitialization { .. })
+        attached_agent(provider.clone(), storage.manager().await).await,
+        Err(error) if matches!(error, AgentError::StorageInitialization { .. })
     ));
     assert_eq!(
         provider.calls.closes.lock().unwrap().as_slice(),
@@ -477,7 +480,7 @@ async fn failed_initial_save_closes_the_opened_provider_context() {
 async fn failed_input_save_prevents_dispatch_and_preserves_previous_evidence() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     storage.fail_next();
@@ -494,7 +497,7 @@ async fn failed_input_save_prevents_dispatch_and_preserves_previous_evidence() {
 async fn failed_event_save_preserves_the_execution_result_and_reports_storage_failure() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     storage.0.lock().unwrap().fail_observation = Some("write-failure".into());
@@ -511,7 +514,7 @@ async fn close_can_interrupt_an_active_invocation_from_a_clone() {
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
     Arc::get_mut(&mut provider).unwrap().wait_for_close = true;
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     let mut events = agent.subscribe();
@@ -584,7 +587,7 @@ async fn hooks_run_in_registration_order_and_preserve_a_failed_provider_result()
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
     Arc::get_mut(&mut provider).unwrap().outcome = Err(AgentError::Provider { code: -42 });
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     for name in ["one", "two"] {
@@ -614,7 +617,7 @@ async fn hooks_run_in_registration_order_and_preserve_a_failed_provider_result()
 async fn a_before_hook_failure_never_dispatches_or_runs_after_hooks() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     agent.add_invocation_hook(Arc::new(OrderedHook {
@@ -640,7 +643,9 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
-        provider_session_id: ExecutionSessionId::new("saved-context").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("saved-context").unwrap(),
+        ),
         invocations: vec![InvocationRecord {
             target_event_offset: None,
             provider_report: None,
@@ -655,7 +660,7 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
             result: None,
         }],
     });
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
@@ -682,7 +687,9 @@ async fn failed_final_save_retains_the_original_provider_error() {
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
     Arc::get_mut(&mut provider).unwrap().outcome = Err(AgentError::Provider { code: -42 });
-    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
+    let agent = attached_agent(provider, storage.manager().await)
+        .await
+        .unwrap();
     storage.0.lock().unwrap().fail_settlement = Some("provider-failure".into());
     assert!(
         matches!(invoke(&agent, "provider-failure").await, Err(AgentError::StorageAfterExecution { error: StorageError::Io(_), execution_result }) if *execution_result == Err(AgentError::Provider { code: -42 }))
@@ -752,7 +759,9 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             queue_history,
             id: SessionId::new("conversation").unwrap(),
             provider: provider.identity(),
-            provider_session_id: ExecutionSessionId::new("saved-context").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("saved-context").unwrap(),
+            ),
             invocations: vec![InvocationRecord {
                 target_event_offset: None,
                 provider_report: None,
@@ -767,7 +776,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
                 result: None,
             }],
         });
-        let agent = Agent::new(provider.clone(), storage.manager().await)
+        let agent = attached_agent(provider.clone(), storage.manager().await)
             .await
             .unwrap();
         assert!(matches!(

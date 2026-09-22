@@ -25,6 +25,9 @@ impl AgentProvider for PayloadProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("payload", "model", "").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let started = Arc::new(AtomicUsize::new(0));
@@ -154,7 +157,7 @@ fn review(
 async fn admission(update: ExecutionUpdate, accepted: bool) {
     let storage = MemoryStorage::default();
     let event = ExecutionEvent::new(ExecutionId::new("payload").unwrap(), update);
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(PayloadProvider(Mutex::new(Some(event)))),
         storage.manager().await,
     )

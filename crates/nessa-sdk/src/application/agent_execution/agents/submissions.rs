@@ -1,7 +1,8 @@
 //! Recovers an existing submission without repeating provider effects.
 //! Saved intent verifies retries; live receipts share one settlement notification.
 
-use super::{AgentError, QueuedInvocation, SteeringDelivery};
+use super::scheduling::QueuedInvocation;
+use super::{AdmissionEvidence, AgentError, QueueAdmission, SteeringDelivery, SteeringEvidence};
 use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode},
     permissions::ActionContext,
@@ -14,8 +15,11 @@ use tokio::sync::watch;
 pub(super) type Settlement = Option<Result<ExecutionOutcome, AgentError>>;
 
 pub(super) enum SubmissionReceipt {
-    Queued(watch::Receiver<Settlement>),
-    Steering(Result<ExecutionId, AgentError>),
+    Queued {
+        result: watch::Receiver<Settlement>,
+        evidence: AdmissionEvidence,
+    },
+    Steering(Result<(ExecutionId, SteeringEvidence), AgentError>),
 }
 
 pub(super) async fn recover(
@@ -29,18 +33,20 @@ pub(super) async fn recover(
     if record.request != *input || record.actor != *actor || record.submission != mode {
         return Some(Err(AgentError::SubmissionConflict));
     }
-    let queued = |result| {
-        Ok(SteeringDelivery::Queued(QueuedInvocation::new(
-            input.execution_id.clone(),
-            result,
+    let queued = |result, evidence| {
+        Ok(SteeringDelivery::Queued(QueueAdmission::new(
+            QueuedInvocation::new(input.execution_id.clone(), result),
+            evidence,
         )))
     };
     if let Some(receipt) = receipts.get(&input.execution_id) {
         return Some(match receipt {
-            SubmissionReceipt::Queued(result) => queued(result.clone()),
+            SubmissionReceipt::Queued { result, evidence } => {
+                queued(result.clone(), evidence.clone())
+            }
             SubmissionReceipt::Steering(result) => result
                 .clone()
-                .map(|target| SteeringDelivery::Injected { target }),
+                .map(|(target, evidence)| SteeringDelivery::Injected { target, evidence }),
         });
     }
     // Restored evidence is a receipt, never an instruction to replay provider work.
@@ -54,7 +60,10 @@ pub(super) async fn recover(
                 event
                     .target
                     .clone()
-                    .map(|target| SteeringDelivery::Injected { target })
+                    .map(|target| SteeringDelivery::Injected {
+                        target,
+                        evidence: SteeringEvidence::Acknowledged,
+                    })
                     .ok_or(AgentError::SubmissionUnresolved),
             );
         }
@@ -83,5 +92,5 @@ pub(super) async fn recover(
             .unwrap_or(AgentError::SubmissionUnresolved)));
     }
     let (_, receiver) = watch::channel(Some(result));
-    Some(queued(receiver))
+    Some(queued(receiver, AdmissionEvidence::Acknowledged))
 }

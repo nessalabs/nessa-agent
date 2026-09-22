@@ -1,7 +1,7 @@
 use super::{
     attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, QueueHistoryRecord, SessionSnapshot, SessionStorage,
-    SessionStorageLease, StorageError,
+    InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -12,7 +12,7 @@ use crate::application::agent_execution::{
     permissions::ActionContext,
     providers::{
         AgentProvider, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
-        OpenedProviderSession,
+        ProviderSession,
     },
     tools::ToolReviewInput,
 };
@@ -73,12 +73,17 @@ pub struct SessionManager {
     // Retained IDs authorize only validated trailing permission cancellations.
     // Imported history never reconstructs this live authority.
     dispatched: RwLock<HashMap<ExecutionId, ObservationAuthority>>,
-    attachment: Option<Arc<AttachmentLease>>,
+    attachment: Arc<AttachmentLease>,
 }
 #[derive(Clone, Copy)]
 enum ObservationAuthority {
     Output,
     CancellationOnly,
+}
+#[derive(Clone)]
+pub(crate) struct AttachedProvider {
+    pub(crate) session: ProviderSession,
+    pub(crate) events: Arc<Mutex<Box<dyn ExecutionEventStream>>>,
 }
 // Retire output authority even if provider polling, hooks, or storage panic.
 // The provider reply alone does not end observation: buffered events still drain.
@@ -131,7 +136,7 @@ impl SessionManager {
             storage_lease: Arc::from(storage_lease),
             evidence: Arc::new(Mutex::new(Evidence::default())),
             dispatched: RwLock::new(HashMap::new()),
-            attachment: None,
+            attachment: Arc::new(AttachmentLease::empty()),
         })
     }
     /// Returns the local conversation key used to acquire storage access.
@@ -147,13 +152,11 @@ impl SessionManager {
     pub(crate) async fn await_admission_writes(&self) {
         drop(self.evidence.lock().await);
     }
-    pub(crate) async fn initialize(
+    pub(crate) async fn prepare(
         &mut self,
         provider: &dyn AgentProvider,
-    ) -> Result<OpenedProviderSession, AgentError> {
-        let saved = self
-            .storage_lease
-            .load()
+    ) -> Result<ProviderContext, AgentError> {
+        let saved = catch_storage_operation(|| self.storage_lease.load())
             .await
             .map_err(StorageError::bounded)
             .map_err(AgentError::Storage)?;
@@ -163,33 +166,68 @@ impl SessionManager {
                 return Err(AgentError::Storage(error));
             }
         }
-        // Custom storage may transfer Vec/String spare capacity. After borrowed
-        // payload preflight, clone once to compact owned DTO allocations and drop
-        // the transferred snapshot before opening a provider. This temporarily
-        // copies full history; history length remains intentionally unbounded.
         let compacted = saved.as_ref().cloned();
         drop(saved);
-        let saved = compacted;
         let identity = provider.identity();
-        if saved
+        if compacted
             .as_ref()
             .is_some_and(|snapshot| snapshot.id != self.id || snapshot.provider != identity)
         {
             return Err(AgentError::Storage(StorageError::IdentityMismatch));
         }
-        let restore = saved
-            .as_ref()
-            .map(|snapshot| snapshot.provider_session_id.clone());
-        // Keep this manager and its lease outside every adapter callback,
-        // including future construction and destruction after a ready result.
+        let created = compacted.is_none();
+        let mut snapshot = compacted.unwrap_or_else(|| SessionSnapshot {
+            queue_history: Vec::new(),
+            id: self.id.clone(),
+            provider: identity,
+            provider_context: ProviderContext::Absent,
+            invocations: Vec::new(),
+        });
+        let mut changed = created;
+        if !super::queue_validation::replay(&snapshot)
+            .map_err(AgentError::Storage)?
+            .is_empty()
+        {
+            Self::append_queue_mutation(&mut snapshot, QueueMutation::Restored, None)
+                .map_err(AgentError::Storage)?;
+            changed = true;
+        }
+        if changed {
+            catch_storage_operation(|| self.storage_lease.save(snapshot.clone()))
+                .await
+                .map_err(StorageError::bounded)
+                .map_err(AgentError::Storage)?;
+        }
+        let context = snapshot.provider_context.clone();
+        *self.evidence.lock().await = Evidence {
+            event_usage: HashMap::new(),
+            message_histories: HashMap::new(),
+            observed: Some(snapshot.clone()),
+            committed: Some(snapshot),
+        };
+        Ok(context)
+    }
+
+    pub(crate) async fn attach(
+        &self,
+        provider: &dyn AgentProvider,
+    ) -> Result<AttachedProvider, AgentError> {
+        let snapshot = self
+            .evidence
+            .lock()
+            .await
+            .observed
+            .clone()
+            .expect("prepared session evidence");
+        let restore = snapshot.provider_context.recorded().cloned();
         let opening = catch_unwind(AssertUnwindSafe(|| provider.open(restore.clone())));
         let mut opening = match opening {
             Ok(opening) => opening,
             Err(payload) => {
                 std::mem::forget(payload);
-                self.attachment = Some(Arc::new(AttachmentLease::unknown_open(
-                    self.storage_lease.clone(),
-                )));
+                self.attachment
+                    .arm_unknown_open(self.storage_lease.clone())
+                    .await;
                 return Err(AgentError::CleanupUncertain);
             }
         };
@@ -204,8 +242,7 @@ impl SessionManager {
             }
         })
         .await;
-        let dropped = catch_unwind(AssertUnwindSafe(|| drop(opening)));
-        let drop_panicked = match dropped {
+        let drop_panicked = match catch_unwind(AssertUnwindSafe(|| drop(opening))) {
             Ok(()) => false,
             Err(payload) => {
                 std::mem::forget(payload);
@@ -216,13 +253,9 @@ impl SessionManager {
             let mut cause = AgentError::CleanupUncertain;
             match result {
                 Some(Ok(opened)) => {
-                    let attachment = Arc::new(AttachmentLease::new(
-                        self.storage_lease.clone(),
-                        opened.session,
-                    ));
-                    self.attachment = Some(attachment.clone());
-                    attachment
-                        .retain_events(Arc::new(Mutex::new(opened.events)))
+                    let events = Arc::new(Mutex::new(opened.events));
+                    self.attachment
+                        .arm(self.storage_lease.clone(), opened.session, events)
                         .await;
                 }
                 Some(Err(error)) => {
@@ -231,17 +264,23 @@ impl SessionManager {
                         operation_error: Box::new(error),
                         cleanup_error: Box::new(AgentError::CleanupUncertain),
                     };
-                    self.attachment = Some(Arc::new(match cleanup {
+                    match cleanup {
                         Some(cleanup) => {
-                            AttachmentLease::failed_open(self.storage_lease.clone(), cleanup)
+                            self.attachment
+                                .arm_failed_open(self.storage_lease.clone(), cleanup)
+                                .await
                         }
-                        None => AttachmentLease::unknown_open(self.storage_lease.clone()),
-                    }));
+                        None => {
+                            self.attachment
+                                .arm_unknown_open(self.storage_lease.clone())
+                                .await
+                        }
+                    }
                 }
                 None => {
-                    self.attachment = Some(Arc::new(AttachmentLease::unknown_open(
-                        self.storage_lease.clone(),
-                    )))
+                    self.attachment
+                        .arm_unknown_open(self.storage_lease.clone())
+                        .await
                 }
             }
             return Err(cause);
@@ -251,75 +290,76 @@ impl SessionManager {
             Err(error) => {
                 let (cause, cleanup) = error.into_parts();
                 if let Some(cleanup) = cleanup {
-                    self.attachment = Some(Arc::new(AttachmentLease::failed_open(
-                        self.storage_lease.clone(),
-                        cleanup,
-                    )));
+                    self.attachment
+                        .arm_failed_open(self.storage_lease.clone(), cleanup)
+                        .await;
                 }
                 return Err(cause);
             }
         };
-        let attachment = Arc::new(AttachmentLease::new(
-            self.storage_lease.clone(),
-            opened.session.clone(),
-        ));
-        self.attachment = Some(attachment.clone());
         if restore.as_ref().is_some_and(|id| id != opened.session.id()) {
-            let cleanup_result = attachment.cleanup().await;
+            self.attachment
+                .arm(
+                    self.storage_lease.clone(),
+                    opened.session,
+                    Arc::new(Mutex::new(opened.events)),
+                )
+                .await;
+            let cleanup_result = self.attachment.cleanup().await;
             return Err(AgentError::StorageInitialization {
                 error: StorageError::IdentityMismatch,
                 cleanup_result: Box::new(cleanup_result.into_result()),
             });
         }
-        let mut snapshot = saved.unwrap_or_else(|| SessionSnapshot {
-            queue_history: Vec::new(),
-            id: self.id.clone(),
-            provider: identity,
-            provider_session_id: opened.session.id().clone(),
-            invocations: Vec::new(),
-        });
-        if !super::queue_validation::replay(&snapshot)
-            .map_err(AgentError::Storage)?
-            .is_empty()
-        {
-            Self::append_queue_mutation(&mut snapshot, QueueMutation::Restored, None)
-                .map_err(AgentError::Storage)?;
+        if opened.session.capabilities() != provider.capabilities() {
+            self.attachment
+                .arm(
+                    self.storage_lease.clone(),
+                    opened.session,
+                    Arc::new(Mutex::new(opened.events)),
+                )
+                .await;
+            let cleanup_result = self.attachment.cleanup().await;
+            return Err(AgentError::StorageInitialization {
+                error: StorageError::IdentityMismatch,
+                cleanup_result: Box::new(cleanup_result.into_result()),
+            });
         }
-        if let Err(error) = self
-            .storage_lease
-            .save(snapshot.clone())
+        let session = opened.session;
+        let events = Arc::new(Mutex::new(opened.events));
+        self.attachment
+            .arm(self.storage_lease.clone(), session.clone(), events.clone())
+            .await;
+        let mut next = snapshot;
+        next.provider_context = ProviderContext::Recorded(session.id().clone());
+        if let Err(error) = catch_storage_operation(|| self.storage_lease.save(next.clone()))
             .await
             .map_err(StorageError::bounded)
         {
-            let cleanup_result = attachment.cleanup().await;
+            let cleanup_result = self.attachment.cleanup().await;
             return Err(AgentError::StorageInitialization {
                 error,
                 cleanup_result: Box::new(cleanup_result.into_result()),
             });
         }
-        *self.evidence.lock().await = Evidence {
-            event_usage: HashMap::new(),
-            message_histories: HashMap::new(),
-            observed: Some(snapshot.clone()),
-            committed: Some(snapshot),
-        };
-        Ok(opened)
+        let mut evidence = self.evidence.lock().await;
+        evidence.observed = Some(next.clone());
+        evidence.committed = Some(next);
+        Ok(AttachedProvider { session, events })
     }
     pub(crate) fn attachment_cleanup(&self) -> Option<Arc<AttachmentLease>> {
-        self.attachment.clone()
+        self.attachment
+            .needs_cleanup()
+            .then(|| self.attachment.clone())
     }
-    pub(crate) fn take_attachment(&mut self) -> Arc<AttachmentLease> {
-        self.attachment.take().expect("initialized attachment")
+    pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {
+        self.attachment.clone()
     }
     pub(crate) fn protective_storage_lease(&self) -> Arc<dyn SessionStorageLease> {
         self.storage_lease.clone()
     }
     pub(crate) async fn attached(&self, events: Arc<Mutex<Box<dyn ExecutionEventStream>>>) {
-        self.attachment
-            .as_ref()
-            .expect("initialized attachment")
-            .attached(events)
-            .await;
+        self.attachment.attached(events).await;
     }
     pub(crate) async fn begin(
         &self,
@@ -370,6 +410,11 @@ impl SessionManager {
                     "execution ID already belongs to a saved invocation".into(),
                 ));
             }
+            if snapshot.invocations.len() >= SessionSnapshot::MAX_INVOCATIONS {
+                return Err(AgentError::InvalidInput(
+                    "session retained invocation limit reached".into(),
+                ));
+            }
             let mut next = snapshot.clone();
             let target_event_offset = scheduling
                 .first()
@@ -418,7 +463,7 @@ impl SessionManager {
                         let next = evidence.observed.as_ref().expect("reserved admission");
                         let absent = saved.id == next.id
                             && saved.provider == next.provider
-                            && saved.provider_session_id == next.provider_session_id
+                            && saved.provider_context == next.provider_context
                             && super::validation::validate(&saved).is_ok()
                             && !saved.invocations.iter().any(|record| {
                                 record.request.execution_id
@@ -1098,6 +1143,37 @@ impl SessionManager {
             .record_local_result(result.as_ref().copied().map_err(|_| ()))
             .map_err(|error| StorageError::Corrupt(error.to_string()))?;
         Ok(history.local_outcome())
+    }
+}
+
+async fn catch_storage_operation<'a, T>(
+    operation: impl FnOnce() -> StorageFuture<'a, T>,
+) -> Result<T, StorageError>
+where
+    T: 'a,
+{
+    let operation = catch_unwind(AssertUnwindSafe(operation));
+    let Ok(mut operation) = operation else {
+        return Err(StorageError::Io(
+            "session storage operation construction panicked".into(),
+        ));
+    };
+    let result = poll_fn(|context| {
+        match catch_unwind(AssertUnwindSafe(|| operation.as_mut().poll(context))) {
+            Ok(poll) => poll.map(Some),
+            Err(payload) => {
+                std::mem::forget(payload);
+                Poll::Ready(None)
+            }
+        }
+    })
+    .await;
+    let dropped = catch_unwind(AssertUnwindSafe(|| drop(operation))).is_ok();
+    match (result, dropped) {
+        (Some(result), true) => result,
+        _ => Err(StorageError::Io(
+            "session storage operation panicked".into(),
+        )),
     }
 }
 

@@ -73,6 +73,8 @@ impl AgentError {
                 | Self::CleanupUncertain
                 | Self::AuditFailure
                 | Self::AuditAndCleanupFailure
+                | Self::AttachmentUnavailable(_)
+                | Self::AttachmentAuthorizationStale
                 | Self::PermissionAnswerDeliveryAndAuditFailure { .. } => {}
             }
             if bytes > MAX_BYTES || nodes > MAX_NODES {

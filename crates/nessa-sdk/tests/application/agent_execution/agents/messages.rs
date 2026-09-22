@@ -26,7 +26,7 @@ async fn message_byte_limit_precedes_every_admission_save() {
         for oversized in [false, true] {
             let storage = MemoryStorage::default();
             let provider = TestProvider::new();
-            let agent = Agent::new(provider.clone(), storage.manager().await)
+            let agent = attached_agent(provider.clone(), storage.manager().await)
                 .await
                 .unwrap();
             let writes = storage.0.lock().unwrap().writes;
@@ -64,7 +64,7 @@ async fn message_byte_limit_precedes_every_admission_save() {
 #[tokio::test]
 async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(TestProvider::new(), storage.manager().await)
+    let agent = attached_agent(TestProvider::new(), storage.manager().await)
         .await
         .unwrap();
     agent.invoke(request("saved"), actor()).await.unwrap();
@@ -85,7 +85,7 @@ async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
     let writes = storage.0.lock().unwrap().writes;
     let provider = TestProvider::new();
     assert!(
-        matches!(Agent::new(provider.clone(), storage.manager().await).await,
+        matches!(attached_agent(provider.clone(), storage.manager().await).await,
         Err(error) if matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_))))
     );
     assert!(provider.calls.opens.lock().unwrap().is_empty());
@@ -107,7 +107,7 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
         for text in [Some("look at this"), None] {
             let storage = MemoryStorage::default();
             let provider = TestProvider::new();
-            let agent = Agent::new(provider.clone(), storage.manager().await)
+            let agent = attached_agent(provider.clone(), storage.manager().await)
                 .await
                 .unwrap();
             let writes = storage.0.lock().unwrap().writes;
@@ -209,6 +209,9 @@ fn image_capabilities() -> EffectiveCapabilities {
 impl AgentProvider for ImageProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("fixture", "fixture", "workspace").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
     }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
@@ -314,7 +317,7 @@ async fn every_entry(
     for operation in 0..4 {
         let storage = MemoryStorage::default();
         let provider = ImageProvider::new(agent_answer, refuses.clone());
-        let agent = Agent::new(provider.clone(), storage.manager().await)
+        let agent = attached_agent(provider.clone(), storage.manager().await)
             .await
             .unwrap();
         let writes = storage.0.lock().unwrap().writes;

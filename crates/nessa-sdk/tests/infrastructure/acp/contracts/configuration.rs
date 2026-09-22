@@ -500,23 +500,21 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
             .unwrap();
         let error = timeout(
             Duration::from_secs(3),
-            Agent::new(Arc::new(binding), manager),
+            attached_agent(Arc::new(binding), manager),
         )
         .await
         .unwrap()
         .err()
         .expect("startup must fail");
         assert_eq!(
-            error.cause(),
-            &AgentError::OperationAndCleanupFailure {
+            error,
+            AgentError::OperationAndCleanupFailure {
                 operation_error: Box::new(AgentError::Protocol(
                     "provider permission mode is not default".into()
                 )),
                 cleanup_error: Box::new(AgentError::AuditFailure),
             }
         );
-        assert!(!error.needs_cleanup());
-        error.retry_cleanup().await.unwrap();
         drop(SessionManager::open(Some(id), storage).await.unwrap());
         assert_gone(&root, "pid");
     }
@@ -579,13 +577,13 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
     let manager = SessionManager::open(Some(id.clone()), storage.clone())
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(binding), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(binding), manager).await.unwrap();
     let provider_id = agent
         .session_manager()
         .snapshot()
         .await
         .unwrap()
-        .provider_session_id;
+        .provider_context;
     agent.close(close_action()).await.unwrap();
     let invoking = tokio::spawn({
         let agent = agent.clone();

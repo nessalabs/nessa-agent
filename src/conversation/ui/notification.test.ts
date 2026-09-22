@@ -2,6 +2,65 @@ import { describe, expect, it } from "vitest"
 import { conversation } from "../model"
 import { conversationNotice } from "./notification"
 
+it("shows a late bounded startup failure from the replacement view", () => {
+  const value = conversation("tab")
+  value.remote = {
+    running: false,
+    permissions: [],
+    tools: [],
+    pending: [],
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: false,
+      permissions: false,
+      imageInput: false,
+    },
+    lifecycle: {
+      phase: "failed",
+      failure: { code: "provider", message: "The configured agent did not start." },
+    },
+    queueComplete: true,
+    truncated: false,
+  }
+  expect(conversationNotice(value)).toEqual({
+    title: "Agent could not start",
+    description: "The configured agent did not start.",
+    retry: { kind: "refresh" },
+  })
+})
+
+it("shows late mandatory lifecycle evidence failure after attachment succeeds", () => {
+  const value = conversation("tab")
+  value.remote = {
+    running: false,
+    permissions: [],
+    tools: [],
+    pending: [],
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: false,
+      permissions: false,
+      imageInput: false,
+    },
+    lifecycle: {
+      phase: "attached",
+      evidenceFailure: {
+        code: "audit",
+        message: "Attachment audit was not acknowledged.",
+      },
+    },
+    queueComplete: true,
+    truncated: false,
+  }
+  expect(conversationNotice(value)).toEqual({
+    title: "Agent lifecycle record failed",
+    description: "Attachment audit was not acknowledged.",
+    retry: { kind: "refresh" },
+  })
+})
+
 describe("conversation notification", () => {
   it("keeps uncertain admission retry tied to its original execution", () => {
     const value = conversation("tab")

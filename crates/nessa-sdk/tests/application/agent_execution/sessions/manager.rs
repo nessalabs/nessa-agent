@@ -74,7 +74,9 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         queue_history: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        provider_session_id: ExecutionSessionId::new("provider-session").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("provider-session").unwrap(),
+        ),
         invocations,
     };
     lease.save(snapshot.clone()).await.unwrap();

@@ -5,7 +5,10 @@ use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
 use super::{Agent, AgentError};
 use crate::application::agent_execution::{
-    executions::{ExecutionAuditRecord, ExecutionRequest, QueueOrderRecord, SubmissionMode},
+    executions::{
+        ExecutionAuditRecord, ExecutionRequest, QueueAdmissionRecord, QueueOrderRecord,
+        SteeringAcknowledgementRecord, SubmissionMode,
+    },
     permissions::ActionContext,
     providers::{
         CloseOutcome, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
@@ -53,6 +56,95 @@ pub struct QueuedInvocation {
     id: ExecutionId,
     result: watch::Receiver<Settlement>,
 }
+
+/// Why mandatory queue-admission evidence was not acknowledged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmissionEvidenceFailure {
+    audit: Option<AgentError>,
+    storage: Option<StorageError>,
+}
+impl AdmissionEvidenceFailure {
+    fn new(audit: Option<AgentError>, storage: Option<StorageError>) -> Option<Self> {
+        (audit.is_some() || storage.is_some()).then_some(Self { audit, storage })
+    }
+    /// Mandatory audit failure, when the sink did not acknowledge ownership.
+    pub fn audit(&self) -> Option<&AgentError> {
+        self.audit.as_ref()
+    }
+    /// Durable snapshot failure, when queue or delivery evidence was not saved.
+    pub fn storage(&self) -> Option<&StorageError> {
+        self.storage.as_ref()
+    }
+    fn retain_storage(&mut self, storage: StorageError) {
+        self.storage.get_or_insert(storage);
+    }
+}
+
+/// Whether mandatory admission evidence was acknowledged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdmissionEvidence {
+    /// Audit and storage acknowledged queue admission.
+    Acknowledged,
+    /// The Agent still owns the receipt; inspect this separate evidence failure.
+    Failed(AdmissionEvidenceFailure),
+}
+
+/// Evidence acknowledgement accompanying a confirmed native steering effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SteeringEvidence {
+    /// Audit and durable scheduling evidence acknowledged the provider effect.
+    Acknowledged,
+    /// The provider effect remains confirmed despite a later evidence failure.
+    Failed(AdmissionEvidenceFailure),
+}
+
+/// Owned queue admission with its stable receipt and evidence acknowledgement.
+pub struct QueueAdmission {
+    receipt: QueuedInvocation,
+    evidence: AdmissionEvidence,
+}
+impl QueueAdmission {
+    pub(super) fn new(receipt: QueuedInvocation, evidence: AdmissionEvidence) -> Self {
+        Self { receipt, evidence }
+    }
+    /// Stable execution identity retained by the owned receipt.
+    pub fn id(&self) -> &ExecutionId {
+        self.receipt.id()
+    }
+    /// Independent audit/storage acknowledgement for this admission.
+    pub fn evidence(&self) -> &AdmissionEvidence {
+        &self.evidence
+    }
+    /// Consume this receipt and wait for invocation settlement.
+    /// Inspect [`Self::evidence`] first when acknowledgement details matter.
+    pub async fn wait(self) -> Result<ExecutionOutcome, AgentError> {
+        self.receipt.wait().await
+    }
+    fn retain_storage_failure(&mut self, storage: StorageError) {
+        match &mut self.evidence {
+            AdmissionEvidence::Acknowledged => {
+                self.evidence = AdmissionEvidence::Failed(AdmissionEvidenceFailure {
+                    audit: None,
+                    storage: Some(storage),
+                });
+            }
+            AdmissionEvidence::Failed(failure) => failure.retain_storage(storage),
+        }
+    }
+}
+impl SteeringEvidence {
+    fn retain_storage_failure(&mut self, storage: StorageError) {
+        match self {
+            Self::Acknowledged => {
+                *self = Self::Failed(AdmissionEvidenceFailure {
+                    audit: None,
+                    storage: Some(storage),
+                });
+            }
+            Self::Failed(failure) => failure.retain_storage(storage),
+        }
+    }
+}
 impl QueuedInvocation {
     pub(super) fn new(id: ExecutionId, result: watch::Receiver<Settlement>) -> Self {
         Self { id, result }
@@ -86,9 +178,11 @@ pub enum SteeringDelivery {
     Injected {
         /// Active execution that accepted this additional input.
         target: ExecutionId,
+        /// Audit/storage acknowledgement retained separately from provider acknowledgement.
+        evidence: SteeringEvidence,
     },
     /// No turn consumed the input; it was admitted for the next invocation boundary.
-    Queued(QueuedInvocation),
+    Queued(QueueAdmission),
 }
 
 /// Result of removing an input from the local pending queue.
@@ -208,7 +302,7 @@ impl Agent {
         &self,
         input: ExecutionRequest,
         actor: ActionContext,
-    ) -> Result<QueuedInvocation, AgentError> {
+    ) -> Result<QueueAdmission, AgentError> {
         self.enqueue_kind(input, actor, InvocationKind::Queued)
             .await
     }
@@ -221,7 +315,7 @@ impl Agent {
         &self,
         input: ExecutionRequest,
         actor: ActionContext,
-    ) -> Result<QueuedInvocation, AgentError> {
+    ) -> Result<QueueAdmission, AgentError> {
         self.enqueue_kind(input, actor, InvocationKind::Steering)
             .await
     }
@@ -316,7 +410,7 @@ impl Agent {
                     .catch_scheduling_panic(async {
                         tokio::select! { biased;
                             _ = close.changed() => Err(AgentError::Closed),
-                            result = agent.inner.session.record_audit(
+                            result = agent.inner.audit.record(
                                 ExecutionAuditRecord::QueueReordered(
                                     QueueOrderRecord::caller_requested(
                                         agent.inner.manager.id().clone(),
@@ -539,7 +633,7 @@ impl Agent {
         input: ExecutionRequest,
         actor: ActionContext,
         kind: InvocationKind,
-    ) -> Result<QueuedInvocation, AgentError> {
+    ) -> Result<QueueAdmission, AgentError> {
         let agent = self.clone();
         tokio::spawn(async move { agent.accept_work(input, actor, kind).await })
             .await
@@ -551,7 +645,7 @@ impl Agent {
         input: ExecutionRequest,
         actor: ActionContext,
         kind: InvocationKind,
-    ) -> Result<QueuedInvocation, AgentError> {
+    ) -> Result<QueueAdmission, AgentError> {
         let mut scheduler = self.inner.scheduler.lock().await;
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
@@ -571,7 +665,6 @@ impl Agent {
                 SteeringDelivery::Injected { .. } => Err(AgentError::SubmissionConflict),
             };
         }
-        self.inner.session.validate(&input)?;
         let work = self.inner.lifecycle.accept_waiting_work()?;
         scheduler
             .queue
@@ -603,7 +696,19 @@ impl Agent {
         let id = input.execution_id.clone();
         let audit_actor = actor.clone();
         let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
-        let notice = self.inner.lifecycle.close_notice();
+        let audit_record = ExecutionAuditRecord::QueueAdmitted(QueueAdmissionRecord::submitted(
+            self.inner.manager.id().clone(),
+            id.clone(),
+            mode,
+            audit_actor.clone(),
+        ));
+        let audit = match self
+            .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+            .await
+        {
+            Ok(result) => result.err(),
+            Err(()) => Some(AgentError::AuditFailure),
+        };
         let saved = self
             .catch_scheduling_panic(self.inner.manager.record_queue_admission(
                 id.clone(),
@@ -611,20 +716,50 @@ impl Agent {
                 audit_actor,
             ))
             .await;
-        match saved {
-            Ok(saved) => {
-                // Even failed acknowledgement keeps its owner and stable receipt.
-                // The runner must save the retained evidence before provider entry.
-                self.start_runner(&mut scheduler);
-                saved.map_err(AgentError::Storage)?;
-                Ok(receipt)
-            }
-            Err(()) => {
-                drop(scheduler);
-                self.recover_scheduling_panic(None, &notice).await?;
-                Err(AgentError::SubmissionUnresolved)
-            }
+        let storage = match saved {
+            Ok(saved) => saved.err(),
+            Err(()) => Some(StorageError::Io(
+                "queue admission evidence persistence panicked".into(),
+            )),
+        };
+        let failure = AdmissionEvidenceFailure::new(audit, storage);
+        let acknowledged = failure.is_none();
+        let evidence = failure.map_or(AdmissionEvidence::Acknowledged, AdmissionEvidence::Failed);
+        let mut admission = QueueAdmission::new(receipt, evidence);
+        if let Some(SubmissionReceipt::Queued {
+            evidence: retained, ..
+        }) = scheduler.receipts.get_mut(&id)
+        {
+            *retained = admission.evidence.clone();
         }
+        if acknowledged {
+            self.start_runner(&mut scheduler);
+            return Ok(admission);
+        }
+        let attempt = self.start_shutdown(SessionCloseRequest::ExecutionFailed);
+        if let Err(AgentError::Storage(error)) = self
+            .cancel_pending(&mut scheduler, SchedulingCause::RunnerStopped, None)
+            .await
+        {
+            admission.retain_storage_failure(error);
+        }
+        if let Some(SubmissionReceipt::Queued {
+            evidence: retained, ..
+        }) = scheduler.receipts.get_mut(&id)
+        {
+            *retained = admission.evidence.clone();
+        }
+        drop(scheduler);
+        let agent = self.clone();
+        tokio::spawn(async move {
+            let cleanup = attempt.clone().wait().await;
+            let _ = agent
+                .inner
+                .lifecycle
+                .finalize_stop(&attempt, &cleanup)
+                .await;
+        });
+        Ok(admission)
     }
 
     fn accept_pending(
@@ -638,9 +773,13 @@ impl Agent {
     ) -> QueuedInvocation {
         let (reply, result) = watch::channel(None);
         let id = input.execution_id.clone();
-        scheduler
-            .receipts
-            .insert(id.clone(), SubmissionReceipt::Queued(result.clone()));
+        scheduler.receipts.insert(
+            id.clone(),
+            SubmissionReceipt::Queued {
+                result: result.clone(),
+                evidence: AdmissionEvidence::Acknowledged,
+            },
+        );
         scheduler.pending.insert(
             id.clone(),
             Pending {
@@ -655,7 +794,7 @@ impl Agent {
         );
         QueuedInvocation { id, result }
     }
-    fn start_runner(&self, scheduler: &mut Scheduler) {
+    pub(super) fn start_runner(&self, scheduler: &mut Scheduler) {
         if !scheduler.running {
             scheduler.running = true;
             let agent = self.clone();
@@ -685,6 +824,27 @@ impl Agent {
                     if let Err(error) = self.settle_stopped_pending(&mut scheduler).await {
                         tracing::warn!(?error, "failed to save stopped queue receipts");
                     }
+                    scheduler.running = false;
+                    return;
+                }
+                if self.inner.lifecycle.attachment_status().phase()
+                    != super::AttachmentPhase::Attached
+                {
+                    scheduler.running = false;
+                    return;
+                }
+                let Some((next, _)) = scheduler.queue.pending().first().cloned() else {
+                    scheduler.running = false;
+                    return;
+                };
+                if let Err(error) = scheduler
+                    .pending
+                    .get(&next)
+                    .expect("queued input has pending owner")
+                    ._work
+                    .activate()
+                {
+                    tracing::debug!(?error, "queue activation fenced before selection");
                     scheduler.running = false;
                     return;
                 }
@@ -734,7 +894,6 @@ impl Agent {
         pending: &Pending,
         selection: Result<(), StorageError>,
     ) -> Result<ExecutionOutcome, AgentError> {
-        pending._work.activate();
         let dispatch = self
             .inner
             .manager
@@ -1035,7 +1194,6 @@ impl Agent {
         {
             return recovered;
         }
-        self.inner.session.validate(&input)?;
         let close_notice = self.inner.lifecycle.close_notice();
         if !self.inner.lifecycle.accepts_queued() {
             return Err(AgentError::Closed);
@@ -1074,7 +1232,7 @@ impl Agent {
         } else {
             match &target {
                 Some(target) => {
-                    work_owner.as_ref().expect("steering owner").activate();
+                    work_owner.as_ref().expect("steering owner").activate()?;
                     self.deliver_native_steering(target.clone(), input.clone())
                         .await
                 }
@@ -1084,10 +1242,24 @@ impl Agent {
         let id = input.execution_id.clone();
         let delivery = match outcome {
             Ok(SteeringOutcome::Injected) => {
+                let target = target.expect("active injection target");
+                let audit_record = ExecutionAuditRecord::SteeringAcknowledged(
+                    SteeringAcknowledgementRecord::provider_acknowledged(
+                        self.inner.manager.id().clone(),
+                        id.clone(),
+                        target.clone(),
+                        actor.clone(),
+                    ),
+                );
+                let audit = match self
+                    .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+                    .await
+                {
+                    Ok(result) => result.err(),
+                    Err(()) => Some(AgentError::AuditFailure),
+                };
                 let saved = self
-                    .inner
-                    .manager
-                    .record_scheduling(
+                    .catch_scheduling_panic(self.inner.manager.record_scheduling(
                         index,
                         event(
                             InvocationKind::Steering,
@@ -1097,30 +1269,37 @@ impl Agent {
                             SchedulingCause::SteeringInjected,
                             None,
                         ),
-                    )
+                    ))
                     .await;
-                if let Err(error) = saved {
-                    let error = self
+                let storage = match saved {
+                    Ok(result) => result.err(),
+                    Err(()) => Some(StorageError::Io(
+                        "native steering evidence persistence panicked".into(),
+                    )),
+                };
+                let failure = AdmissionEvidenceFailure::new(audit, storage);
+                let evidence =
+                    failure.map_or(SteeringEvidence::Acknowledged, SteeringEvidence::Failed);
+                if matches!(evidence, SteeringEvidence::Failed(_)) {
+                    let attempt = self.start_shutdown(SessionCloseRequest::ExecutionFailed);
+                    let _ = self
                         .stop_after_steering(
                             &mut scheduler,
-                            AgentError::Storage(error),
+                            AgentError::SubmissionUnresolved,
                             &close_notice,
                         )
                         .await;
-                    let error = self
-                        .inner
-                        .manager
-                        .settle_submission(index, Err(error))
-                        .await
-                        .expect_err("failed steering receipt");
-                    scheduler
-                        .receipts
-                        .insert(id, SubmissionReceipt::Steering(Err(error.clone())));
-                    return Err(error);
+                    let agent = self.clone();
+                    tokio::spawn(async move {
+                        let cleanup = attempt.clone().wait().await;
+                        let _ = agent
+                            .inner
+                            .lifecycle
+                            .finalize_stop(&attempt, &cleanup)
+                            .await;
+                    });
                 }
-                Ok(SteeringDelivery::Injected {
-                    target: target.expect("active injection target"),
-                })
+                Ok(SteeringDelivery::Injected { target, evidence })
             }
             Ok(SteeringOutcome::PromptRequired) => {
                 scheduler
@@ -1137,6 +1316,20 @@ impl Agent {
                     target,
                     work_owner.take().expect("admitted steering owner"),
                 );
+                let audit_record =
+                    ExecutionAuditRecord::QueueAdmitted(QueueAdmissionRecord::submitted(
+                        self.inner.manager.id().clone(),
+                        id.clone(),
+                        SubmissionMode::Steering,
+                        audit_actor.clone(),
+                    ));
+                let audit = match self
+                    .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
+                    .await
+                {
+                    Ok(result) => result.err(),
+                    Err(()) => Some(AgentError::AuditFailure),
+                };
                 let saved = self
                     .catch_scheduling_panic(self.inner.manager.record_queue_admission(
                         id.clone(),
@@ -1144,22 +1337,50 @@ impl Agent {
                         audit_actor,
                     ))
                     .await;
-                match saved {
-                    Ok(saved) => {
-                        self.start_runner(&mut scheduler);
-                        // Do not replace the queued receipt with a native-steering
-                        // error: retries must recover the same waiting owner.
-                        if let Err(error) = saved {
-                            return Err(AgentError::Storage(error));
-                        }
-                        Ok(SteeringDelivery::Queued(receipt))
-                    }
-                    Err(()) => {
-                        drop(scheduler);
-                        self.recover_scheduling_panic(None, &close_notice).await?;
-                        return Err(AgentError::SubmissionUnresolved);
-                    }
+                let storage = match saved {
+                    Ok(saved) => saved.err(),
+                    Err(()) => Some(StorageError::Io(
+                        "queue admission evidence persistence panicked".into(),
+                    )),
+                };
+                let failure = AdmissionEvidenceFailure::new(audit, storage);
+                let acknowledged = failure.is_none();
+                let evidence =
+                    failure.map_or(AdmissionEvidence::Acknowledged, AdmissionEvidence::Failed);
+                let mut admission = QueueAdmission::new(receipt, evidence);
+                if let Some(SubmissionReceipt::Queued {
+                    evidence: retained, ..
+                }) = scheduler.receipts.get_mut(&id)
+                {
+                    *retained = admission.evidence.clone();
                 }
+                if acknowledged {
+                    self.start_runner(&mut scheduler);
+                } else {
+                    let attempt = self.start_shutdown(SessionCloseRequest::ExecutionFailed);
+                    if let Err(AgentError::Storage(error)) = self
+                        .cancel_pending(&mut scheduler, SchedulingCause::RunnerStopped, None)
+                        .await
+                    {
+                        admission.retain_storage_failure(error);
+                    }
+                    if let Some(SubmissionReceipt::Queued {
+                        evidence: retained, ..
+                    }) = scheduler.receipts.get_mut(&id)
+                    {
+                        *retained = admission.evidence.clone();
+                    }
+                    let agent = self.clone();
+                    tokio::spawn(async move {
+                        let cleanup = attempt.clone().wait().await;
+                        let _ = agent
+                            .inner
+                            .lifecycle
+                            .finalize_stop(&attempt, &cleanup)
+                            .await;
+                    });
+                }
+                Ok(SteeringDelivery::Queued(admission))
             }
             Err(mut error) => {
                 // The owning generation records both automatic stops and explicit closes.
@@ -1205,13 +1426,23 @@ impl Agent {
         };
         let mut delivery = delivery;
         if let Err(AgentError::Storage(error)) = self.settle_stopped_pending(&mut scheduler).await {
-            delivery = Err(match delivery {
-                Err(prior) => AgentError::StorageAfterExecution {
+            delivery = match delivery {
+                Ok(SteeringDelivery::Injected {
+                    target,
+                    mut evidence,
+                }) => {
+                    evidence.retain_storage_failure(error);
+                    Ok(SteeringDelivery::Injected { target, evidence })
+                }
+                Ok(SteeringDelivery::Queued(mut admission)) => {
+                    admission.retain_storage_failure(error);
+                    Ok(SteeringDelivery::Queued(admission))
+                }
+                Err(prior) => Err(AgentError::StorageAfterExecution {
                     error,
                     execution_result: Box::new(Err(prior)),
-                },
-                Ok(_) => AgentError::Storage(error),
-            });
+                }),
+            };
         }
         let delivery = match delivery {
             Err(error) => Err(self
@@ -1223,10 +1454,11 @@ impl Agent {
             other => other,
         };
         match &delivery {
-            Ok(SteeringDelivery::Injected { target }) => {
-                scheduler
-                    .receipts
-                    .insert(id, SubmissionReceipt::Steering(Ok(target.clone())));
+            Ok(SteeringDelivery::Injected { target, evidence }) => {
+                scheduler.receipts.insert(
+                    id,
+                    SubmissionReceipt::Steering(Ok((target.clone(), evidence.clone()))),
+                );
             }
             Err(error) => {
                 scheduler
@@ -1244,8 +1476,9 @@ impl Agent {
         input: ExecutionRequest,
     ) -> Result<SteeringOutcome, AgentError> {
         let admission = self.accept_control()?;
+        let attached = self.inner.lifecycle.attached_provider(&admission)?;
         let mut cleanup_needed = false;
-        let mut delivery = Box::pin(async { self.inner.session.steer(target, input).await });
+        let mut delivery = Box::pin(async { attached.session.steer(target, input).await });
         let outcome = self
             .run_control(
                 admission.clone(),
@@ -1481,8 +1714,11 @@ impl Agent {
                 }
                 _ => (SchedulingCause::RunnerStopped, None),
             };
-            let (mut scheduler, cleanup) =
-                tokio::join!(agent.inner.scheduler.lock(), attempt.clone().wait());
+            let (mut scheduler, cleanup, attachment_evidence) = tokio::join!(
+                agent.inner.scheduler.lock(),
+                attempt.clone().wait(),
+                agent.inner.lifecycle.wait_for_attachment_evidence(),
+            );
             let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
             drop(scheduler);
             let _invocation = agent.inner.invocation.lock().await;
@@ -1494,13 +1730,23 @@ impl Agent {
                 .finalize_stop(&attempt, &cleanup)
                 .await;
             let cleanup = cleanup.into_result();
-            match saved {
+            let result = match saved {
                 Ok(()) => cleanup,
                 Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
                     error,
                     cleanup_result: Box::new(cleanup),
                 }),
                 Err(error) => Err(error),
+            };
+            match (result, attachment_evidence) {
+                (result, Ok(())) => result,
+                (Ok(_), Err(error)) => Err(error),
+                (Err(first_error), Err(subsequent_error)) => {
+                    Err(AgentError::MultipleOperationFailures {
+                        first_error: Box::new(first_error),
+                        subsequent_error: Box::new(subsequent_error),
+                    })
+                }
             }
         })
         .await

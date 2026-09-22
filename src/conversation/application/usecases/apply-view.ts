@@ -119,18 +119,21 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     turns: projected,
     revision: view.revision,
     readRequest: undefined,
-    phase: busy
-      ? view.messages.some(
-          (message) =>
-            message.status === "running" &&
-            message.parts
-              .filter((part) => part.kind === "text")
-              .map((part) => part.text)
-              .join(""),
-        )
-        ? "streaming"
-        : "thinking"
-      : "idle",
+    phase:
+      view.lifecycle.phase === "starting"
+        ? "starting"
+        : view.lifecycle.phase === "attached" && busy
+          ? view.messages.some(
+              (message) =>
+                message.status === "running" &&
+                message.parts
+                  .filter((part) => part.kind === "text")
+                  .map((part) => part.text)
+                  .join(""),
+            )
+            ? "streaming"
+            : "thinking"
+          : "idle",
     pending: "",
     readError: undefined,
     error: retainedError,
@@ -147,6 +150,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       tools: view.tools,
       pending: view.pending,
       capabilities: view.capabilities,
+      lifecycle: view.lifecycle,
     },
   }
 }

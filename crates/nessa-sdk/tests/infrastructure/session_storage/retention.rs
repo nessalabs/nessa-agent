@@ -57,7 +57,7 @@ fn reviews(count: usize, bytes: usize, overlap: bool, cancellations: bool) -> Se
         ));
         if cancellations {
             let record = PermissionCancellation::from_record(
-                value.provider_session_id.clone(),
+                value.provider_context.recorded().unwrap().clone(),
                 cancelled_request(
                     PermissionRequest::new(id, execution.clone(), tool_id.clone(), choices()),
                     PermissionCancellationReason::deadline_exceeded(),

@@ -293,6 +293,12 @@ created on and is reopened on that same agent for the rest of its life, so
 only the selected one — yesterday's conversations need the agent nobody selected
 today. `product/conversation.rs` maps the canonical product wire contract;
 composition supplies the agents, storage and audit.
+The live slot owns a prepared SDK `Agent` before provider attachment. It captures
+caller-attributed attachment authority, returns create/read/queue commands without
+waiting for runtime readiness, and retains one bounded task that joins readiness
+before starting the SDK-owned attachment. The SDK scheduler remains the only queue
+on both sides of attachment. Replacement views project its `Waiting` and `Starting`
+phases as `starting`, and retain typed, bounded late attachment failures.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
 A message refers to images by digest, never by bytes: the service asks its
 `ConversationAttachments` port whether this conversation holds each one before it
@@ -339,9 +345,12 @@ through one open and close and committing that evidence (application), and the
 completion record and audit files in the data directory (infrastructure). It is
 started by composition once the gateway is listening, so the operating system's
 first-execution scan is paid in the background rather than inside a user's first
-message. The conversation context waits through its own `RuntimeReadiness` port,
+message. The conversation context joins settlement through its own
+`RuntimeReadiness` port without blocking command responses,
 which `composition/warm_up.rs` connects; the two contexts do not depend on each
-other. Tests live under `crates/nessa-server/tests/agent_warm_up/`.
+other. Warm-up failure releases the settlement gate and the conversation's own
+attachment attempt supplies its authoritative result. Tests live under
+`crates/nessa-server/tests/agent_warm_up/`.
 
 ## MCP tools
 

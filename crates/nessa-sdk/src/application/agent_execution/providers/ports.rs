@@ -16,6 +16,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
+use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 
 /// Confirmed cleanup of the provider attachment, independent of saved history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +144,11 @@ pub struct OpenedProviderSession {
 pub trait AgentProvider: Send + Sync {
     /// Exact provider/model/context configuration used to validate restoration.
     fn identity(&self) -> ProviderIdentity;
+    /// Immutable configured model and binding capabilities available before open.
+    ///
+    /// The opened [`ProviderSession`] must report the same value. This accessor
+    /// performs no provider I/O and grants no attachment authority.
+    fn capabilities(&self) -> &EffectiveCapabilities;
     /// Open a fresh context or restore exactly the supplied context. A provider
     /// that cannot restore must return Unsupported, never silently start over.
     /// On failure, return ProviderOpenError with owned cleanup whenever attachment

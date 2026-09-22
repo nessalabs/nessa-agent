@@ -165,6 +165,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
             permissions: true,
             imageInput: false,
           },
+          lifecycle: { phase: "attached" },
           messages: [
             {
               executionId: "active",

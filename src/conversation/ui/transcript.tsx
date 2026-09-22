@@ -25,7 +25,7 @@ import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
-import { Thinking } from "./thinking"
+import { Starting, Thinking } from "./thinking"
 import { selectedToolActivity } from "./tool-selection"
 
 export function Transcript({
@@ -143,6 +143,11 @@ export function Transcript({
             !conversation.readError &&
             !conversation.error ? (
               <Thinking motion={animateMount} />
+            ) : null}
+            {conversation.phase === "starting" &&
+            !conversation.readError &&
+            !conversation.error ? (
+              <Starting />
             ) : null}
             <ConversationControls
               conversation={conversation}

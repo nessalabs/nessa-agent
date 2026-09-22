@@ -2,6 +2,34 @@
 use super::*;
 use nessa_sdk::application::agent_execution::sessions::InvocationSchedulingEvent;
 
+#[tokio::test]
+async fn absent_provider_context_rejects_provider_evidence_at_custom_and_journal_boundaries() {
+    let mut contradictory = snapshot("absent-provider-context");
+    contradictory.provider_context = ProviderContext::Absent;
+    super::custom_storage::assert_custom_retention_admission(contradictory.clone(), false).await;
+
+    let memory = InMemoryStorage::new();
+    let memory_lease = memory.open(contradictory.id.clone()).await.unwrap();
+    assert!(matches!(
+        memory_lease.save(contradictory.clone()).await,
+        Err(StorageError::Corrupt(_))
+    ));
+
+    let root = tempfile::tempdir().unwrap();
+    private::create_directory(&root.path().join("private")).unwrap();
+    let storage = LocalFileStorage::new(root.path().join("private")).unwrap();
+    let lease = storage.open(contradictory.id.clone()).await.unwrap();
+    let valid = snapshot("absent-provider-context");
+    lease.save(valid).await.unwrap();
+    let path = journal_path(&root.path().join("private"), "absent-provider-context");
+    let mut encoded = snapshot_json(&std::fs::read(&path).unwrap()).unwrap();
+    encoded.as_object_mut().unwrap().remove("provider_context");
+    let bytes = journal_bytes(&encoded).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(matches!(lease.load().await, Err(StorageError::Corrupt(_))));
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
 fn review_snapshot() -> SessionSnapshot {
     let mut value = snapshot("evidence-integrity");
     let execution = value.invocations[0].request.execution_id.clone();
@@ -29,7 +57,7 @@ fn review_snapshot() -> SessionSnapshot {
             execution,
             ExecutionUpdate::PermissionCancelled(
                 PermissionCancellation::from_record(
-                    value.provider_session_id.clone(),
+                    value.provider_context.recorded().unwrap().clone(),
                     request,
                     input,
                     CancellationOrigin::Runtime,
@@ -335,9 +363,9 @@ async fn restored_session_failure_and_context_bounds_preserve_truthful_evidence(
         PermissionCancellationReason::session_failed(),
     );
     let exact = "é".repeat(ExecutionSessionId::MAX_BYTES / 2);
-    value.provider_session_id = ExecutionSessionId::new(&exact).unwrap();
+    value.provider_context = ProviderContext::Recorded(ExecutionSessionId::new(&exact).unwrap());
     let cancellation = PermissionCancellation::from_record(
-        value.provider_session_id.clone(),
+        value.provider_context.recorded().unwrap().clone(),
         failed,
         previous.input().clone(),
         CancellationOrigin::Runtime,
@@ -357,7 +385,7 @@ async fn restored_session_failure_and_context_bounds_preserve_truthful_evidence(
     let path = journal_path(&root.path().join("private"), "evidence-integrity");
     let original: serde_json::Value = snapshot_json(&std::fs::read(&path).unwrap()).unwrap();
     for pointer in [
-        "/provider_session_id",
+        "/provider_context",
         "/invocations/0/events/1/update/PermissionCancelled/session_id",
     ] {
         let mut corrupted = original.clone();

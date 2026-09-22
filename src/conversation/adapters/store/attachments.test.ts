@@ -204,6 +204,7 @@ function viewSaying(imageInput: boolean): ConversationEffects["read"] {
       permissions: false,
       imageInput,
     },
+    lifecycle: { phase: "attached" },
     truncated: false,
     queueComplete: true,
   })

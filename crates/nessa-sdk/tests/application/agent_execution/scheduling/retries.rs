@@ -112,7 +112,7 @@ async fn scheduling_native_retry_recovers_injection_and_ambiguous_error_without_
         let running = started(&mut calls, "active").await;
         for _ in 0..2 {
             match agent.steer(request("correction"), actor()).await {
-                Ok(SteeringDelivery::Injected { target }) => {
+                Ok(SteeringDelivery::Injected { target, .. }) => {
                     assert!(outcome.is_ok());
                     assert_eq!(target.as_str(), "active");
                 }
@@ -136,7 +136,7 @@ async fn scheduling_restore_returns_saved_result_without_dispatching_again() {
     within(receipt.wait()).await.unwrap();
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let restored = Agent::new(Arc::new(GatedFactory(provider)), storage.manager().await)
+    let restored = attached_agent(Arc::new(GatedFactory(provider)), storage.manager().await)
         .await
         .unwrap();
     let receipt = restored.enqueue(request("saved"), actor()).await.unwrap();
@@ -171,7 +171,7 @@ async fn restored_retry_retains_late_queue_and_native_persistence_failures() {
         };
         agent.close(close_action()).await.unwrap();
         drop(agent);
-        let restored = Agent::new(
+        let restored = attached_agent(
             Arc::new(GatedFactory(provider.clone())),
             storage.manager().await,
         )
@@ -207,7 +207,7 @@ async fn restored_withdrawn_receipt_retains_its_audit_failure() {
     within(active.wait()).await.unwrap();
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let restored = Agent::new(Arc::new(GatedFactory(provider)), storage.manager().await)
+    let restored = attached_agent(Arc::new(GatedFactory(provider)), storage.manager().await)
         .await
         .unwrap();
     let retry = restored.enqueue(request("removed"), actor()).await.unwrap();

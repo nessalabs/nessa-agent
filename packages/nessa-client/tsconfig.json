@@ -7,8 +7,6 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    // Only tests read the shared protocol tables; production source in this
-    // package stays self-contained. See application/agent-budgets.ts.
     "resolveJsonModule": true,
     "isolatedModules": true
   },

@@ -1,7 +1,9 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::Projection, ConversationCapabilities, ConversationMessageStatus,
-    ConversationPendingMode,
+    projection::{clipped, Projection},
+    ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
+    ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
+    ConversationMessageStatus, ConversationPendingMode,
 };
 use nessa_sdk::{
     application::agent_execution::{
@@ -18,7 +20,7 @@ use nessa_sdk::{
             PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
         },
         prompts::{PromptText, UserMessage},
-        sessions::{ExecutionSessionId, SessionId},
+        sessions::{ExecutionSessionId, ProviderContext, SessionId},
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
@@ -40,6 +42,37 @@ fn projection() -> Projection {
 }
 fn event(update: ExecutionUpdate) -> ExecutionEvent {
     ExecutionEvent::new(ExecutionId::new("execution").unwrap(), update)
+}
+
+#[test]
+fn lifecycle_evidence_is_phase_independent_and_only_changes_revision_once() {
+    let mut projection = projection();
+    let initial = projection.read().revision;
+    let lifecycle = ConversationLifecycle {
+        phase: ConversationLifecyclePhase::Attached,
+        failure: None,
+        evidence_failure: Some(ConversationAttachmentEvidenceFailure {
+            code: ConversationAttachmentEvidenceFailureCode::Audit,
+            message: "attachment audit was not acknowledged".into(),
+        }),
+    };
+    projection.lifecycle(lifecycle.clone());
+    let changed = projection.read();
+    assert_ne!(changed.revision, initial);
+    assert_eq!(changed.lifecycle, lifecycle);
+
+    projection.lifecycle(lifecycle);
+    assert_eq!(projection.read().revision, changed.revision);
+}
+
+#[test]
+fn lifecycle_diagnostics_are_clipped_at_a_utf8_boundary() {
+    let exact = "😀".repeat(512);
+    assert_eq!(clipped(&exact, 2048), exact);
+    let oversized = "😀".repeat(513);
+    let clipped = clipped(&oversized, 2048);
+    assert_eq!(clipped, "😀".repeat(512));
+    assert_eq!(clipped.len(), 2048);
 }
 fn review(arguments: String) -> ExecutionEvent {
     event(ExecutionUpdate::PermissionRequested {
@@ -66,7 +99,9 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
-        provider_session_id: ExecutionSessionId::new("provider-session").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("provider-session").unwrap(),
+        ),
         queue_history: vec![],
         invocations: vec![InvocationRecord {
             target_event_offset: None,

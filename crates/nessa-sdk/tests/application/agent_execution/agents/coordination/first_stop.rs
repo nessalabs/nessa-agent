@@ -63,9 +63,10 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         lease.save(saved.clone()).await.unwrap();
         drop(lease);
         let restored = SessionManager::open(Some(id), storage).await.unwrap();
-        let restored_agent = Agent::new(Arc::new(Provider(Arc::new(Backend::default()))), restored)
-            .await
-            .unwrap();
+        let restored_agent =
+            attached_agent(Arc::new(Provider(Arc::new(Backend::default()))), restored)
+                .await
+                .unwrap();
         let restored = restored_agent.session_manager().snapshot().await.unwrap();
         assert_eq!(
             restored.invocations[0].scheduling,

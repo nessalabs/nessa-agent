@@ -230,6 +230,47 @@ export const ConversationDisposition = {
 } as const
 export type ConversationDisposition =
   (typeof ConversationDisposition)[keyof typeof ConversationDisposition]
+/** Current provider attachment state. This is presentation state and grants no operation authority. */
+export const ConversationLifecyclePhase = {
+  Absent: "absent",
+  Starting: "starting",
+  Attached: "attached",
+  Failed: "failed",
+} as const
+export type ConversationLifecyclePhase =
+  (typeof ConversationLifecyclePhase)[keyof typeof ConversationLifecyclePhase]
+/** Stable category for a provider attachment failure. */
+export const ConversationStartupFailureCode = {
+  Audit: "audit",
+  Provider: "provider",
+  Storage: "storage",
+  Cleanup: "cleanup",
+} as const
+export type ConversationStartupFailureCode =
+  (typeof ConversationStartupFailureCode)[keyof typeof ConversationStartupFailureCode]
+/** Bounded presentation of the latest provider attachment failure. It carries no admission or cleanup authority. */
+export interface ConversationStartupFailure {
+  /** Stable failure category. */
+  code: ConversationStartupFailureCode
+  /** Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound. */
+  message: string
+}
+/** Bounded late failure to acknowledge mandatory attachment audit evidence. It carries no lifecycle authority. */
+export interface ConversationAttachmentEvidenceFailure {
+  /** Mandatory attachment audit was not acknowledged. */
+  code: "audit"
+  /** Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound. */
+  message: string
+}
+/** Current provider attachment lifecycle for this conversation. */
+export interface ConversationLifecycle {
+  /** Current provider attachment phase. */
+  phase: ConversationLifecyclePhase
+  /** Present exactly when phase is failed. */
+  failure?: ConversationStartupFailure
+  /** Late mandatory attachment-audit failure retained independently of the current phase. It grants no lifecycle authority. */
+  evidenceFailure?: ConversationAttachmentEvidenceFailure
+}
 /** Operations supported by this configured agent. */
 export interface ConversationCapabilities {
   /** Can queue input at invocation boundaries. */
@@ -376,6 +417,8 @@ export interface ConversationView {
   tools: ConversationTool[]
   /** Agent operation support. */
   capabilities: ConversationCapabilities
+  /** Current provider attachment lifecycle. */
+  lifecycle: ConversationLifecycle
   /** Some non-actionable history or text was omitted to bound this response. */
   truncated: boolean
   /** Why pending review choices cannot safely be shown; do not offer inferred choices. */

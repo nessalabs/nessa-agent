@@ -68,6 +68,9 @@ impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let text = ModalitiesDto {
@@ -204,7 +207,7 @@ async fn agent_with_backend() -> (Agent, Arc<Backend>) {
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(Provider(backend.clone())), manager)
+    let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
         .await
         .unwrap();
     (agent, backend)

@@ -9,7 +9,8 @@ cannot impersonate another surface or principal.
 
 ```text
 Panel Send -> NessaClient.conversation.send -> authorized gateway command
-  -> shared ConversationService -> Agent.enqueue -> this conversation's ACP process
+  -> shared ConversationService -> prepared Agent queue
+  -> retained attachment task -> this conversation's ACP process
   <- bounded conversation.read view <- live SDK observations + saved history
 ```
 
@@ -20,6 +21,18 @@ The read view shows at most 24 recent messages, bounded text and tool summaries,
 within a 60 KB encoded budget. It marks omissions; it is not a full-history export.
 Queueing, steering, withdrawal, permission state and cleanup belong to the SDK.
 The server does not implement another scheduler.
+
+`conversation.create`, `conversation.read`, and queued sends do not wait for the
+provider process. The view's required `lifecycle` is `absent`, `starting`,
+`attached`, or `failed`. `starting` covers both an authorized attachment waiting
+for runtime readiness and the installed provider-start task. A failed lifecycle
+adds a stable `audit`, `provider`, `storage`, or `cleanup` code and a bounded
+display message. A phase-independent `evidenceFailure` retains a late mandatory
+attachment-audit failure even when the current phase has moved on. These fields
+describe attachment and grant no operation authority. Input admitted while starting stays in the same SDK queue and the
+panel says “Starting the agent”; it says the model is thinking only after
+attachment. The client's configured ordinary request deadline therefore applies
+to these commands instead of tracking provider launch budgets.
 
 ## Local setup
 

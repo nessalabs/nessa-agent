@@ -7,13 +7,14 @@ use crate::application::agent_execution::executions::{
 };
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::application::agent_execution::providers::{ExecutionReport, ProviderIdentity};
+pub use crate::domain::agent_execution::sessions::ProviderContext;
 use crate::domain::agent_execution::{
     executions::{
         ExecutionId, ExecutionOutcome, InvocationCancellation, InvocationKind, InvocationStage,
         QueueMutation, SchedulingCause, SchedulingInitiator, SchedulingTransition,
         SchedulingTransitionError,
     },
-    sessions::{ExecutionSessionId, SessionId},
+    sessions::SessionId,
 };
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
@@ -46,13 +47,17 @@ pub struct SessionSnapshot {
     pub id: SessionId,
     /// Provider configuration identity required for restoration.
     pub provider: ProviderIdentity,
-    /// Opaque provider context to resume without replaying input.
-    pub provider_session_id: ExecutionSessionId,
+    /// Opaque provider context to resume without replaying input, or explicit absence.
+    pub provider_context: ProviderContext,
     /// Submitted invocations in admission order, including unresolved work.
     pub invocations: Vec<InvocationRecord>,
     /// Append-only global queue membership/order facts. Local selection precedes
     /// provider dispatch; restoration clears pending membership without replay.
     pub queue_history: Vec<QueueHistoryRecord>,
+}
+impl SessionSnapshot {
+    /// Maximum durable invocation records retained by one conversation.
+    pub const MAX_INVOCATIONS: usize = 4096;
 }
 
 /// One queue membership decision, recorded in global scheduler order.

@@ -9,7 +9,9 @@ let provider = Arc::new(ClaudeAcpProvider::new(config, &model, limits, audit)?);
 let storage = Arc::new(LocalFileStorage::new("./sessions")?);
 let manager = SessionManager::open(None, storage).await?; // Fresh local UUID v4.
 let session_id = manager.id().clone(); // Retain this key to reopen the conversation.
-let agent = Agent::new(provider, manager).await?;
+let agent = Agent::prepare(provider, manager, audit.clone()).await?;
+let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(verified_actor.clone()))?;
+agent.start_attachment(authorization)?.wait().await?;
 
 agent.add_hook(BeforeInvocation, |context: &InvocationContext<'_>| {
     tracing::debug!(execution = context.request.execution_id.as_str(), "Invoking agent");
@@ -40,10 +42,12 @@ not generate execution IDs automatically.
 host / future chat RPC
     -> SessionManager::open(optional local SessionId, storage)
         -> SessionStorage::open -> SessionStorageLease [exclusive writer lease]
-    -> Agent::new(provider, session_manager)
-        -> load saved snapshot and verify provider identity
+    -> Agent::prepare(provider, session_manager, audit)
+        -> load saved snapshot and verify provider identity without provider I/O
+    -> authorize_attachment(attributed request) -> Waiting
+    -> start_attachment(single-use authorization) -> Starting
         -> AgentProvider::open(saved provider context or None)
-        -> save attached context identity
+        -> save attached context identity -> Attached
     -> Agent::add_hook(event, callback)
     -> Agent::enqueue(request, actor)
         -> capability validation + saved queue admission
@@ -173,22 +177,7 @@ lease immediately; dropping an attached Agent starts supervised cleanup and reta
 exclusion through uncertain results. Supervised admission saves and outstanding
 file operations retain the same lease until they finish, even after their caller drops.
 
-`Agent::new` returns `AgentInitializationError` on construction failure. Inspect
-`cause()` for the typed failure and `needs_cleanup()` for retained attachment
-ownership; `retry_cleanup().await` retries cleanup without opening a replacement
-context or sending input. The original failure remains available after recovery.
-Initialization is supervised once polled, so abandoning its future cannot release
-the lease while provider opening, saving, or cleanup is still in progress. Failed
-provider opening must supply actual owned resources through
-`ProviderOpenError::with_cleanup` when termination is uncertain, even before a
-provider session identity exists. Its fields are private; `no_resources(cause)`
-rejects uncertain cleanup, including nested causes and bounded summaries, returning
-the typed cause for the adapter to pair with its cleanup handle. Confirmed cleanup
-and failures before attachment can use the validated resource-free constructor.
-If an adapter panics without returning a cleanup handle, initialization returns
-`CleanupUncertain`. No retry can prove termination in that case: the protective
-lease remains held for the process lifetime, even after the error is dropped.
-Adapters must transfer owned cleanup to support recovery.
+`Agent::prepare` returns `AgentInitializationError` only for local identity, validation, and storage preparation failures; it performs no provider I/O. Provider opening belongs to the generation-bound attachment task. `AttachmentWait` reports its provider, audit, storage, and cleanup outcome, while `attachment_status()` atomically projects phase with its matching bounded failure. Closing or dropping an unused authorization fences that exact generation and wakes its cancellation wait. Provider open failures retain cleanup ownership inside the Agent until cleanup is confirmed.
 
 Dropping a recovery error with an available cleanup handle delegates cleanup to
 a task with bounded backoff. Adapter panics while constructing, polling, or

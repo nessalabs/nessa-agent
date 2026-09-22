@@ -67,7 +67,7 @@ async fn confirmed_control_then_last_agent_drop_releases_lease_without_closing_a
             .await
             .unwrap();
         let backend = Arc::new(Backend::default());
-        let agent = Agent::new(Arc::new(Provider(backend.clone())), manager)
+        let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
             .await
             .unwrap();
         let control = agent.accept_control().unwrap();

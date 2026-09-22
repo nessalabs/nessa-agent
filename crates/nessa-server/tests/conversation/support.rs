@@ -52,7 +52,7 @@ use nessa_sdk::{
     infrastructure::session_storage::InMemoryStorage,
 };
 
-struct AcceptingAudit;
+pub(crate) struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
     fn record(
         &self,
@@ -244,6 +244,7 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
             AgentId::Claude,
             ConversationAgent {
                 provider,
+                execution_audit: Arc::new(AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
             },

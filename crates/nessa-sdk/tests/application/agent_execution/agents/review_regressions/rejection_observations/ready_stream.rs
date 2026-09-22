@@ -32,6 +32,9 @@ impl AgentProvider for ReadyProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("ready", "test", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
@@ -81,7 +84,7 @@ async fn rejected_foreign_ready_output_stops_after_its_first_cleanup() {
     let backend = Arc::new(ReadyBackend::default());
     let polls = Arc::new(AtomicUsize::new(0));
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ReadyProvider {
             backend: backend.clone(),
             polls: polls.clone(),

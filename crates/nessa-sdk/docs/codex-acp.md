@@ -16,7 +16,7 @@ see `codex_acp/sessions/profile.rs`.
 Identical to the Claude binding in shape. The host supplies a selected
 `ModelMetadata`, explicit `TokenLimits`, an `infrastructure::acp::sessions::AcpConfig`,
 and an `Arc<dyn ExecutionAudit>` to `CodexAcpProvider::new`. The factory is
-immutable, and `Agent::new(provider, manager)` opens or resumes a context.
+immutable, and `Agent::prepare(provider, manager, audit)` loads durable evidence; `authorize_attachment` and `start_attachment` open or resume the context.
 
 ```text
 host -> Agent(provider, SessionManager)

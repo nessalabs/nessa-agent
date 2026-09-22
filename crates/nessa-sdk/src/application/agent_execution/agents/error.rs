@@ -1,6 +1,7 @@
 //! Typed SDK failures preserve execution, observation, storage, and cleanup outcomes.
 #![deny(missing_docs)]
 
+use crate::application::agent_execution::agents::AttachmentPhase;
 use crate::application::agent_execution::hooks::HookFailure;
 use crate::application::agent_execution::{
     providers::{CloseOutcome, ImageInputRefusal, UserImageError},
@@ -129,6 +130,11 @@ impl fmt::Display for AgentStartupStep {
 /// diagnostic variants never authorize admission or confirm termination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentError {
+    /// The requested direct or provider control operation requires a current attachment.
+    /// Queue and boundary-steering admission have a separate waiting contract.
+    AttachmentUnavailable(AttachmentPhase),
+    /// Attachment authority was consumed or invalidated by a lifecycle generation change.
+    AttachmentAuthorizationStale,
     /// This invocation reached the 128 MiB or 262,144-observation retention limit.
     /// The rejected event is not saved or published. Earlier observations and the
     /// actual provider settlement remain available; required audit delivery and

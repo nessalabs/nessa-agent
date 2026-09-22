@@ -6,8 +6,8 @@
 use crate::application::agent_execution::{
     agents::AgentError,
     providers::{
-        CleanupReport, ExecutionEventStream, ProviderCleanup, ProviderSession, ResourceCleanup,
-        SessionCloseRequest,
+        CleanupReport, CloseOutcome, ExecutionEventStream, ProviderCleanup, ProviderSession,
+        ResourceCleanup, SessionCloseRequest,
     },
     sessions::SessionStorageLease,
 };
@@ -45,6 +45,7 @@ impl CleanupReason {
     }
 }
 enum AttachmentState {
+    Empty,
     Attached(Resources),
     // An adapter panicked before transferring a cleanup handle. No retry can prove release.
     UnknownOpen(Arc<dyn SessionStorageLease>),
@@ -104,6 +105,15 @@ impl Resources {
     }
 }
 impl AttachmentLease {
+    pub(crate) fn empty() -> Self {
+        Self {
+            state: Mutex::new(AttachmentState::Empty),
+            cleanup_report: StateMutex::new(None),
+            pending: AtomicBool::new(false),
+            drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
+            runtime: Handle::current(),
+        }
+    }
     pub(crate) fn new(lease: Arc<dyn SessionStorageLease>, session: ProviderSession) -> Self {
         Self::with_target(lease, CleanupTarget::Session(session))
     }
@@ -158,7 +168,7 @@ impl AttachmentLease {
             .cleanup_report
             .lock()
             .expect("attachment cleanup evidence");
-        if matches!(*state, AttachmentState::Cleaned(_))
+        if matches!(*state, AttachmentState::Empty | AttachmentState::Cleaned(_))
             || evidence.as_ref().is_some_and(CleanupReport::is_confirmed)
         {
             *evidence = None;
@@ -171,6 +181,32 @@ impl AttachmentLease {
                 CleanupReason::new(SessionCloseRequest::SessionHandlesDropped);
             self.pending.store(true, Ordering::SeqCst);
         }
+    }
+    pub(crate) async fn arm_failed_open(
+        &self,
+        lease: Arc<dyn SessionStorageLease>,
+        cleanup: Arc<dyn ProviderCleanup>,
+    ) {
+        self.arm_target(lease, CleanupTarget::FailedOpen(cleanup))
+            .await;
+    }
+    pub(crate) async fn arm_unknown_open(&self, lease: Arc<dyn SessionStorageLease>) {
+        let mut state = self.state.lock().await;
+        *state = AttachmentState::UnknownOpen(lease);
+        self.pending.store(true, Ordering::SeqCst);
+    }
+    async fn arm_target(&self, lease: Arc<dyn SessionStorageLease>, target: CleanupTarget) {
+        let mut state = self.state.lock().await;
+        *self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence") = None;
+        *state = AttachmentState::Attached(Resources {
+            target,
+            _lease: lease,
+            _events: None,
+        });
+        self.pending.store(true, Ordering::SeqCst);
     }
     /// Capture the first shutdown request before provider I/O. Later attempts
     /// retire the same attachment and must preserve its cause and known initiator.
@@ -301,6 +337,9 @@ impl AttachmentLease {
             return report;
         }
         let owned = match &*state {
+            AttachmentState::Empty => {
+                return CleanupReport::confirmed(CloseOutcome { forced: false })
+            }
             AttachmentState::Attached(owned) => owned,
             AttachmentState::Cleaned(report) => return report.clone(),
             AttachmentState::UnknownOpen(_) => {
@@ -345,6 +384,9 @@ impl Drop for AttachmentLease {
             // No cleanup capability was transferred. Preserve exclusion for this
             // process rather than treating caller/error/runtime drop as proof.
             std::mem::forget(lease.clone());
+            return;
+        }
+        if matches!(self.state.get_mut(), AttachmentState::Empty) {
             return;
         }
         let AttachmentState::Attached(resources) = self.state.get_mut() else {

@@ -257,7 +257,7 @@ impl Metadata {
 impl Event {
     pub(super) fn decode(
         self,
-        provider_session_id: &ExecutionSessionId,
+        provider_context: &ExecutionSessionId,
         execution_id: &ExecutionId,
     ) -> Result<ExecutionEvent, StorageError> {
         if self.execution_id != execution_id.as_str() {
@@ -270,7 +270,7 @@ impl Event {
             Update::Tool(tool) => ExecutionUpdate::Tool(tool.decode()?),
             Update::PermissionCancelled(cancellation) => {
                 let cancellation = cancellation.decode()?;
-                if cancellation.session_id() != provider_session_id
+                if cancellation.session_id() != provider_context
                     || cancellation.request().execution_id() != execution_id
                 {
                     return Err(corrupt(

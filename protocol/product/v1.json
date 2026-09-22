@@ -586,6 +586,85 @@
       "description": "How the gateway accepted or recovered this submission.",
       "enum": ["queued", "injected", "settled"]
     },
+    "ConversationLifecyclePhase": {
+      "type": "string",
+      "description": "Current provider attachment state. This is presentation state and grants no operation authority.",
+      "enum": ["absent", "starting", "attached", "failed"]
+    },
+    "ConversationStartupFailureCode": {
+      "type": "string",
+      "description": "Stable category for a provider attachment failure.",
+      "enum": ["audit", "provider", "storage", "cleanup"]
+    },
+    "ConversationStartupFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded presentation of the latest provider attachment failure. It carries no admission or cleanup authority.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ConversationStartupFailureCode",
+          "description": "Stable failure category."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound."
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "ConversationAttachmentEvidenceFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded late failure to acknowledge mandatory attachment audit evidence. It carries no lifecycle authority.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "const": "audit",
+          "description": "Mandatory attachment audit was not acknowledged."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound."
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "ConversationLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Current provider attachment lifecycle for this conversation.",
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/ConversationLifecyclePhase",
+          "description": "Current provider attachment phase."
+        },
+        "failure": {
+          "$ref": "#/$defs/ConversationStartupFailure",
+          "description": "Present exactly when phase is failed."
+        },
+        "evidenceFailure": {
+          "$ref": "#/$defs/ConversationAttachmentEvidenceFailure",
+          "description": "Late mandatory attachment-audit failure retained independently of the current phase. It grants no lifecycle authority."
+        }
+      },
+      "required": ["phase"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "phase": { "const": "failed" } },
+            "required": ["phase"]
+          },
+          "then": { "required": ["failure"] },
+          "else": { "not": { "required": ["failure"] } }
+        }
+      ]
+    },
     "ConversationCapabilities": {
       "type": "object",
       "additionalProperties": false,
@@ -1060,6 +1139,10 @@
           "$ref": "#/$defs/ConversationCapabilities",
           "description": "Agent operation support."
         },
+        "lifecycle": {
+          "$ref": "#/$defs/ConversationLifecycle",
+          "description": "Current provider attachment lifecycle."
+        },
         "truncated": {
           "type": "boolean",
           "description": "Some non-actionable history or text was omitted to bound this response."
@@ -1088,6 +1171,7 @@
         "permissions",
         "tools",
         "capabilities",
+        "lifecycle",
         "truncated",
         "queueComplete"
       ]

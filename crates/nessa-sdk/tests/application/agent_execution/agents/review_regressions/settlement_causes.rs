@@ -65,7 +65,9 @@ async fn queued_failure_cause_uses_provider_facts_instead_of_local_error_shape()
                 ))
             },
         });
-        let agent = Agent::new(provider, storage.manager().await).await.unwrap();
+        let agent = attached_agent(provider, storage.manager().await)
+            .await
+            .unwrap();
         if known_outcome {
             agent.add_invocation_hook(Arc::new(FailAfterOutcome));
         }

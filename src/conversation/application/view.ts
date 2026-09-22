@@ -52,6 +52,17 @@ export type ConversationView = {
     /** The opened agent takes images. False until one is open, so never assumed. */
     imageInput: boolean
   }
+  lifecycle: {
+    phase: "absent" | "starting" | "attached" | "failed"
+    failure?: {
+      code: "audit" | "provider" | "storage" | "cleanup"
+      message: string
+    }
+    evidenceFailure?: {
+      code: "audit"
+      message: string
+    }
+  }
   permissionViewError?: string
 }
 

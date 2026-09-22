@@ -10,7 +10,9 @@ use crate::application::agent_execution::executions::{
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
 use crate::domain::agent_execution::{
-    executions::{ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage},
+    executions::{
+        ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+    },
     permissions::{PermissionRequest, PermissionStateView},
 };
 use std::{
@@ -37,6 +39,41 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         calls.set((full + 1, history));
     });
     let _ = super::queue_validation::replay(snapshot)?;
+    if snapshot.invocations.len() > SessionSnapshot::MAX_INVOCATIONS {
+        return Err(corrupt("retained invocation history exceeds session limit"));
+    }
+    snapshot
+        .provider_context
+        .validate_evidence(
+            snapshot
+                .invocations
+                .iter()
+                .any(|invocation| !invocation.events.is_empty()),
+            snapshot
+                .invocations
+                .iter()
+                .any(|invocation| invocation.provider_report.is_some()),
+            snapshot.invocations.iter().any(|invocation| {
+                invocation.scheduling.iter().any(|event| {
+                    matches!(
+                        event.stage,
+                        InvocationStage::Running | InvocationStage::Injected
+                    )
+                })
+            }),
+            snapshot.invocations.iter().any(|invocation| {
+                invocation.target_event_offset.is_some()
+                    || invocation
+                        .scheduling
+                        .iter()
+                        .any(|event| event.target.is_some())
+            }),
+            snapshot
+                .queue_history
+                .iter()
+                .any(|record| matches!(&record.mutation, QueueMutation::Selected { .. })),
+        )
+        .map_err(corrupt)?;
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
     let mut event_counts = HashMap::new();
     for invocation in &snapshot.invocations {
@@ -142,7 +179,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                     validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
                     validate_observation_id(record.request().tool_id().as_str())
                         .map_err(corrupt)?;
-                    if record.session_id() != &snapshot.provider_session_id
+                    if snapshot.provider_context.recorded() != Some(record.session_id())
                         || record.request().execution_id() != event.execution_id()
                     {
                         return Err(corrupt(

@@ -9,7 +9,7 @@ permissions, prompts, and shared transport contracts.
 The host loads its model catalog and supplies a selected `ModelMetadata`, explicit
 `TokenLimits`, `infrastructure::acp::sessions::AcpConfig`, and an injected
 `Arc<dyn ExecutionAudit>` to `ClaudeAcpProvider::new`. The factory is
-immutable. `Agent::new(provider, manager)` opens a new provider context or resumes
+immutable. `Agent::prepare(provider, manager, audit)` loads durable evidence. A separate attributed attachment opens a new provider context or resumes
 the context saved under the manager's local session key. There are no global
 backend handles, environment reads in the adapter, or fallback models.
 

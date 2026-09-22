@@ -26,7 +26,9 @@ fn abandoned_file_operations_retain_the_lease_until_io_finishes() {
             queue_history: Vec::new(),
             id: id.clone(),
             provider: ProviderIdentity::new("test", "test", "test").unwrap(),
-            provider_session_id: ExecutionSessionId::new("provider").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("provider").unwrap(),
+            ),
             invocations: vec![],
         };
         runtime.block_on(lease.save(value.clone())).unwrap();
@@ -165,13 +167,16 @@ async fn failed_append_and_sync_retry_reconcile_disk_before_acknowledgement() {
                 queue_history: Vec::new(),
                 id: store.id.clone(),
                 provider: ProviderIdentity::new("test", "test", "test").unwrap(),
-                provider_session_id: ExecutionSessionId::new("provider").unwrap(),
+                provider_context: ProviderContext::Recorded(
+                    ExecutionSessionId::new("provider").unwrap(),
+                ),
                 invocations: vec![],
             };
             if !first_save {
                 store.save(value.clone()).await.unwrap();
             }
-            value.provider_session_id = ExecutionSessionId::new("changed").unwrap();
+            value.provider_context =
+                ProviderContext::Recorded(ExecutionSessionId::new("changed").unwrap());
             *store.lease.fault.lock().unwrap() = Some(fault);
             assert!(matches!(
                 store.save(value.clone()).await,
@@ -199,8 +204,8 @@ async fn failed_append_and_sync_retry_reconcile_disk_before_acknowledgement() {
                 if first_save { 1 } else { 2 }
             );
             assert_eq!(
-                store.load().await.unwrap().unwrap().provider_session_id,
-                value.provider_session_id
+                store.load().await.unwrap().unwrap().provider_context,
+                value.provider_context
             );
             store.save(value).await.unwrap();
             assert_eq!(std::fs::read(&store.path).unwrap(), saved);

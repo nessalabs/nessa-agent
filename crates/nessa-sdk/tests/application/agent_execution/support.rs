@@ -28,6 +28,19 @@ impl ExecutionAudit for AcceptingAudit {
     }
 }
 
+pub(super) async fn attached_agent(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, Arc::new(AcceptingAudit))
+        .await
+        .map_err(|error| error.cause().clone())?;
+    let authorization =
+        agent.authorize_attachment(AttachmentRequest::CallerRequested(close_action()))?;
+    agent.start_attachment(authorization)?.wait().await?;
+    Ok(agent)
+}
+
 pub(super) struct RecordingSession {
     pub(super) prompts: AtomicUsize,
 }
@@ -157,6 +170,11 @@ pub(super) fn capabilities() -> EffectiveCapabilities {
     )
     .unwrap()
 }
+
+pub(super) fn capabilities_ref() -> &'static EffectiveCapabilities {
+    static CAPABILITIES: std::sync::OnceLock<EffectiveCapabilities> = std::sync::OnceLock::new();
+    CAPABILITIES.get_or_init(capabilities)
+}
 pub(super) fn attribution() -> ApprovalAttribution {
     ApprovalAttribution::new(
         ActionContext::new("nessa.binding-fixture", "nessa.cli", "fixture-answer").unwrap(),
@@ -279,6 +297,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::QueueReordered(_) => {
                                 panic!("close cannot reorder pending work")
                             }
+                            ExecutionAuditRecord::Attachment(_)
+                            | ExecutionAuditRecord::QueueAdmitted(_)
+                            | ExecutionAuditRecord::SteeringAcknowledged(_) => {}
                             ExecutionAuditRecord::ReviewDeclined(_) => {
                                 panic!("close cannot decline a review")
                             }

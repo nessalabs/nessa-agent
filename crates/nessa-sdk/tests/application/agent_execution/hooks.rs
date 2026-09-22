@@ -92,6 +92,9 @@ impl AgentProvider for HookProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("hook-fixture", "fixture", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             Ok(OpenedProviderSession {
@@ -110,7 +113,7 @@ async fn client(
     backend: Arc<dyn ProviderSessionBackend>,
     hooks: Vec<Arc<dyn InvocationHook>>,
 ) -> Agent {
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(HookProvider(backend)),
         MemoryStorage::default().manager().await,
     )
@@ -539,6 +542,9 @@ impl AgentProvider for ObservationFailureProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("observation-fixture", "test", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let backend = Arc::new(RecordingSession {
@@ -560,7 +566,7 @@ impl AgentProvider for ObservationFailureProvider {
 #[tokio::test]
 async fn observation_failure_retains_confirmed_execution_in_storage_and_after_hook() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ObservationFailureProvider),
         storage.manager().await,
     )

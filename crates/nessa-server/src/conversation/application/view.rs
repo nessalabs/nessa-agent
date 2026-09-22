@@ -14,11 +14,60 @@ pub struct ConversationView {
     pub permissions: Vec<ConversationPermission>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
+    pub lifecycle: ConversationLifecycle,
     pub truncated: bool,
     /// Whether the bounded view contains every currently waiting identity.
     pub queue_complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_view_error: Option<String>,
+}
+/// Current provider attachment lifecycle. It grants no operation authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationLifecycle {
+    pub phase: ConversationLifecyclePhase,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ConversationStartupFailure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_failure: Option<ConversationAttachmentEvidenceFailure>,
+}
+/// Bounded diagnostic for late mandatory attachment-audit evidence failure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationAttachmentEvidenceFailure {
+    pub code: ConversationAttachmentEvidenceFailureCode,
+    pub message: String,
+}
+/// The only cause of phase-independent attachment evidence failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationAttachmentEvidenceFailureCode {
+    Audit,
+}
+/// Product-facing provider attachment phase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLifecyclePhase {
+    Absent,
+    Starting,
+    Attached,
+    Failed,
+}
+/// Bounded diagnostic for the latest failed provider attachment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationStartupFailure {
+    pub code: ConversationStartupFailureCode,
+    pub message: String,
+}
+/// Stable category for a provider attachment failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStartupFailureCode {
+    Audit,
+    Provider,
+    Storage,
+    Cleanup,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

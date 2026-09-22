@@ -2,7 +2,8 @@ use super::ports::{ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError,
 use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::{
-    agents::{Agent, AgentError},
+    agents::{Agent, AgentError, AttachmentFailureCode, AttachmentPhase, AttachmentRequest},
+    executions::ExecutionAudit,
     permissions::ActionContext,
     providers::AgentProvider,
     sessions::{SessionManager, SessionStorage},
@@ -36,6 +37,7 @@ pub struct AgentWarmUp {
 }
 struct Inner {
     provider: Arc<dyn AgentProvider>,
+    execution_audit: Arc<dyn ExecutionAudit>,
     storage: Arc<dyn SessionStorage>,
     records: Arc<dyn WarmUpRecords>,
     audit: Arc<dyn WarmUpAudit>,
@@ -50,6 +52,7 @@ impl AgentWarmUp {
     /// [`Self::start`] or a waiting caller asks for it.
     pub fn new(
         provider: Arc<dyn AgentProvider>,
+        execution_audit: Arc<dyn ExecutionAudit>,
         storage: Arc<dyn SessionStorage>,
         records: Arc<dyn WarmUpRecords>,
         audit: Arc<dyn WarmUpAudit>,
@@ -59,6 +62,7 @@ impl AgentWarmUp {
         Self {
             inner: Arc::new(Inner {
                 provider,
+                execution_audit,
                 storage,
                 records,
                 audit,
@@ -208,23 +212,46 @@ impl AgentWarmUp {
                 error: AgentError::Storage(error),
                 cleanup_unconfirmed: false,
             })?;
-        let agent = Agent::new(self.inner.provider.clone(), manager)
-            .await
-            .map_err(|error| ProviderFailure {
-                // A failed opening can retain provider resources whose release
-                // the SDK has not confirmed. Recording that is the difference
-                // between "the launch failed" and "the launch failed and may
-                // still be running".
-                cleanup_unconfirmed: error.needs_cleanup(),
-                error: error.cause().clone(),
-            })?;
+        let agent = Agent::prepare(
+            self.inner.provider.clone(),
+            manager,
+            self.inner.execution_audit.clone(),
+        )
+        .await
+        .map_err(|error| ProviderFailure {
+            // Preparation can retain storage or audit cleanup ownership whose
+            // release the SDK has not confirmed. Provider startup begins only
+            // after the caller-attributed authorization below.
+            cleanup_unconfirmed: error.needs_cleanup(),
+            error: error.cause().clone(),
+        })?;
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
+            .map_err(provider_failure)?;
+        let attachment = agent
+            .start_attachment(authorization)
+            .map_err(provider_failure)?;
+        if let Err(error) = attachment.wait().await {
+            return Err(ProviderFailure {
+                cleanup_unconfirmed: matches!(
+                    agent.attachment_status().phase(),
+                    AttachmentPhase::Failed(AttachmentFailureCode::Cleanup)
+                ),
+                error,
+            });
+        }
         // None rather than an empty identity: the provider not naming a session
         // is not the same fact as it naming the empty one.
         let session_id = agent
             .session_manager()
             .snapshot()
             .await
-            .map(|snapshot| snapshot.provider_session_id.as_str().to_owned());
+            .and_then(|snapshot| {
+                snapshot
+                    .provider_context
+                    .recorded()
+                    .map(|id| id.as_str().to_owned())
+            });
         // Closing is part of the warm-up, not cleanup after it: the provider's
         // own closure evidence is what records that this session existed.
         agent
@@ -238,6 +265,18 @@ impl AgentWarmUp {
                 error,
             })?;
         Ok(session_id)
+    }
+}
+
+fn provider_failure(error: AgentError) -> ProviderFailure {
+    ProviderFailure {
+        cleanup_unconfirmed: matches!(
+            error,
+            AgentError::CleanupUncertain
+                | AgentError::AuditAndCleanupFailure
+                | AgentError::OperationAndCleanupFailure { .. }
+        ),
+        error,
     }
 }
 

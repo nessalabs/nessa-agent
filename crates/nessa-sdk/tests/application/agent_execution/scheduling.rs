@@ -39,6 +39,9 @@ impl AgentProvider for GatedFactory {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gated", "fixture", "tests").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (sender, receiver) = mpsc::unbounded_channel();
@@ -206,7 +209,7 @@ async fn fixture(
         steering_wait: Mutex::new(None),
         steering_started: Notify::new(),
     });
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(GatedFactory(provider.clone())),
         storage.manager().await,
     )
@@ -335,7 +338,7 @@ async fn scheduling_native_injection_saves_input_and_correlates_with_active_exec
     let running = started(&mut calls, "active").await;
     let injected = agent.steer(request("correction"), actor()).await.unwrap();
     assert!(
-        matches!(injected, SteeringDelivery::Injected { target } if target.as_str() == "active")
+        matches!(injected, SteeringDelivery::Injected { target, .. } if target.as_str() == "active")
     );
     assert_eq!(provider.steered.lock().unwrap()[0].0.as_str(), "active");
     let before = provider.saved_before_steering.lock().unwrap()[0].clone();

@@ -43,6 +43,12 @@ pub enum ConversationError {
     Unavailable,
     Metadata,
     Audit,
+    /// The SDK owns the submission receipt, but one or both mandatory evidence
+    /// stores did not acknowledge admission.
+    AdmissionEvidence {
+        audit: Option<AgentError>,
+        storage: Option<StorageError>,
+    },
     /// Every failed owner is retained; successful cleanup of another owner never erases it.
     Retirement(Vec<(String, AgentError)>),
     /// Retirement attempted cleanup despite an unsettled admitted command.

@@ -64,6 +64,9 @@ impl AgentProvider for ProbeFactory {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("review", "test", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
@@ -294,7 +297,7 @@ async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Ag
         executions: AtomicUsize::new(0),
         steers: AtomicUsize::new(0),
     });
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ProbeFactory {
             backend: backend.clone(),
             receiver: Mutex::new(Some(receiver)),
@@ -387,7 +390,7 @@ async fn steering_during_preparation_enters_the_boundary_queue() {
 async fn restored_running_record_recovers_its_already_saved_result() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
-    let agent = Agent::new(provider.clone(), storage.manager().await)
+    let agent = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     agent
@@ -412,7 +415,7 @@ async fn restored_running_record_recovers_its_already_saved_result() {
         .scheduling
         .pop();
     let before = provider.calls.executions.load(Ordering::SeqCst);
-    let restored = Agent::new(provider.clone(), storage.manager().await)
+    let restored = attached_agent(provider.clone(), storage.manager().await)
         .await
         .unwrap();
     assert_eq!(
@@ -546,7 +549,9 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
-        provider_session_id: ExecutionSessionId::new("saved-context").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("saved-context").unwrap(),
+        ),
         invocations: vec![InvocationRecord {
             target_event_offset: None,
             provider_report: None,
@@ -562,8 +567,8 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
         }],
     });
     assert!(matches!(
-        Agent::new(provider.clone(), storage.manager().await).await,
-        Err(error) if !error.needs_cleanup() && matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_)))
+        attached_agent(provider.clone(), storage.manager().await).await,
+        Err(error) if matches!(error, AgentError::Storage(StorageError::Corrupt(_)))
     ));
     assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
     assert!(provider.calls.opens.lock().unwrap().is_empty());
@@ -691,7 +696,7 @@ async fn custom_storage_rejects_terminal_corruption_before_open_and_preserves_kn
         let (_, backend, _) = probe(false).await;
         drop(sender);
         assert!(matches!(
-            Agent::new(
+            attached_agent(
                 Arc::new(ProbeFactory {
                     backend,
                     receiver: Mutex::new(Some(receiver))
@@ -699,7 +704,7 @@ async fn custom_storage_rejects_terminal_corruption_before_open_and_preserves_kn
                 storage.manager().await
             )
             .await,
-            Err(error) if !error.needs_cleanup() && matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_)))
+            Err(error) if matches!(error, AgentError::Storage(StorageError::Corrupt(_)))
         ));
     }
     let (agent, _, storage) = probe(true).await;
@@ -707,7 +712,7 @@ async fn custom_storage_rejects_terminal_corruption_before_open_and_preserves_kn
     drop(agent);
     let (_, backend, _) = probe(false).await;
     let (_, receiver) = mpsc::unbounded_channel();
-    Agent::new(
+    attached_agent(
         Arc::new(ProbeFactory {
             backend,
             receiver: Mutex::new(Some(receiver)),
@@ -744,7 +749,8 @@ async fn custom_storage_cannot_restore_a_cancellation_without_its_original_reque
             options,
         );
         let execution = request.execution_id().clone();
-        let mut aggregate = ExecutionSession::new(saved.provider_session_id.clone());
+        let mut aggregate =
+            ExecutionSession::new(saved.provider_context.recorded().unwrap().clone());
         aggregate.begin_execution(execution.clone()).unwrap();
         aggregate
             .observe_tool(
@@ -759,7 +765,7 @@ async fn custom_storage_cannot_restore_a_cancellation_without_its_original_reque
             .1
             .remove(0);
         let cancellation = PermissionCancellation::from_record(
-            saved.provider_session_id.clone(),
+            saved.provider_context.recorded().unwrap().clone(),
             request,
             ToolReviewInput {
                 name: "Read".into(),
@@ -780,7 +786,7 @@ async fn custom_storage_cannot_restore_a_cancellation_without_its_original_reque
     let (_, backend, _) = probe(false).await;
     let (_, receiver) = mpsc::unbounded_channel();
     assert!(matches!(
-        Agent::new(
+        attached_agent(
             Arc::new(ProbeFactory {
                 backend,
                 receiver: Mutex::new(Some(receiver))
@@ -788,7 +794,7 @@ async fn custom_storage_cannot_restore_a_cancellation_without_its_original_reque
             storage.manager().await
         )
         .await,
-        Err(error) if !error.needs_cleanup() && matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_)))
+        Err(error) if matches!(error, AgentError::Storage(StorageError::Corrupt(_)))
     ));
 }
 
@@ -1490,8 +1496,8 @@ async fn custom_storage_cannot_restore_observations_before_queue_dispatch() {
     let provider = TestProvider::new();
     let writes = storage.0.lock().unwrap().writes;
     assert!(
-        matches!(Agent::new(provider.clone(), storage.manager().await).await,
-        Err(error) if matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_))))
+        matches!(attached_agent(provider.clone(), storage.manager().await).await,
+        Err(error) if matches!(error, AgentError::Storage(StorageError::Corrupt(_))))
     );
     assert!(provider.calls.opens.lock().unwrap().is_empty());
     assert_eq!(storage.0.lock().unwrap().writes, writes);

@@ -1,9 +1,11 @@
 use super::{
     projection::Projection,
     view::{
-        ConversationCapabilities, ConversationDisposition, ConversationMessageStatus,
-        ConversationPendingMode, ConversationReorderOutcome, ConversationRuntime, ConversationView,
-        SubmissionReceipt,
+        ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
+        ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
+        ConversationLifecyclePhase, ConversationMessageStatus, ConversationPendingMode,
+        ConversationReorderOutcome, ConversationRuntime, ConversationStartupFailure,
+        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
     },
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
     ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
@@ -17,10 +19,11 @@ use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
     agents::{
-        Agent, AgentError, AgentInitializationError, QueueRemoval, QueueReorder, QueuedInvocation,
-        SteeringDelivery,
+        AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AgentInitializationError,
+        AttachmentFailure, AttachmentFailureCode, AttachmentPhase, AttachmentRequest,
+        QueueAdmission, QueueRemoval, QueueReorder, SteeringDelivery, SteeringEvidence,
     },
-    executions::ExecutionRequest,
+    executions::{ExecutionAudit, ExecutionRequest},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, PermissionSelectionState,
@@ -48,7 +51,10 @@ use std::{
         Arc, OnceLock,
     },
 };
-use tokio::sync::{watch, Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
+use tokio::{
+    sync::{watch, Mutex, Notify, OnceCell, RwLock, RwLockReadGuard},
+    task::JoinHandle,
+};
 use uuid::Uuid;
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
@@ -132,6 +138,8 @@ impl Default for ConversationLimits {
 pub struct ConversationAgent {
     /// What opens an execution session for it.
     pub provider: Arc<dyn AgentProvider>,
+    /// The same durable audit sink injected into the provider and prepared Agent.
+    pub execution_audit: Arc<dyn ExecutionAudit>,
     /// The output budget every submission to this agent reserves.
     pub reserved_output_tokens: u32,
     /// Joins this agent's one-time runtime preparation before its provider is
@@ -189,6 +197,13 @@ pub enum SubmissionMode {
     Queue,
     Steer,
 }
+enum SubmissionDelivery {
+    Queued(QueueAdmission),
+    Injected {
+        target: ExecutionId,
+        evidence: SteeringEvidence,
+    },
+}
 struct LiveConversation {
     agent: Agent,
     /// The configured output reservation of the agent this conversation runs
@@ -196,38 +211,27 @@ struct LiveConversation {
     reserved_output_tokens: u32,
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
+    attachment_owner: Mutex<Option<JoinHandle<()>>>,
 }
-/// A first opening that did not produce a live conversation.
+impl LiveConversation {
+    async fn join_attachment_owner(&self) {
+        if let Some(owner) = self.attachment_owner.lock().await.take() {
+            if let Err(error) = owner.await {
+                tracing::error!(%error, "conversation attachment owner panicked");
+            }
+        }
+    }
+}
+/// Preparation failure before a live conversation and attachment owner exist.
 ///
-/// `holds` is the one thing this has to say about such a failure: does the
-/// attempt still own something — a provider part-way through initialization, or
-/// a state nothing can describe after a panic — so that the
-/// `max_conversations` slot it was given has to stay taken. A failure that
-/// acquired nothing gives its slot back.
-///
-/// This was a `retryable` flag until now, which is a different question, and
-/// one only the caller asks; [`ConversationError`] already answers it at the
-/// wire. The two agreed for as long as every permanent failure had genuinely
-/// retained something, and parted company at the first one that acquired
-/// nothing at all: an agent dropped from the configuration refuses each of its
-/// conversations instantly and permanently, and thirty-two such refusals used
-/// to leave the server unable to create any conversation at all.
-///
-/// Giving the slot back means giving up the answer with it, which is the second
-/// thing this flag changed and the one that costs something. A slot is where
-/// the attempt is remembered, so a failure that releases it is not cached: the
-/// next call for that conversation runs the whole opening again — `metadata`
-/// load, the audit reconcile, `SessionManager::open`, and a provider spawn —
-/// and fails the same way. A panel polls, and a tab polls per tab, so a runtime
-/// pointed at a binary that is not there spawns once per poll per tab rather
-/// than once. That is accepted deliberately: the alternative is a cached
-/// refusal that survives the user installing the binary, and a wrong answer
-/// held forever is worse than a right one paid for repeatedly. A failure that
-/// did retain something keeps its slot and so keeps its answer, which is why
-/// the expensive case is exactly the cheap one to redo.
+/// `holds` says whether preparation may still own storage or audit cleanup, or
+/// whether a panic left ownership unknowable. A failure that acquired nothing
+/// releases its capacity slot; retained ownership keeps the slot for cleanup.
+/// Provider attachment failures occur after publication and stay on the SDK's
+/// typed attachment lifecycle instead of becoming preparation failures here.
 struct OpeningFailure {
     cause: ConversationError,
-    _cleanup: Option<AgentInitializationError>,
+    cleanup: Option<AgentInitializationError>,
     holds: bool,
 }
 struct Slot {
@@ -314,6 +318,53 @@ fn report_opening_failure(id: &ConversationId, error: &AgentError) {
         report.message
     );
 }
+pub(super) fn attachment_failure_message(code: AttachmentFailureCode) -> &'static str {
+    match code {
+        AttachmentFailureCode::Audit => "Required attachment audit was not acknowledged.",
+        AttachmentFailureCode::Provider => "The agent provider could not attach.",
+        AttachmentFailureCode::Storage => "Attachment state could not be saved.",
+        AttachmentFailureCode::Cleanup => "Attachment cleanup could not be confirmed.",
+    }
+}
+fn lifecycle_view(agent: &Agent) -> ConversationLifecycle {
+    let status = agent.attachment_status();
+    let phase = match status.phase() {
+        AttachmentPhase::Absent => ConversationLifecyclePhase::Absent,
+        AttachmentPhase::Waiting | AttachmentPhase::Starting => {
+            ConversationLifecyclePhase::Starting
+        }
+        AttachmentPhase::Attached => ConversationLifecyclePhase::Attached,
+        AttachmentPhase::Failed(_) => ConversationLifecyclePhase::Failed,
+    };
+    let failure_view = |failure: &AttachmentFailure| {
+        let code = failure.code();
+        ConversationStartupFailure {
+            code: match code {
+                AttachmentFailureCode::Audit => ConversationStartupFailureCode::Audit,
+                AttachmentFailureCode::Provider => ConversationStartupFailureCode::Provider,
+                AttachmentFailureCode::Storage => ConversationStartupFailureCode::Storage,
+                AttachmentFailureCode::Cleanup => ConversationStartupFailureCode::Cleanup,
+            },
+            message: attachment_failure_message(code).into(),
+        }
+    };
+    ConversationLifecycle {
+        phase,
+        failure: status.failure().map(failure_view),
+        evidence_failure: status.evidence_failure().map(|_| {
+            ConversationAttachmentEvidenceFailure {
+                code: ConversationAttachmentEvidenceFailureCode::Audit,
+                message: attachment_failure_message(AttachmentFailureCode::Audit).into(),
+            }
+        }),
+    }
+}
+fn admission_evidence_error(failure: &AdmissionEvidenceFailure) -> ConversationError {
+    ConversationError::AdmissionEvidence {
+        audit: failure.audit().cloned(),
+        storage: failure.storage().cloned(),
+    }
+}
 /// Every port the service calls, constructed by composition and substituted in
 /// tests. Grouped rather than passed one by one, so that adding one does not
 /// add another positional argument at every call site.
@@ -394,7 +445,7 @@ impl ConversationService {
             // can record a caller nobody validated. A reopen writes this
             // caller's surface and action into its own audit record, so the
             // same context has to be fit to record on both branches.
-            caller.actor()?;
+            let actor = caller.actor()?;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
@@ -520,13 +571,13 @@ impl ConversationService {
                             started: AtomicBool::new(false),
                         });
                         entry.insert(slot.clone());
-                        service.start_slot(id.clone(), slot.clone());
+                        service.start_slot(id.clone(), slot.clone(), actor.clone());
                         slot
                     }
                 }
             };
             drop(creation_guard);
-            service.open_slot(&id, slot).await?;
+            service.wait_for_slot(&id, slot).await?;
             Ok(())
         })
         .await
@@ -563,7 +614,7 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
-        caller.actor()?;
+        let actor = caller.actor()?;
         let record = self
             .inner
             .metadata
@@ -590,23 +641,13 @@ impl ConversationService {
                     started: AtomicBool::new(false),
                 });
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone());
+                self.start_slot(id.clone(), slot.clone(), actor);
                 slot
             }
         };
-        self.open_slot(id, slot).await
-    }
-    async fn open_slot(
-        &self,
-        id: &ConversationId,
-        slot: Arc<Slot>,
-    ) -> Result<Arc<LiveConversation>, ConversationError> {
-        if slot.value.get().is_none() {
-            self.start_slot(id.clone(), slot.clone());
-        }
         self.wait_for_slot(id, slot).await
     }
-    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>) {
+    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, actor: ActionContext) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
@@ -614,41 +655,29 @@ impl ConversationService {
                 let result = owner
                     .value
                     .get_or_init(|| async {
-                        let opening = async {
-                            // One gate for every first provider opening: read the
-                            // authoritative creator evidence and reconcile its
-                            // mandatory creation audit before any provider work.
-                            // Repeating it is idempotent by conversation identity.
+                        let preparation = async {
                             let record = service
                                 .inner
                                 .metadata
                                 .load(&id)
                                 .await
-                                .map_err(|cause| OpeningFailure { cause, _cleanup: None, holds: false })?
-                                .ok_or(OpeningFailure {
-                                    cause: ConversationError::NotFound,
-                                    _cleanup: None,
-                                    holds: false,
-                                })?;
-                            service
-                                .reconcile_creation_audit(&record)
-                                .await
                                 .map_err(|cause| OpeningFailure {
                                     cause,
-                                    _cleanup: None,
+                                    cleanup: None,
+                                    holds: false,
+                                })?
+                                .ok_or(OpeningFailure {
+                                    cause: ConversationError::NotFound,
+                                    cleanup: None,
                                     holds: false,
                                 })?;
-                            // The agent the record names, never this server's
-                            // current default: a conversation restores a
-                            // provider session that belongs to one agent, and
-                            // reopening it on another would hand that session
-                            // to a harness that never wrote it.
-                            //
-                            // Settled before the storage lease is taken. A
-                            // conversation this build cannot open is refused the
-                            // same way on every attempt, and there is no reason
-                            // for each of those attempts to acquire the
-                            // exclusive lease and drop it again.
+                            service.reconcile_creation_audit(&record).await.map_err(|cause| {
+                                OpeningFailure {
+                                    cause,
+                                    cleanup: None,
+                                    holds: false,
+                                }
+                            })?;
                             let configured = service
                                 .inner
                                 .agents
@@ -656,11 +685,10 @@ impl ConversationService {
                                 .cloned()
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::AgentNotConfigured,
-                                    _cleanup: None,
+                                    cleanup: None,
                                     holds: false,
                                 })?;
-                            let session_id =
-                                SessionId::new(id.to_string()).expect("UUID session key");
+                            let session_id = SessionId::new(id.to_string()).expect("UUID session key");
                             let manager = SessionManager::open(
                                 Some(session_id),
                                 service.inner.storage.clone(),
@@ -668,62 +696,33 @@ impl ConversationService {
                             .await
                             .map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
-                                OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, holds: false }
-                            })?;
-                            // Join any one-time preparation already paying for
-                            // the operating system's first-execution scan. This
-                            // is after the storage lease is held and before the
-                            // provider is launched, so the conversation neither
-                            // starts a second cold launch nor loses its place.
-                            //
-                            // The wait is this conversation's own agent's, not
-                            // every configured agent's: the scan being paid for
-                            // is the one this provider is about to trigger, and
-                            // a Codex conversation has nothing to gain by
-                            // waiting behind Claude's binary being scanned.
-                            //
-                            // Any stop supersedes the wait, whether it fences
-                            // the gateway or only stops the agents. Preparation
-                            // has no deadline of its own, and the caller holds a
-                            // shared admission guard while this runs, so an
-                            // opening that waited through a stop would stall
-                            // that pass for its whole budget and then launch a
-                            // provider the pass has already walked past.
-                            if let Some(readiness) = &configured.readiness {
-                                // Subscribing here marks stops that finished
-                                // before this opening began as already seen:
-                                // they closed agents this one does not have.
-                                let mut stops = service.inner.stops.subscribe();
-                                if service.inner.retirement.get().is_none() {
-                                    tokio::select! {
-                                        () = readiness.wait() => {}
-                                        _ = stops.changed() => return Err(service.stopped()),
-                                    }
+                                OpeningFailure {
+                                    cause: ConversationError::Storage(error),
+                                    cleanup: None,
+                                    holds: false,
                                 }
-                            }
-                            // A stop can also arrive for an opening that never
-                            // had to wait, so this is checked again rather than
-                            // only on the waiting path.
-                            if service.inner.retirement.get().is_some() {
-                                return Err(service.stopped());
-                            }
-                            let agent = Agent::new(configured.provider.clone(), manager)
-                                .await
-                                .map_err(|error| {
-                                report_opening_failure(&id, error.cause());
-                                // The one question that decides ownership: a
-                                // provider left part-way through initialization
-                                // is this slot's to finish closing. Whether the
-                                // caller may retry is already carried to the
-                                // wire by `ConversationError`, so it is not a
-                                // second fact for this slot to hold.
+                            })?;
+                            let agent = Agent::prepare(
+                                configured.provider.clone(),
+                                manager,
+                                configured.execution_audit.clone(),
+                            )
+                            .await
+                            .map_err(|error| {
                                 let holds = error.needs_cleanup();
                                 OpeningFailure {
                                     cause: ConversationError::Agent(error.cause().clone()),
-                                    _cleanup: Some(error),
+                                    cleanup: Some(error),
                                     holds,
                                 }
                             })?;
+                            let authorization = agent
+                                .authorize_attachment(AttachmentRequest::CallerRequested(actor))
+                                .map_err(|error| OpeningFailure {
+                                    cause: ConversationError::Agent(error),
+                                    cleanup: None,
+                                    holds: true,
+                                })?;
                             let mut events = agent.subscribe();
                             let snapshot = agent.session_manager().snapshot().await;
                             let capabilities = ConversationCapabilities {
@@ -735,10 +734,13 @@ impl ConversationService {
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
+                            projection.lifecycle(lifecycle_view(&agent));
                             if let Some(workspace) = &service.inner.workspace {
                                 let identity = configured.provider.identity();
                                 projection.view.runtime = Some(ConversationRuntime {
-                                    model: identity.model_id().into(), provider: identity.name().into(), workspace: workspace.clone(),
+                                    model: identity.model_id().into(),
+                                    provider: identity.name().into(),
+                                    workspace: workspace.clone(),
                                 });
                             }
                             let live = Arc::new(LiveConversation {
@@ -746,6 +748,7 @@ impl ConversationService {
                                 reserved_output_tokens: configured.reserved_output_tokens,
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
+                                attachment_owner: Mutex::new(None),
                             });
                             let weak = Arc::downgrade(&live);
                             tokio::spawn(async move {
@@ -755,26 +758,51 @@ impl ConversationService {
                                         break;
                                     };
                                     match event {
-                                        Ok(Some(event)) => {
-                                            live.projection.lock().await.event(&event)
-                                        }
+                                        Ok(Some(event)) => live.projection.lock().await.event(&event),
                                         Err(_) => live.projection.lock().await.lagged(),
                                         Ok(None) => break,
                                     }
                                 }
                             });
+                            let attachment = live.clone();
+                            let attachment_id = id.clone();
+                            let attachment_service = service.clone();
+                            let readiness = configured.readiness.clone();
+                            let mut stops = service.inner.stops.subscribe();
+                            let owner = tokio::spawn(async move {
+                                if let Some(readiness) = readiness {
+                                    let cancellation = authorization.cancellation();
+                                    tokio::select! {
+                                        () = readiness.wait() => {}
+                                        () = cancellation.wait() => return,
+                                        _ = stops.changed() => return,
+                                    }
+                                }
+                                if attachment_service.inner.retirement.get().is_some() {
+                                    return;
+                                }
+                                match attachment.agent.start_attachment(authorization) {
+                                    Ok(wait) => {
+                                        if let Err(error) = wait.wait().await {
+                                            report_opening_failure(&attachment_id, &error);
+                                        }
+                                    }
+                                    Err(error) if matches!(error, AgentError::Closed) => {}
+                                    Err(error) => report_opening_failure(&attachment_id, &error),
+                                }
+                            });
+                            *live.attachment_owner.lock().await = Some(owner);
                             Ok(live)
                         };
-                        match AssertUnwindSafe(opening).catch_unwind().await {
+                        match AssertUnwindSafe(preparation).catch_unwind().await {
                             Ok(result) => result,
                             Err(payload) => {
-                                // An adapter panic payload may itself panic on drop.
-                                // Publish failure before allowing any waiter to hang.
                                 mem::forget(payload);
-                                // Nothing can say what the panic left behind,
-                                // so the slot stays taken rather than being
-                                // handed to an opening that assumes it is free.
-                                Err(OpeningFailure { cause: ConversationError::Unavailable, _cleanup: None, holds: true })
+                                Err(OpeningFailure {
+                                    cause: ConversationError::Unavailable,
+                                    cleanup: None,
+                                    holds: true,
+                                })
                             }
                         }
                     })
@@ -839,6 +867,7 @@ impl ConversationService {
         if let Some(takes_images) = self.takes_images(&live.agent) {
             projection.view.capabilities.image_input = takes_images;
         }
+        projection.lifecycle(lifecycle_view(&live.agent));
         Ok(projection.read())
     }
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
@@ -985,50 +1014,97 @@ impl ConversationService {
                 estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
                 reserved_output_tokens: reserved,
             };
-            let receipt = match mode {
-                SubmissionMode::Queue => Some(live.agent.enqueue(request, actor).await?),
-                SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering => {
-                    Some(live.agent.enqueue_steering(request, actor).await?)
-                }
-                SubmissionMode::Steer => match live.agent.steer(request, actor).await? {
-                    SteeringDelivery::Queued(receipt) => Some(receipt),
-                    SteeringDelivery::Injected { .. } => None,
-                },
-            };
-            live.projection.lock().await.admitted(
-                &execution_id,
-                &message,
-                if matches!(mode, SubmissionMode::Queue) {
-                    ConversationPendingMode::Queued
-                } else {
-                    ConversationPendingMode::Steering
-                },
-            );
-            if let Some(receipt) = receipt {
-                let settled = Self::watch_receipt(live, receipt).await;
-                Ok(SubmissionReceipt {
-                    execution_id,
-                    disposition: if settled {
-                        ConversationDisposition::Settled
-                    } else {
-                        ConversationDisposition::Queued
-                    },
-                })
-            } else {
-                let snapshot = live.agent.session_manager().snapshot().await;
-                live.projection
-                    .lock()
+            let delivery = match mode {
+                SubmissionMode::Queue => live
+                    .agent
+                    .enqueue(request, actor)
                     .await
-                    .settled(&execution_id, snapshot.as_ref());
-                Ok(SubmissionReceipt {
-                    execution_id,
-                    disposition: ConversationDisposition::Injected,
-                })
+                    .map(SubmissionDelivery::Queued),
+                SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering => {
+                    live.agent
+                        .enqueue_steering(request, actor)
+                        .await
+                        .map(SubmissionDelivery::Queued)
+                }
+                SubmissionMode::Steer => {
+                    live.agent
+                        .steer(request, actor)
+                        .await
+                        .map(|delivery| match delivery {
+                            SteeringDelivery::Queued(receipt) => {
+                                SubmissionDelivery::Queued(receipt)
+                            }
+                            SteeringDelivery::Injected { target, evidence } => {
+                                SubmissionDelivery::Injected { target, evidence }
+                            }
+                        })
+                }
+            };
+            let pending_mode = if matches!(mode, SubmissionMode::Queue) {
+                ConversationPendingMode::Queued
+            } else {
+                ConversationPendingMode::Steering
+            };
+            let delivery = match delivery {
+                Ok(delivery) => delivery,
+                Err(AgentError::SubmissionUnresolved) => {
+                    live.projection
+                        .lock()
+                        .await
+                        .admitted(&execution_id, &message, pending_mode);
+                    let snapshot = live.agent.session_manager().snapshot().await;
+                    live.projection
+                        .lock()
+                        .await
+                        .settled(&execution_id, snapshot.as_ref());
+                    return Err(ConversationError::Agent(AgentError::SubmissionUnresolved));
+                }
+                Err(error) => return Err(ConversationError::Agent(error)),
+            };
+            live.projection
+                .lock()
+                .await
+                .admitted(&execution_id, &message, pending_mode);
+            match delivery {
+                SubmissionDelivery::Queued(receipt) => {
+                    let evidence_error = match receipt.evidence() {
+                        AdmissionEvidence::Acknowledged => None,
+                        AdmissionEvidence::Failed(failure) => {
+                            Some(admission_evidence_error(failure))
+                        }
+                    };
+                    let settled = Self::watch_receipt(live, receipt).await;
+                    if let Some(error) = evidence_error {
+                        return Err(error);
+                    }
+                    Ok(SubmissionReceipt {
+                        execution_id,
+                        disposition: if settled {
+                            ConversationDisposition::Settled
+                        } else {
+                            ConversationDisposition::Queued
+                        },
+                    })
+                }
+                SubmissionDelivery::Injected { target, evidence } => {
+                    let snapshot = live.agent.session_manager().snapshot().await;
+                    let mut projection = live.projection.lock().await;
+                    projection.settled(&execution_id, snapshot.as_ref());
+                    projection.injected(&execution_id, target.as_str());
+                    drop(projection);
+                    if let SteeringEvidence::Failed(failure) = &evidence {
+                        return Err(admission_evidence_error(failure));
+                    }
+                    Ok(SubmissionReceipt {
+                        execution_id,
+                        disposition: ConversationDisposition::Injected,
+                    })
+                }
             }
         })
         .await
     }
-    async fn watch_receipt(live: Arc<LiveConversation>, receipt: QueuedInvocation) -> bool {
+    async fn watch_receipt(live: Arc<LiveConversation>, receipt: QueueAdmission) -> bool {
         let id = receipt.id().as_str().to_owned();
         let mut completion = Box::pin(receipt.wait());
         // Inspect the actual SDK receipt, not a second admission ledger. A retry
@@ -1240,6 +1316,10 @@ impl ConversationService {
             let (closed, may_release) = match service.resolve(&id, &caller).await {
                 Ok(live) => {
                     let result = live.agent.close(actor).await;
+                    if result.is_ok() {
+                        live.join_attachment_owner().await;
+                        service.release_live_slot(&id, &live).await;
+                    }
                     // Refresh only terminal records. A concurrently accepted new turn
                     // retains its live observation state; there is no second closed flag.
                     let snapshot = live.agent.session_manager().snapshot().await;
@@ -1343,21 +1423,6 @@ impl ConversationService {
         self.close_agents(&actor).await
     }
 
-    /// A stop reached this opening before it had a provider.
-    ///
-    /// It therefore holds nothing, so its slot goes back and its answer is not
-    /// cached: stopping the agents leaves admission open, and the conversation
-    /// may be opened again. A retirement needs no cached refusal to stay
-    /// refused — `create` checks it before any of this — so the same answer is
-    /// right whether or not the gateway is retiring.
-    fn stopped(&self) -> OpeningFailure {
-        OpeningFailure {
-            cause: ConversationError::Unavailable,
-            _cleanup: None,
-            holds: false,
-        }
-    }
-
     /// Permanently fence new operations, join admitted commands, then stop owned agents.
     /// The caller supplies the automatic lifecycle cause and stable transaction correlation.
     pub(crate) async fn retire(
@@ -1414,7 +1479,6 @@ impl ConversationService {
         // cannot consume another owner's cleanup opportunity. Timeout means only
         // unconfirmed cleanup; the slot and supervised SDK work remain owned.
         let attempts = slots.into_iter().map(|(id, slot)| async move {
-            self.start_slot(id.clone(), slot.clone());
             let attempt = async {
                 loop {
                     let ready = slot.ready.notified();
@@ -1422,9 +1486,23 @@ impl ConversationService {
                     ready.as_mut().enable();
                     if let Some(value) = slot.value.get() {
                         return match value {
-                            Ok(live) => live.agent.close(actor.clone()).await.map(|_| ()),
-                            Err(failed) => match &failed._cleanup {
-                                Some(error) => error.retry_cleanup().await.map(|_| ()),
+                            Ok(live) => match live.agent.close(actor.clone()).await {
+                                Ok(_) => {
+                                    live.join_attachment_owner().await;
+                                    self.release_slot(&id, &slot).await;
+                                    Ok(())
+                                }
+                                Err(error) => Err(error),
+                            },
+                            Err(failed) => match &failed.cleanup {
+                                Some(error) => match error.retry_cleanup().await {
+                                    Ok(_) => {
+                                        self.release_slot(&id, &slot).await;
+                                        Ok(())
+                                    }
+                                    Err(error) => Err(error),
+                                },
+                                None if failed.holds => Err(AgentError::CleanupUncertain),
                                 None => Ok(()),
                             },
                         };
@@ -1443,6 +1521,27 @@ impl ConversationService {
             Ok(())
         } else {
             Err(ConversationError::Retirement(failures))
+        }
+    }
+
+    async fn release_live_slot(&self, id: &ConversationId, live: &Arc<LiveConversation>) {
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        if let Some(slot) = slot {
+            if slot
+                .value
+                .get()
+                .and_then(|value| value.as_ref().ok())
+                .is_some_and(|known| Arc::ptr_eq(known, live))
+            {
+                self.release_slot(id, &slot).await;
+            }
+        }
+    }
+
+    async fn release_slot(&self, id: &ConversationId, slot: &Arc<Slot>) {
+        let mut owners = self.inner.conversations.lock().await;
+        if owners.get(id).is_some_and(|known| Arc::ptr_eq(known, slot)) {
+            owners.remove(id);
         }
     }
 }

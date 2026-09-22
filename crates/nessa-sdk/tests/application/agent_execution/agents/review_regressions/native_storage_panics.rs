@@ -127,13 +127,18 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
         release_execution.send(()).unwrap();
         release_cleanup.send(()).unwrap();
-        let error = timeout(Duration::from_secs(2), steering)
+        let delivery = timeout(Duration::from_secs(2), steering)
             .await
             .unwrap()
             .unwrap()
-            .err()
-            .expect("panic cannot acknowledge steering success");
-        assert!(matches!(error, AgentError::Protocol(_)), "{error:?}");
+            .expect("provider acknowledgement remains owned");
+        assert!(matches!(
+            &delivery,
+            SteeringDelivery::Injected {
+                evidence: SteeringEvidence::Failed(failure),
+                ..
+            } if matches!(failure.storage(), Some(StorageError::Io(_)))
+        ));
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         let retry = timeout(
             Duration::from_secs(2),
@@ -141,9 +146,15 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         )
         .await
         .unwrap()
-        .err()
-        .expect("retry returns failed receipt");
-        assert_eq!(retry, error);
+        .unwrap()
+        .expect("retry returns owned provider acknowledgement");
+        assert!(matches!(
+            retry,
+            SteeringDelivery::Injected {
+                evidence: SteeringEvidence::Failed(_),
+                ..
+            }
+        ));
         assert_eq!(
             backend.steers.load(Ordering::SeqCst),
             usize::from(stage == InvocationStage::Injected)
@@ -154,7 +165,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             .iter()
             .find(|record| record.request.execution_id.as_str() == "steering")
             .unwrap();
-        assert_eq!(record.result, Some(Err(error)));
+        assert_eq!(record.result, Some(Err(AgentError::SubmissionUnresolved)));
         assert_eq!(record.actor, actor());
         let final_event = record.scheduling.last().unwrap();
         if stage == InvocationStage::Injected {

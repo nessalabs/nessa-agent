@@ -8,7 +8,7 @@ pub(super) fn snapshot_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
         .filter(|line| !line.is_empty())
     {
         let record: Value = serde_json::from_slice(line)?;
-        for key in ["id", "provider", "provider_session_id"] {
+        for key in ["id", "provider", "provider_context"] {
             if let Some(value) = record.get(key) {
                 snapshot[key] = value.clone();
             }

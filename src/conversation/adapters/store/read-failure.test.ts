@@ -30,6 +30,7 @@ const view = (conversationId: string): ConversationView => ({
     permissions: true,
     imageInput: false,
   },
+  lifecycle: { phase: "attached" },
   truncated: false,
   queueComplete: true,
 })

@@ -1,10 +1,12 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
-    ConversationAgent, ConversationAgents, ConversationCaller, ConversationCreation,
-    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDependencies,
-    ConversationDisposition, ConversationError, ConversationFuture, ConversationLimits,
-    ConversationMessageStatus, ConversationOwnershipState, ConversationRepository,
-    ConversationService, RequestedAgent, RuntimeReadiness, SubmissionMode, SubmittedMessage,
+    service::attachment_failure_message, ConversationAgent, ConversationAgents, ConversationCaller,
+    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
+    ConversationDependencies, ConversationDisposition, ConversationError, ConversationFuture,
+    ConversationLifecyclePhase, ConversationLimits, ConversationMessageStatus,
+    ConversationOwnershipState, ConversationRepository, ConversationService,
+    ConversationStartupFailureCode, RequestedAgent, RuntimeReadiness, SubmissionMode,
+    SubmittedMessage,
 };
 use crate::{
     agents::domain::AgentId,
@@ -17,7 +19,10 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::{
-        agents::{AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep},
+        agents::{
+            AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+            AttachmentFailureCode,
+        },
         permissions::PermissionSelectionState,
         providers::{
             AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
@@ -27,7 +32,7 @@ use nessa_sdk::{
             SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
         },
     },
-    domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
+    domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
     infrastructure::session_storage::InMemoryStorage,
 };
 use std::{
@@ -39,7 +44,7 @@ use std::{
         Arc, Mutex,
     },
 };
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{oneshot, watch, Notify};
 
 fn id() -> ConversationId {
     ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap()
@@ -50,6 +55,33 @@ fn caller(surface: &str, action: &str) -> ConversationCaller {
         principal_id: PrincipalId::new("person").unwrap(),
         surface_id: surface.into(),
         action_id: action.into(),
+    }
+}
+
+#[test]
+fn attachment_failure_messages_follow_only_their_typed_category() {
+    for (code, expected) in [
+        (
+            AttachmentFailureCode::Audit,
+            "Required attachment audit was not acknowledged.",
+        ),
+        (
+            AttachmentFailureCode::Provider,
+            "The agent provider could not attach.",
+        ),
+        (
+            AttachmentFailureCode::Storage,
+            "Attachment state could not be saved.",
+        ),
+        (
+            AttachmentFailureCode::Cleanup,
+            "Attachment cleanup could not be confirmed.",
+        ),
+    ] {
+        let message = attachment_failure_message(code);
+        assert_eq!(message, expected);
+        assert!(!message.is_empty());
+        assert!(message.len() <= 2048);
     }
 }
 async fn completed(service: &ConversationService, id: &ConversationId, count: usize) {
@@ -73,6 +105,36 @@ async fn completed(service: &ConversationService, id: &ConversationId, count: us
     })
     .await
     .unwrap();
+}
+async fn lifecycle(
+    service: &ConversationService,
+    id: &ConversationId,
+    phase: ConversationLifecyclePhase,
+) -> super::ConversationView {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "read-lifecycle"))
+                .await
+                .unwrap();
+            if view.lifecycle.phase == phase {
+                return view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("conversation reaches expected lifecycle phase")
+}
+async fn opened(provider: &ProviderFactory, count: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while provider.open_calls.load(Ordering::SeqCst) < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider reaches expected open count");
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), count);
 }
 
 struct RecordingCreationAudit {
@@ -226,7 +288,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
         .await
         .unwrap();
 
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     let accepted = audit.accepted.lock().unwrap();
     assert_eq!(accepted.len(), 2);
     let initial = accepted
@@ -359,7 +421,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
         .read(id.clone(), caller("phone", "read-2"))
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     service
         .submit(
             id.clone(),
@@ -388,7 +450,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     assert_eq!(records[0].initiator_surface_id, "panel");
     assert_eq!(records[0].before, ConversationOwnershipState::Absent);
     assert_eq!(records[0].after, ConversationOwnershipState::Owned);
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     service.shutdown().await.unwrap();
 }
 
@@ -420,7 +482,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
         .create(id.clone(), caller("panel", "create-1"), None)
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     service.shutdown().await.unwrap();
 
     // A fresh owner map, so the next create must open the provider again.
@@ -449,14 +511,14 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     ));
     // The reopen is attributed before its effect, so a refused attribution
     // leaves no reopened conversation behind.
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
 
     audit.reject_reopen.store(false, Ordering::SeqCst);
     service
         .create(id, caller("phone", "create-3"), None)
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    opened(&provider, 2).await;
     let records = audit.records.lock().unwrap().clone();
     assert_eq!(
         records
@@ -718,7 +780,7 @@ async fn surfaces_share_one_agent_and_keep_original_creator() {
     );
     a.unwrap();
     b.unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     let record = repository.records.lock().unwrap().get(&id).unwrap().clone();
     assert!(["original", "retry"].contains(&record.creation_action()));
     let mut foreign = caller("phone", "read");
@@ -775,13 +837,13 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
         restarted.create(id.clone(), foreign, None).await,
         Err(ConversationError::NotFound)
     ));
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
 
     restarted
         .create(id, caller("phone", "owner-reopen"), None)
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    opened(&provider, 2).await;
     restarted.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -878,7 +940,7 @@ async fn caller_loss_does_not_cancel_initialization() {
     task.abort();
     release.send(()).unwrap();
     service.read(id, caller("phone", "read")).await.unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     service.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -912,7 +974,7 @@ async fn first_read_caller_loss_cannot_leave_an_unstarted_shutdown_slot() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
 }
 
 struct FailOnceStorage {
@@ -965,7 +1027,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
         .await
         .unwrap();
     assert_eq!(storage.attempts.load(Ordering::SeqCst), 2);
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     service.shutdown().await.unwrap();
 }
 
@@ -1059,7 +1121,7 @@ impl AgentProvider for FailOnceProvider {
     }
 }
 #[tokio::test]
-async fn resource_free_provider_failure_retires_slot_for_retry() {
+async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
     let provider = Arc::new(FailOnceProvider {
         attempts: AtomicUsize::new(0),
@@ -1080,16 +1142,29 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
     )
     .unwrap();
     let id = id();
-    assert!(matches!(
-        service
-            .create(id.clone(), caller("panel", "first"), None)
-            .await,
-        Err(ConversationError::Agent(AgentError::Deadline))
-    ));
     service
-        .create(id, caller("panel", "retry"), None)
+        .create(id.clone(), caller("panel", "first"), None)
         .await
         .unwrap();
+    let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
+    assert_eq!(
+        failed.lifecycle.failure.unwrap().code,
+        ConversationStartupFailureCode::Provider
+    );
+    service
+        .create(id.clone(), caller("panel", "same-generation"), None)
+        .await
+        .unwrap();
+    assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
+    service
+        .close(id.clone(), caller("panel", "close-failed"))
+        .await
+        .unwrap();
+    service
+        .create(id.clone(), caller("panel", "retry"), None)
+        .await
+        .unwrap();
+    lifecycle(&service, &id, ConversationLifecyclePhase::Attached).await;
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
     service.shutdown().await.unwrap();
 }
@@ -1130,6 +1205,7 @@ fn prepared(
             AgentId::Claude,
             ConversationAgent {
                 provider,
+                execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: Some(readiness),
             },
@@ -1155,8 +1231,36 @@ impl RuntimeReadiness for GatedReadiness {
     }
 }
 
-/// A first message arriving while the runtime is still being prepared waits for
-/// that work instead of launching a second cold provider of its own.
+struct HeldReadiness {
+    released: watch::Receiver<bool>,
+    waited: AtomicUsize,
+}
+impl RuntimeReadiness for HeldReadiness {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.waited.fetch_add(1, Ordering::SeqCst);
+            let mut released = self.released.clone();
+            while !*released.borrow() {
+                if released.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+}
+
+async fn readiness_waiters(readiness: &HeldReadiness, count: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while readiness.waited.load(Ordering::SeqCst) < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("conversation attachment owners reach runtime readiness");
+}
+
+/// A first message arriving while the runtime is still being prepared gets a
+/// stable conversation immediately without launching a second cold provider.
 #[tokio::test]
 async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
@@ -1180,13 +1284,12 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     )
     .unwrap();
     let id = id();
-    let creating = tokio::spawn({
-        let service = service.clone();
-        let id = id.clone();
-        async move { service.create(id, caller("panel", "first"), None).await }
-    });
-    // The conversation is held at the gate, so it has not launched a provider:
-    // the preparation already in flight is the only launch.
+    service
+        .create(id.clone(), caller("panel", "first"), None)
+        .await
+        .unwrap();
+    // The retained attachment owner is held at the gate, while the command is
+    // already complete and the lifecycle is available to readers.
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         while !readiness.waited.load(Ordering::SeqCst) {
             tokio::task::yield_now().await;
@@ -1195,9 +1298,186 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     .await
     .expect("the opening gate waits for preparation");
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .read(id.clone(), caller("panel", "read-starting"))
+            .await
+            .unwrap()
+            .lifecycle
+            .phase,
+        ConversationLifecyclePhase::Starting
+    );
     release.send(()).unwrap();
-    creating.await.unwrap().unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while provider.open_calls.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the provider starts after readiness settles");
+    opened(&provider, 1).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorization_cannot_start() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let (release, released) = watch::channel(false);
+    let readiness = Arc::new(HeldReadiness {
+        released,
+        waited: AtomicUsize::new(0),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let first = id();
+    let second = id();
+
+    service
+        .create(first.clone(), caller("panel", "create-first"), None)
+        .await
+        .unwrap();
+    service
+        .create(second.clone(), caller("panel", "create-second"), None)
+        .await
+        .unwrap();
+    readiness_waiters(&readiness, 2).await;
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .read(second.clone(), caller("panel", "read-second"))
+            .await
+            .unwrap()
+            .lifecycle
+            .phase,
+        ConversationLifecyclePhase::Starting
+    );
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        service.close(first.clone(), caller("panel", "close-first")),
+    )
+    .await
+    .expect("close joins the targeted attachment owner before readiness")
+    .unwrap();
+
+    // The old Agent and its storage lease are gone, so the same durable
+    // conversation can prepare a fresh generation while readiness stays held.
+    service
+        .create(first.clone(), caller("panel", "recreate-first"), None)
+        .await
+        .unwrap();
+    readiness_waiters(&readiness, 3).await;
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .read(second.clone(), caller("panel", "read-second-again"))
+            .await
+            .unwrap()
+            .lifecycle
+            .phase,
+        ConversationLifecyclePhase::Starting
+    );
+
+    release.send_replace(true);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while provider.open_calls.load(Ordering::SeqCst) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the surviving and replacement generations attach");
+    opened(&provider, 2).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let (release, released) = watch::channel(false);
+    let readiness = Arc::new(HeldReadiness {
+        released,
+        waited: AtomicUsize::new(0),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    readiness_waiters(&readiness, 1).await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        for (execution_id, text) in [("one", "First"), ("two", "Second")] {
+            service
+                .submit(
+                    id.clone(),
+                    caller("panel", execution_id),
+                    execution_id.into(),
+                    SubmittedMessage {
+                        text: text.into(),
+                        images: Vec::new(),
+                        files: Vec::new(),
+                    },
+                    SubmissionMode::Queue,
+                )
+                .await
+                .unwrap();
+        }
+        service
+            .reorder(
+                id.clone(),
+                caller("panel", "reorder"),
+                vec!["two".into(), "one".into()],
+            )
+            .await
+            .unwrap();
+        assert!(service
+            .remove(id.clone(), caller("panel", "remove"), "one".into(),)
+            .await
+            .unwrap());
+    })
+    .await
+    .expect("queue admission and controls do not inherit runtime readiness");
+
+    let waiting = service
+        .read(id.clone(), caller("panel", "read-waiting"))
+        .await
+        .unwrap();
+    assert_eq!(
+        waiting.lifecycle.phase,
+        ConversationLifecyclePhase::Starting
+    );
+    assert_eq!(waiting.pending.len(), 1);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+
+    release.send_replace(true);
+    completed(&service, &id, 1).await;
+    assert_eq!(*provider.executions.lock().unwrap(), vec!["two"]);
     service.shutdown().await.unwrap();
 }
 
@@ -1231,10 +1511,11 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
         None,
     )
     .unwrap();
-    let creating = tokio::spawn({
-        let service = service.clone();
-        async move { service.create(id(), caller("panel", "first"), None).await }
-    });
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "first"), None)
+        .await
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         while !readiness.waited.load(Ordering::SeqCst) {
             tokio::task::yield_now().await;
@@ -1251,13 +1532,6 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     .await
     .expect("quit must not wait out a preparation with no deadline")
     .unwrap();
-    assert!(matches!(
-        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
-            .await
-            .expect("the parked request is released")
-            .unwrap(),
-        Err(ConversationError::Unavailable)
-    ));
     // Nothing was launched past the stop, so quit leaves no provider behind.
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 
@@ -1265,10 +1539,16 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     // conversation this released can be opened again afterwards.
     *readiness.release.lock().unwrap() = None;
     service
-        .create(id(), caller("panel", "after-quit"), None)
+        .create(id, caller("panel", "after-quit"), None)
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while provider.open_calls.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the conversation can attach after the transient stop");
     service.shutdown().await.unwrap();
 }
 
@@ -1299,10 +1579,10 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
         None,
     )
     .unwrap();
-    let creating = tokio::spawn({
-        let service = service.clone();
-        async move { service.create(id(), caller("panel", "first"), None).await }
-    });
+    service
+        .create(id(), caller("panel", "first"), None)
+        .await
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         while !readiness.waited.load(Ordering::SeqCst) {
             tokio::task::yield_now().await;
@@ -1316,15 +1596,8 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
         .await
         .expect("shutdown must not wait out a preparation with no deadline")
         .unwrap();
-    // The waiting request is released rather than left parked, and no provider
-    // is launched past the fence for nothing to close.
-    assert!(matches!(
-        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
-            .await
-            .expect("the parked request is released")
-            .unwrap(),
-        Err(ConversationError::Unavailable)
-    ));
+    // The retained attachment owner is joined, and no provider is launched
+    // past the fence for nothing to close.
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 }
 
@@ -1350,12 +1623,10 @@ impl AgentProvider for StartupDeadlineOnceProvider {
         }
     }
 }
-/// The client tells the user a startup deadline is worth retrying. That is only
-/// true because the slot is released when the failed launch left no resources
-/// behind, so the next command opens a fresh provider instead of being served
-/// the cached failure.
+/// Attachment failure is a late lifecycle result, retained until an explicit
+/// close releases that generation and a new caller-authorized attempt replaces it.
 #[tokio::test]
-async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
+async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
     let provider = Arc::new(StartupDeadlineOnceProvider {
         attempts: AtomicUsize::new(0),
@@ -1376,15 +1647,38 @@ async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
     )
     .unwrap();
     let id = id();
-    assert!(matches!(
-        service.create(id.clone(), caller("panel", "first"), None).await,
-        Err(ConversationError::Agent(AgentError::StartupDeadline(step)))
-            if step.phase() == AgentStartupPhase::Session
-    ));
     service
-        .create(id, caller("panel", "retry"), None)
+        .create(id.clone(), caller("panel", "first"), None)
         .await
         .unwrap();
+    let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
+    let failure = failed.lifecycle.failure.as_ref().unwrap();
+    assert_eq!(failure.code, ConversationStartupFailureCode::Provider);
+    assert!(failure.message.contains("startup"));
+    let revision = failed.revision;
+
+    // Re-reading and reconnect-style creation retain one failed generation;
+    // diagnostics do not authorize a replay.
+    service
+        .create(id.clone(), caller("phone", "reconnect"), None)
+        .await
+        .unwrap();
+    let repeated = service
+        .read(id.clone(), caller("phone", "read-again"))
+        .await
+        .unwrap();
+    assert_eq!(repeated.revision, revision);
+    assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
+
+    service
+        .close(id.clone(), caller("panel", "close-failed"))
+        .await
+        .unwrap();
+    service
+        .create(id.clone(), caller("panel", "retry"), None)
+        .await
+        .unwrap();
+    lifecycle(&service, &id, ConversationLifecyclePhase::Attached).await;
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
     service.shutdown().await.unwrap();
 }
@@ -1406,10 +1700,8 @@ impl AgentProvider for UncertainStartupDeadlineProvider {
         })
     }
 }
-/// The other half of the same contract: when the failed launch could not be
-/// confirmed stopped, the slot is deliberately retained, so retrying *this*
-/// conversation cannot reach the provider again. The failure keeps its own
-/// meaning rather than being relabelled by the retained cleanup.
+/// Unconfirmed cleanup stays a separate typed lifecycle fact. Repeating create
+/// cannot discard its owner or reinterpret the provider attempt as unowned.
 #[tokio::test]
 async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     let (_, _, repository, storage) = fixture(ConversationLimits::default());
@@ -1432,14 +1724,19 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     )
     .unwrap();
     let id = id();
-    for action in ["first", "retry"] {
-        assert!(matches!(
-            service
-                .create(id.clone(), caller("panel", action), None)
-                .await,
-            Err(ConversationError::Agent(AgentError::StartupDeadline(_))),
-        ));
-    }
+    service
+        .create(id.clone(), caller("panel", "first"), None)
+        .await
+        .unwrap();
+    let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
+    assert_eq!(
+        failed.lifecycle.failure.unwrap().code,
+        ConversationStartupFailureCode::Cleanup
+    );
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
     assert!(service.shutdown().await.is_err());
 }
@@ -1465,12 +1762,19 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     )
     .unwrap();
     let id = id();
-    for action in ["first", "retry"] {
-        assert!(service
-            .create(id.clone(), caller("panel", action), None)
-            .await
-            .is_err());
-    }
+    service
+        .create(id.clone(), caller("panel", "first"), None)
+        .await
+        .unwrap();
+    let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
+    assert_eq!(
+        failed.lifecycle.failure.unwrap().code,
+        ConversationStartupFailureCode::Cleanup
+    );
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
     assert!(service.shutdown().await.is_err());
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
@@ -1487,7 +1791,7 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
     assert_eq!(repository.records.lock().unwrap().len(), 1);
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     assert!(matches!(
         service.create(id(), caller("panel", "c"), None).await,
         Err(ConversationError::Capacity)
@@ -1582,10 +1886,10 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
         .unwrap(),
         Err(ConversationError::Unavailable)
     ));
-    tokio::time::timeout(std::time::Duration::from_secs(2), service.shutdown())
+    let shutdown = tokio::time::timeout(std::time::Duration::from_secs(2), service.shutdown())
         .await
-        .unwrap()
-        .unwrap();
+        .expect("shutdown reports unknowable panic ownership without hanging");
+    assert!(matches!(shutdown, Err(ConversationError::Retirement(_))));
 }
 #[tokio::test]
 async fn boundary_steering_can_be_removed_without_dispatch() {
@@ -1650,7 +1954,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
 }
 
 #[tokio::test]
-async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works() {
+async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
@@ -1692,7 +1996,6 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
         .unwrap();
     assert_eq!(replay.disposition, ConversationDisposition::Settled);
     assert_eq!(provider.executions.lock().unwrap().len(), 1);
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     let view = service
         .read(id.clone(), caller("phone", "read"))
         .await
@@ -1718,6 +2021,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
         .unwrap();
     completed(&service, &id, 2).await;
     assert_eq!(provider.executions.lock().unwrap().len(), 2);
+    opened(&provider, 2).await;
     service.shutdown().await.unwrap();
 }
 struct PanicOnDrop;
@@ -1758,10 +2062,10 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
         .unwrap(),
         Err(ConversationError::Unavailable)
     ));
-    tokio::time::timeout(std::time::Duration::from_secs(2), service.shutdown())
+    let shutdown = tokio::time::timeout(std::time::Duration::from_secs(2), service.shutdown())
         .await
-        .unwrap()
-        .unwrap();
+        .expect("shutdown reports hostile panic ownership without hanging");
+    assert!(matches!(shutdown, Err(ConversationError::Retirement(_))));
 }
 
 #[tokio::test]
@@ -1787,7 +2091,9 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         .save(SessionSnapshot {
             id: session_id.clone(),
             provider: ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap(),
-            provider_session_id: ExecutionSessionId::new("retained-context").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("retained-context").unwrap(),
+            ),
             queue_history: vec![],
             invocations: vec![],
         })
@@ -1805,7 +2111,10 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     let lease = storage.open(session_id).await.unwrap();
     let saved = lease.load().await.unwrap().unwrap();
-    assert_eq!(saved.provider_session_id.as_str(), "retained-context");
+    assert_eq!(
+        saved.provider_context.recorded().unwrap().as_str(),
+        "retained-context"
+    );
     assert_eq!(
         saved.provider,
         ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap()
@@ -1861,6 +2170,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                     AgentId::Claude,
                     ConversationAgent {
                         provider: Arc::new(Provider(claude.clone())),
+                        execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
                         readiness: None,
                     },
@@ -1869,6 +2179,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                     AgentId::Codex,
                     ConversationAgent {
                         provider: Arc::new(Provider(codex.clone())),
+                        execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
                         readiness: None,
                     },
@@ -1901,7 +2212,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
         )
         .await
         .unwrap();
-    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    opened(&codex, 1).await;
     assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         repository.records.lock().unwrap()[&id].agent(),
@@ -1931,7 +2242,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
         .create(id.clone(), caller("panel", "reopen"), None)
         .await
         .unwrap();
-    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 2);
+    opened(&codex, 2).await;
     assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
 }
 
@@ -1951,6 +2262,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             id,
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
             },
@@ -2017,7 +2329,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     ));
     // Never opened on the agent that is still here, and never opened at all.
     assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    opened(&codex, 1).await;
 }
 
 #[tokio::test]
@@ -2041,6 +2353,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             id,
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
             },
@@ -2144,6 +2457,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             id,
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
             },
@@ -2256,7 +2570,7 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
         )
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     service.shutdown().await.unwrap();
 }
 
@@ -2284,7 +2598,7 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
         )
         .await
         .unwrap();
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
 
     // A conversation that does not exist yet has nothing else to be run on, so
     // the name is refused there — and as the misspelling it is, not as a fact
@@ -2353,7 +2667,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     ));
     // Refused before anything was reopened, so the record never existed to be
     // written: the same answer this context gets for a new conversation.
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    opened(&provider, 1).await;
     assert!(matches!(
         service.create(fresh, caller("panel", wiped), None).await,
         Err(ConversationError::InvalidInput)
@@ -2449,6 +2763,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
             AgentId::Claude,
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
             },
@@ -2466,6 +2781,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
         AgentId::Claude,
         ConversationAgent {
             provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+            execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
             reserved_output_tokens: 0,
             readiness: None,
         },
@@ -2503,6 +2819,9 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                         AgentId::Claude,
                         ConversationAgent {
                             provider: Arc::new(Provider(claude.clone())),
+                            execution_audit: Arc::new(
+                                crate::conversation_test_support::AcceptingAudit,
+                            ),
                             reserved_output_tokens: 4096,
                             readiness: Some(claude_readiness.clone()),
                         },
@@ -2511,6 +2830,9 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                         AgentId::Codex,
                         ConversationAgent {
                             provider: Arc::new(Provider(codex.clone())),
+                            execution_audit: Arc::new(
+                                crate::conversation_test_support::AcceptingAudit,
+                            ),
                             reserved_output_tokens: 4096,
                             readiness: None,
                         },
@@ -2544,7 +2866,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
     .await
     .expect("a Codex conversation must not wait for Claude's runtime")
     .expect("the conversation opens");
-    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    opened(&codex, 1).await;
     // Claude's preparation was neither joined nor started by a conversation
     // that runs on something else.
     assert!(!claude_readiness.waited.load(Ordering::SeqCst));

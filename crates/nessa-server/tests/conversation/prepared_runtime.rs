@@ -12,7 +12,7 @@ use crate::agent_warm_up::domain::RuntimeFingerprint;
 use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
-    ConversationLimits, ConversationService,
+    ConversationLifecyclePhase, ConversationLimits, ConversationService,
 };
 use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
@@ -46,11 +46,21 @@ impl WarmUpRecords for MemoryRecords {
 #[derive(Default)]
 struct RecordingAudit {
     records: Mutex<Vec<WarmUpAuditRecord>>,
+    fail: std::sync::atomic::AtomicBool,
 }
 impl WarmUpAudit for RecordingAudit {
     fn record(&self, record: WarmUpAuditRecord) -> WarmUpFuture<'_, ()> {
         self.records.lock().unwrap().push(record);
-        Box::pin(async { Ok(()) })
+        let fail = self.fail.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if fail {
+                Err(crate::agent_warm_up::application::WarmUpError::Audit(
+                    "warm-up audit unavailable".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 
@@ -70,12 +80,13 @@ fn conversation_id() -> ConversationId {
 /// A first message arriving mid-warm-up joins that launch rather than starting
 /// a second one — through the real port, the real adapter and the real service.
 #[tokio::test]
-async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
+async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failure() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
     let records = Arc::new(MemoryRecords::default());
     let audit = Arc::new(RecordingAudit::default());
     let warm_up = AgentWarmUp::new(
         Arc::new(Provider(provider.clone())),
+        Arc::new(crate::conversation_test_support::AcceptingAudit),
         Arc::new(InMemoryStorage::new()),
         records.clone(),
         audit.clone(),
@@ -89,6 +100,7 @@ async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
                     AgentId::Claude,
                     ConversationAgent {
                         provider: Arc::new(Provider(provider.clone())),
+                        execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
                         readiness: Some(Arc::new(PreparedRuntime(warm_up.clone()))),
                     },
@@ -114,20 +126,37 @@ async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
     *provider.open_gate.lock().unwrap() = Some(gate);
     warm_up.start();
     provider.opening.notified().await;
-
-    let creating = tokio::spawn({
-        let service = service.clone();
-        async move { service.create(conversation_id(), caller(), None).await }
-    });
+    let conversation = conversation_id();
+    service
+        .create(conversation.clone(), caller(), None)
+        .await
+        .expect("preparation returns before runtime readiness");
     wait_for_waiting_conversation(&provider).await;
     // One launch so far, and it is the warm-up's.
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
 
+    audit.fail.store(true, Ordering::SeqCst);
     release.send(()).unwrap();
-    creating.await.unwrap().unwrap();
-    // The conversation's own provider opens only after the warm-up settled.
+    for _ in 0..64 {
+        if provider.open_calls.load(Ordering::SeqCst) == 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(records.completed.lock().unwrap().len(), 1);
+    let mut attached = None;
+    for _ in 0..64 {
+        let view = service.read(conversation.clone(), caller()).await.unwrap();
+        if view.lifecycle.phase == ConversationLifecyclePhase::Attached {
+            attached = Some(view);
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let view = attached.expect("conversation attachment completes after readiness settles");
+    assert_eq!(view.lifecycle.phase, ConversationLifecyclePhase::Attached);
+    assert!(view.lifecycle.failure.is_none());
+    assert!(records.completed.lock().unwrap().is_empty());
     assert_eq!(audit.records.lock().unwrap().len(), 1);
     service.shutdown().await.unwrap();
 }

@@ -119,6 +119,9 @@ impl AgentProvider for TestProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("test", "test", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
@@ -137,7 +140,7 @@ pub(super) async fn provider_agent(backend: Arc<dyn ProviderSessionBackend>) -> 
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    Agent::new(Arc::new(TestProvider(backend)), manager)
+    attached_agent(Arc::new(TestProvider(backend)), manager)
         .await
         .unwrap()
 }
@@ -156,7 +159,9 @@ pub(super) async fn provider_agent_with_review(
             queue_history: Vec::new(),
             id: id.clone(),
             provider: provider.identity(),
-            provider_session_id: ExecutionSessionId::new("fixture").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("fixture").unwrap(),
+            ),
             invocations: vec![InvocationRecord {
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
@@ -182,5 +187,5 @@ pub(super) async fn provider_agent_with_review(
         .unwrap();
     drop(lease);
     let manager = SessionManager::open(Some(id), storage).await.unwrap();
-    Agent::new(provider, manager).await.unwrap()
+    attached_agent(provider, manager).await.unwrap()
 }
