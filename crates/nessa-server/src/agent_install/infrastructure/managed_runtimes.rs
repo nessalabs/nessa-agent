@@ -356,6 +356,38 @@ impl ManagedRuntimes {
         self.file_path(agent, release, release.launch())
     }
 
+    /// Whether this store really holds the file it published at `relative`.
+    ///
+    /// Opened rather than stat'ed, and through the anchored primitive. It
+    /// answers the whole question in one call: every directory from the root
+    /// down is walked and checked, nothing along the way may be a symbolic
+    /// link, and what is finally opened has to be a regular file with a single
+    /// link, owned by this user and reachable by nobody else — which is exactly
+    /// what this store publishes and nothing else is.
+    ///
+    /// `symlink_metadata` would have covered only the last of those. A link at
+    /// `versions/`, or at the agent's own directory, would have been followed
+    /// by the kernel before it ever looked, and whatever was found on the other
+    /// side handed back as the tested runtime — with no download, no digest,
+    /// and none of the archive's checks ever running. That path is then given
+    /// out to be launched.
+    ///
+    /// Anything that is not openable as a file this store published answers
+    /// `false` rather than failing. That is the recoverable answer: the pinned
+    /// release is known, and installing it renames the real files back over
+    /// whatever is there. A failure would be a dead end — every attempt
+    /// refusing at the same place, with nothing a person could do but go and
+    /// find the file. A disk that is genuinely failing still says so, in the
+    /// install that follows.
+    fn holds(&self, relative: &Path) -> Result<bool, StoreFailure> {
+        let Ok(file) = open_beneath(&self.root, relative, OpenMode::Read) else {
+            return Ok(false);
+        };
+        // A record is a note, not evidence: a file truncated to nothing is not
+        // the one that was unpacked, and an empty program cannot start.
+        Ok(file.metadata().map_err(unreadable)?.len() != 0)
+    }
+
     /// Hold the sole right to publish one agent's runtimes.
     ///
     /// Publication is not a single rename. It creates directories, unpacks a
@@ -799,11 +831,11 @@ impl ManagedRuntimes {
         // out, and the message is true when it is read.
         if let Err(failure) = self.settle(agent, release, durable) {
             // Unconditional, and safe to be: the lock has been held since
-            // before the recheck, which found nothing installed, so the file
-            // at `destination` is the one this call renamed there and no other
-            // install can have finished in between. Taking it back out is
-            // undoing this call's own work, not losing somebody else's.
-            self.withdraw(agent, release, &destination);
+            // before the recheck, which found nothing installed, so every file
+            // in `written` is one this call renamed and no other install can
+            // have finished in between. Taking them back out is undoing this
+            // call's own work, not losing somebody else's.
+            self.withdraw(agent, release, &written);
             return Err(failure);
         }
         // Nothing reclaims the artifact this one supersedes, and that is a
@@ -850,8 +882,10 @@ impl ManagedRuntimes {
         //
         // The one path that leaves this type, so the one that is spelled in
         // full: everything above is relative because everything above is
-        // reached through the root rather than resolved from the outside.
-        Ok(self.absolute(&destination))
+        // reached through the root rather than resolved from the outside. One
+        // of the files rather than all of them, because the rest are reached by
+        // the runtime itself, relative to this one.
+        Ok(self.absolute(&self.launch_path(agent, release)))
     }
 }
 
@@ -913,43 +947,21 @@ impl RuntimeStore for ManagedRuntimes {
         if !record.describes(release) {
             return Ok(None);
         }
-        // The path is recomputed from the release rather than read back out of
-        // the record, so `installed.json` cannot name a launch path of its own
-        // choosing: the most a rewritten record can do is make Nessa install
-        // again. The record is still only a note, so an executable that has
-        // since been deleted — by a disk cleaner, or by someone tidying up —
-        // makes it stale, and an empty one is a runtime that cannot start.
-        let executable = self.executable_path(agent, release);
-        // Opened rather than stat'ed, and through the anchored primitive. It
-        // answers the whole question in one call: every directory from the root
-        // down is walked and checked, nothing along the way may be a symbolic
-        // link, and what is finally opened has to be a regular file with a
-        // single link, owned by this user and reachable by nobody else — which
-        // is exactly what this store publishes and nothing else is.
-        //
-        // `symlink_metadata` would have covered only the last of those. A link
-        // at `versions/`, or at the agent's own directory, would have been
-        // followed by the kernel before it ever looked, and whatever was found
-        // on the other side handed back as the tested runtime — with no
-        // download, no digest, and none of the archive's checks ever running.
-        // That path is then given out to be launched.
-        let installed = match open_beneath(&self.root, &executable, OpenMode::Read) {
-            Ok(file) => file,
-            // Anything that is not openable as the file this store published is
-            // answered with "nothing is installed", not with a failure. That is
-            // the recoverable answer: the pinned release is known, and
-            // installing it renames the real executable back over whatever is
-            // there. A failure would be a dead end — every attempt refusing at
-            // the same place, with nothing a person could do but go and find
-            // the file. A disk that is genuinely failing still says so, in the
-            // install that follows.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Ok(None),
-        };
-        // A record is a note, not evidence: an executable truncated to nothing
-        // is a runtime that cannot start.
-        let empty = installed.metadata().map_err(unreadable)?.len() == 0;
-        Ok((!empty).then(|| self.absolute(&executable)))
+        // Every file, not only the one that is launched. A record is a note
+        // rather than evidence, and a runtime whose ripgrep a disk cleaner took
+        // away is one that starts and then cannot search — reported as ready,
+        // with nothing saying why it is not. Seven opens rather than one is
+        // nothing beside the download this answer avoids.
+        for file in release.contents().files() {
+            // The path is recomputed from the release rather than read back out
+            // of the record, so `installed.json` cannot name a launch path of
+            // its own choosing: the most a rewritten record can do is make Nessa
+            // install again.
+            if !self.holds(&self.file_path(agent, release, file.path()))? {
+                return Ok(None);
+            }
+        }
+        Ok(Some(self.absolute(&self.launch_path(agent, release))))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
@@ -1084,7 +1096,7 @@ impl ManagedRuntimes {
 fn expand(
     entry: &mut impl Read,
     staging: &mut File,
-    release: &PinnedRelease,
+    path: &ArchivePath,
 ) -> Result<u64, StoreFailure> {
     let mut buffer = vec![0u8; UNPACK_CHUNK];
     let mut unpacked: u64 = 0;
@@ -1101,8 +1113,7 @@ fn expand(
                 io::ErrorKind::InvalidData
                 | io::ErrorKind::InvalidInput
                 | io::ErrorKind::UnexpectedEof => StoreFailure::MalformedArchive(format!(
-                    "{} could not be read out of the archive: {error}",
-                    release.executable()
+                    "{path} could not be read out of the archive: {error}"
                 )),
                 _ => StoreFailure::Unreadable(format!(
                     "reading the downloaded archive back: {error}"
@@ -1117,12 +1128,12 @@ fn expand(
     }
 }
 
-/// Why an entry of this kind cannot be the runtime, if it cannot.
+/// Why an entry of this kind cannot be one of a release's files, if it cannot.
 ///
 /// A link entry names another file and carries no data; a directory carries
-/// none either. Neither is an executable, and unpacking one writes an empty
-/// file that this store would then record as the installed runtime and hand
-/// out as something to launch.
+/// none either. Neither is a file to install, and unpacking one writes an empty
+/// one that this store would then record as part of the installed runtime and
+/// hand out as something to launch.
 ///
 /// A sparse entry is refused for the same reason — what would be written is not
 /// the file the archive describes — but it gets its own sentence, because it
@@ -1197,26 +1208,33 @@ fn malformed(error: io::Error) -> StoreFailure {
     StoreFailure::MalformedArchive(error.to_string())
 }
 
-/// Make a freshly written file launchable by its owner, and by nobody else.
+/// Give a freshly written file the mode its role asks for, and nothing more.
 ///
-/// A tar entry carries a mode, but it is not used: the mode is part of the
-/// archive, and the one thing this installation needs is true regardless of
-/// what the archive says about it. Set through the open handle rather than by
-/// path, so it lands on the file that was just written and not on whatever the
-/// name happens to mean by now.
+/// The tar entry carries a mode and it is not used. The archive is a thing
+/// being verified, not a thing to be believed about what it may run: the *pin*
+/// says which files are programs, so a release that turned a document into an
+/// executable by flipping a bit in its own header would change nothing here.
+/// That is what `0o600` for a document buys — Codex ships three files that are
+/// read rather than run, and none of them becomes runnable because the archive
+/// said so.
 ///
-/// Owner-only, like every other file this store writes. The directories above
-/// it are `0o700` already, so the group and world bits a release archive
-/// usually carries grant nothing — and dropping them is what lets
-/// [`RuntimeStore::installed`] check the file through the same private-file
-/// primitive as the record, instead of settling for what a stat can see.
+/// Set through the open handle rather than by path, so it lands on the file
+/// that was just written and not on whatever the name happens to mean by now.
+///
+/// Owner-only either way, like every other file this store writes. The
+/// directories above it are `0o700` already, so the group and world bits a
+/// release archive usually carries grant nothing — and dropping them is what
+/// lets [`RuntimeStore::installed`] check the file through the same
+/// private-file primitive as the record, instead of settling for what a stat
+/// can see.
 #[cfg(unix)]
-fn make_executable(file: &File) -> io::Result<()> {
-    file.set_permissions(Permissions::from_mode(0o700))
+fn set_mode(file: &File, role: FileRole) -> io::Result<()> {
+    let mode = if role.runnable() { 0o700 } else { 0o600 };
+    file.set_permissions(Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn make_executable(_file: &File) -> io::Result<()> {
+fn set_mode(_file: &File, _role: FileRole) -> io::Result<()> {
     // Windows decides executability by extension, so there is nothing to set.
     Ok(())
 }
