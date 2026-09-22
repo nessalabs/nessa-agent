@@ -783,7 +783,7 @@ signed in, and that turned out to be false — its free models are refused outsi
 OpenCode's own application, so all three want the person's own account. What is
 left of the reason applies to every agent equally: telling somebody to go and
 install something before they can use Nessa is the thing this context exists to
-avoid. [ADR 0013](adr/todo/0013-fetch-agent-runtimes.md) is the decision to
+avoid. [ADR 0014](adr/todo/0014-fetch-agent-runtimes.md) is the decision to
 fetch all three and ship none.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
