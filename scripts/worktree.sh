@@ -107,8 +107,11 @@ check_hook_name() {
   [[ "$name" != -* ]] || die "WorktreeCreate: name may not start with a dash: $name"
   # A trailing slash leaves no empty field to catch below, so it is caught here.
   [[ "$name" != */ ]] || die "WorktreeCreate: name may not end with a slash: $name"
-  # `read` below stops at the first newline, so everything after one would go
-  # unexamined. Refused outright rather than half-checked.
+  # `read` below stops at the first newline, so anything after one would go
+  # unexamined. Refused rather than half-checked. (A name whose only newline is
+  # a trailing one never reaches here: the command substitution that read the
+  # payload has already stripped it, leaving a slug this rule then judges
+  # normally.)
   [[ "$name" != *$'\n'* ]] || die "WorktreeCreate: name may not contain a newline"
   # `read -ra`, not `for segment in $name`: an unquoted expansion is also a glob,
   # so a name of `*` would have been replaced by the contents of whatever
@@ -457,9 +460,19 @@ cmd_claude_hook_remove() {
   fi
   git -C "$repo_root" worktree remove --force "$dir" >&2
   # A nested name (`a/b`) leaves `a/` behind. `rmdir` removes only empty
-  # directories, so this can never take anything with it, and `-p` stops at the
-  # first that is not empty.
-  rmdir -p "$(dirname "$dir")" 2>/dev/null || true
+  # directories, but `-p` on an absolute path keeps walking up until something
+  # is not empty and has no notion of a boundary — it would take `.claude/`
+  # itself, or, for a worktree adopted from somewhere else entirely, an empty
+  # parent outside the repository that this hook never created. So: only under
+  # the directory this hook owns, and run from inside it on the part below it,
+  # which cannot climb past where it started.
+  local owned="$repo_root/.claude/worktrees" inner
+  if [[ "$dir" == "$owned"/* ]]; then
+    inner="$(dirname "${dir#"$owned/"}")"
+    if [[ "$inner" != "." ]]; then
+      (cd "$owned" && rmdir -p "$inner" 2>/dev/null) || true
+    fi
+  fi
 
   # Only branches this hook names, and only when the base already contains
   # everything on them. `-D` is safe here because that test, not git's default
