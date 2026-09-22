@@ -899,7 +899,7 @@ fn the_bound_is_spent_across_every_file_a_release_installs() {
     // fit under 512 on their own and do not fit together.
     let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
-    let release = package("1.0.0");
+    let release = package("1.18.31");
     let mut staged = staged(
         &store,
         &gzipped(&tarball(&[
@@ -1155,14 +1155,37 @@ fn a_discarded_archive_leaves_nothing_behind() {
 }
 
 /// The uncompressed tar bytes for each of `entries`, in order.
+/// A tar carrying entries under exactly these names, however impossible.
+///
+/// `Builder::append_data` refuses a path containing `..`, which is this crate
+/// declining to *write* an archive nobody should publish. The archives this
+/// store defends itself against are not written by this crate, so the name goes
+/// straight into the header instead — which is the only way to ask the question
+/// the store exists to answer.
+fn tarball_of_planted_names(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, body) in entries {
+        let mut header = Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(EntryType::Regular);
+        let stored = header.as_gnu_mut().expect("a gnu header");
+        stored.name[..path.len()].copy_from_slice(path.as_bytes());
+        header.set_cksum();
+        builder
+            .append(&header, *body)
+            .expect("appending to an in-memory archive");
+    }
+    builder.into_inner().expect("finishing the tar")
+}
+
 /// One gzip member holding `tar`, which is what a release archive is.
 ///
 /// `tarball` deliberately stops at the tar, because the tests about gzip
 /// members wrap it themselves. Everything else that hands an archive to the
 /// store needs this.
 fn gzipped(tar: &[u8]) -> Vec<u8> {
-    let mut encoder =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     encoder.write_all(tar).expect("gzipping an in-memory tar");
     encoder.finish().expect("finishing the gzip stream")
 }
@@ -2118,4 +2141,268 @@ fn a_lock_only_counts_while_it_is_the_file_at_that_path() {
         matches!(refused, StoreFailure::Unwritable(_)),
         "{refused:?}"
     );
+}
+
+/// A release that is a whole package rather than one program.
+///
+/// Codex's shape is the reason this context grew a set of files at all: seven
+/// entries, four of them programs, and the three the runtime is not launched as
+/// are found *through the directory the launched one sits in* — ripgrep at
+/// `../codex-path/rg`, a zsh under `../codex-resources/`. Everything here is
+/// about that relationship surviving an install, a rollback and a later check.
+mod packages {
+    use super::*;
+
+    #[test]
+    fn every_file_a_package_names_is_installed_where_the_pin_puts_it() {
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+
+        let published = publish(&store, &release, &gzipped(&tarball(&package_entries())))
+            .expect("a package is unpacked");
+
+        // The launch is what comes back, and the rest sit around it exactly as
+        // the archive had them — which is the whole point: flattened into one
+        // directory they would all be present and none of them findable.
+        assert_eq!(
+            published,
+            package_path(root.path(), "package/vendor/bin/codex")
+        );
+        for (path, body) in package_entries() {
+            let installed = package_path(root.path(), path);
+            assert_eq!(
+                std::fs::read(&installed).unwrap_or_else(|_| panic!("{path} was not installed")),
+                body,
+                "{path} holds the wrong bytes"
+            );
+        }
+        assert_eq!(store.installed(&agent(), &release), Ok(Some(published)));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_program_is_installed_runnable_and_a_document_is_not() {
+        // The mode comes from the pin's role, never from the archive's own
+        // header — `tarball` writes `0o644` for all three. A release that
+        // turned a document into a program by flipping a bit in a header it
+        // also supplies would change nothing here.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+
+        publish(&store, &release, &gzipped(&tarball(&package_entries())))
+            .expect("a package is unpacked");
+
+        let mode = |path: &str| {
+            package_path(root.path(), path)
+                .metadata()
+                .unwrap_or_else(|_| panic!("{path} was not installed"))
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("package/vendor/bin/codex"), 0o700, "the launch");
+        assert_eq!(mode("package/vendor/codex-path/rg"), 0o700, "the helper");
+        assert_eq!(mode("package/package.json"), 0o600, "the document");
+    }
+
+    #[test]
+    fn a_package_missing_one_file_installs_none_of_them() {
+        // A runtime whose ripgrep is absent starts and then cannot search. Four
+        // of seven files is worse than none: enough for a later install to
+        // rename over, not enough to run.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+        let mut without_the_helper = package_entries();
+        without_the_helper.retain(|(path, _)| *path != "package/vendor/codex-path/rg");
+
+        let failure = publish(&store, &release, &gzipped(&tarball(&without_the_helper)))
+            .expect_err("a package missing a file");
+
+        assert_eq!(
+            failure,
+            StoreFailure::MissingExecutable("package/vendor/codex-path/rg".into())
+        );
+        for (path, _) in package_entries() {
+            assert!(
+                !package_path(root.path(), path).exists(),
+                "{path} survived an install that could not finish"
+            );
+        }
+        assert_eq!(store.installed(&agent(), &release), Ok(None));
+        assert!(
+            !version_path(root.path()).exists(),
+            "a refused package left its directories behind"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_package_that_cannot_be_settled_takes_back_every_file_it_wrote() {
+        // The interrupted install. Everything is unpacked and renamed, and then
+        // the step that makes it durable fails — so nothing may be reported as
+        // installed and nothing may be left behind for the next install to
+        // mistake for its own work.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+        let mut staged = staged(&store, &gzipped(&tarball(&package_entries())));
+
+        let failure = store
+            .publish_durably(&agent(), &release, &mut staged, |_| {
+                Err(std::io::Error::other("the disk gave out"))
+            })
+            .expect_err("an install that cannot be made durable");
+
+        assert!(
+            matches!(failure, StoreFailure::Unwritable(_)),
+            "{failure:?}"
+        );
+        for (path, _) in package_entries() {
+            assert!(
+                !package_path(root.path(), path).exists(),
+                "{path} was left behind by an install that reported failure"
+            );
+        }
+        assert_eq!(
+            store.installed(&agent(), &release),
+            Ok(None),
+            "an interrupted install was reported as installed"
+        );
+        assert!(
+            !version_path(root.path()).exists(),
+            "an interrupted install left its directories behind"
+        );
+    }
+
+    #[test]
+    fn a_package_whose_helper_was_deleted_is_not_installed() {
+        // The record is a note, not evidence, and that has to hold for every
+        // file rather than only the one that is launched. A disk cleaner that
+        // took the ripgrep away leaves a runtime that starts and cannot work.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+        publish(&store, &release, &gzipped(&tarball(&package_entries())))
+            .expect("a package is unpacked");
+
+        std::fs::remove_file(package_path(root.path(), "package/vendor/codex-path/rg"))
+            .expect("removing the helper");
+
+        assert_eq!(store.installed(&agent(), &release), Ok(None));
+    }
+
+    #[test]
+    fn a_pin_that_starts_installing_one_more_file_is_not_already_installed() {
+        // The same archive, and a pin that has noticed it left a helper out.
+        // Answering "already installed" would leave the runtime unable to do
+        // its work with nothing saying why — so the record compares every file,
+        // not only the version and the digest.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let without = release_installing(
+            "1.18.31",
+            &"a".repeat(64),
+            installing(&[("package/vendor/bin/codex", FileRole::Launch)]),
+        );
+        publish(&store, &without, &gzipped(&tarball(&package_entries())))
+            .expect("one program is unpacked");
+
+        assert_eq!(store.installed(&agent(), &package("1.18.31")), Ok(None));
+    }
+
+    #[test]
+    fn an_entry_that_would_escape_the_artifact_directory_is_not_unpacked() {
+        // The pin's paths decide where bytes land, so an entry naming its way
+        // out of the artifact directory matches nothing and is skipped. Said
+        // with a real archive rather than only through `ArchivePath`, because
+        // the two rules are meant to hold together: the domain refuses such a
+        // path in a *pin*, and the unpacker never consults an entry's own name
+        // for a destination.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("../../../escaped", b"planted".as_slice()),
+            ("package/../../escaped-too", b"planted".as_slice()),
+            ("/escaped-absolute", b"planted".as_slice()),
+        ];
+        entries.extend(package_entries());
+
+        publish(
+            &store,
+            &release,
+            &gzipped(&tarball_of_planted_names(&entries)),
+        )
+        .expect("a package is unpacked");
+
+        // Nothing appeared anywhere but under the artifact. The store's root
+        // sits inside a temporary directory, so an escape of one or more levels
+        // lands somewhere this test can look.
+        let temporary = root
+            .path()
+            .parent()
+            .expect("the store root is inside a temporary directory");
+        for planted in ["escaped", "escaped-too", "escaped-absolute"] {
+            assert!(
+                !temporary.join(planted).exists(),
+                "{planted} was written outside the artifact directory"
+            );
+            assert!(
+                !root.path().join(planted).exists(),
+                "{planted} was written into the store's root"
+            );
+        }
+        // And the files the pin does name are all there, so the escaping
+        // entries were skipped rather than the archive refused.
+        for (path, body) in package_entries() {
+            assert_eq!(
+                std::fs::read(package_path(root.path(), path)).expect("an installed file"),
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_the_archive_carries_twice_is_refused() {
+        // Two entries under one pinned name are two answers to what is
+        // installed there, and which of them won would be decided by nothing
+        // but which came first.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+        let mut twice = package_entries();
+        twice.push(("package/vendor/bin/codex", b"a second codex".as_slice()));
+
+        let failure =
+            publish(&store, &release, &gzipped(&tarball(&twice))).expect_err("a repeated entry");
+
+        assert!(
+            matches!(failure, StoreFailure::MalformedArchive(_)),
+            "{failure:?}"
+        );
+        assert_eq!(store.installed(&agent(), &release), Ok(None));
+    }
+
+    #[test]
+    fn an_entry_the_pin_does_not_name_is_left_in_the_archive() {
+        // The pin names what is installed, so an archive carrying more than it
+        // says installs no more than it says. Codex's package is seven files
+        // and Nessa is not obliged to take an eighth because a release added
+        // one.
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let release = package("1.18.31");
+        let mut with_extra = package_entries();
+        with_extra.push(("package/vendor/bin/surprise", b"unpinned".as_slice()));
+
+        publish(&store, &release, &gzipped(&tarball(&with_extra))).expect("a package is unpacked");
+
+        assert!(
+            !package_path(root.path(), "package/vendor/bin/surprise").exists(),
+            "an entry the pin says nothing about was installed"
+        );
+    }
 }

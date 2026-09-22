@@ -810,7 +810,8 @@ impl ManagedRuntimes {
         // the expectation of them are swept. Nothing outside `written` is
         // touched, so a pin that is wrong about its own contents cannot delete
         // a runtime somebody was using.
-        if let Err(failure) = self.unpack(agent, release, staged, MAXIMUM_UNPACKED_BYTES, &mut written)
+        if let Err(failure) =
+            self.unpack(agent, release, staged, MAXIMUM_UNPACKED_BYTES, &mut written)
         {
             self.withdraw(agent, release, &written);
             return Err(failure);

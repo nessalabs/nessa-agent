@@ -407,8 +407,7 @@ fn a_role_this_build_does_not_know_is_refused() {
     // reading of an unknown one would install Codex's ripgrep unable to run —
     // surfacing much later as a search that does not work.
     let mut misspelled = entry("macos", "aarch64", None, false, 'a');
-    misspelled["files"] =
-        serde_json::json!([{ "path": "package/claude", "role": "executable" }]);
+    misspelled["files"] = serde_json::json!([{ "path": "package/claude", "role": "executable" }]);
     assert!(
         matches!(
             releases_in(&document(vec![misspelled]), &opencode()),

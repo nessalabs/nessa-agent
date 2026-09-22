@@ -2,10 +2,7 @@ use super::*;
 
 /// A file at `path` in `role`, for a set being assembled.
 fn file(path: &str, role: FileRole) -> ReleaseFile {
-    ReleaseFile::new(
-        ArchivePath::parse(path).expect("a contained path"),
-        role,
-    )
+    ReleaseFile::new(ArchivePath::parse(path).expect("a contained path"), role)
 }
 
 /// The shape Codex has: one program, three helpers, three documents, in an
