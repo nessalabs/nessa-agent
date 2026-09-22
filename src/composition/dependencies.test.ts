@@ -1,15 +1,68 @@
-import type { NessaClient } from "@nessa/client"
+import type { NessaClient, NessaClientConnectOptions } from "@nessa/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDependencies } from "./dependencies"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { makeStore } from "../store"
 import { sendDraft } from "../conversation/adapters/store/slice"
 import { sha256Digest } from "../panel/adapters/sha256"
+import { loadEnvironment } from "../env/environment"
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock("@tauri-apps/api/core", () => ({ invoke }))
 
 describe("application dependency scope", () => {
+  it("keeps explicit gateway authority distinct from derived endpoint discovery", async () => {
+    const selected: string[] = []
+    const clientConnect = vi.fn(async (options: NessaClientConnectOptions) => {
+      const url =
+        options.url ??
+        (await options.endpointSource?.load({ stage: options.stage ?? "dev" }))
+      if (!url) throw new Error("missing selected endpoint")
+      selected.push(url)
+      await options.credentialSource?.load({
+        stage: options.stage ?? "dev",
+        url,
+        clientId: options.client.id,
+      })
+      return {
+        productSession: {},
+        server: { health: vi.fn(async () => ({})) },
+        close: vi.fn(),
+      } as unknown as NessaClient
+    }) as unknown as typeof NessaClient.connect
+
+    const explicitEndpoint = { load: vi.fn(async () => "ws://127.0.0.1:9137") }
+    const explicitCredential = { load: vi.fn(async () => "explicit-secret") }
+    await createDependencies({
+      environment: loadEnvironment({
+        VITE_NESSA_GATEWAY_URL: "http://127.0.0.1:42177/path-is-an-origin-only-input",
+      }),
+      endpointSource: explicitEndpoint,
+      credentialSource: explicitCredential,
+      clientConnect,
+    }).connectSession()
+
+    expect(explicitEndpoint.load).not.toHaveBeenCalled()
+    expect(explicitCredential.load).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:42177" }),
+    )
+
+    const discoveredEndpoint = { load: vi.fn(async () => "ws://127.0.0.1:43177") }
+    const discoveredCredential = { load: vi.fn(async () => "discovered-secret") }
+    await createDependencies({
+      environment: loadEnvironment({}),
+      endpointSource: discoveredEndpoint,
+      credentialSource: discoveredCredential,
+      clientConnect,
+    }).connectSession()
+
+    expect(discoveredEndpoint.load).toHaveBeenCalledWith({ stage: "prod" })
+    expect(discoveredCredential.load).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:43177" }),
+    )
+    expect(selected).toEqual(["ws://127.0.0.1:42177", "ws://127.0.0.1:43177"])
+  })
+
   it("routes real conversation operations through each injected adapter without sharing state", async () => {
     const first = makeStore(createDependencies({ conversation: scenarioEffects("echo") }))
     const second = makeStore(

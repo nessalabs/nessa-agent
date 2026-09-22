@@ -84,6 +84,47 @@ describe("connectDevSession", () => {
     )
     expect(connect.mock.calls[0][0].auth).toBeUndefined()
   })
+
+  it("uses an explicit gateway origin without consulting endpoint discovery", async () => {
+    const endpointSource = { load: vi.fn(async () => "ws://127.0.0.1:9137") }
+    const connect = vi.fn().mockResolvedValue({
+      productSession: {},
+      server: { health: vi.fn(async () => ({})) },
+      close: vi.fn(),
+    })
+
+    await connectDevSession({
+      connect,
+      gatewayBaseUrl: "https://127.0.0.1:42177",
+      endpointSource,
+    })
+
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "wss://127.0.0.1:42177" }),
+    )
+    expect(connect.mock.calls[0][0].endpointSource).toBeUndefined()
+  })
+
+  it("keeps browser-cookie sessions on their supplied browser URL", async () => {
+    const connect = vi.fn().mockResolvedValue({
+      productSession: {},
+      server: { health: vi.fn(async () => ({})) },
+      close: vi.fn(),
+    })
+
+    await connectDevSession({
+      connect,
+      browserUrl: "ws://127.0.0.1:1420/browser/session",
+      gatewayBaseUrl: "http://127.0.0.1:42177",
+    })
+
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:1420/browser/session",
+        auth: { browserCookie: true },
+      }),
+    )
+  })
 })
 
 describe("session client handle", () => {

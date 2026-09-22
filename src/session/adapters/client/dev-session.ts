@@ -33,6 +33,13 @@ export type ConnectDevSessionDeps = {
   stage?: Stage
   clientId?: string
   browserUrl?: string
+  gatewayBaseUrl?: string
+}
+
+function gatewaySessionUrl(baseUrl: string): string {
+  const url = new URL(baseUrl)
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+  return url.origin
 }
 
 /** Authenticate the chat surface and verify authorized gateway health. */
@@ -46,7 +53,9 @@ export async function connectDevSession(
     stage,
     ...(deps.browserUrl
       ? { url: deps.browserUrl, auth: { browserCookie: true as const } }
-      : { endpointSource: deps.endpointSource }),
+      : deps.gatewayBaseUrl
+        ? { url: gatewaySessionUrl(deps.gatewayBaseUrl) }
+        : { endpointSource: deps.endpointSource }),
     credentialSource: deps.credentialSource,
     role: "surface",
     surface: { kind: "panel", instance: crypto.randomUUID() },

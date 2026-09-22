@@ -5,7 +5,7 @@ import {
   nativeCredentialSource,
   nativeGatewayEndpointSource,
 } from "../session/adapters/client/credential-source"
-import type { CredentialSource, GatewayEndpointSource } from "@nessa/client"
+import type { CredentialSource, GatewayEndpointSource, NessaClient } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { createSessionHandle } from "../session/adapters/client/handle"
@@ -25,6 +25,7 @@ export function createDependencies(
     agents?: AgentReadinessSource
     credentialSource?: CredentialSource
     endpointSource?: GatewayEndpointSource
+    clientConnect?: typeof NessaClient.connect
     clientId?: string
     digest?: (bytes: Blob) => Promise<string>
     canChoosePaths?: boolean
@@ -122,7 +123,9 @@ export function createDependencies(
       options.connectSession ??
       (() =>
         connectDevSession({
+          connect: options.clientConnect,
           stage: config.stage,
+          gatewayBaseUrl: config.gatewayBaseUrlOverride,
           clientId: options.clientId,
           credentialSource: options.credentialSource ?? nativeCredentialSource(),
           endpointSource: options.endpointSource ?? nativeGatewayEndpointSource(),

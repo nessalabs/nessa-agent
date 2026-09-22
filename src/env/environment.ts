@@ -11,6 +11,8 @@ export type Environment = {
    * A packaged build has no proxy and talks to the gateway directly.
    */
   readonly gatewayBaseUrl: string
+  /** Explicit gateway origin supplied by the build environment, if any. */
+  readonly gatewayBaseUrlOverride?: string
   readonly conversation:
     | { readonly backend: "local" }
     | {
@@ -51,12 +53,21 @@ export function loadEnvironment(
     throw new Error("VITE_NESSA_STAGE must be dev, ci, alpha, or prod")
   }
   const gateway = gatewayBaseUrl(source, developmentBuild, stage)
+  const gatewayBaseUrlOverride =
+    source.VITE_NESSA_GATEWAY_URL === undefined || source.VITE_NESSA_GATEWAY_URL === ""
+      ? undefined
+      : gateway
   const backend = source.VITE_NESSA_CONVERSATION_BACKEND ?? "local"
   const scenario = source.VITE_NESSA_CONVERSATION_SCENARIO
   if (backend === "local") {
     if (scenario !== undefined)
       throw new Error("Conversation scenario requires scenario backend")
-    return { stage, gatewayBaseUrl: gateway, conversation: { backend } }
+    return {
+      stage,
+      gatewayBaseUrl: gateway,
+      gatewayBaseUrlOverride,
+      conversation: { backend },
+    }
   }
   if (backend !== "scenario") throw new Error("Unknown conversation backend")
   if (!developmentBuild || (stage !== "dev" && stage !== "ci")) {
@@ -65,5 +76,10 @@ export function loadEnvironment(
   if (scenario !== "echo" && scenario !== "offline") {
     throw new Error("VITE_NESSA_CONVERSATION_SCENARIO must be echo or offline")
   }
-  return { stage, gatewayBaseUrl: gateway, conversation: { backend, scenario } }
+  return {
+    stage,
+    gatewayBaseUrl: gateway,
+    gatewayBaseUrlOverride,
+    conversation: { backend, scenario },
+  }
 }

@@ -8,7 +8,7 @@ const host = vi.hoisted(() => ({
 
 vi.mock("../../../host", () => host)
 
-import { nativeGatewayEndpointSource } from "./credential-source"
+import { nativeCredentialSource, nativeGatewayEndpointSource } from "./credential-source"
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -31,5 +31,22 @@ it("uses a verified native publication instead of the stage address", async () =
   host.loadAssignedGatewayEndpoint.mockResolvedValue("ws://127.0.0.1:9137")
   await expect(nativeGatewayEndpointSource()?.load({ stage: "prod" })).resolves.toBe(
     "ws://127.0.0.1:9137",
+  )
+})
+
+it("binds native credential release to the endpoint selected for this attempt", async () => {
+  host.loadAssignedSurfaceCredential.mockResolvedValue("private")
+
+  await expect(
+    nativeCredentialSource()?.load({
+      stage: "prod",
+      url: "ws://127.0.0.1:42177",
+      clientId: "nessa-panel",
+    }),
+  ).resolves.toBe("private")
+
+  expect(host.loadAssignedSurfaceCredential).toHaveBeenCalledWith(
+    "prod",
+    "ws://127.0.0.1:42177",
   )
 })
