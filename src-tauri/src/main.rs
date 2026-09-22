@@ -58,6 +58,8 @@ fn main() {
             panel::retry_setup_record,
             panel::chosen_agent,
             panel::reveal_setup_window,
+            gateway::infrastructure::gateway_startup,
+            gateway::infrastructure::retry_gateway_startup,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
@@ -94,6 +96,17 @@ fn main() {
             // it, and kept here so the rest of `setup` can pass it by hand.
             let deps = HostDependencies::assemble(app.handle(), stage.clone())?;
             app.manage(deps.clone());
+
+            // The host owns packaged gateway startup. Start it independently of
+            // either webview so setup can subscribe to progress before a
+            // credential request, and keep setup/window presentation unblocked.
+            if let Some(gateway) = deps.gateway.clone() {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = gateway.start().await {
+                        eprintln!("[nessa] gateway startup failed: {error}");
+                    }
+                });
+            }
 
             platform::current().configure_app(app.handle());
 
@@ -240,8 +253,11 @@ fn stop_agents_if_asked(settings: &dyn SettingsStore, gateway: Option<&Gateway>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
-    use gateway::domain::value_objects::SearchPath;
+    use gateway::application::{
+        GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
+        GatewayReconciliationProgress, ReconciledGateway,
+    };
+    use gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
     use settings::testing::in_memory;
     use std::path::Path;
     use std::sync::Arc;
@@ -260,13 +276,24 @@ mod tests {
             _: &Path,
             _: &str,
             _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
             self.calls.lock().unwrap().push("register");
+            let target = ReconciliationTarget::new(
+                "com.nessa.gateway".into(),
+                "a".repeat(64),
+                "b".repeat(64),
+            )
+            .expect("target");
+            progress.intent_admitted(
+                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent"),
+            )?;
             Ok(ReconciledGateway::new(
                 "com.nessa.gateway".into(),
-                "fingerprint".into(),
-                "instance".into(),
-                "generation".into(),
+                "a".repeat(64),
+                "550e8400-e29b-41d4-a716-446655440000".into(),
+                "b".repeat(64),
                 7,
                 7420,
             ))
@@ -292,10 +319,13 @@ mod tests {
         let gateway = Gateway::bootstrap(
             host,
             gateway::application::testing::system_login_shell(),
+            gateway::application::testing::discard_startup_events(),
+            gateway::application::testing::sequential_reconciliation_ids(),
+            gateway::application::testing::discard_reconciliation_audit(),
             "/runtime".into(),
             "ci".into(),
         );
-        tauri::async_runtime::block_on(gateway.wait_ready()).expect("the fake host registers");
+        tauri::async_runtime::block_on(gateway.start()).expect("the fake host registers");
         gateway
     }
 

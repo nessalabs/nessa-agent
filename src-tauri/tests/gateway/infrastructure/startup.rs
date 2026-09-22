@@ -306,7 +306,7 @@ fn a_program_that_never_ran_is_not_reported_as_something_it_said() {
 #[test]
 fn the_formats_that_used_to_wait_out_the_deadline_now_fail_fast() {
     // Each of these is a real `launchctl print` fragment for a service that is
-    // gone. Every one of them must be a failure, or readiness sits for thirty
+    // gone. Every one of them must be a failure, or readiness sits for the full
     // seconds and then blames the runtime identity.
     for text in [
         "\tlast exit code = 78: EX_CONFIG",

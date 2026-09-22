@@ -50,6 +50,25 @@ pub const UPDATE_FAILED: &str = "nessa://update-failed";
 /// not one — macOS sends it nowhere a person looks, and the release Windows
 /// build has no console at all.
 pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
+/// The managed gateway's startup projection changed. The payload is
+/// [`GatewayStartup`]; a snapshot command carries the same revisioned value so
+/// subscribing before asking cannot lose or reorder a transition.
+pub const GATEWAY_STARTUP: &str = "nessa://gateway-startup";
+
+/// What the desktop host currently knows about gateway startup.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum GatewayStartup {
+    /// This build does not manage a packaged gateway. The surface keeps using
+    /// its direct readiness probe and draws no conclusion from the host.
+    Unmanaged { revision: u64 },
+    /// The host is reconciling its registered service.
+    Starting { revision: u64 },
+    /// The exact registered PID, generation, instance and fingerprint agree.
+    Ready { revision: u64 },
+    /// Reconciliation stopped. `message` names the safe next action when known.
+    Failed { revision: u64, message: String },
+}
 
 /// Why a clicked link did nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -188,5 +207,27 @@ mod tests {
                 "src/host/window.ts PanelSize is missing {field}"
             );
         }
+    }
+
+    #[test]
+    fn shell_gateway_startup_matches_the_host() {
+        let shell = include_str!("../../src/onboarding/application/ports.ts");
+        let at = shell
+            .find("export type GatewayStartup")
+            .expect("the shell is missing GatewayStartup");
+        let declaration = &shell[at..];
+        let end = declaration
+            .find("export interface GatewayStartupSource")
+            .expect("GatewayStartup declaration closes before its source");
+        let declaration = &declaration[..end];
+
+        assert!(declaration.contains("revision: number"));
+        for state in ["unmanaged", "starting", "ready", "failed"] {
+            assert!(
+                declaration.contains(&format!("state: \"{state}\"")),
+                "GatewayStartup is missing {state}"
+            );
+        }
+        assert!(declaration.contains("message: string"));
     }
 }

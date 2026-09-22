@@ -646,7 +646,7 @@ fn an_unloaded_service_reports_no_exit_of_its_own() {
 
 /// A port, a launchd and a clock that only this test moves.
 ///
-/// Time passes when the code under test sleeps, so a thirty-second deadline
+/// Time passes when the code under test sleeps, so the readiness deadline
 /// costs nothing to run through, and every `launchctl print` is recorded with
 /// the instant it happened at — which is the only way to see that a
 /// subprocess is not being run ten times a second.
@@ -726,10 +726,10 @@ fn absent_log() -> std::path::PathBuf {
 
 #[test]
 fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
-    // Twenty-nine seconds of silence from a process that is alive the whole
-    // time. The deadline exists for exactly this, and nothing may cut it short.
+    // Sixty seconds of silence from a process that is alive the whole time.
+    // The deadline exists for exactly this, and nothing may cut it short.
     let mut watch = FakeWatch::new(|elapsed| {
-        if elapsed < Duration::from_secs(29) {
+        if elapsed < Duration::from_secs(60) {
             (None, Ok(observed(Some(42), true, LastExit::NeverExited)))
         } else {
             (
@@ -742,14 +742,14 @@ fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
         wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()),
         Ok(ready_runtime())
     );
-    assert!(watch.elapsed >= Duration::from_secs(29));
-    assert!(watch.elapsed < Duration::from_secs(30));
+    assert!(watch.elapsed >= Duration::from_secs(60));
+    assert!(watch.elapsed < Duration::from_secs(61));
 }
 
 /// A server that gave up exits *successfully* — the only thing launchd reads
 /// as "do not start me again" — so nothing in launchd's answer says it failed.
 /// Waiting out the deadline for a process that is never coming back is the
-/// thirty seconds this whole path exists to avoid, and the sentence at the end
+/// the full readiness deadline this whole path exists to avoid, and the sentence at the end
 /// of it would be the readiness contract's rather than the reason.
 #[test]
 fn a_gateway_that_gave_up_is_not_waited_out_and_is_reported_by_its_own_reason() {
@@ -783,7 +783,7 @@ fn a_record_from_another_registration_proves_nothing_about_this_one() {
         matches!(&error, InstallFailure::Reconciliation(message) if message.contains("readiness deadline")),
         "{error:?}"
     );
-    assert!(watch.elapsed >= Duration::from_secs(30));
+    assert!(watch.elapsed >= Duration::from_secs(75));
 }
 
 /// A process launchd is still running has nothing to say about having given
@@ -842,7 +842,7 @@ fn launchd_is_not_asked_ten_times_a_second() {
     }
     // Roughly twice a second across the deadline, not ten times.
     assert!(
-        watch.status_calls.len() <= 70,
+        watch.status_calls.len() <= 160,
         "{}",
         watch.status_calls.len()
     );
@@ -866,7 +866,7 @@ fn a_process_that_comes_back_between_deaths_starts_the_count_again() {
         matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("readiness deadline")),
         "{error:?}"
     );
-    assert!(watch.elapsed >= Duration::from_secs(30));
+    assert!(watch.elapsed >= Duration::from_secs(75));
 }
 
 #[test]
@@ -879,7 +879,7 @@ fn a_service_that_says_nothing_either_way_still_ends_at_the_deadline() {
         matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("did not advertise the expected runtime identity")),
         "{error:?}"
     );
-    assert!(watch.elapsed >= Duration::from_secs(30));
+    assert!(watch.elapsed >= Duration::from_secs(75));
 }
 
 #[test]

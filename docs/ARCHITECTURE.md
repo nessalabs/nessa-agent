@@ -40,7 +40,7 @@ opinion rather than the product's.
 | `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
-| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | Retryable background-service reconciliation and native launchd adapters, injected from `main.rs`. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read, once per registration, for the path the agent will be given. |
+| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads reconcile the complete service again while concurrent callers share one attempt. Domain evidence validates each request cause and initiator, attempt correlation, target, and before/after incarnation. The application writes private atomic intent, outcome, and joined-request audit records through its injected port; physical service results and audit delivery remain separate facts so cleanup retains the confirmed identity after an audit failure. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
 | `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
@@ -150,8 +150,11 @@ private version directory outside the app before any service mutation. Exclusive
 atomic publication prevents replacing an existing version; launchd arguments name
 only the staged directory, and no search path derives from it — the service runs
 everything in that directory by absolute path, so neither the gateway's `PATH`
-nor the agent's contains it. Published versions are retained,
-validated on reuse, and never repaired or garbage-collected automatically.
+nor the agent's contains it. A host process fully validates a published version
+before first use, then caches only that exact path, fingerprint, and private root
+directory identity; later reconciliation still checks the complete definition and
+live process identity without hashing the whole runtime again. Published versions
+are retained and never repaired or garbage-collected automatically.
 The desktop compares it with health's fingerprint, persisted service generation,
 and canonical runtime-instance UUID, requiring the advertised process ID to match
 the exact launchd service PID. A generation is reused only for the same complete
@@ -206,6 +209,10 @@ are written here.
   health with the expected service generation, runtime-instance UUID and PID
   matching the exact launchd service.
   A generic HTTP 200 is insufficient.
+- Packaged gateway startup has one host owner. It begins independently of either
+  webview, exposes a revisioned snapshot plus bundled-window events, and serializes
+  retries with credential-load reconciliation. A successful repeated validation
+  keeps the current ready revision; a failure and its retry advance it.
 - launchd restarts the gateway when its process ended unsuccessfully, and only
   then. A failure that starting again cannot fix exits zero on purpose — the one
   status launchd reads as "do not start me again" — but only after the reason it

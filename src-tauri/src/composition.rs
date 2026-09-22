@@ -129,9 +129,14 @@ impl HostDependencies {
             None
         } else {
             let runtime = app.path().resource_dir()?.join("runtime");
+            let reconciliation_audit =
+                gateway::infrastructure::reconciliation_audit(config_root.clone());
             Some(Arc::new(Gateway::bootstrap(
                 gateway::infrastructure::current(),
                 gateway::infrastructure::login_shell_path(),
+                gateway::infrastructure::startup_events(app),
+                gateway::infrastructure::reconciliation_ids(),
+                reconciliation_audit,
                 runtime,
                 stage.clone(),
             )))

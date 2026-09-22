@@ -573,7 +573,7 @@ pub(super) fn retire(
         target_generation,
     )?;
     launchctl(&["kill", "SIGUSR2", service])?;
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = Instant::now() + Duration::from_secs(75);
     loop {
         if read_acknowledgement(
             &directory,
@@ -670,7 +670,7 @@ fn parse_health(bytes: &[u8]) -> Option<Health> {
     }
 }
 /// How long a healthy-but-slow gateway is allowed to take to answer.
-const READINESS_DEADLINE: Duration = Duration::from_secs(30);
+const READINESS_DEADLINE: Duration = Duration::from_secs(75);
 /// How often launchd is asked what happened to the process, while the port is
 /// still silent. `launchctl print` is a subprocess; the health probe is not.
 const LIVENESS_INTERVAL: Duration = Duration::from_millis(500);

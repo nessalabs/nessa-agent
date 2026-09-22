@@ -1,4 +1,7 @@
-use crate::gateway::domain::value_objects::{SearchPath, SearchPathError};
+use crate::gateway::domain::value_objects::{
+    ReconciliationCorrelation, ReconciliationEvidence, ReconciliationIncarnation,
+    ReconciliationTarget, SearchPath, SearchPathError,
+};
 use std::{error::Error, fmt, path::Path};
 
 /// Exact native runtime incarnation established by successful reconciliation.
@@ -54,11 +57,31 @@ impl ReconciledGateway {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    pub fn audit_identity(&self) -> Result<ReconciliationIncarnation, GatewayError> {
+        let target = ReconciliationTarget::new(
+            self.service.clone(),
+            self.runtime_fingerprint.clone(),
+            self.service_generation.clone(),
+        )
+        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        ReconciliationIncarnation::new(
+            target,
+            self.runtime_instance.clone(),
+            self.process_id,
+            self.port,
+        )
+        .map_err(|error| GatewayError::Registration(error.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     Registration(String),
+    Audit {
+        audit: String,
+        physical: Option<Box<GatewayError>>,
+    },
     NotReconciled,
     Stop(String),
 }
@@ -66,11 +89,251 @@ impl fmt::Display for GatewayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Registration(message) | Self::Stop(message) => f.write_str(message),
+            Self::Audit { audit, physical } => {
+                write!(f, "gateway reconciliation audit failed: {audit}")?;
+                if let Some(physical) = physical {
+                    write!(f, "; physical reconciliation also failed: {physical}")?;
+                }
+                Ok(())
+            }
             Self::NotReconciled => f.write_str("gateway service has not reconciled"),
         }
     }
 }
 impl Error for GatewayError {}
+
+/// The managed gateway startup fact currently owned by the desktop host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayStartupPhase {
+    /// Reconciliation is underway, including a retry after stale live evidence.
+    Starting,
+    /// The expected runtime identity is currently owned by the registered service.
+    Ready,
+    /// Reconciliation stopped and why. A later credential load or explicit UI
+    /// retry starts one new serialized attempt.
+    Failed(GatewayError),
+}
+
+/// A revisioned projection of managed gateway startup.
+///
+/// The revision lets a consumer subscribe before taking a snapshot without an
+/// older command response overwriting a newer event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayStartup {
+    revision: u64,
+    phase: GatewayStartupPhase,
+}
+
+impl GatewayStartup {
+    pub(crate) fn starting() -> Self {
+        Self {
+            revision: 0,
+            phase: GatewayStartupPhase::Starting,
+        }
+    }
+
+    pub(super) fn next(&self, phase: GatewayStartupPhase) -> Self {
+        Self {
+            revision: self.revision.saturating_add(1),
+            phase,
+        }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn phase(&self) -> &GatewayStartupPhase {
+        &self.phase
+    }
+}
+
+/// Publishes the host-owned startup projection to interested surfaces.
+///
+/// This application port is framework-free. A failed UI publication is
+/// reported by its adapter and never changes the authoritative startup state.
+pub trait GatewayStartupEvents: Send + Sync {
+    fn publish(&self, startup: &GatewayStartup);
+}
+
+/// Reports that native reconciliation is about to invalidate current readiness.
+///
+/// Healthy verification never calls this port. A native adapter calls it before
+/// it fences, retires, unloads, or replaces the ready process.
+pub trait GatewayReconciliationProgress: Send + Sync {
+    fn readiness_invalidated(&self);
+    fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError>;
+    fn effect_observed(&self, effect: GatewayNativeEffect);
+}
+
+/// One caller's immutable request to the serialized reconciliation owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayReconciliationRequest {
+    correlation: ReconciliationCorrelation,
+    evidence: ReconciliationEvidence,
+}
+
+impl GatewayReconciliationRequest {
+    pub fn new(correlation: ReconciliationCorrelation, evidence: ReconciliationEvidence) -> Self {
+        Self {
+            correlation,
+            evidence,
+        }
+    }
+
+    pub fn correlation(&self) -> &ReconciliationCorrelation {
+        &self.correlation
+    }
+
+    pub fn evidence(&self) -> &ReconciliationEvidence {
+        &self.evidence
+    }
+}
+
+/// One serialized native attempt and the original request that caused it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayReconciliationAttempt {
+    correlation: ReconciliationCorrelation,
+    origin: GatewayReconciliationRequest,
+}
+
+impl GatewayReconciliationAttempt {
+    pub fn new(
+        correlation: ReconciliationCorrelation,
+        origin: GatewayReconciliationRequest,
+    ) -> Result<Self, GatewayError> {
+        correlation
+            .require_distinct_from(origin.correlation())
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        Ok(Self {
+            correlation,
+            origin,
+        })
+    }
+
+    pub fn correlation(&self) -> &ReconciliationCorrelation {
+        &self.correlation
+    }
+
+    pub fn origin(&self) -> &GatewayReconciliationRequest {
+        &self.origin
+    }
+}
+
+/// Allocates correlations without putting randomness in domain or application.
+pub trait GatewayReconciliationIds: Send + Sync {
+    fn next(&self) -> Result<ReconciliationCorrelation, GatewayError>;
+}
+
+/// Durable intent written before a reconciliation effect is admitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayReconciliationIntent {
+    attempt: GatewayReconciliationAttempt,
+    target: ReconciliationTarget,
+    before: Option<ReconciliationIncarnation>,
+}
+
+impl GatewayReconciliationIntent {
+    pub fn new(
+        attempt: GatewayReconciliationAttempt,
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+    ) -> Result<Self, GatewayError> {
+        if before
+            .as_ref()
+            .is_some_and(|before| before.target().service() != target.service())
+        {
+            return Err(GatewayError::Registration(
+                "gateway reconciliation intent disagrees with its prior service".into(),
+            ));
+        }
+        Ok(Self {
+            attempt,
+            target,
+            before,
+        })
+    }
+
+    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
+        &self.attempt
+    }
+
+    pub fn target(&self) -> &ReconciliationTarget {
+        &self.target
+    }
+
+    pub fn before(&self) -> Option<&ReconciliationIncarnation> {
+        self.before.as_ref()
+    }
+}
+
+/// Confirmed native mutations observed while an admitted attempt ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayNativeEffect {
+    OldServiceUnloaded,
+    ServiceDefinitionPublished,
+    BootstrapRequested,
+}
+
+/// Physical reconciliation result, kept separate from audit delivery.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GatewayReconciliationEffect {
+    Confirmed(ReconciliationIncarnation),
+    Refused(GatewayError),
+    Partial {
+        effects: Vec<GatewayNativeEffect>,
+        error: GatewayError,
+    },
+}
+
+/// Final audit record for one admitted attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayReconciliationOutcome {
+    intent: GatewayReconciliationIntent,
+    effect: GatewayReconciliationEffect,
+}
+
+impl GatewayReconciliationOutcome {
+    pub fn new(
+        intent: GatewayReconciliationIntent,
+        effect: GatewayReconciliationEffect,
+    ) -> Result<Self, GatewayError> {
+        if let GatewayReconciliationEffect::Confirmed(after) = &effect {
+            if after.target() != intent.target() {
+                return Err(GatewayError::Registration(
+                    "gateway reconciliation outcome disagrees with admitted target".into(),
+                ));
+            }
+        }
+        Ok(Self { intent, effect })
+    }
+
+    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
+        self.intent.attempt()
+    }
+
+    pub fn intent(&self) -> &GatewayReconciliationIntent {
+        &self.intent
+    }
+
+    pub fn effect(&self) -> &GatewayReconciliationEffect {
+        &self.effect
+    }
+}
+
+/// Durable audit boundary for caller coalescing and native reconciliation.
+pub trait GatewayReconciliationAudit: Send + Sync {
+    fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
+
+    fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
+
+    /// Records a caller whose request joined an already-running attempt.
+    fn joined(
+        &self,
+        attempt: &GatewayReconciliationAttempt,
+        joined: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError>;
+}
 /// Why the user's login shell did not produce a search path.
 ///
 /// Kept apart from [`GatewayError`]: none of these stop a registration. They
@@ -132,6 +395,8 @@ pub trait GatewayHost: Send + Sync {
         runtime: &Path,
         stage: &str,
         agent_path: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError>;
     fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError>;
 }
@@ -146,8 +411,16 @@ pub trait GatewayHost: Send + Sync {
 /// finds no children to carry the gate to — it says so.
 #[cfg(test)]
 pub(crate) mod testing {
-    use super::{LoginShellError, LoginShellPath, SearchPath};
-    use std::sync::Arc;
+    use super::{
+        GatewayError, GatewayReconciliationAttempt, GatewayReconciliationAudit,
+        GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationOutcome,
+        GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, LoginShellError,
+        LoginShellPath, ReconciliationCorrelation, SearchPath,
+    };
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
 
     /// A login shell with a fixed answer — the path it reports, or the reason
     /// it reported none.
@@ -162,5 +435,54 @@ pub(crate) mod testing {
     /// subject is something else.
     pub(crate) fn system_login_shell() -> Arc<dyn LoginShellPath> {
         Arc::new(FixedLoginShell(Ok(SearchPath::system())))
+    }
+
+    pub(crate) struct DiscardStartupEvents;
+
+    impl GatewayStartupEvents for DiscardStartupEvents {
+        fn publish(&self, _startup: &GatewayStartup) {}
+    }
+
+    pub(crate) fn discard_startup_events() -> Arc<dyn GatewayStartupEvents> {
+        Arc::new(DiscardStartupEvents)
+    }
+
+    #[derive(Default)]
+    pub(crate) struct SequentialReconciliationIds(AtomicU64);
+
+    impl GatewayReconciliationIds for SequentialReconciliationIds {
+        fn next(&self) -> Result<ReconciliationCorrelation, GatewayError> {
+            let next = self.0.fetch_add(1, Ordering::Relaxed) + 1;
+            ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{next:012x}"))
+                .map_err(|error| GatewayError::Registration(error.to_string()))
+        }
+    }
+
+    pub(crate) fn sequential_reconciliation_ids() -> Arc<dyn GatewayReconciliationIds> {
+        Arc::new(SequentialReconciliationIds::default())
+    }
+
+    pub(crate) struct DiscardReconciliationAudit;
+
+    impl GatewayReconciliationAudit for DiscardReconciliationAudit {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn joined(
+            &self,
+            _: &GatewayReconciliationAttempt,
+            _: &GatewayReconciliationRequest,
+        ) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn discard_reconciliation_audit() -> Arc<dyn GatewayReconciliationAudit> {
+        Arc::new(DiscardReconciliationAudit)
     }
 }
