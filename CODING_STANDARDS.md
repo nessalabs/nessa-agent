@@ -59,18 +59,29 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     when the thing began — never on a name, a file list, the active tab, or any
     other attribute that can change, repeat, or be recycled while the state
     lives. An attribute is stale the moment it is written down.
-13. **One owner of a decision, asked as early as possible.** Every rule has
-    exactly one owner — the layer the rule belongs to. An earlier layer may
-    refuse sooner only by *asking* that owner, or by using a value the owner
-    publishes; it may not restate the rule in its own terms. Where the owner
-    cannot be reached in time, share the rule as data the owner publishes, not
-    as a second implementation. Refuse as early as the owner can be consulted,
-    so a person can still act on it — but a second copy of a rule is not an
-    early refusal. It is a second authority, and it will drift: a path bound
-    counted in three different units across four layers, and a control character
-    one layer accepted and the next refused, both began as helpful early checks.
-    The test: change the rule where it is owned, and see what fails. If nothing
-    does, the copies are already lying.
+13. **One owner of a decision. Never two.** Every rule has exactly one
+    implementation, in the layer that owns it. A second implementation is a
+    defect on sight — not a safeguard, not defence in depth, not a harmless
+    convenience — and the fix is to delete it, not to keep the copies in step.
+    This holds however reasonable the copy looks: a stricter subset, a quick
+    pre-check, a friendlier message, a validation the other side "also" does.
+    Two authorities over one decision will disagree, and the disagreement
+    surfaces as a refusal nobody can explain.
+
+    An earlier layer may still refuse early, and should, so a person can act
+    while it is cheap — but only by *asking* the owner, or by consuming
+    something the owner publishes: a compiled pattern, a generated constant, a
+    shared schema. Published, never retyped. Where the owner cannot be reached
+    in time, publish the rule as data and derive both sides from it.
+
+    The test, and it is not optional: change the rule where it is owned and see
+    what fails. If nothing does, the copies are already lying. #122's review
+    caught a path bound counted in code points by the schema, UTF-8 bytes by the
+    client and the domain, and UTF-16 units by the panel; and a control
+    character one layer accepted and the next refused, which would have put the
+    refusal after send with no sentence, because the layer meant to speak first
+    had quietly said nothing. Both began as helpful early checks.
+
 14. **A gate runs where it claims to run.** Each check declares the environment
     it must survive — bare Node with no `node_modules`, every supported target's
     `-D warnings`, the CI package selection, contention — and something enforces
@@ -143,7 +154,9 @@ that their combination describes a possible execution.
   the enforcing code and regression evidence, and explicit exclusions. A review
   fails this gate if it only lists individually validated types or isolated tests.
 - For lifecycle changes, name one owner of each transition and test the same
-  guarantees across every delivery mode that uses it. A second flag, error walker,
+  guarantees across every delivery mode that uses it. This is
+  [gate 13](#gates) applied to transitions: one owner, and no second
+  implementation of the same decision anywhere in the stack. A second flag, error walker,
   or cleanup path is not an independent implementation of the same authority.
   A stop must be correlated with the affected work's admission; historical cleanup
   cannot become the cancellation cause of a later input. Preserve the first cause
@@ -247,7 +260,7 @@ that their combination describes a possible execution.
 
 | Dimension | Required questions and evidence |
 | --- | --- |
-| Authority and identity | Can Clone, restoration, a detached handle, or a public constructor create another mutable dispatch/decision authority? Does every delayed command identify its intended execution, including bulk operations? Can an old callback affect a reused identity in a later run? Read-only evidence may be shared; mutable authority must have one owner. |
+| Authority and identity | Can Clone, restoration, a detached handle, or a public constructor create another mutable dispatch/decision authority? Does every delayed command identify its intended execution, including bulk operations? Can an old callback affect a reused identity in a later run? Read-only evidence may be shared; mutable authority must have one owner — see gate 13, which holds for any rule, not only for authority objects. |
 | Domain invariants | Are legal transitions, sequence continuity, and stable correlation validated by their owning domain? Are cause/initiator combinations validated at the boundary that owns attribution? A valid individual record does not make a valid history. Enumerate accepted causes for each operation separately (permission cancellation, execution finish, session close); one valid cause enum is not valid at every lifecycle boundary. Execution-specific causes require execution correlation; idle attachment failures need their own meaning. Retain the first transition evidence needed to validate later settlement; a boolean closed flag loses the original cause. Keep a local closure distinct from a later independent execution failure: preserve both causes rather than requiring equality or leaving active state stranded. Check state after settlement as well as before it. Invalid input must leave authoritative state and prior evidence unchanged. |
 | Admission and concurrency | Identify the point at which the SDK owns a submitted command and the point at which close excludes new work. Exercise accepted commands overtaken by close, dropped waiters, queued work, native steering, preparation, hooks, and cleanup. Check incoming observations after close as well as outgoing commands; retaining an active execution for settlement does not authorize new state mutation. Inspect async lock waiters across select branches: handling one branch must not wait behind a suspended sibling future that only this task can poll. Cancellation between authority changes and their effects must not leave stale authority. Error publication belongs to that boundary too: a delayed old-generation failure must not revoke confirmed recovery of a new generation. Separate admission, delivery, and confirmed external effects. Trace every explicit and automatic shutdown caller through the same coordinator; test already-admitted controls as well as late arrivals. A control awaiting teardown must not prevent teardown from starting. Dropping a waiter must not release dispatch authority while provider work can continue; test both caller cancellation and task panic. |
 | Failure and cleanup | Raise admission barriers before asynchronous cleanup starts. Inspect direct and wrapped uncertain-cleanup results for every provider operation (preparation, execution, steering, answers, cancellation, and shutdown), repeated close, and successful recovery. No input may reach a context undergoing teardown; reopening requires confirmed cleanup. Include constructor failure and cancellation: ownership and exclusive leases must outlive any unconfirmed attachment, with a documented recovery path. Preserve the primary typed failure alongside audit and cleanup failures, including three-way failures; do not replace its cause with a generic runtime label. |
