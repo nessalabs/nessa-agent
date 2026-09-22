@@ -2616,6 +2616,7 @@ dependencies = [
  "gtk",
  "libc",
  "minisign-verify",
+ "nessa-gateway-endpoint",
  "nessa-local-storage",
  "objc2",
  "objc2-app-kit",
@@ -2649,6 +2650,18 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+]
+
+[[package]]
+name = "nessa-gateway-endpoint"
+version = "0.1.0"
+dependencies = [
+ "nessa-local-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2724,6 +2737,7 @@ dependencies = [
  "image",
  "libc",
  "nessa-auth",
+ "nessa-gateway-endpoint",
  "nessa-images",
  "nessa-local-storage",
  "nessa-sdk",
