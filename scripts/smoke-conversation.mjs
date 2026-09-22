@@ -277,10 +277,32 @@ try {
     (candidate) => candidate.executionId === answerExecutionId,
   )
   assert.ok(permission)
-  assert.equal(permission.permissionId, `review-${answerExecutionId}`)
+  const providerPermission = evidenceFor(
+    readEvidence(evidencePath),
+    "permission-request",
+    providerSessionId,
+    answerExecutionId,
+  )
+  assert.equal(providerPermission.length, 1)
+  const [providerPermissionRequest] = providerPermission
+  assert.equal(
+    providerPermissionRequest.permissionRequestId,
+    `review-${answerExecutionId}`,
+  )
+  assert.notEqual(
+    permission.permissionId,
+    providerPermissionRequest.permissionRequestId,
+    "the gateway permission ID is distinct from the provider JSON-RPC request ID",
+  )
+  assert.equal(permission.toolId, providerPermissionRequest.toolCallId)
+  assert.equal(permission.toolName, providerPermissionRequest.toolName)
+  assert.deepEqual(
+    JSON.parse(permission.argumentsJson),
+    providerPermissionRequest.rawInput,
+  )
   assert.deepEqual(
     permission.options.map((option) => option.id),
-    ["allow-once", "deny-once"],
+    providerPermissionRequest.options.map((option) => option.optionId),
   )
 
   const steered = await proxy.guard(
@@ -338,15 +360,19 @@ try {
       ),
     "answered execution completion",
   )
-  assert.equal(
-    evidenceFor(
-      readEvidence(evidencePath),
-      "permission-answer",
-      providerSessionId,
-      answerExecutionId,
-    )[0]?.optionId,
-    "allow-once",
+  const providerAnswers = evidenceFor(
+    readEvidence(evidencePath),
+    "permission-answer",
+    providerSessionId,
+    answerExecutionId,
   )
+  assert.equal(providerAnswers.length, 1)
+  assert.equal(
+    providerAnswers[0].permissionRequestId,
+    providerPermissionRequest.permissionRequestId,
+  )
+  assert.equal(providerAnswers[0].toolCallId, providerPermissionRequest.toolCallId)
+  assert.equal(providerAnswers[0].optionId, "allow-once")
 
   client.close()
   proxy.assertHealthy()

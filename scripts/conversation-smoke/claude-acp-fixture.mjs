@@ -177,6 +177,10 @@ async function receive(message) {
       const permissionRequestId = `review-${expectedExecutionId}`
       const toolCallId = `tool-${expectedExecutionId}`
       const rawInput = { file_path: join(sessionWorkspace, "fixture-input") }
+      const options = [
+        { optionId: "allow-once", kind: "allow_once", name: "Allow once" },
+        { optionId: "deny-once", kind: "reject_once", name: "Deny once" },
+      ]
       pendingPermission = { permissionRequestId, toolCallId, expectedExecutionId }
       update(providerSessionId, {
         sessionUpdate: "tool_call",
@@ -199,10 +203,7 @@ async function receive(message) {
             rawInput,
             _meta: { claudeCode: { toolName: "Read" } },
           },
-          options: [
-            { optionId: "allow-once", kind: "allow_once", name: "Allow once" },
-            { optionId: "deny-once", kind: "reject_once", name: "Deny once" },
-          ],
+          options,
         },
       })
       record({
@@ -211,7 +212,9 @@ async function receive(message) {
         expectedExecutionId,
         permissionRequestId,
         toolCallId,
+        toolName: "Read",
         rawInput,
+        options,
       })
       return
     }
@@ -255,6 +258,7 @@ async function receive(message) {
       providerSessionId,
       expectedExecutionId: pendingPermission.expectedExecutionId,
       permissionRequestId: pendingPermission.permissionRequestId,
+      toolCallId: pendingPermission.toolCallId,
       optionId: outcome.optionId,
     })
     update(providerSessionId, {

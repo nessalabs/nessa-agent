@@ -158,10 +158,11 @@ test("Claude fixture records real prompt, permission, terminal, and resume messa
     assert.equal(permission.id, "review-execution-answer")
     assert.equal(permission.params.toolCall.toolCallId, tool.params.update.toolCallId)
     assert.deepEqual(permission.params.toolCall.rawInput, tool.params.update.rawInput)
-    assert.deepEqual(permission.params.options, [
+    const providerOptions = [
       { optionId: "allow-once", kind: "allow_once", name: "Allow once" },
       { optionId: "deny-once", kind: "reject_once", name: "Deny once" },
-    ])
+    ]
+    assert.deepEqual(permission.params.options, providerOptions)
     first.send({
       id: permission.id,
       result: { outcome: { outcome: "selected", optionId: "allow-once" } },
@@ -225,8 +226,32 @@ test("Claude fixture records real prompt, permission, terminal, and resume messa
         (event) =>
           event.type === "permission-request" &&
           event.providerSessionId === providerSessionId,
-      )?.rawInput,
-      { file_path: join(directory, "fixture-input") },
+      ),
+      {
+        type: "permission-request",
+        providerSessionId,
+        expectedExecutionId: "execution-answer",
+        permissionRequestId: permission.id,
+        toolCallId: tool.params.update.toolCallId,
+        toolName: "Read",
+        rawInput: { file_path: join(directory, "fixture-input") },
+        options: providerOptions,
+      },
+    )
+    assert.deepEqual(
+      events.find(
+        (event) =>
+          event.type === "permission-answer" &&
+          event.providerSessionId === providerSessionId,
+      ),
+      {
+        type: "permission-answer",
+        providerSessionId,
+        expectedExecutionId: "execution-answer",
+        permissionRequestId: permission.id,
+        toolCallId: tool.params.update.toolCallId,
+        optionId: "allow-once",
+      },
     )
     assert.equal(
       events.filter(
