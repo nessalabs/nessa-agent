@@ -67,11 +67,19 @@ fn stderr(run: &Run) -> String {
     String::from_utf8_lossy(&run.output.stderr).into_owned()
 }
 
-/// Display may use an equivalent OS spelling such as a Windows short path.
-/// Exact lossless identity is asserted separately on the structured audit target.
+/// Display may use an equivalent OS spelling such as a Windows short path, so
+/// compare the complete resolved identity. The structured audit assertion below
+/// separately requires the original lossless target spelling.
 fn assert_human_target(message: &str, target: &Path) {
-    let name = target.file_name().and_then(|name| name.to_str()).unwrap();
-    assert!(message.contains(name), "{message}");
+    let displayed = message
+        .split_once("credential registry at ")
+        .and_then(|(_, rest)| rest.split_once(" was refused:").map(|(path, _)| path))
+        .unwrap_or_else(|| panic!("diagnostic did not include a refused target: {message}"));
+    assert_eq!(
+        fs::canonicalize(displayed).unwrap(),
+        fs::canonicalize(target).unwrap(),
+        "{message}"
+    );
 }
 
 fn records(auth: &Path) -> Vec<Value> {
