@@ -854,6 +854,18 @@ and the command's output.
 
 ## Command-line surface
 
+Developer worktree lifecycle is owned by `scripts/worktree.sh`. Manual sibling
+worktrees and Claude Code's nested worktrees use different naming namespaces,
+but both keep Cargo output in a real `target/` directory inside the checkout.
+`scripts/worktree-target.test.mjs` covers creation, legacy migration, cleanup,
+removal, invalid links, hook reopen behavior, and A/B/A artifact provenance.
+The optional `sccache` process cache is the cross-checkout reuse boundary; Cargo
+target directories are not shared by the recipe. `scripts/cargo-target.mjs` is
+the one resolver used by scripts that build and then execute an artifact, so an
+explicit `CARGO_TARGET_DIR` selects the same output for both steps.
+The worktree clean command separately resolves that effective value and permits
+deletion only when it is the invoking checkout's ordinary local target.
+
 The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,
 and `cli/infrastructure/` implements the bounded local WebSocket adapter.
