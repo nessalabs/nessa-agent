@@ -202,12 +202,11 @@ fn measurement_provenance() {
         .and_then(|path| path.canonicalize())
         .expect("the running test binary path must be available");
     eprintln!(
-        "compiled_checkout={:?} compiled_head={} test_binary={} cargo_package_version={} profile={} debug_assertions={} build_invocation={:?}",
+        "compiled_checkout={:?} compiled_head={} test_binary={} cargo_package_version={} debug_assertions={} build_invocation={:?}",
         env!("CARGO_MANIFEST_DIR"),
         build_head,
         binary.display(),
         env!("CARGO_PKG_VERSION"),
-        if cfg!(debug_assertions) { "debug" } else { "release" },
         cfg!(debug_assertions),
         build_invocation,
     );
