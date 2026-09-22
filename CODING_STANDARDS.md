@@ -59,10 +59,18 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     when the thing began — never on a name, a file list, the active tab, or any
     other attribute that can change, repeat, or be recycled while the state
     lives. An attribute is stale the moment it is written down.
-13. **Refuse at the earliest layer that knows.** If a layer can already tell
-    that something will be refused, it refuses there, while the person can still
-    act on it — not at the last boundary able to say no. Ask of every refusal:
-    what is the earliest point at which this was knowable?
+13. **One owner of a decision, asked as early as possible.** Every rule has
+    exactly one owner — the layer the rule belongs to. An earlier layer may
+    refuse sooner only by *asking* that owner, or by using a value the owner
+    publishes; it may not restate the rule in its own terms. Where the owner
+    cannot be reached in time, share the rule as data the owner publishes, not
+    as a second implementation. Refuse as early as the owner can be consulted,
+    so a person can still act on it — but a second copy of a rule is not an
+    early refusal. It is a second authority, and it will drift: a path bound
+    counted in three different units across four layers, and a control character
+    one layer accepted and the next refused, both began as helpful early checks.
+    The test: change the rule where it is owned, and see what fails. If nothing
+    does, the copies are already lying.
 14. **A gate runs where it claims to run.** Each check declares the environment
     it must survive — bare Node with no `node_modules`, every supported target's
     `-D warnings`, the CI package selection, contention — and something enforces
