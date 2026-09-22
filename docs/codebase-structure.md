@@ -696,17 +696,25 @@ a `+` selection the moment the picker's answer comes back — and that name is a
 else, so no answer can be built without one. Dropping `Default` alone had been a
 speed bump, since a struct literal with `String::new()` still compiled.
 
-What the name routes differs by gesture, and the difference is not a gap.
-A **drop** is entirely the host's: the host names it, and the name travels back
-on the `Dropped` that carries the files, the refusal, or the dragged text — so
-the panel routes all three by it. A **`+`** was begun by the page, which captured
-the draft when the button was pressed and passes it straight to `addChosenFiles`;
-the name is what the *tile* needs, because that is drawn by the host mid-call
-and has nothing else to go on. Both come from one capture either way: for a pick,
-`began` says `gesture: "picked"` and the panel answers with the draft it is
-already holding rather than reading the open tab a second time. Two reads of one
-fact agreed only while nothing could change between them, and what guaranteed
-that was the picker being modal — rfd's presentation choice, not a promise.
+A **drop** gives one of three answers, and two of them land on a draft: the
+files and the refusal. Both travel back on the `Dropped` with the name attached,
+and the panel routes both by it. The third is dragged text, which goes to the
+focused composer and names no draft — so a drag carrying no paths is never
+announced, and the name it is given anyway is never looked up. That is
+`attach_begun_by`, and it is a rule with a test rather than a condition inside a
+function that needs a window.
+
+A **`+`** differs in what needs the name, not in where the name comes from. The
+page begins that gesture, so it captured the draft at the press and passes it
+straight to `addChosenFiles`; the name is what the *tile* needs, because the
+host draws that mid-call and has nothing else to go on. `began` says
+`gesture: "picked"`, and the panel answers with the draft it is already holding
+rather than reading the open tab a second time — one capture either way. Two
+reads of one fact agreed only while nothing could change between them, and what
+guaranteed that was the picker being modal: rfd's presentation choice, not a
+promise. `readiness.rs` has the seam test that pins `"picked"`, because that
+literal is the whole of what makes the distinction work and nothing else checked
+it.
 
 The name exists because an attach can be three quarters of a minute behind its
 gesture, and by then the open tab is no evidence of anything. Only the drop

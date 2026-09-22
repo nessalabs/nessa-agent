@@ -160,11 +160,18 @@ pub(super) async fn chosen_attachments(
         Picked::Unavailable(detail) => return Err(FileNotAttached::picker_unavailable(&detail)),
         Picked::Files(paths) => paths,
     };
-    // The gesture's moment for `+`: the person has chosen, and nothing has
-    // been looked at yet. Said after the picker rather than before it so a
-    // cancelled selection leaves the panel nothing to remember, and said at
-    // all because the tab can change during the fetch that follows — the
-    // picker is modal, so it cannot change before this line.
+    // The gesture's moment for `+`: the person has chosen, and nothing has been
+    // looked at yet. Said after the picker rather than before it so a cancelled
+    // selection leaves the panel nothing to remember.
+    //
+    // It does *not* assume the tab has not moved since the press. It said so
+    // for a while — "the picker is modal, so it cannot change before this line"
+    // — which was a guarantee borrowed from rfd's presentation choice, in the
+    // same breath as the rest of this feature giving up on exactly that kind of
+    // borrowing. `Gesture::Picked` is what removes the need for it: the panel
+    // answers with the draft it captured at the press and never reads the open
+    // tab for a pick at all, so whether the tab could have moved stops being a
+    // question anyone has to be right about.
     announce.began(batch, Gesture::Picked);
 
     describe_each(
@@ -336,6 +343,10 @@ mod tests {
     use crate::attachments::readiness::{Announce, Readiness, Untold};
     use crate::attachments::refusal::NotAttached;
     use crate::attachments::tickets::Redeemed;
+    // Both halves of reading a path as bytes, and both only where a path is
+    // bytes. Ungated, `OsStr` is unused on Windows, which is an error under
+    // `-D warnings` and invisible on this machine.
+    #[cfg(unix)]
     use std::ffi::OsStr;
     use std::io::{Error, ErrorKind};
     #[cfg(unix)]

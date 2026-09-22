@@ -246,12 +246,24 @@ pub(super) const BATCH_EVENT: &str = "nessa://attachment-batch";
 /// Telling the panel, which draws a tile for it.
 pub(super) struct Telling<'a>(pub &'a AppHandle);
 
+/// What the panel is handed when an attach begins.
+///
+/// Its own function so that the shape can be a test, which is the whole of what
+/// makes `gesture` safe: nothing else checks that it reaches the page as
+/// `"picked"` rather than `"Picked"`. Deleting the `rename_all` above left every
+/// test in this repository passing while every `+` selection silently went back
+/// to binding its tile to whatever tab was open — the defect this field exists
+/// to close, green on every gate.
+///
+/// `batch` is written as a bare string by [`Batch`]'s own `transparent`, and the
+/// panel splits the identities built from it on `:`.
+pub(super) fn beginning(batch: &Batch, gesture: Gesture) -> serde_json::Value {
+    serde_json::json!({ "batch": batch, "gesture": gesture })
+}
+
 impl Announce for Telling<'_> {
     fn began(&self, batch: &Batch, gesture: Gesture) {
-        self.tell(
-            BATCH_EVENT,
-            serde_json::json!({ "batch": batch, "gesture": gesture }),
-        );
+        self.tell(BATCH_EVENT, beginning(batch, gesture));
     }
     fn readying(&self, id: &str, name: &str) {
         self.say(id, name, true);
@@ -331,6 +343,33 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::Mutex;
+
+    /// The shape the panel reads an attach's beginning by, both fields.
+    ///
+    /// `gesture` was the one thing this feature put across the seam with
+    /// nothing checking it, and it is load-bearing: the page compares against
+    /// the literal `"picked"`, so the `rename_all` that produces it is the only
+    /// reason a `+` selection binds its tile to the draft it was begun in.
+    /// Removing that attribute passed every test in the repository while
+    /// quietly restoring the bug the field was added to close.
+    ///
+    /// The `Dropped` payload has had this test since it crossed, and `Batch`
+    /// got one when it became a type. This is the third of three.
+    #[test]
+    fn an_attach_begins_with_the_names_and_the_words_the_panel_reads() {
+        let batch = Batch::next();
+
+        assert_eq!(
+            serde_json::to_string(&beginning(&batch, Gesture::Picked))
+                .expect("a beginning serializes"),
+            format!(r#"{{"batch":"{batch}","gesture":"picked"}}"#)
+        );
+        assert_eq!(
+            serde_json::to_string(&beginning(&batch, Gesture::Dropped))
+                .expect("a beginning serializes"),
+            format!(r#"{{"batch":"{batch}","gesture":"dropped"}}"#)
+        );
+    }
 
     /// A handler that claims what it is told to and answers what it is told to.
     struct Staged {

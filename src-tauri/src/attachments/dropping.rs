@@ -322,7 +322,8 @@ pub(super) fn board_after(event: &DragDropEvent, board: &DragBoard) {
     }
 }
 
-/// Whether this event begins an attach the panel has to bind to a draft.
+/// What attach, if any, this event begins — and which gesture the panel is to
+/// be told it was.
 ///
 /// Only a drop that names paths. A drag of text names none, and what becomes of
 /// it — a paste into the composer — goes to the focused composer rather than to
@@ -330,11 +331,19 @@ pub(super) fn board_after(event: &DragDropEvent, board: &DragBoard) {
 /// of the sixty-four names the panel remembers on a gesture that could not use
 /// it, and a window that is only dropped text would evict real ones.
 ///
+/// It answers with the gesture rather than a `bool` so the literal is here,
+/// where a test can hold it, instead of at a call site that needs a window.
+/// `Gesture::Picked` there would compile, ship, and bind every drop's tile to
+/// whichever draft a picker had last been opened from.
+///
 /// Its own function for the reason `board_after` is: it is a rule, it lived
 /// inside a function that needs a window, and a rule nothing can test is how
 /// the late board clear survived a whole review.
-pub(super) fn begins_an_attach(event: &DragDropEvent) -> bool {
-    matches!(event, DragDropEvent::Drop { paths, .. } if !paths.is_empty())
+pub(super) fn attach_begun_by(event: &DragDropEvent) -> Option<Gesture> {
+    match event {
+        DragDropEvent::Drop { paths, .. } if !paths.is_empty() => Some(Gesture::Dropped),
+        _ => None,
+    }
 }
 
 pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
@@ -363,8 +372,8 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
             // three quarters of a minute later, by which time the open tab may
             // be a different one — and binding then put the tile over a draft
             // the file was never going to join.
-            if begins_an_attach(event) {
-                Telling(app).began(&batch, Gesture::Dropped);
+            if let Some(gesture) = attach_begun_by(event) {
+                Telling(app).began(&batch, gesture);
             }
             over(false);
             let app = app.clone();
@@ -790,21 +799,30 @@ mod tests {
         );
     }
 
-    /// Only a gesture that can use a name is given one.
+    /// Only a gesture that can use a name is given one, and it is told as the
+    /// gesture it actually was.
     ///
-    /// The panel remembers sixty-four, and nothing removes one when an attach
-    /// ends. A drag of text pastes into the composer and never looks a name up,
-    /// so naming it spent a slot on a gesture that could not use it — and
-    /// somebody dragging selected text around would evict the names of real
+    /// The panel remembers sixty-four names, and nothing removes one when an
+    /// attach ends. A drag of text pastes into the composer and never looks a
+    /// name up, so naming it spent a slot on a gesture that could not use it —
+    /// and somebody dragging selected text around would evict the names of real
     /// attachments still in flight.
+    ///
+    /// The gesture is asserted rather than assumed because the panel branches
+    /// on it: `Picked` tells the panel to answer with the draft a picker was
+    /// opened from, which for a drop is whatever draft was last picked in, or
+    /// none at all.
     #[test]
-    fn only_a_drop_that_names_files_begins_an_attach() {
-        assert!(begins_an_attach(&dropping(&["/Users/dev/a.pdf"])));
+    fn only_a_drop_that_names_files_begins_an_attach_and_it_is_a_drop() {
+        assert_eq!(
+            attach_begun_by(&dropping(&["/Users/dev/a.pdf"])),
+            Some(Gesture::Dropped)
+        );
         // Dragged text, which is a drop with no paths at all.
-        assert!(!begins_an_attach(&dropping(&[])));
+        assert_eq!(attach_begun_by(&dropping(&[])), None);
         // And the two events that are not drops at all.
-        assert!(!begins_an_attach(&entering()));
-        assert!(!begins_an_attach(&DragDropEvent::Leave));
+        assert_eq!(attach_begun_by(&entering()), None);
+        assert_eq!(attach_begun_by(&DragDropEvent::Leave), None);
     }
 
     /// The rule a late clear broke, and which nothing could see.

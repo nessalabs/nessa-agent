@@ -87,9 +87,15 @@ export function useHostDrop(actions: HostDropActions) {
       onAttachmentDropped((dropped) => {
         if (!live) return
         setDragging(false)
-        // One lookup, before the branch, because every answer a drop gives is
-        // about the same draft — the one the drop landed on. The refusal
-        // branch used to skip it and land on whatever was open.
+        // One lookup for the two answers that land on a draft — the files
+        // and the refusal — because they are about the same draft, the one the
+        // drop landed on. The refusal branch used to skip it and land on
+        // whatever was open.
+        //
+        // The third answer, dragged text, goes to the focused composer and
+        // names no draft, so it does not read this. A drag carrying no paths
+        // is never announced for that reason, which makes this a fallback to
+        // the open tab in that case; nothing below uses it.
         const target = latest.current.conversationOf(dropped.batch)
         if (dropped.refused) {
           latest.current.refuse(pickerRefusal(dropped.refused), target)

@@ -67,15 +67,20 @@
 //! *that* draft's send. It was the same defect the drop had already been fixed
 //! for, living on the other gesture.
 //!
-//! What the name routes differs by gesture, and the difference is not a gap. A
-//! drop is entirely the host's, so the name travels back on the [`Dropped`] and
-//! the panel routes the files, the refusal and the dragged text by it. A `+`
-//! was begun by the page, which captured its draft at the press and uses that
-//! for the files; the name is what the *tile* needs, since that is drawn
-//! mid-call and has nothing else. [`readiness::Gesture`] is how the panel tells
-//! the two apart, so both end up answering from one capture.
+//! Two of a drop's three answers land on a draft — the files and the refusal —
+//! and both are routed by the name, which travels back on the [`Dropped`]. The
+//! third is dragged text, which goes to the focused composer and names no
+//! draft; that is why a drag carrying no paths is never announced at all, and
+//! why the name it is nonetheless given is never looked up. See
+//! [`dropping::attach_begun_by`].
 //!
-//! A drag of text is not named at all — see [`dropping::begins_an_attach`].
+//! A `+` differs in what needs the name and not in where the name comes from.
+//! The page begins that gesture, so it captured the draft at the press and uses
+//! it for the files directly; the name is what the *tile* needs, since the host
+//! draws that mid-call and has nothing else to go on.
+//! [`readiness::Gesture`] is how the panel tells the two apart, so a pick
+//! answers with the draft it is already holding rather than reading the open
+//! tab a second time — one capture either way.
 //!
 //! # Ports, and why each is its own
 //!
