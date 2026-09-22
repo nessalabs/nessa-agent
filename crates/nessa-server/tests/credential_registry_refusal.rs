@@ -36,7 +36,7 @@ fn run(args: &[&str], obstruct_audit: bool) -> Run {
 
 fn run_with(args: impl FnOnce(&Path) -> Vec<String>, setup: impl FnOnce(&Path, &Path)) -> Run {
     let root = tempfile::tempdir().unwrap();
-    let auth = root.path().join("ci/auth");
+    let auth = root.path().join("ci").join("auth");
     nessa_local_storage::create_directory(&auth).unwrap();
     let registry = auth.join("credentials.v1.json");
     let mut file =
@@ -85,7 +85,7 @@ fn assert_human_target(message: &str, target: &Path) {
 }
 
 fn records(auth: &Path) -> Vec<Value> {
-    let directory = auth.join("audit/credential-registry-refusals");
+    let directory = auth.join("audit").join("credential-registry-refusals");
     fs::read_dir(directory)
         .unwrap()
         .map(|entry| {
@@ -338,7 +338,7 @@ fn lock_symlink_is_refused_and_audited_without_changing_its_target() {
 #[test]
 fn unsafe_lock_preserves_an_initialized_registry_byte_for_byte() {
     let root = tempfile::tempdir().unwrap();
-    let auth = root.path().join("ci/auth");
+    let auth = root.path().join("ci").join("auth");
     let registry = auth.join("credentials.v1.json");
     let token = root.path().join("owner.token");
     let initialized = execute(
@@ -375,7 +375,7 @@ fn unsafe_lock_preserves_an_initialized_registry_byte_for_byte() {
 #[test]
 fn unsafe_lock_does_not_create_an_absent_registry() {
     let root = tempfile::tempdir().unwrap();
-    let auth = root.path().join("ci/auth");
+    let auth = root.path().join("ci").join("auth");
     nessa_local_storage::create_directory(&auth).unwrap();
     let registry = auth.join("credentials.v1.json");
     let lock = lock_path(&auth);
