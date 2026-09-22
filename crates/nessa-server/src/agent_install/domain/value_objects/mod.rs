@@ -7,9 +7,14 @@
 mod agent_name;
 mod device_names;
 mod host_platform;
+mod install_transition;
 mod pinned_release;
 pub use agent_name::{AgentName, NotAnAgentName};
 pub use host_platform::{HostPlatform, Libc, ReleaseRequirements};
+pub use install_transition::{
+    InstallRequest, InstallRequestError, InstallTransition, InstallTransitionError,
+    InstallTransitionKind, RollbackState, RuntimeArtifact,
+};
 pub use pinned_release::{
     ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinRejected, PinnedRelease,
     ReleasePlatform, ReleaseVersion,

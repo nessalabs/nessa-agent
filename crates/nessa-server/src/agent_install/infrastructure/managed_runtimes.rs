@@ -15,8 +15,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
 
-use crate::agent_install::application::{RuntimeStore, StagedArchive, StoreFailure};
-use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease, ReleaseVersion};
+use crate::agent_install::application::{
+    Publication, PublicationChange, PublishFailure, RollbackChange, RuntimeStore, StagedArchive,
+    StoreFailure,
+};
+use crate::agent_install::domain::{
+    AgentName, ArchiveDigest, ArchivePath, PinnedRelease, ReleaseVersion, RuntimeArtifact,
+};
 
 /// How many times a staged download will try for a name of its own before
 /// giving up. The names are sixteen random bytes, so a single collision already
@@ -115,6 +120,16 @@ impl InstallationRecord {
         self.version == release.version().as_str()
             && self.digest == release.archive_digest().as_str()
             && self.executable == release.executable().as_str()
+    }
+
+    /// Read the identity-bearing fields back through their domain validators.
+    /// A malformed record is not evidence of an installed artifact.
+    fn artifact(&self) -> Option<RuntimeArtifact> {
+        Some(RuntimeArtifact::new(
+            ReleaseVersion::parse(&self.version).ok()?,
+            ArchiveDigest::parse(&self.digest).ok()?,
+            ArchivePath::parse(&self.executable).ok()?,
+        ))
     }
 }
 
@@ -229,8 +244,12 @@ impl ManagedRuntimes {
     /// because it is what the download was accepted against. Sixty-four
     /// lowercase hex characters, so it is a directory name everywhere.
     fn artifact_root(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
-        self.version_root(agent, release.version())
-            .join(release.archive_digest().as_str())
+        self.artifact_root_for(agent, &RuntimeArtifact::for_release(release))
+    }
+
+    fn artifact_root_for(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {
+        self.version_root(agent, artifact.version())
+            .join(artifact.digest().as_str())
     }
 
     /// Every directory this install creates, innermost first.
@@ -264,8 +283,43 @@ impl ManagedRuntimes {
     /// be `package/bin/opencode`, and the directories of it are the archive's
     /// business rather than this layout's.
     fn executable_path(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
-        self.artifact_root(agent, release)
-            .join(release.executable().file_name())
+        self.executable_path_for(agent, &RuntimeArtifact::for_release(release))
+    }
+
+    fn executable_path_for(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {
+        self.artifact_root_for(agent, artifact)
+            .join(artifact.executable().file_name())
+    }
+
+    /// The valid artifact named by the current record, if its executable is
+    /// still a private non-empty file beneath this store.
+    fn recorded_artifact(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<RuntimeArtifact>, StoreFailure> {
+        let mut record = match open_beneath(
+            &self.root,
+            &self.record_path(agent),
+            OpenMode::ReadNonblocking,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(unreadable(error)),
+        };
+        let mut encoded = Vec::new();
+        record.read_to_end(&mut encoded).map_err(unreadable)?;
+        let Ok(record) = serde_json::from_slice::<InstallationRecord>(&encoded) else {
+            return Ok(None);
+        };
+        let Some(artifact) = record.artifact() else {
+            return Ok(None);
+        };
+        let executable = self.executable_path_for(agent, &artifact);
+        let installed = match open_beneath(&self.root, &executable, OpenMode::Read) {
+            Ok(file) => file,
+            Err(_) => return Ok(None),
+        };
+        Ok((installed.metadata().map_err(unreadable)?.len() != 0).then_some(artifact))
     }
 
     /// Hold the sole right to publish one agent's runtimes.
@@ -575,12 +629,12 @@ impl ManagedRuntimes {
         release: &PinnedRelease,
         staged: &mut StagedArchive,
         durable: impl Fn(&Path) -> io::Result<()>,
-    ) -> Result<PathBuf, StoreFailure> {
+    ) -> Result<Publication, PublishFailure> {
         // Held from here to the end of this method, the rollback included.
         // Everything below assumes that whatever is at `destination` when it
         // looks is either nothing or this call's own work, and that assumption
         // is true only while nobody else is publishing this agent.
-        let _lock = self.hold(agent)?;
+        let lock = self.hold(agent).map_err(publish_failed)?;
         // Asked again now that this call is the only one publishing. The
         // caller asked before downloading, and between that answer and this
         // line another install may have finished the very same artifact — in
@@ -589,11 +643,16 @@ impl ManagedRuntimes {
         // running with an identical one. Handing back what is installed also
         // keeps the rollback below honest: after this point, a file at
         // `destination` can only have been put there by this call.
-        if let Some(installed) = self.installed(agent, release)? {
-            return Ok(installed);
+        if let Some(installed) = self.installed(agent, release).map_err(publish_failed)? {
+            return Ok(Publication::new(
+                installed,
+                PublicationChange::Reused,
+                Box::new(lock),
+            ));
         }
+        let previous = self.recorded_artifact(agent).map_err(publish_failed)?;
         let directory = self.artifact_root(agent, release);
-        self.private_directory(&directory)?;
+        self.private_directory(&directory).map_err(publish_failed)?;
         let destination = self.executable_path(agent, release);
         let unpacked = self.unpack(
             release,
@@ -611,13 +670,13 @@ impl ManagedRuntimes {
         match unpacked {
             Err(failure) => {
                 self.sweep_artifact(agent, release);
-                return Err(failure);
+                return Err(publish_failed(failure));
             }
             Ok(false) => {
                 self.sweep_artifact(agent, release);
-                return Err(StoreFailure::MissingExecutable(
+                return Err(publish_failed(StoreFailure::MissingExecutable(
                     release.executable().as_str().to_owned(),
-                ));
+                )));
             }
             Ok(true) => {}
         }
@@ -642,10 +701,13 @@ impl ManagedRuntimes {
             // install can have finished in between. Taking it back out is
             // undoing this call's own work, not losing somebody else's.
             self.withdraw(agent, release, &destination);
-            return Err(failure);
+            return Err(PublishFailure {
+                failure,
+                rollback: Some(RollbackChange::NoInstalledRuntime),
+                lease: Some(Box::new(lock)),
+            });
         }
-        // Nothing reclaims the artifact this one supersedes, and that is a
-        // decision rather than an oversight.
+        // Nothing reclaims the artifact this one supersedes in this operation.
         //
         // A pin bump leaves `versions/<old>/<digest>/` on disk with no record
         // naming it, around a hundred and fifty megabytes for Opencode, and
@@ -656,14 +718,10 @@ impl ManagedRuntimes {
         // safe thing to say. Anywhere else would be reading a record another
         // install is in the middle of replacing.
         //
-        // What stops it being written today is not where it goes but what it
-        // owes. Removing an installed runtime is a consequential state
-        // transition, so the hard audit rule asks it to carry its target, its
-        // before and after, its cause, and who caused it — and this store has
-        // no audit port to carry any of that. Adding the removal without one
-        // would delete a runtime and leave nothing saying it happened, which
-        // is worse than the disk. The same port is what the install path is
-        // waiting on, so the two land together or not at all.
+        // Removing an installed runtime is a separate consequential transition.
+        // The application must acknowledge the replacement before cleanup and
+        // audit the removal independently, so reclamation follows publication
+        // rather than being hidden inside this storage effect.
         //
         // Three things the implementation owes, written here because this is
         // where it will be read.
@@ -689,7 +747,11 @@ impl ManagedRuntimes {
         // The one path that leaves this type, so the one that is spelled in
         // full: everything above is relative because everything above is
         // reached through the root rather than resolved from the outside.
-        Ok(self.absolute(&destination))
+        Ok(Publication::new(
+            self.absolute(&destination),
+            previous.map_or(PublicationChange::Installed, PublicationChange::Replaced),
+            Box::new(lock),
+        ))
     }
 }
 
@@ -844,7 +906,7 @@ impl RuntimeStore for ManagedRuntimes {
         agent: &AgentName,
         release: &PinnedRelease,
         staged: &mut StagedArchive,
-    ) -> Result<PathBuf, StoreFailure> {
+    ) -> Result<Publication, PublishFailure> {
         self.publish_durably(agent, release, staged, |relative| {
             sync_directory_beneath(&self.root, relative)
         })
@@ -1029,6 +1091,14 @@ fn unwritable(error: io::Error) -> StoreFailure {
 
 fn unreadable(error: io::Error) -> StoreFailure {
     StoreFailure::Unreadable(error.to_string())
+}
+
+fn publish_failed(failure: StoreFailure) -> PublishFailure {
+    PublishFailure {
+        failure,
+        rollback: None,
+        lease: None,
+    }
 }
 
 fn malformed(error: io::Error) -> StoreFailure {

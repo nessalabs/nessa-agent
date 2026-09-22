@@ -1,8 +1,11 @@
 use super::*;
-use crate::agent_install::domain::{Libc, ReleasePlatform, ReleaseRequirements};
+use crate::agent_install::application::RollbackChange;
+use crate::agent_install::domain::{
+    InstallTransitionKind, Libc, ReleasePlatform, ReleaseRequirements, RuntimeArtifact,
+};
 use crate::agent_install_test_support::{
-    agent, host, host_of, platform, release, release_needing, FakeSource, FakeStore, OTHER_DIGEST,
-    PINNED_DIGEST,
+    agent, audit, host, host_of, platform, release, release_needing, request, FakeSource,
+    FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
 
 #[test]
@@ -16,11 +19,13 @@ fn a_matching_archive_is_published() {
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect("a matching archive installs");
 
@@ -43,11 +48,13 @@ fn a_mismatched_archive_is_never_unpacked() {
     let failure = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect_err("a mismatched archive is refused");
 
@@ -77,11 +84,13 @@ fn a_rejected_archive_is_discarded() {
     let _ = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     );
 
     assert_eq!(store.discarded().len(), 1, "the archive is discarded");
@@ -98,11 +107,13 @@ fn a_successful_install_discards_its_archive_too() {
     InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect("a matching archive installs");
 
@@ -120,11 +131,13 @@ fn installing_what_is_already_installed_downloads_nothing() {
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect("an installed runtime is reported as installed");
 
@@ -150,11 +163,13 @@ fn a_release_the_store_does_not_hold_is_downloaded() {
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect("a newly pinned version installs over an older one");
 
@@ -177,11 +192,13 @@ fn what_is_measured_is_what_is_unpacked() {
     InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect("a matching archive installs");
 
@@ -203,11 +220,13 @@ fn a_store_that_cannot_stage_a_download_fails_before_fetching() {
     let failure = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect_err("a store with nowhere to stage fails the install");
 
@@ -233,6 +252,7 @@ fn a_release_for_another_platform_is_refused_before_anything_is_fetched() {
     let failure = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
@@ -256,11 +276,13 @@ fn a_download_failure_is_reported_as_one() {
     let failure = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect_err("a refused download fails the install");
 
@@ -286,11 +308,13 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
     let failure = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect_err("an archive missing its executable fails the install");
 
@@ -312,11 +336,13 @@ fn a_store_that_cannot_say_what_is_installed_does_not_download() {
     let failure = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &host,
+        &request(),
     )
     .expect_err("an unreadable store fails the install");
 
@@ -336,8 +362,9 @@ fn the_pinned_url_is_what_gets_fetched() {
     InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
-    .execute(&agent(), &release, &host)
+    .execute(&agent(), &release, &host, &request())
     .expect("a matching archive installs");
 
     assert_eq!(
@@ -407,11 +434,13 @@ fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
         let failure = InstallAgentRuntime {
             source: &source,
             store: &store,
+            audit: audit(),
         }
         .execute(
             &agent(),
             &release_needing("1.18.31", PINNED_DIGEST, &platform, requirements),
             &host,
+            &request(),
         )
         .expect_err(named);
 
@@ -421,4 +450,213 @@ fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
             "{named} was downloaded before it was refused"
         );
     }
+}
+
+#[test]
+fn a_new_install_records_one_correlated_legal_sequence() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let audit = RecordingAudit::default();
+    InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap();
+
+    let records = audit.records();
+    assert_eq!(
+        records
+            .iter()
+            .map(InstallTransition::kind)
+            .collect::<Vec<_>>(),
+        [
+            InstallTransitionKind::Started,
+            InstallTransitionKind::Verified,
+            InstallTransitionKind::Installed,
+        ]
+    );
+    assert!(records
+        .iter()
+        .all(|record| record.request().request_id() == "install-request-1"));
+}
+
+#[test]
+fn replacement_evidence_uses_the_artifact_seen_under_the_publication_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let previous = RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform()));
+    let store = FakeStore::empty(root.path()).replacing(previous.clone());
+    let audit = RecordingAudit::default();
+    InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap();
+
+    let records = audit.records();
+    let replaced = records.last().unwrap();
+    assert_eq!(replaced.kind(), InstallTransitionKind::Replaced);
+    assert_eq!(replaced.previous(), Some(&previous));
+}
+
+#[test]
+fn digest_rejection_is_audited_and_the_archive_is_discarded() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"other bytes");
+    let store = FakeStore::empty(root.path()).hashing(OTHER_DIGEST);
+    let audit = RecordingAudit::default();
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(failure, InstallFailure::Rejected(_)));
+    assert_eq!(
+        audit.records().last().unwrap().kind(),
+        InstallTransitionKind::DigestRejected
+    );
+    assert_eq!(store.discarded().len(), 1);
+}
+
+#[test]
+fn store_rollback_is_audited_without_hiding_the_store_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store_failure = StoreFailure::Unwritable("directory sync failed".into());
+    let store = FakeStore::empty(root.path())
+        .failing_after_rollback(store_failure.clone(), RollbackChange::NoInstalledRuntime);
+    let audit = RecordingAudit::default();
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure, InstallFailure::Store(store_failure));
+    assert_eq!(
+        audit.records().last().unwrap().kind(),
+        InstallTransitionKind::RolledBack
+    );
+    assert_eq!(store.discarded().len(), 1);
+}
+
+#[test]
+fn audit_failure_after_verification_is_visible_and_prevents_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let audit = RecordingAudit::failing_on(InstallTransitionKind::Verified, "sink refused");
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Audit {
+            runtime_installed: false,
+            ..
+        }
+    ));
+    assert!(store.published().is_empty());
+    assert_eq!(store.discarded().len(), 1);
+}
+
+#[test]
+fn audit_failure_after_publication_reports_the_runtime_as_installed() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let audit = RecordingAudit::failing_on(InstallTransitionKind::Installed, "sink refused");
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Audit {
+            runtime_installed: true,
+            ..
+        }
+    ));
+    assert_eq!(store.published(), ["opencode"]);
+    assert_eq!(store.discarded().len(), 1);
+}
+
+#[test]
+fn audit_failure_preserves_digest_rejection_and_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path()).hashing(OTHER_DIGEST);
+    let audit = RecordingAudit::failing_on(InstallTransitionKind::DigestRejected, "sink refused");
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Audit {
+            operation: Some(operation),
+            runtime_installed: false,
+            ..
+        } if matches!(*operation, InstallFailure::Rejected(_))
+    ));
+    assert!(store.published().is_empty());
+    assert_eq!(store.discarded().len(), 1);
 }

@@ -11,9 +11,12 @@
 //! version can also be a directory name, a path inside an archive does not
 //! escape it, an archive is fetched over https from a host that is named.
 //! Deciding *where* a runtime goes and putting it there is infrastructure.
+pub mod entities;
 pub mod value_objects;
+pub use entities::{InstallAttempt, InstallAttemptError};
 pub use value_objects::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, HostPlatform, Libc,
-    NotAnAgentName, PinRejected, PinnedRelease, ReleasePlatform, ReleaseRequirements,
-    ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, HostPlatform,
+    InstallRequest, InstallRequestError, InstallTransition, InstallTransitionError,
+    InstallTransitionKind, Libc, NotAnAgentName, PinRejected, PinnedRelease, ReleasePlatform,
+    ReleaseRequirements, ReleaseVersion, RollbackState, RuntimeArtifact,
 };

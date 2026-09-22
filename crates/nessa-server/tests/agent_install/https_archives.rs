@@ -9,7 +9,7 @@ use rustls::crypto::CryptoProvider;
 use crate::agent_install::application::{InstallAgentRuntime, RuntimeStore};
 use crate::agent_install::domain::AgentName;
 use crate::agent_install::infrastructure::{host_platform, releases_for, ManagedRuntimes};
-use crate::agent_install_test_support::temporary_root;
+use crate::agent_install_test_support::{audit, request, temporary_root};
 
 #[test]
 fn building_a_client_names_the_tls_backend_this_process_uses() {
@@ -284,8 +284,9 @@ fn installs_the_pinned_release() {
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
-    .execute(&agent, &release, &platform)
+    .execute(&agent, &release, &platform, &request())
     .expect("the pinned release installs");
 
     assert!(installed.downloaded);
@@ -325,8 +326,9 @@ fn installs_the_pinned_release() {
     let again = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: audit(),
     }
-    .execute(&agent, &release, &platform)
+    .execute(&agent, &release, &platform, &request())
     .expect("an installed runtime is reported as installed");
     assert!(!again.downloaded);
     assert_eq!(again.executable, installed.executable);

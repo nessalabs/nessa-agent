@@ -102,7 +102,10 @@ fn publish(
     bytes: &[u8],
 ) -> Result<PathBuf, StoreFailure> {
     let mut staged = staged(store, bytes);
-    store.publish(&agent(), release, &mut staged)
+    store
+        .publish(&agent(), release, &mut staged)
+        .map(|publication| publication.executable().to_owned())
+        .map_err(|failure| failure.failure)
 }
 
 /// Where `publish` puts the version directory for the release these tests use.
@@ -202,7 +205,7 @@ fn a_published_runtime_is_reported_as_installed() {
 
     assert!(published.is_file());
     assert_eq!(
-        std::fs::read(&published).expect("reading the published runtime"),
+        std::fs::read(published.executable()).expect("reading the published runtime"),
         b"binary"
     );
     assert_eq!(
@@ -941,7 +944,7 @@ fn what_was_hashed_is_what_gets_unpacked() {
         .publish(&agent(), &release, &mut staged)
         .expect("the executable is unpacked");
     assert_eq!(
-        std::fs::read(&published).expect("reading the published runtime"),
+        std::fs::read(published.executable()).expect("reading the published runtime"),
         b"measured",
         "publish unpacked bytes that were never measured"
     );
@@ -1228,7 +1231,7 @@ fn an_install_that_cannot_be_settled_takes_back_only_what_it_wrote() {
         .expect_err("an install that cannot be made durable fails");
 
     assert!(
-        matches!(failure, StoreFailure::Unwritable(_)),
+        matches!(failure.failure, StoreFailure::Unwritable(_)),
         "a directory that will not sync is this machine's doing: {failure:?}"
     );
     assert!(
@@ -1623,7 +1626,7 @@ fn a_failure_after_the_rename_says_nothing_was_installed_and_means_it() {
         .expect_err("an install that cannot be settled");
 
     assert!(
-        matches!(failure, StoreFailure::Unwritable(_)),
+        matches!(failure.failure, StoreFailure::Unwritable(_)),
         "a record that would not write is this machine's doing: {failure:?}"
     );
     assert!(
@@ -1811,6 +1814,53 @@ fn a_publication_waits_for_the_one_already_running() {
 }
 
 #[test]
+fn publication_authority_is_held_until_the_result_is_dropped() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let first_release = release("1.18.31", "package/bin/opencode");
+    let second_release = artifact(
+        "1.19.0",
+        "package/bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let mut first_archive = staged(&store, &archive("package/bin/opencode", b"first runtime"));
+    let first = store
+        .publish(&agent(), &first_release, &mut first_archive)
+        .expect("the first publication succeeds");
+    let second_bytes = archive("package/bin/opencode", b"second runtime");
+    let (finished, waiting) = std::sync::mpsc::channel();
+
+    std::thread::scope(|threads| {
+        threads.spawn(|| {
+            let published = publish(&store, &second_release, &second_bytes);
+            finished
+                .send(published)
+                .expect("the test is still listening");
+        });
+
+        assert!(
+            matches!(
+                waiting.recv_timeout(Duration::from_millis(500)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "a second publication completed before the first audit lease ended"
+        );
+        drop(first);
+        match waiting.recv_timeout(Duration::from_secs(30)) {
+            Ok(result) => {
+                result.expect("the second publication runs when the audit lease is dropped");
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("the second publication did not run after the audit lease ended")
+            }
+            Err(RecvTimeoutError::Disconnected) => panic!("the second publication panicked"),
+        }
+    });
+}
+
+#[test]
 fn a_pin_that_corrects_itself_about_an_archive_reinstalls_nothing() {
     // The record and the layout have to agree about what identifies an
     // artifact. They key on the version, the digest and the entry; the
@@ -1861,7 +1911,7 @@ fn a_pin_that_corrects_itself_about_an_archive_reinstalls_nothing() {
         })
         .expect("the artifact already installed is handed back");
 
-    assert_eq!(again, published);
+    assert_eq!(again.executable(), &published);
     assert_eq!(
         std::fs::read(&published).expect("the installed runtime reads"),
         b"the runtime"

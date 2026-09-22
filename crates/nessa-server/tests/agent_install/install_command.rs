@@ -4,12 +4,17 @@ use std::path::Path;
 
 use crate::agent_install::application::{InstalledRuntime, StoreFailure};
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinnedRelease, ReleaseVersion,
+    ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, InstallRequest, PinnedRelease,
+    ReleaseVersion,
 };
 use crate::agent_install_test_support::temporary_root;
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
+}
+
+fn request() -> InstallRequest {
+    InstallRequest::new("unix:501", "install-command-test").expect("valid request")
 }
 
 fn digest(byte: char) -> ArchiveDigest {
@@ -70,7 +75,7 @@ fn installs_from_inside_the_runtime() {
             // the task outside `block_on` would be a different thing entirely —
             // `spawn_blocking` needs a runtime context to be called at all.
             let root = root.path().to_owned();
-            tokio::task::spawn_blocking(move || install(&opencode(), &root)).await
+            tokio::task::spawn_blocking(move || install(&opencode(), &root, &request())).await
         })
         .expect("the installer finishes")
         .expect("the pinned release installs");
@@ -86,7 +91,8 @@ fn an_agent_nessa_does_not_install_is_named_as_such() {
     // fails obscurely — and it must not touch the network to say so.
     let root = temporary_root();
     let claude = AgentName::parse("claude").expect("a plain agent name");
-    let failure = install(&claude, root.path()).expect_err("claude is not installed by nessa");
+    let failure =
+        install(&claude, root.path(), &request()).expect_err("claude is not installed by nessa");
     assert!(
         failure.to_string().contains("not an agent nessa installs"),
         "unhelpful message: {failure}"
@@ -115,7 +121,7 @@ fn an_agent_with_no_build_for_this_machine_is_told_so() {
 fn nothing_is_written_for_an_agent_with_no_release() {
     let root = temporary_root();
     let claude = AgentName::parse("claude").expect("a plain agent name");
-    let _ = install(&claude, root.path());
+    let _ = install(&claude, root.path(), &request());
     assert!(
         !root.path().join("claude").exists(),
         "a refused install left a directory behind"

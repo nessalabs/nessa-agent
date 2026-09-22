@@ -1,15 +1,16 @@
 //! Construct the agent installer and report what it did.
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
 use crate::agent_install::application::{
     InstallAgentRuntime, InstallFailure, InstalledRuntime, SourceFailure, StoreFailure,
 };
-use crate::agent_install::domain::{AgentName, HostPlatform, PinnedRelease};
+use crate::agent_install::domain::{AgentName, HostPlatform, InstallRequest, PinnedRelease};
 use crate::agent_install::infrastructure::{
-    host_platform, releases_for, HttpsArchives, ManagedRuntimes,
+    host_platform, releases_for, DurableInstallAudit, HttpsArchives, ManagedRuntimes,
 };
 use crate::core::RunError;
 use crate::env::Environment;
@@ -38,8 +39,10 @@ fn runtime_root() -> Result<PathBuf, RunError> {
 pub(super) async fn execute(agent: &AgentName) -> Result<(), RunError> {
     let root = runtime_root()?;
     let agent = agent.clone();
+    let request = InstallRequest::new(local_account_id(), uuid::Uuid::new_v4().to_string())
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     let installed = tokio::task::spawn_blocking(move || {
-        install(&agent, &root).and_then(|installed| report(&agent, &installed))
+        install(&agent, &root, &request).and_then(|installed| report(&agent, &installed))
     })
     .await
     .map_err(|error| RunError::Agent(format!("the installer did not finish: {error}")))??;
@@ -47,14 +50,26 @@ pub(super) async fn execute(agent: &AgentName) -> Result<(), RunError> {
 }
 
 /// The install itself, with every effect it needs constructed here.
-fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError> {
+fn install(
+    agent: &AgentName,
+    root: &Path,
+    request: &InstallRequest,
+) -> Result<InstalledRuntime, RunError> {
     let host = host_platform();
     let release = pinned(agent, &host)?;
     let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
     let store = ManagedRuntimes::new(root);
+    let audit_root = root
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid agent runtime directory".into()))?
+        .join("audit")
+        .join("agent-install");
+    let audit = DurableInstallAudit::new(audit_root, Arc::new(super::local_auth::SystemClock))
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
+        audit: &audit,
     }
     // Flattening the typed failure into prose is this surface's limitation,
     // not the design. `explain` already knows which failures are worth trying
@@ -70,7 +85,7 @@ fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError>
     // the check scripts, so it is not done here — and the machine-readable
     // half of this command is deliberately left to be shaped against that
     // mutation rather than given a second vocabulary now.
-    .execute(agent, &release, &host)
+    .execute(agent, &release, &host, request)
     .map_err(|failure| RunError::Agent(explain(&failure)))?;
     tracing::info!(
         agent = agent.as_str(),
@@ -178,7 +193,30 @@ fn explain(failure: &InstallFailure) -> String {
         ),
         InstallFailure::Download(_) => format!("{failure}; nothing was installed, try again"),
         InstallFailure::Store(failure) => format!("{failure}; nothing was installed"),
+        InstallFailure::Evidence(_) => format!("{failure}; the install result was not reported"),
+        InstallFailure::Audit {
+            runtime_installed: true,
+            ..
+        } => failure.to_string(),
+        InstallFailure::Audit { .. } => {
+            format!("{failure}; no unaudited runtime was reported as installed")
+        }
     }
+}
+
+#[cfg(unix)]
+fn local_account_id() -> String {
+    // The process runs with the account whose private data directory receives
+    // the runtime and audit records. The effective uid is the verified OS
+    // identity behind those permissions; no human name is guessed from it.
+    format!("unix:{}", unsafe { libc::geteuid() })
+}
+
+#[cfg(not(unix))]
+fn local_account_id() -> String {
+    // No runtime is pinned for a non-Unix host. Kept explicit so an eventual
+    // Windows pin cannot silently claim a human identity it has not verified.
+    "unsupported-process-account".to_owned()
 }
 
 /// What the command says it did, on stdout, for whatever called it.

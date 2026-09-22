@@ -1,9 +1,13 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use super::ports::{ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure};
+use super::ports::{
+    ArchiveSource, AuditFailure, InstallAudit, PublicationChange, RollbackChange, RuntimeStore,
+    SourceFailure, StagedArchive, StoreFailure,
+};
 use crate::agent_install::domain::{
-    AgentName, ArchiveRejected, HostPlatform, PinnedRelease, ReleaseVersion,
+    AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError, InstallRequest,
+    InstallTransition, PinnedRelease, ReleaseVersion, RollbackState, RuntimeArtifact,
 };
 
 /// An agent runtime that is on this machine and ready to launch.
@@ -46,6 +50,16 @@ pub enum InstallFailure {
     Rejected(ArchiveRejected),
     /// This machine could not read, write, or unpack the runtime.
     Store(StoreFailure),
+    /// A store result contradicted the legal install sequence.
+    Evidence(InstallAttemptError),
+    /// Durable evidence was not acknowledged. `operation` preserves an
+    /// installation failure that happened too; `runtime_installed` prevents a
+    /// successful publication from being described as though it was undone.
+    Audit {
+        operation: Option<Box<InstallFailure>>,
+        runtime_installed: bool,
+        failure: AuditFailure,
+    },
 }
 
 impl fmt::Display for InstallFailure {
@@ -57,6 +71,23 @@ impl fmt::Display for InstallFailure {
             Self::Download(failure) => failure.fmt(f),
             Self::Rejected(rejection) => rejection.fmt(f),
             Self::Store(failure) => failure.fmt(f),
+            Self::Evidence(failure) => failure.fmt(f),
+            Self::Audit {
+                operation,
+                runtime_installed,
+                failure,
+            } => {
+                if let Some(operation) = operation {
+                    write!(f, "{operation}; install audit was not committed: {failure}")
+                } else if *runtime_installed {
+                    write!(
+                        f,
+                        "the runtime was installed, but its audit record was not committed: {failure}"
+                    )
+                } else {
+                    write!(f, "install audit was not committed: {failure}")
+                }
+            }
         }
     }
 }
@@ -87,6 +118,7 @@ impl std::error::Error for InstallFailure {}
 pub struct InstallAgentRuntime<'a> {
     pub source: &'a dyn ArchiveSource,
     pub store: &'a dyn RuntimeStore,
+    pub audit: &'a dyn InstallAudit,
 }
 
 impl InstallAgentRuntime<'_> {
@@ -96,39 +128,29 @@ impl InstallAgentRuntime<'_> {
     /// download: the surface that offers this cannot know whether an earlier
     /// attempt finished, and a user who presses it twice should not wait twice.
     ///
-    /// **There is no audit port here yet, and there is owed to be one.** This
-    /// writes an executable Nessa later launches under the person's own
-    /// account, replaces a previous one, and can reject an archive whose bytes
-    /// were not the pinned ones — a consequential transition by the hard audit
-    /// rule, and a `tracing::info!` and a line of stdout are not a durable
-    /// record of it. What that port covers is decided: started, verified,
-    /// digest rejected, replaced, rolled back, and the removal of a superseded
-    /// artifact, with a test on a failing sink, modelled on `RetirementAudit`
-    /// in `desktop_runtime`. Reclaiming those superseded artifacts, and the
-    /// ordering [`ManagedRuntimes::record`] documents — the new record replaces
-    /// the previous one before the last thing that can fail, so a failure
-    /// leaves the previous runtime's bytes named by nothing — belong to the
-    /// same change.
-    ///
-    /// It is deliberately not in the change that added this module: a port, a
-    /// durable sink and artifact reclamation are a subsystem, and adding one
-    /// to the first install path while it is under review is how the rest of
-    /// it stops being reviewable. Saying so here is the alternative to a
-    /// silence that reads like nobody noticed.
+    /// Every consequential transition is passed to [`InstallAudit`] before
+    /// this call reports its outcome. Publication and rollback retain the
+    /// store's per-agent lease through that acknowledgement, so two concurrent
+    /// installs cannot report their effects in an order that contradicts the
+    /// before/after evidence captured under the publication lock.
     pub fn execute(
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
         host: &HostPlatform,
+        request: &InstallRequest,
     ) -> Result<InstalledRuntime, InstallFailure> {
         if !release.runs_on(host) {
             return Err(InstallFailure::UnsupportedPlatform(host.clone()));
         }
+        let target = RuntimeArtifact::for_release(release);
+        let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
+        self.audit(started)?;
         if let Some(runtime) = self.already_installed(agent, release)? {
             return Ok(runtime);
         }
         let mut staged = self.store.stage(agent).map_err(InstallFailure::Store)?;
-        let outcome = self.fetch_and_publish(agent, release, &mut staged);
+        let outcome = self.fetch_and_publish(agent, release, &mut attempt, &mut staged);
         // The archive has served its purpose either way, and it is the largest
         // thing this operation writes. Discarding it on the failure path too is
         // what keeps a run of refused downloads from filling the disk.
@@ -167,16 +189,81 @@ impl InstallAgentRuntime<'_> {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
+        attempt: &mut InstallAttempt,
         staged: &mut StagedArchive,
     ) -> Result<PathBuf, InstallFailure> {
         self.source
             .download(release.archive_url().as_str(), staged)
             .map_err(InstallFailure::Download)?;
         let digest = self.store.digest(staged).map_err(InstallFailure::Store)?;
-        release.accept(&digest).map_err(InstallFailure::Rejected)?;
-        self.store
-            .publish(agent, release, staged)
-            .map_err(InstallFailure::Store)
+        if let Err(rejection) = release.accept(&digest) {
+            let operation = InstallFailure::Rejected(rejection);
+            let transition = attempt.rejected(digest).map_err(InstallFailure::Evidence)?;
+            return match self.audit.record(transition) {
+                Ok(()) => Err(operation),
+                Err(failure) => Err(with_audit_failure(operation, failure)),
+            };
+        }
+        self.audit(attempt.verified().map_err(InstallFailure::Evidence)?)?;
+        match self.store.publish(agent, release, staged) {
+            Ok(publication) => {
+                let transition = match publication.change() {
+                    PublicationChange::Reused => {
+                        attempt.reused().map_err(InstallFailure::Evidence)?;
+                        return Ok(publication.executable().to_owned());
+                    }
+                    PublicationChange::Installed => {
+                        attempt.installed().map_err(InstallFailure::Evidence)?
+                    }
+                    PublicationChange::Replaced(previous) => attempt
+                        .replaced(previous.clone())
+                        .map_err(InstallFailure::Evidence)?,
+                };
+                self.audit
+                    .record(transition)
+                    .map_err(|failure| InstallFailure::Audit {
+                        operation: None,
+                        runtime_installed: true,
+                        failure,
+                    })?;
+                Ok(publication.executable().to_owned())
+            }
+            Err(publish) => {
+                let operation = InstallFailure::Store(publish.failure.clone());
+                let Some(rollback) = publish.rollback.as_ref() else {
+                    return Err(operation);
+                };
+                let restored = match rollback {
+                    RollbackChange::Restored(artifact) => RollbackState::Restored(artifact.clone()),
+                    RollbackChange::NoInstalledRuntime => RollbackState::NoInstalledRuntime,
+                };
+                let transition = attempt
+                    .rolled_back(restored)
+                    .map_err(InstallFailure::Evidence)?;
+                match self.audit.record(transition) {
+                    Ok(()) => Err(operation),
+                    Err(failure) => Err(with_audit_failure(operation, failure)),
+                }
+            }
+        }
+    }
+
+    fn audit(&self, transition: InstallTransition) -> Result<(), InstallFailure> {
+        self.audit
+            .record(transition)
+            .map_err(|failure| InstallFailure::Audit {
+                operation: None,
+                runtime_installed: false,
+                failure,
+            })
+    }
+}
+
+fn with_audit_failure(operation: InstallFailure, failure: AuditFailure) -> InstallFailure {
+    InstallFailure::Audit {
+        operation: Some(Box::new(operation)),
+        runtime_installed: false,
+        failure,
     }
 }
 

@@ -2,7 +2,9 @@ use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease};
+use crate::agent_install::domain::{
+    AgentName, ArchiveDigest, InstallTransition, PinnedRelease, RuntimeArtifact,
+};
 
 /// Why an archive could not be fetched.
 ///
@@ -77,6 +79,108 @@ impl fmt::Display for StoreFailure {
 }
 
 impl std::error::Error for StoreFailure {}
+
+/// The durable audit sink did not acknowledge install evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditFailure(pub String);
+
+impl fmt::Display for AuditFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AuditFailure {}
+
+/// Which state change a successful publication performed while holding the
+/// agent's publication lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationChange {
+    /// Another install had already published this exact artifact.
+    Reused,
+    /// No valid runtime record existed before this artifact was published.
+    Installed,
+    /// This artifact replaced the runtime named by the prior valid record.
+    Replaced(RuntimeArtifact),
+}
+
+/// Keeps the store's per-agent publication authority until audit delivery has
+/// completed. Implementations normally own the publication lock handle.
+pub trait PublicationLease: Send {}
+
+impl<T: Send> PublicationLease for T {}
+
+/// A runtime publication and the state it actually changed under the store's
+/// publication lock.
+pub struct Publication {
+    executable: PathBuf,
+    change: PublicationChange,
+    _lease: Box<dyn PublicationLease>,
+}
+
+impl fmt::Debug for Publication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Publication")
+            .field("executable", &self.executable)
+            .field("change", &self.change)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Publication {
+    pub fn new(
+        executable: PathBuf,
+        change: PublicationChange,
+        lease: Box<dyn PublicationLease>,
+    ) -> Self {
+        Self {
+            executable,
+            change,
+            _lease: lease,
+        }
+    }
+
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub fn change(&self) -> &PublicationChange {
+        &self.change
+    }
+}
+
+/// The state left after the store withdrew a publication that could not be
+/// completed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RollbackChange {
+    Restored(RuntimeArtifact),
+    NoInstalledRuntime,
+}
+
+/// A publication failure, including a rollback the store actually performed.
+pub struct PublishFailure {
+    pub failure: StoreFailure,
+    pub rollback: Option<RollbackChange>,
+    /// Held only when a rollback happened, until its audit record is handled.
+    pub lease: Option<Box<dyn PublicationLease>>,
+}
+
+impl fmt::Debug for PublishFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PublishFailure")
+            .field("failure", &self.failure)
+            .field("rollback", &self.rollback)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Durable evidence for agent-runtime installation transitions.
+pub trait InstallAudit: Send + Sync {
+    /// Commit one immutable transition before the install reports its outcome.
+    fn record(&self, transition: InstallTransition) -> Result<(), AuditFailure>;
+}
 
 /// The private file one install downloads its archive into.
 ///
@@ -216,7 +320,7 @@ pub trait RuntimeStore: Send + Sync {
         agent: &AgentName,
         release: &PinnedRelease,
         staged: &mut StagedArchive,
-    ) -> Result<PathBuf, StoreFailure>;
+    ) -> Result<Publication, PublishFailure>;
 
     /// Forget a staged download. Never fails the install: a leftover file in a
     /// directory Nessa owns is survivable, and reporting it would turn a
