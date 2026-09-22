@@ -1,4 +1,5 @@
-import type { AgentReadiness, AgentReadinessReport } from "../model/onboarding"
+import { AGENT_CHOICES } from "../model/onboarding"
+import type { AgentId, AgentReadiness, AgentReadinessReport } from "../model/onboarding"
 import type { AgentReadinessAnswer, AgentReadinessSource } from "../application/ports"
 
 /** The gateway's pre-authentication surface, relative to wherever it answers. */
@@ -16,14 +17,26 @@ function known(value: unknown): AgentReadiness | undefined {
     : undefined
 }
 
+/** Which agent the gateway is talking about, if it is one Nessa lists.
+ *
+ * Read off the listing rather than written out again, so adding an agent there
+ * is what adds it here. The report is keyed by agent, and a key is a name only
+ * if it is one of ours: left as any string the gateway sent, `id: "constructor"`
+ * wrote a property onto the report that shadowed the one every object already
+ * has, and `id: "__proto__"` was swallowed by the prototype setter instead of
+ * being stored — so the report neither held what arrived nor said it had not. */
+function listed(value: unknown): AgentId | undefined {
+  return AGENT_CHOICES.find((choice) => choice.id === value)?.id
+}
+
 function readReport(body: unknown): AgentReadinessReport | undefined {
   const agents = (body as { agents?: unknown })?.agents
   if (!Array.isArray(agents)) return undefined
-  const report: Record<string, AgentReadiness> = {}
+  const report: Partial<Record<AgentId, AgentReadiness>> = {}
   for (const entry of agents) {
-    const id = (entry as { id?: unknown })?.id
+    const id = listed((entry as { id?: unknown })?.id)
     const readiness = known((entry as { readiness?: unknown })?.readiness)
-    if (typeof id === "string" && readiness) report[id] = readiness
+    if (id && readiness) report[id] = readiness
   }
   return report
 }

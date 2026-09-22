@@ -77,6 +77,28 @@ describe("asking the gateway which agents can start", () => {
     })
   })
 
+  /**
+   * The report is keyed by agent, and the gateway names the agents. Any string
+   * it sent used to become a key: `constructor` wrote an own property over the
+   * one every object already has, and `__proto__` went to the prototype setter
+   * and was not stored at all — so the report neither held what arrived nor
+   * said it had not. An id is a key only if it is an agent Nessa lists.
+   */
+  it("keys the report by the agents Nessa lists, not by whatever was sent", async () => {
+    const fetch = answering({
+      agents: [
+        { id: "claude", readiness: "ready" },
+        { id: "constructor", readiness: "ready" },
+        { id: "__proto__", readiness: "ready" },
+        { id: "toString", readiness: "not-installed" },
+        { id: "gemini", readiness: "ready" },
+      ],
+    })
+    const answer = await httpAgentReadiness({ baseUrl: "", fetch }).read()
+    expect(answer).toEqual({ ok: true, agents: { claude: "ready" } })
+    expect(Object.keys(answer.ok ? answer.agents : {})).toEqual(["claude"])
+  })
+
   it("is an answer, not a failure, when no runtime can start anything", async () => {
     const fetch = answering({ agents: [] })
     await expect(httpAgentReadiness({ baseUrl: "", fetch }).read()).resolves.toEqual({
