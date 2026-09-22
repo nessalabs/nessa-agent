@@ -417,7 +417,7 @@ pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
 /// path again. The handle remains bound to the file even if an ancestor name is
 /// concurrently replaced, so cleanup cannot delete an outside same-name file.
 pub fn remove_reserved_beneath(file: &File, _: &Path, _: &Path) -> io::Result<()> {
-    let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
     unsafe {
         check(SetFileInformationByHandle(
             file.as_raw_handle(),
