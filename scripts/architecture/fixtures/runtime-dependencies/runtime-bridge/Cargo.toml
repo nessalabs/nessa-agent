@@ -1,0 +1,13 @@
+[package]
+name = "runtime-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../empty.rs"
+
+[features]
+desktop = ["dep:desktop-shell"]
+
+[dependencies]
+desktop-shell = { package = "tauri", path = "../tauri", optional = true }
