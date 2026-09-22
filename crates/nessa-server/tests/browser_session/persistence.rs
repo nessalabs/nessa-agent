@@ -1059,6 +1059,7 @@ async fn structurally_valid_historical_origin_replays_without_current_trust() {
         reopened.get(id.clone()).await.unwrap().unwrap().origin(),
         exact_origin
     );
+    drop(reopened);
     let record = last_record(&path);
     assert_eq!(
         record.changes[0].before.as_ref().unwrap().origin,
@@ -1068,8 +1069,6 @@ async fn structurally_valid_historical_origin_replays_without_current_trust() {
         record.changes[0].after.as_ref().unwrap().origin,
         exact_origin
     );
-    drop(reopened);
-
     let replacement_id = "a".repeat(64);
     let store = reopen(&path).unwrap();
     let prior = store
@@ -1097,6 +1096,7 @@ async fn structurally_valid_historical_origin_replays_without_current_trust() {
         exact_origin
     );
     assert!(reopened.get(replacement_id).await.unwrap().is_none());
+    drop(reopened);
     let record = last_record(&path);
     assert_eq!(record.changes[0].reason, Reason::AbandonedLogin);
     assert_eq!(
