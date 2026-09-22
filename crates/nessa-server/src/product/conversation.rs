@@ -16,8 +16,8 @@ use crate::{
     agents::domain::AgentId,
     conversation::{
         application::{
-            ConversationCaller, ConversationError, RequestedAgent, SubmissionMode, SubmittedFile,
-            SubmittedImage, SubmittedMessage,
+            ConversationCaller, ConversationError, QuestionChoiceInput, RequestedAgent,
+            SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
         },
         domain::ConversationId,
     },
@@ -168,7 +168,11 @@ pub(super) async fn dispatch(
                         params.choices.map(|choices| {
                             choices
                                 .into_iter()
-                                .map(|choice| (choice.key, choice.values, choice.own_words))
+                                .map(|choice| QuestionChoiceInput {
+                                    key: choice.key,
+                                    values: choice.values,
+                                    own_words: choice.own_words,
+                                })
                                 .collect()
                         }),
                     )

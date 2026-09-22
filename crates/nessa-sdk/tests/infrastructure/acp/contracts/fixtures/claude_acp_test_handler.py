@@ -272,6 +272,26 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
+        elif mode.startswith("question"):
+            # An agent asking, the way the harness bridges its own question tool
+            # into a form elicitation.
+            single = mode == "question"
+            properties = {
+                "question_0": {"type": "string", "title": "Environment",
+                    **({} if single else {"description": "Which environment?"}),
+                    "oneOf": [
+                        {"const": "staging", "title": "Staging", "description": "Safe to break"},
+                        {"const": "production", "title": "Production"}]},
+                "question_0_custom": {"type": "string", "title": "Other",
+                    "_meta": {"_askUserQuestionCustomAnswer": {"questionId": "question_0", "isCustomAnswer": True}}},
+            }
+            if not single:
+                properties["question_1"] = {"type": "array", "description": "Which checks?",
+                    "items": {"anyOf": [{"const": "tests"}, {"const": "lint"}]}}
+            send({"id": "ask", "method": "elicitation/create", "params": {
+                "sessionId": session, "mode": "form",
+                "message": "Which environment should I deploy to?",
+                "requestedSchema": {"type": "object", "properties": properties}}})
         elif mode.startswith("declined-"):
             # A review this binding will not put to a host. The call is still
             # observed, the review is answered "no", and the turn finishes —
@@ -372,6 +392,12 @@ for line in sys.stdin:
             pending = None
     elif mode == "permission-pair" and msg.get("id") in ("first-review", "second-review"):
         record(msg["id"] + "-outcome", json.dumps(msg["result"]["outcome"]))
+    elif mode.startswith("question") and msg.get("id") == "ask":
+        # Record exactly what the answer carried, then finish the turn.
+        record("question-answer", json.dumps(msg["result"]))
+        text("answered and carried on")
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
     elif mode.startswith("declined-") and msg.get("id") == permission_id:
         # Every answer for this review, in order: one refusal must not be able
         # to hide behind a later one.

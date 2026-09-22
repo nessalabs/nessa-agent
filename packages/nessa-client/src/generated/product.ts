@@ -648,6 +648,7 @@ export const ProductMethod = {
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
   ConversationAnswer: "conversation.answer",
+  ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
   ConversationReorder: "conversation.reorder",

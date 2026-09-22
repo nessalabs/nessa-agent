@@ -332,6 +332,21 @@ pub struct ConversationDependencies {
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
     pub clock: Arc<dyn Clock>,
 }
+/// What a host chose for one of the agent's questions.
+///
+/// Named rather than a tuple because each part means something different to
+/// the agent: which question this answers, what was chosen from what it
+/// offered, and any words the answerer typed instead.
+#[derive(Clone, Debug)]
+pub struct QuestionChoiceInput {
+    /// The question this answers.
+    pub key: String,
+    /// Option values chosen, which that question must have offered.
+    pub values: Vec<String>,
+    /// Words of the answerer's own, only where the question invited them.
+    pub own_words: Option<String>,
+}
+
 impl ConversationService {
     /// Own every configured agent, and the one a caller gets by default.
     pub fn new(
@@ -1135,7 +1150,7 @@ impl ConversationService {
         caller: ConversationCaller,
         execution: String,
         question: String,
-        choices: Option<Vec<(String, Vec<String>, Option<String>)>>,
+        choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
@@ -1149,8 +1164,8 @@ impl ConversationService {
                 .map(|choices| {
                     choices
                         .into_iter()
-                        .map(|(key, values, own_words)| {
-                            QuestionChoice::new(key, values, own_words)
+                        .map(|choice| {
+                            QuestionChoice::new(choice.key, choice.values, choice.own_words)
                                 .map_err(|_| ConversationError::InvalidInput)
                         })
                         .collect::<Result<Vec<_>, _>>()

@@ -5,7 +5,7 @@ pub(super) use crate::application::agent_execution::permissions::*;
 pub(super) use crate::application::agent_execution::providers::*;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 pub(super) use crate::domain::agent_execution::{
-    executions::*, permissions::*, prompts::*, sessions::ExecutionFinish,
+    executions::*, permissions::*, prompts::*, questions::*, sessions::ExecutionFinish,
 };
 pub(super) use crate::domain::common::value_objects::TokenLimits;
 pub(super) use crate::domain::model_metadata::entities::ModelMetadata;

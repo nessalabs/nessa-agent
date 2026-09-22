@@ -367,6 +367,14 @@ impl ProviderSessionBackend for CloseSettledBackend {
             ))
         })
     }
+    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("this fixture asks nothing".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     fn answer_permission(
         &self,
         _: PermissionAnswer,

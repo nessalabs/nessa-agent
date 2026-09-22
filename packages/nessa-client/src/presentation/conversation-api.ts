@@ -10,6 +10,7 @@ import type {
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
+  ConversationQuestionChoice,
   ConversationReorderResult,
   ImageAttachment,
   LinkedFile,
@@ -111,6 +112,20 @@ export type ConversationApi = {
     optionId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /**
+   * Answer one question the agent asked, or decline it.
+   *
+   * `choices` of null declines: the agent is told it was asked and answered
+   * with nothing, which is an answer rather than silence. A question left out
+   * of `choices` is skipped, which every ask permits.
+   */
+  answerQuestion: (
+    conversationId: string,
+    executionId: string,
+    questionId: string,
+    choices: readonly ConversationQuestionChoice[] | null,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
   /** Withdraw the identified review with a human-readable reason recorded by the gateway. */
   cancel: (
     conversationId: string,
@@ -152,6 +167,8 @@ export function createConversationApi(
       | readonly string[]
       | readonly ImageAttachment[]
       | readonly LinkedFile[]
+      | readonly ConversationQuestionChoice[]
+      | null
       | undefined
     >,
     validate: (value: unknown) => T,
@@ -300,6 +317,21 @@ export function createConversationApi(
         { conversationId: id, requestId, executionIds: Object.freeze([...executionIds]) },
         (value) => conversationReorder(value, requestId),
         false,
+      )
+    },
+    answerQuestion: (id, executionId, questionId, choices, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationAnswerQuestion,
+        {
+          conversationId: id,
+          requestId,
+          executionId,
+          questionId,
+          choices: choices === null ? null : choices.map((choice) => ({ ...choice })),
+        },
+        (value) => conversationMutation(value, requestId),
       )
     },
     answer: (id, executionId, permissionId, optionId, options) =>

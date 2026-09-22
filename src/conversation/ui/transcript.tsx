@@ -13,6 +13,7 @@ import {
   MessageScrollerButton,
 } from "@nessa-ui/react/message-scroller"
 import { ConversationControls } from "./conversation-controls"
+import { ConversationQuestions } from "./conversation-questions"
 import * as React from "react"
 import {
   ChatBubble,
@@ -144,6 +145,10 @@ export function Transcript({
             !conversation.error ? (
               <Thinking motion={animateMount} />
             ) : null}
+            <ConversationQuestions
+              conversation={conversation}
+              gatewayAvailable={gatewayAvailable}
+            />
             <ConversationControls
               conversation={conversation}
               gatewayAvailable={gatewayAvailable}

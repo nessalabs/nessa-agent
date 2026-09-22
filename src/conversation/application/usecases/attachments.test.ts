@@ -74,6 +74,7 @@ const capabilities = {
 const remote = {
   running: false,
   permissions: [],
+  questions: [],
   tools: [],
   pending: [],
   capabilities,
