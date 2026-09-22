@@ -303,18 +303,21 @@ mod tests {
 
     #[test]
     fn private_directory_tree_syncs_each_name_before_descent_and_the_leaf_before_success() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Step {
+            Create(PathBuf),
+            Sync(PathBuf),
+        }
         let steps = std::cell::RefCell::new(Vec::new());
 
         create_private_directory_tree_with(
             Path::new("audit/refusals"),
             |path| {
-                steps
-                    .borrow_mut()
-                    .push(format!("create:{}", path.display()));
+                steps.borrow_mut().push(Step::Create(path.to_path_buf()));
                 Ok(())
             },
             |path| {
-                steps.borrow_mut().push(format!("sync:{}", path.display()));
+                steps.borrow_mut().push(Step::Sync(path.to_path_buf()));
                 Ok(())
             },
         )
@@ -323,11 +326,11 @@ mod tests {
         assert_eq!(
             steps.into_inner(),
             vec![
-                "create:audit".to_owned(),
-                "sync:".to_owned(),
-                "create:audit/refusals".to_owned(),
-                "sync:audit".to_owned(),
-                "sync:audit/refusals".to_owned(),
+                Step::Create(PathBuf::from("audit")),
+                Step::Sync(PathBuf::new()),
+                Step::Create(PathBuf::from("audit").join("refusals")),
+                Step::Sync(PathBuf::from("audit")),
+                Step::Sync(PathBuf::from("audit").join("refusals")),
             ]
         );
     }
