@@ -1,11 +1,6 @@
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
-import {
-  ToolActivity,
-  ToolDetails,
-  ThoughtActivity,
-  ThoughtDetails,
-} from "./tool-activity"
+import { TurnActivity, TurnActivityDetails } from "./turn-activity"
 import {
   MessageScroller,
   MessageScrollerViewport,
@@ -26,7 +21,7 @@ import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
 import { Starting, Thinking } from "./thinking"
-import { selectedToolActivity } from "./tool-selection"
+import { selectedTurnActivity } from "./activity-selection"
 
 export function Transcript({
   conversation,
@@ -47,8 +42,10 @@ export function Transcript({
   gatewayAvailable: boolean
   onOpenPaste: (text: string) => void
 }) {
-  const [thoughtFor, setThoughtFor] = React.useState<string | null>(null)
-  const [toolsFor, setToolsFor] = React.useState<string | null>(null)
+  const [activityFor, setActivityFor] = React.useState<{
+    conversationId: string
+    key: string
+  } | null>(null)
   const normalized = React.useMemo(
     () =>
       agentTranscript(
@@ -63,12 +60,13 @@ export function Transcript({
     [normalized],
   )
   const segments = rows.flatMap((row) => row.content)
-  const thoughtTurn = segments.find((part) => part.key === thoughtFor)
-  const selectedToolPart = selectedToolActivity(segments, toolsFor)
-  const selectedTools = selectedToolPart?.tools ?? []
+  const selectedActivity = selectedTurnActivity(
+    segments,
+    activityFor?.conversationId === conversation.id ? activityFor.key : null,
+  )
   React.useEffect(() => {
-    if (toolsFor !== null && !selectedToolPart) setToolsFor(null)
-  }, [selectedToolPart, toolsFor])
+    if (activityFor !== null && !selectedActivity) setActivityFor(null)
+  }, [activityFor, selectedActivity])
   const users = new Map(
     conversation.turns
       .filter((turn) => turn.from === "user")
@@ -108,19 +106,19 @@ export function Transcript({
                   )}
                   {row.content.map((part) => (
                     <React.Fragment key={part.key}>
-                      {part.thought && (
-                        <ThoughtActivity
-                          onOpen={() => setThoughtFor(part.key)}
-                          running={row.status === "running"}
+                      {"activity" in part && (
+                        <TurnActivity
+                          items={part.activity}
+                          running={part.running}
+                          onOpen={() =>
+                            setActivityFor({
+                              conversationId: conversation.id,
+                              key: part.key,
+                            })
+                          }
                         />
                       )}
-                      {part.tools && (
-                        <ToolActivity
-                          tools={part.tools}
-                          onOpen={() => setToolsFor(part.key)}
-                        />
-                      )}
-                      {part.text && (
+                      {"text" in part && part.text && (
                         <TurnRow
                           turn={{
                             id: part.key,
@@ -136,10 +134,12 @@ export function Transcript({
                       )}
                     </React.Fragment>
                   ))}
+                  <TurnStatus key={`${row.key}:status`} status={row.status} />
                 </React.Fragment>
               )
             })}
             {conversation.phase === "thinking" &&
+            (rows.length === 0 || rows.at(-1)?.status === "running") &&
             !conversation.readError &&
             !conversation.error ? (
               <Thinking motion={animateMount} />
@@ -157,14 +157,12 @@ export function Transcript({
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
-      {thoughtTurn && (
-        <ThoughtDetails
-          thought={thoughtTurn.thought ?? ""}
-          onClose={() => setThoughtFor(null)}
+      {selectedActivity && (
+        <TurnActivityDetails
+          items={selectedActivity.activity}
+          running={selectedActivity.running}
+          onClose={() => setActivityFor(null)}
         />
-      )}
-      {selectedToolPart && (
-        <ToolDetails tools={selectedTools} onClose={() => setToolsFor(null)} />
       )}
     </>
   )
@@ -193,13 +191,6 @@ const TurnRow = React.memo(function TurnRow({
           <MessageMarkdown streaming={streaming}>{turn.text}</MessageMarkdown>
         )}
       </ChatBubble>
-      {turn.from === "assistant" &&
-      turn.status &&
-      !["running", "completed"].includes(turn.status) ? (
-        <p role="status" className="text-xs">
-          {turn.status === "cancelled" ? "Cancelled" : turn.status}
-        </p>
-      ) : null}
       {turn.from === "user" ? (
         <ChatMessageActions>
           <ChatMessageReceipt>{receiptLabel(turn.receipt)}</ChatMessageReceipt>
@@ -208,6 +199,15 @@ const TurnRow = React.memo(function TurnRow({
     </ChatMessage>
   )
 })
+
+function TurnStatus({ status }: { status: string }) {
+  if (["running", "completed"].includes(status)) return null
+  return (
+    <p role="status" className="text-xs">
+      {status === "cancelled" ? "Cancelled" : status}
+    </p>
+  )
+}
 
 function receiptLabel(receipt: Receipt) {
   return {

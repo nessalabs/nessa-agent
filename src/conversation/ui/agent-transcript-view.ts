@@ -13,9 +13,62 @@ export type AgentToolView = {
   input: string
   details: string
 }
+export type AgentTurnActivityItem =
+  | { key: string; kind: "thought"; text: string }
+  | { key: string; kind: "tool"; tool: AgentToolView }
+export type AgentTurnContentView =
+  | { key: string; text: string }
+  | { key: string; activity: AgentTurnActivityItem[]; running: boolean }
 function rawText(raw: JsonValue, key: string): string {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return ""
+  if (!Object.hasOwn(raw, key)) return ""
   return typeof raw[key] === "string" ? raw[key] : ""
+}
+type ExecutionMetadata = {
+  sourceTurnId: string
+  executionId: string | null
+  executionStatus: string | null
+  activityRunning: boolean
+}
+function nullableRawText(raw: Record<string, JsonValue>, key: string): string | null {
+  const value = raw[key]
+  if (value === null || typeof value === "string") return value
+  throw new Error("Transcript event has invalid source execution metadata")
+}
+function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | undefined {
+  const productEvents = events.filter(({ payload }) =>
+    ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
+      payload.type,
+    ),
+  )
+  if (productEvents.length === 0) return undefined
+  const facts = productEvents.map(({ raw }) => {
+    if (raw === null || Array.isArray(raw) || typeof raw !== "object")
+      throw new Error("Transcript event is missing source execution metadata")
+    const sourceTurnId = rawText(raw, "sourceTurnId")
+    const activityRunning = raw.activityRunning
+    if (!sourceTurnId || typeof activityRunning !== "boolean")
+      throw new Error("Transcript event is missing source execution metadata")
+    return {
+      sourceTurnId,
+      executionId: nullableRawText(raw, "executionId"),
+      executionStatus: nullableRawText(raw, "executionStatus"),
+      activityRunning,
+    }
+  })
+  const [first, ...rest] = facts
+  if (!first) return undefined
+  if (
+    rest.some(
+      (fact) =>
+        fact.sourceTurnId !== first.sourceTurnId ||
+        fact.executionId !== first.executionId ||
+        fact.executionStatus !== first.executionStatus ||
+        fact.activityRunning !== first.activityRunning,
+    )
+  )
+    throw new Error("Transcript row combines different execution metadata")
+  return first
 }
 export function agentTurnView(turn: Turn, transcript: Transcript) {
   const events: AgentEvent[] = turn.work.flatMap((item) =>
@@ -68,45 +121,68 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       },
     ]
   })
-  const content: {
-    key: string
-    text?: string
-    thought?: string
-    tools?: AgentToolView[]
-  }[] = []
+  const content: AgentTurnContentView[] = []
+  let activity: Extract<
+    AgentTurnContentView,
+    { activity: AgentTurnActivityItem[] }
+  > | null = null
+  let pendingThought: { key: string; text: string } | null = null
+  const completed = turn.completed?.payload
+  const execution = executionMetadata([
+    ...events,
+    ...(turn.completed ? [turn.completed] : []),
+  ])
+  const activityFor = (key: string) => {
+    if (!activity) {
+      if (!execution) throw new Error("Turn activity has no execution metadata")
+      activity = {
+        key,
+        activity: [],
+        running: execution.activityRunning,
+      }
+      content.push(activity)
+    }
+    return activity
+  }
+  const flushThought = () => {
+    if (pendingThought?.text.trim()) {
+      activityFor(pendingThought.key).activity.push({
+        key: pendingThought.key,
+        kind: "thought",
+        text: pendingThought.text,
+      })
+    }
+    pendingThought = null
+  }
   for (const event of events) {
     const payload = event.payload
-    if (payload.type === "assistant_text")
+    if (payload.type === "assistant_text") {
+      flushThought()
       content.push({ key: event.id, text: payload.text })
+    }
     if (payload.type === "reasoning") {
-      const last = content.at(-1)
-      if (last?.thought !== undefined) last.thought += payload.text
-      else content.push({ key: event.id, thought: payload.text })
+      if (pendingThought) pendingThought.text += payload.text
+      else pendingThought = { key: event.id, text: payload.text }
     }
     if (payload.type === "tool_call_started") {
+      flushThought()
       const tool = tools.find((tool) => tool.callId === payload.callId)
       if (tool) {
-        const last = content.at(-1)
-        if (last?.tools) last.tools.push(tool)
-        else content.push({ key: event.id, tools: [tool] })
+        activityFor(event.id).activity.push({ key: event.id, kind: "tool", tool })
       }
     }
   }
+  flushThought()
   if (turn.finalText !== null && !finalEvent)
     content.push({ key: `${turn.key}:answer`, text: turn.finalText })
-  const completed = turn.completed?.payload
   return {
     content,
     key: turn.key,
     promptId: turn.prompt?.id,
     text: turn.finalText ?? "",
-    thought: events
-      .flatMap(({ payload }) => (payload.type === "reasoning" ? [payload.text] : []))
-      .join("\n"),
     status:
       completed?.type === "turn_completed"
         ? (completed.terminalReason ?? completed.status)
         : "running",
-    tools,
   }
 }
