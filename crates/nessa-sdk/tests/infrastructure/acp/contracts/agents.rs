@@ -34,8 +34,8 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     )
     .await
     .unwrap();
-    assert!(agent.operation_capabilities().session_resume);
-    assert!(!agent.operation_capabilities().native_steering);
+    assert!(agent.operation_capabilities().session_resume());
+    assert!(!agent.operation_capabilities().native_steering());
     let hook_calls = Arc::new(AtomicUsize::new(0));
     let count = hook_calls.clone();
     agent.add_hook(BeforeInvocation, move |_: &InvocationContext<'_>| {

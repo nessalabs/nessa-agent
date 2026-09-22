@@ -30,7 +30,7 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
-    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
+    ProviderExecutionReply, ProviderOperationCapabilities, ProviderOperationFailure,
     ProviderOperationResult, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
     SteeringOutcome,
 };
@@ -140,7 +140,7 @@ struct Worker<P> {
     /// Whether an image can actually be delivered also needs a byte source, so
     /// the published capability is this and `config.images` together.
     agent_accepts_images: bool,
-    operation_capabilities: watch::Sender<OperationCapabilities>,
+    operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
     /// One session identity claimed by advisory updates racing session startup.
     /// Advisory payloads are not retained and conflicting identities fail startup.
@@ -188,7 +188,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     audit: Arc<dyn ExecutionAudit>,
     restore: Option<ExecutionSessionId>,
     permission_sequence: Arc<AtomicU64>,
-    operation_capabilities: watch::Sender<OperationCapabilities>,
+    operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     recovery: Arc<ProcessCleanup>,
 ) {
     let reader = Reader::new(
@@ -758,8 +758,9 @@ impl<P: AcpProfile> Worker<P> {
                 .verify_session(&result, &self.capabilities, step == last)?;
         }
         self.configured = true;
+        let profile_capabilities = self.profile.operation_capabilities(&init);
         self.operation_capabilities
-            .send_replace(OperationCapabilities {
+            .send_replace(ProviderOperationCapabilities {
                 negotiated: true,
                 native_steering: self.steering_supported,
                 // Only an agent that said so receives an image, and only when
@@ -768,6 +769,7 @@ impl<P: AcpProfile> Worker<P> {
                 session_resume: init
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
+                ..profile_capabilities
             });
         Ok(())
     }

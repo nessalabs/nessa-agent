@@ -64,7 +64,7 @@ async fn blocked_worker(
     }
     let (_commands, commands) = mpsc::channel(1);
     let (_close, close_requested) = watch::channel(None);
-    let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
+    let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let (events, receiver) = EventQueueBudget::new().channel(16);
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let execution_id = ExecutionId::new("active").unwrap();

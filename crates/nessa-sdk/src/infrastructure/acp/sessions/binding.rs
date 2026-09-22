@@ -21,11 +21,11 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::{
     CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ImageInputRefusal,
-    ObservationFailure, ObservationFailureCause, OpenedProviderSession, OperationCapabilities,
-    ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture,
-    ProviderOpenError, ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult,
-    ProviderSession, ProviderSessionBackend, ProviderSessionState, ResourceCleanup,
-    SessionCloseRequest, SteeringOutcome,
+    ObservationFailure, ObservationFailureCause, OpenedProviderSession, ProviderCleanup,
+    ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture, ProviderOpenError,
+    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
+    ResourceCleanup, SessionCloseRequest, SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
@@ -56,7 +56,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         // Validation runs before allocation and returns only Configuration/Unsupported.
         ProviderOpenError::no_resources(cause)
     })?;
-    let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
+    let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let session_audit = audit.clone();
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),
@@ -106,7 +106,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
 
 struct WorkerFactory<P> {
     event_budget: EventQueueBudget,
-    operation_capabilities: watch::Sender<OperationCapabilities>,
+    operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     process: ProcessFactory,
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
@@ -120,7 +120,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         restore: Option<ExecutionSessionId>,
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
         self.operation_capabilities
-            .send_replace(OperationCapabilities::default());
+            .send_replace(ProviderOperationCapabilities::default());
         let scope = match (self.process)() {
             Ok(scope) => scope,
             Err(failure) => {
@@ -448,7 +448,7 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
     }
 }
 impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
-    fn operation_capabilities(&self) -> OperationCapabilities {
+    fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         *self.factory.operation_capabilities.borrow()
     }
     fn validate_input(&self, input: &ExecutionRequest) -> Result<(), AgentError> {

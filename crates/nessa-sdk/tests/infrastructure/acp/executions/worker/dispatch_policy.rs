@@ -157,7 +157,7 @@ async fn worker_with_ready_frames_boundary(
     }
     let (sender, commands) = mpsc::channel(4);
     let (close, close_requested) = watch::channel(None);
-    let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
+    let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let (events, receiver) = EventQueueBudget::new().channel(16);
     (
         Worker {

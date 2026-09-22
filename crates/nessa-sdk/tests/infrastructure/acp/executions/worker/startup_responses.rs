@@ -136,7 +136,8 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 );
                 let (_commands, commands) = mpsc::channel(1);
                 let (_close, close_requested) = watch::channel(None);
-                let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
+                let (operation_capabilities, _) =
+                    watch::channel(ProviderOperationCapabilities::default());
                 let (events, _events) = EventQueueBudget::new().channel(16);
                 let audit = Arc::new(StartupAudit {
                     reject: reject_audit,

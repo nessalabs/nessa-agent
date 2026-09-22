@@ -210,7 +210,7 @@ async fn an_advertising_agent_receives_text_then_images_in_attachment_order() {
     });
     let (root, provider) = image_provider("image-input", Some(source.clone()));
     let opened = provider.open(None).await.unwrap();
-    assert!(opened.session.operation_capabilities().image_input);
+    assert!(opened.session.operation_capabilities().image_input());
 
     let sent = message("both", Some("what is this?"), vec![second, first]);
     let result = opened.session.execute(sent).await.into_result();
@@ -252,7 +252,7 @@ async fn an_agent_that_did_not_advertise_images_is_sent_nothing() {
     let opened = provider.open(None).await.unwrap();
     assert!(opened.session.capabilities().features().input().image());
     // ...but this agent never agreed to receive one.
-    assert!(!opened.session.operation_capabilities().image_input);
+    assert!(!opened.session.operation_capabilities().image_input());
 
     let refused = message("refused", Some("look"), vec![image]);
     let result = opened.session.execute(refused).await.into_result();
@@ -279,7 +279,7 @@ async fn a_binding_without_a_byte_source_refuses_images_at_admission() {
     assert!(!opened.session.capabilities().features().input().image());
     // This agent did advertise images; it is this process that has nowhere to
     // read them from, so the connection carries none.
-    assert!(!opened.session.operation_capabilities().image_input);
+    assert!(!opened.session.operation_capabilities().image_input());
 
     let image = reference(b"image", ImageMediaType::Webp);
     let result = opened
