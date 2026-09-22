@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::profile::OpencodeProfile;
+use super::{effective_data_home, profile::OpencodeProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
@@ -17,8 +17,8 @@ use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, Mo
 use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
 use crate::infrastructure::process::ProcessScope;
 use std::{
-    ffi::{OsStr, OsString},
-    path::{Path, PathBuf},
+    ffi::OsStr,
+    path::Path,
     sync::Arc,
 };
 use tokio::process::Command;
@@ -362,19 +362,7 @@ impl AgentProvider for OpencodeAcpProvider {
 }
 
 fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
-    let data_home = nonempty_environment(&config, "XDG_DATA_HOME").or_else(|| {
-        nonempty_environment(&config, "HOME").map(|home| {
-            PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .into_os_string()
-        })
-    });
-    let Some(data_home) = data_home else {
-        return Err(AgentError::Configuration(
-            "Opencode requires HOME or XDG_DATA_HOME so its account data remains addressable while configuration is isolated".into(),
-        ));
-    };
+    let data_home = effective_data_home(&config.environment, &config.credential_environment)?;
     for key in [
         "HOME",
         "XDG_CONFIG_HOME",
@@ -388,14 +376,8 @@ fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
         config.environment.remove(OsStr::new(key));
         config.credential_environment.remove(OsStr::new(key));
     }
-    config.environment.insert("XDG_DATA_HOME".into(), data_home);
-    Ok(config)
-}
-
-fn nonempty_environment(config: &AcpConfig, key: &str) -> Option<OsString> {
     config
         .environment
-        .get(OsStr::new(key))
-        .filter(|value| !value.is_empty())
-        .cloned()
+        .insert("XDG_DATA_HOME".into(), data_home.into_os_string());
+    Ok(config)
 }

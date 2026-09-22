@@ -11,5 +11,7 @@
 //! private process root isolates code-loading configuration while the caller's
 //! data root remains available for Opencode account lookup.
 mod binding;
+mod data_home;
 mod profile;
 pub use binding::OpencodeAcpProvider;
+pub use data_home::effective_data_home;
