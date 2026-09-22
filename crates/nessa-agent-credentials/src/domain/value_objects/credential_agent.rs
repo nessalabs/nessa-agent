@@ -1,3 +1,5 @@
+use std::{error::Error, fmt};
+
 /// A local agent for which Nessa explicitly stores a credential.
 ///
 /// This is deliberately narrower than the gateway's full agent identity. Codex
@@ -116,5 +118,3 @@ mod tests {
         assert_eq!(namespace.account("../key"), Err(CredentialNamespaceError));
     }
 }
-
-use std::{error::Error, fmt};
