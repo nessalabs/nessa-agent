@@ -166,13 +166,15 @@ mod tests {
 
     #[test]
     fn refusal_record_keeps_target_transition_cause_and_initiator() {
-        let root = tempfile::tempdir().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("auth");
+        nessa_local_storage::create_directory(&root).unwrap();
         let audit = DurableCredentialRegistryRefusalAudit::new(
-            root.path().to_path_buf(),
+            root.clone(),
             "audit".into(),
             Arc::new(FixedClock),
         );
-        let target = root.path().join("credentials.v1.json");
+        let target = root.join("credentials.v1.json");
         let refusal = CredentialRegistryRefusal::new(
             target.clone(),
             CredentialRegistryFault::UnsupportedSchema {
@@ -185,7 +187,7 @@ mod tests {
 
         audit.record(&refusal).unwrap();
 
-        let entry = fs::read_dir(root.path().join("audit"))
+        let entry = fs::read_dir(root.join("audit"))
             .unwrap()
             .next()
             .unwrap()
@@ -242,16 +244,18 @@ mod tests {
     fn audit_ancestry_symlink_cannot_redirect_writes_outside_the_root() {
         use std::os::unix::fs::symlink;
 
-        let root = tempfile::tempdir().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("auth");
+        nessa_local_storage::create_directory(&root).unwrap();
         let outside = tempfile::tempdir().unwrap();
-        symlink(outside.path(), root.path().join("audit")).unwrap();
+        symlink(outside.path(), root.join("audit")).unwrap();
         let audit = DurableCredentialRegistryRefusalAudit::new(
-            root.path().to_path_buf(),
+            root.clone(),
             "audit/credential-registry-refusals".into(),
             Arc::new(FixedClock),
         );
         let refusal = CredentialRegistryRefusal::new(
-            root.path().join("credentials.v1.json"),
+            root.join("credentials.v1.json"),
             CredentialRegistryFault::UnsafeStorage,
             CredentialRegistryRefusalCause::GatewayStartup,
             CredentialRegistryRefusalInitiator::Automatic,
