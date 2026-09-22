@@ -87,20 +87,16 @@ const HARNESSES = {
   "claude-acp": "@agentclientprotocol/claude-agent-acp",
   "codex-acp": "@agentclientprotocol/codex-acp",
 }
-// The manifests, not what they install.
-//
-// `npm ci` used to run here, and its result — two dependency trees, 539 MB —
-// went into the application. Everybody downloaded both agents, including the
-// one they would never pick, and the version was fixed for the life of that
-// build. The same `npm ci` now runs on the machine at first use, against these
-// same two files, into `~/.nessa`. The lockfile is what makes that safe: it
-// carries an integrity hash for every package, so the bytes are checked
-// wherever the install happens. See docs/adr/todo/0012-fetch-agent-runtimes.md.
 for (const [name, pinned] of Object.entries(HARNESSES)) {
   const harness = join(out, name)
   mkdirSync(harness, { recursive: true })
   for (const file of ["package.json", "package-lock.json"])
     cpSync(join(root, "crates/nessa-sdk/harnesses", name, file), join(harness, file))
+  execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
+    cwd: harness,
+    stdio: "inherit",
+  })
+  materializeBinLinks(join(harness, "node_modules"))
   const manifest = JSON.parse(readFileSync(join(harness, "package.json"), "utf8"))
   const version = manifest.dependencies?.[pinned]
   if (!version) throw new Error(`${name} no longer pins ${pinned}`)

@@ -1,4 +1,4 @@
-# 0012. Fetch every agent runtime instead of shipping it
+# 0013. Fetch every agent runtime instead of shipping it
 
 ## Purpose
 
@@ -7,7 +7,7 @@ actually uses, reuse what is already on their machine, and say which versions
 Nessa supports rather than shipping exactly one.
 
 - **Date:** 2026-09-21
-- **Status:** proposed.
+- **Status:** proposed. Reviewed independently and returned with changes; the mechanism below is the one that review chose, not the one first written.
 - **Follows:** [#104](https://github.com/nessalabs/nessa-agent/issues/104), which joined an installed runtime to a launch, and [#129](https://github.com/nessalabs/nessa-agent/issues/129), which showed the reason Opencode was treated differently was not true.
 
 ## What this is about
@@ -38,7 +38,11 @@ A runtime is resolved in this order, at every start:
 
 1. **Already installed by Nessa** — the store answers, and that is the launch.
 2. **Already on the machine** — a runtime the person installed themselves, if
-   its version is one this build supports.
+   its version is one this build supports. Supported means **between** the floor
+   and the pinned version: an older one we still handle, or the one we tested.
+   Not "anything newer", for the reason the next section gives — the danger is a
+   newer version, and admitting one here would contradict the paragraph that
+   refuses it three lines down.
 3. **Not present** — offered, and fetched on demand into `~/.nessa/`.
 
 The application drops by 539 MB — the two dependency trees — and a person who
@@ -83,10 +87,11 @@ the registry at fetch time instead of the build at review time — which is what
 
 ### So the range has two ends
 
-- **Floor:** the oldest version whose protocol behaviour we still handle. Used
-  to decide whether a runtime already on the machine is usable.
+- **Floor:** the oldest version whose protocol behaviour we still handle.
 - **Pinned:** the exact version this build fetches when nothing usable is
-  present, with its digest, as today.
+  present, with its digest, as today. It is also the **ceiling**: a runtime
+  already on the machine is used when it sits between the two, and a newer one
+  is not, because nothing recorded its behaviour.
 
 A person who already runs a newer Opencode keeps using it, and we say plainly
 that it is newer than we tested. A person with nothing gets the version we
@@ -94,33 +99,39 @@ tested, verified byte for byte. Nessa is not tied to one version forever — eac
 release moves the pin and may move the floor — and no release ships bytes nobody
 checked.
 
-## The problem this hits, which has to be solved first
+## How it is fetched, which is not what this first proposed
 
-**`npm` is not shipped, and this design calls it.**
+The first draft said: run the same `npm ci`, later, on the machine. That does
+not work. The application bundles `node` as a single binary and no npm, npx or
+corepack — an independent review confirmed there is nothing in the built app
+that can install a package tree, and a desktop application cannot require one
+from the person using it.
 
-The application bundles `node` as a single binary. It does not bundle `npm`:
-there is no `npm`, no `npm-cli.js`, nothing in the application that can install
-a package tree. The build ran `npm ci` on a developer's machine, where npm
-exists; moving that install onto the user's machine assumes an npm they may not
-have, and a desktop application cannot require one.
+It also never asked what the 539 MB *is*, and the answer changes the design.
+It is two platform-keyed native packages —
+`@anthropic-ai/claude-agent-sdk-darwin-arm64` at 190 MB, which contains one
+executable and three documents, and `@openai/codex-darwin-arm64` at 277 MB.
+That is 467 MB, 87% of it, in exactly the shape this context already fetches:
+one platform's binary, named by a pin, checked against a digest. The remaining
+72 MB is JavaScript.
 
-So "run the same `npm ci`, later" is not a design that works as written. Three
-ways out, and this decision is not complete until one is chosen:
+So:
 
-1. **Ship npm as well.** It is about 10 MB against 539 MB saved, and it keeps
-   the lockfile's integrity checking exactly as it works today — the guarantee
-   is npm's, and npm is what enforces it.
-2. **Resolve the tree ourselves.** The lockfile already names every package,
-   its URL and its sha512. Fetching those and verifying each one needs no npm,
-   and reuses the machinery `HttpsArchives` already has. It is more code and it
-   is a second implementation of something npm does correctly.
-3. **Publish one archive per agent at release time**, built the way the bundle
-   is built today, and fetch it with a digest like Opencode's. One mechanism
-   for all three agents, at the cost of hosting artefacts we currently do not.
+- **The native packages are fetched** as pinned, digest-verified archives, by
+  the same `PinnedRelease` / `HttpsArchives` / `ManagedRuntimes` path Opencode
+  already uses. One mechanism for every agent's binary.
+- **The JavaScript stays in the bundle**, installed by `npm ci` at build time
+  exactly as today, with those two native packages excluded. At first use it is
+  copied out of the bundle into `~/.nessa` — a directory copy, no installer.
 
-The first is the smallest change and keeps the verification story unchanged.
-The third is the most consistent. The second is the most work for the least
-benefit, and is noted only so the choice is visible.
+No npm on anybody's machine. No install scripts running on it either. The
+compiled-in digest is kept rather than traded for a lockfile, so the supply
+chain story the review of #44 established is unchanged rather than argued
+about. Nothing new is hosted.
+
+The alternative of publishing one archive per agent at release time remains
+open and would take the JavaScript out too. It is a bigger change and it adds
+artefacts to host; this can be done first and that later, without undoing it.
 
 ## What we are not deciding here
 
@@ -133,8 +144,10 @@ unbundling.
 
 ## Consequences
 
-- The download is 539 MB smaller, and a person downloads only the agent they
-  pick.
+- The installed application is 467 MB smaller on disk. The *download* shrinks by
+  less, because it is compressed — the disk image is 410 MB today — and an
+  earlier draft of this document wrongly claimed the download itself fell by
+  539 MB.
 - First use of an agent costs a fetch. Today that cost is paid by everyone at
   install time whether they use the agent or not.
 - The pin file grows from one agent to three, and so does the work of moving a
