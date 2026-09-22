@@ -1,7 +1,40 @@
+import type { JsonValue } from "@nessalabs/agent-stream"
 import { expect, it } from "vitest"
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { textContent } from "../model"
 import { agentTurnView } from "./agent-transcript-view"
+
+type RawMutation = (raw: Record<string, JsonValue>) => JsonValue
+
+function nullableMetadataTranscript() {
+  const transcript = agentTranscript(
+    "local",
+    [
+      {
+        id: "local-assistant",
+        from: "assistant",
+        text: "",
+        parts: [
+          { offset: 0, kind: "thought", text: "First", messageId: "one", toolId: "" },
+          { offset: 1, kind: "thought", text: " second", messageId: "two", toolId: "" },
+        ],
+      },
+    ],
+    [],
+  )
+  const events = transcript.events.filter((event) => event.payload.type === "reasoning")
+  expect(events).toHaveLength(2)
+  return { transcript, events }
+}
+
+function mutateSecondMetadata(mutate: RawMutation) {
+  const fixture = nullableMetadataTranscript()
+  const second = fixture.events[1]!
+  if (second.raw === null || Array.isArray(second.raw) || typeof second.raw !== "object")
+    throw new Error("Fixture has no execution metadata")
+  Object.defineProperty(second, "raw", { value: mutate(second.raw) })
+  return fixture.transcript
+}
 
 it("renders every message in observation order even when the builder extracts finalText", () => {
   const transcript = agentTranscript(
@@ -226,6 +259,83 @@ it("uses the source turn identity when a local assistant has no execution id", (
   })
   const activity = agentTurnView(transcript.turns[0]!, transcript).content[0]
   expect(activity && "activity" in activity ? activity.running : undefined).toBe(false)
+})
+
+it("accepts agreeing source rows with nullable execution identity and status", () => {
+  const { transcript } = nullableMetadataTranscript()
+  expect(transcript.events[0]?.raw).toMatchObject({
+    sourceTurnId: "local-assistant",
+    executionId: null,
+    executionStatus: null,
+    activityRunning: true,
+  })
+  const activity = agentTurnView(transcript.turns[0]!, transcript).content[0]
+  expect(activity).toMatchObject({
+    activity: [{ kind: "thought", text: "First second" }],
+    running: true,
+  })
+})
+
+it.each([
+  ["source turn", (raw) => ({ ...raw, sourceTurnId: "another-turn" })],
+  ["execution id", (raw) => ({ ...raw, executionId: "run" })],
+  ["execution status", (raw) => ({ ...raw, executionStatus: "completed" })],
+  ["running state", (raw) => ({ ...raw, activityRunning: false })],
+] satisfies readonly [string, RawMutation][])(
+  "rejects one row that contradicts its source %s",
+  (_field, mutate) => {
+    const transcript = mutateSecondMetadata(mutate)
+    expect(() => agentTurnView(transcript.turns[0]!, transcript)).toThrow(
+      "Transcript row combines different execution metadata",
+    )
+  },
+)
+
+it.each([
+  ["missing metadata", () => null, "missing"],
+  ["source turn", (raw) => ({ ...raw, sourceTurnId: 7 }), "missing"],
+  ["execution id", (raw) => ({ ...raw, executionId: false }), "invalid"],
+  ["execution status", (raw) => ({ ...raw, executionStatus: [] }), "invalid"],
+  ["running state", (raw) => ({ ...raw, activityRunning: "yes" }), "missing"],
+] satisfies readonly [string, RawMutation, string][])(
+  "rejects a row with %s instead of typed source metadata",
+  (_field, mutate, reason) => {
+    const transcript = mutateSecondMetadata(mutate)
+    expect(() => agentTurnView(transcript.turns[0]!, transcript)).toThrow(reason)
+  },
+)
+
+it("rejects disagreement between an activity event and its terminal event", () => {
+  const transcript = agentTranscript(
+    "local",
+    [
+      {
+        id: "local-assistant",
+        from: "assistant",
+        text: "",
+        status: "completed",
+        parts: [{ offset: 0, kind: "thought", text: "Finished", toolId: "" }],
+      },
+    ],
+    [],
+  )
+  const turn = transcript.turns[0]!
+  const terminal = turn.completed
+  expect(terminal?.payload.type).toBe("turn_completed")
+  if (
+    !terminal ||
+    terminal.raw === null ||
+    Array.isArray(terminal.raw) ||
+    typeof terminal.raw !== "object"
+  )
+    throw new Error("Fixture terminal has no execution metadata")
+  Object.defineProperty(terminal, "raw", {
+    value: { ...terminal.raw, sourceTurnId: "another-turn" },
+  })
+
+  expect(() => agentTurnView(turn, transcript)).toThrow(
+    "Transcript row combines different execution metadata",
+  )
 })
 
 it("keeps streamed whitespace inside a thought and omits a whole whitespace-only run", () => {
