@@ -85,7 +85,7 @@ impl ProviderSession {
     /// Read the backend's current operation support without reconnecting.
     /// Unlike model capabilities, this snapshot may change after restoration.
     pub fn operation_capabilities(&self) -> OperationCapabilities {
-        self.backend.operation_capabilities()
+        OperationCapabilities::resolve(self.backend.operation_capabilities())
     }
     /// Decide whether `input` may be accepted at all. Every way in runs this
     /// before anything is saved, queued, or sent: an immediate invocation, a
@@ -135,8 +135,8 @@ impl ProviderSession {
                     .check(image.media_type(), image.size())
                     .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
             }
-            let agent = self.backend.operation_capabilities();
-            if agent.negotiated && !agent.image_input {
+            let agent = self.operation_capabilities();
+            if agent.negotiated() && !agent.image_input() {
                 return Err(AgentError::ImageInputRefused(
                     ImageInputRefusal::AgentDoesNotAccept,
                 ));

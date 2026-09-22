@@ -1,13 +1,13 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::Projection, ConversationCapabilities, ConversationMessageStatus,
-    ConversationPendingMode,
+    projection::Projection, ConversationAgentFeatures, ConversationCapabilities,
+    ConversationMessageStatus, ConversationPendingMode, PermissionDenialSupport,
 };
 use nessa_sdk::{
     application::agent_execution::{
         executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
         permissions::ActionContext,
-        providers::ProviderIdentity,
+        providers::{OperationCapabilities, ProviderIdentity},
         sessions::{InvocationRecord, SessionSnapshot},
         tools::ToolReviewInput,
     },
@@ -34,9 +34,46 @@ fn projection() -> Projection {
             resume: false,
             permissions: true,
             image_input: false,
+            agent_features: OperationCapabilities::default().into(),
         },
         None,
     )
+}
+
+#[test]
+fn application_absences_project_as_not_implemented() {
+    let value = serde_json::to_value(ConversationAgentFeatures::from(
+        OperationCapabilities::default(),
+    ))
+    .unwrap();
+    assert_eq!(value["permissionDenial"], "unknown");
+    assert_eq!(value["nativeHookSuppression"], "unknown");
+    assert_eq!(value["compactionReporting"], "unsupported_not_implemented");
+    assert_eq!(value["modelSwitchReporting"], "unsupported_not_implemented");
+    assert_eq!(value["permissionDeferral"], "unsupported_not_implemented");
+    assert_eq!(value["preToolPolicy"], "unsupported_not_implemented");
+    assert_eq!(value["policyEndTurn"], "unsupported_not_implemented");
+    assert_eq!(value["policyCloseSession"], "unsupported_not_implemented");
+    assert_eq!(value["incomingElicitation"], "unsupported_not_implemented");
+}
+
+#[test]
+fn capability_changes_advance_the_replacement_revision_once() {
+    let mut projection = projection();
+    let before = projection.read();
+    projection.capabilities(before.capabilities.clone());
+    assert_eq!(projection.read().revision, before.revision);
+
+    let mut changed = before.capabilities;
+    changed.agent_features.permission_denial =
+        PermissionDenialSupport::SupportedForOfferedPermissionReviews;
+    projection.capabilities(changed.clone());
+    let after = projection.read();
+    assert_ne!(after.revision, before.revision);
+    assert_eq!(after.capabilities, changed);
+
+    projection.capabilities(changed);
+    assert_eq!(projection.read().revision, after.revision);
 }
 fn event(update: ExecutionUpdate) -> ExecutionEvent {
     ExecutionEvent::new(ExecutionId::new("execution").unwrap(), update)
