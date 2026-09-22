@@ -42,14 +42,17 @@ impl GatewayEndpoint {
     pub fn new(web_socket_url: String, identity: EndpointIdentity) -> Result<Self, &'static str> {
         let parsed = url::Url::parse(&web_socket_url).map_err(|_| "invalid gateway endpoint")?;
         let loopback = match parsed.host() {
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            Some(url::Host::Ipv4(address)) => address == std::net::Ipv4Addr::LOCALHOST,
+            Some(url::Host::Ipv6(address)) => address == std::net::Ipv6Addr::LOCALHOST,
             _ => false,
         };
+        let explicit_port = web_socket_url
+            .rsplit_once(':')
+            .and_then(|(_, value)| value.parse::<u16>().ok());
         if parsed.scheme() != "ws"
             || !parsed.username().is_empty()
             || parsed.password().is_some()
-            || parsed.port().is_none_or(|port| port == 0)
+            || explicit_port.is_none_or(|port| port == 0)
             || parsed.path() != "/"
             || parsed.query().is_some()
             || parsed.fragment().is_some()

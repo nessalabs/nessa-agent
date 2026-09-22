@@ -16,6 +16,7 @@ pub struct Environment {
     /// Private product auth directory, resolved from typed startup configuration.
     /// None is valid for isolated config tests; serving requires a data root.
     pub auth_directory: Option<std::path::PathBuf>,
+    endpoint_storage: Option<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 impl Environment {
@@ -49,6 +50,7 @@ impl Environment {
             read_optional(source, key::UPTIME_FIXED_MS)?.as_deref(),
         )?;
         let auth_directory = load_auth_directory(source, stage)?;
+        let endpoint_storage = load_endpoint_storage(source, stage)?;
 
         Ok(Self {
             stage,
@@ -57,6 +59,7 @@ impl Environment {
             version: config::VERSION,
             uptime_backend,
             auth_directory,
+            endpoint_storage,
         })
     }
 
@@ -112,12 +115,23 @@ impl Environment {
     /// its parent is the one namespace authority. Endpoint publication uses the
     /// sibling log directory without re-reading or re-interpreting environment
     /// variables.
-    pub(crate) fn gateway_log_directory(&self) -> Option<std::path::PathBuf> {
-        self.auth_directory
-            .as_deref()
-            .and_then(std::path::Path::parent)
-            .map(|namespace| namespace.join("logs"))
+    pub(crate) fn gateway_endpoint_storage(
+        &self,
+    ) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        self.endpoint_storage.clone()
     }
+}
+
+fn load_endpoint_storage(
+    source: &impl EnvSource,
+    stage: Stage,
+) -> Result<Option<(std::path::PathBuf, std::path::PathBuf)>, EnvironmentError> {
+    super::paths::endpoint_storage(
+        read_optional(source, key::DATA_DIR)?.as_deref(),
+        read_optional(source, home_variable())?.as_deref(),
+        stage.as_str(),
+        read_optional(source, key::INSTANCE)?.as_deref(),
+    )
 }
 
 fn load_auth_directory(
@@ -295,8 +309,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            config.gateway_log_directory().unwrap(),
-            std::path::Path::new("/private/nessa/ci/instances/worker-7/logs")
+            config.gateway_endpoint_storage().unwrap(),
+            (
+                std::path::PathBuf::from("/private/nessa"),
+                std::path::PathBuf::from("ci/instances/worker-7/logs")
+            )
         );
     }
 }

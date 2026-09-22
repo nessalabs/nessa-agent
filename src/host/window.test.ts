@@ -39,11 +39,11 @@ describe("native surface credential failures", () => {
     const { loadAssignedSurfaceCredential } = await import("./window")
     invoke.mockRejectedValue(failure)
     await expect(
-      loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420/session"),
+      loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420"),
     ).rejects.toThrow(typeof failure === "string" ? failure : failure.message)
     expect(invoke).toHaveBeenCalledWith("load_surface_credential", {
       stage: "prod",
-      url: "ws://127.0.0.1:7420/session",
+      url: "ws://127.0.0.1:7420",
     })
   })
 
@@ -53,7 +53,7 @@ describe("native surface credential failures", () => {
       const { loadAssignedSurfaceCredential } = await import("./window")
       invoke.mockRejectedValue(failure)
       await expect(
-        loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420/session"),
+        loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420"),
       ).rejects.toThrow("Could not load the desktop gateway credential.")
     },
   )
@@ -63,7 +63,7 @@ describe("native surface credential failures", () => {
     const failure = new TypeError("native transport failed")
     invoke.mockRejectedValue(failure)
     await expect(
-      loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420/session"),
+      loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420"),
     ).rejects.toBe(failure)
   })
 
@@ -83,7 +83,7 @@ describe("native surface credential failures", () => {
     const failed = vi.fn()
     const ready = vi.fn()
     const connect = vi.fn(async () => {
-      await loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420/session")
+      await loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420")
       return { client, hello: client.productSession, health: {} } as EstablishedDevSession
     })
     const options = {

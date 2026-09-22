@@ -26,8 +26,7 @@ impl GatewayEndpointAccess {
     /// Require a credential request to name the endpoint selected for this attempt.
     pub fn permits_credential_for(&self, stage: &str, requested_url: &str) -> Result<(), String> {
         if let Some(endpoint) = self.resolve(stage)? {
-            let expected = format!("{endpoint}/session");
-            if requested_url != expected {
+            if requested_url != endpoint {
                 return Err(
                     "The credential request does not match the verified gateway endpoint".into(),
                 );

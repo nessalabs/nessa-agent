@@ -224,17 +224,27 @@ describe("product connection recovery", () => {
     expect(endpointSource.load).toHaveBeenCalledTimes(2)
     expect(credentialSource.load).toHaveBeenCalledTimes(2)
 
-    const uploadRequest = vi.fn(async (_target: string) => {
-      throw new Error("stop after observing the upload target")
-    })
+    const stored = {
+      digest: `sha256:${"b".repeat(64)}`,
+      mimeType: "image/png",
+      size: 7,
+    }
+    const uploadRequest = vi.fn(
+      async (_target: string, _init?: RequestInit) =>
+        new Response(JSON.stringify(stored), { status: 200 }),
+    )
     vi.stubGlobal("fetch", uploadRequest)
+    const ticket = "a".repeat(64)
     await expect(
-      client.attachments.upload("a".repeat(64), {
+      client.attachments.upload(ticket, {
         mimeType: "image/png",
         bytes: new Blob(["payload"]),
       }),
-    ).rejects.toMatchObject({ code: "unreachable" })
+    ).resolves.toEqual(stored)
     expect(uploadRequest.mock.calls[0]?.[0]).toBe("http://127.0.0.1:9138/attachments")
+    expect(uploadRequest.mock.calls[0]?.[1]).toMatchObject({
+      headers: { "x-nessa-upload-ticket": ticket },
+    })
     client.close()
   })
 

@@ -38,11 +38,41 @@ pub enum OpenMode {
     OpenOrCreate,
     CreateNew,
 }
+#[derive(Debug)]
+struct UnsafeFile;
+
+impl std::fmt::Display for UnsafeFile {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("local storage must be private and owned by the current OS user")
+    }
+}
+
+impl std::error::Error for UnsafeFile {}
+
 fn unsafe_file() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        "local storage must be private and owned by the current OS user",
-    )
+    io::Error::new(io::ErrorKind::PermissionDenied, UnsafeFile)
+}
+
+/// Reports whether an I/O error proves that a local-storage object is unsafe.
+///
+/// Ordinary absence and operating-system availability failures are deliberately
+/// distinct so callers may fall back only when no untrusted object was found.
+pub fn is_unsafe_file(error: &io::Error) -> bool {
+    if error
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<UnsafeFile>())
+        .is_some()
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 /// A temporary file protected at creation, before any secret bytes are written.

@@ -78,18 +78,27 @@ pub struct SurfaceCredential {
 
 impl SurfaceCredential {
     /// Build the credential reader from composition's one resolved service namespace.
-    pub fn for_namespace(root: Option<PathBuf>, stage: String) -> Self {
+    pub fn for_namespace(namespace: Option<ServiceNamespace>, stage: String) -> Self {
         Self {
-            root,
-            relative: PathBuf::from("auth/surfaces/nessa-panel.token"),
+            root: namespace.as_ref().map(|value| value.root.clone()),
+            relative: namespace
+                .map(|value| value.relative.join("auth/surfaces/nessa-panel.token"))
+                .unwrap_or_default(),
             stage,
         }
     }
 }
 
+/// A validated relative service namespace anchored at one trusted data root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ServiceNamespace {
+    pub(crate) root: PathBuf,
+    pub(crate) relative: PathBuf,
+}
+
 /// Resolve the service namespace once for composition to inject into endpoint
 /// and credential readers. Environment reads stay at this composition edge.
-pub(crate) fn service_namespace_from_environment(stage: &str) -> Option<PathBuf> {
+pub(crate) fn service_namespace_from_environment(stage: &str) -> Option<ServiceNamespace> {
     let instance = std::env::var("NESSA_INSTANCE").ok();
     let base = std::env::var("NESSA_DATA_DIR")
         .map(PathBuf::from)
@@ -131,17 +140,18 @@ fn service_namespace(
     base: Option<PathBuf>,
     stage: &str,
     instance: Option<&str>,
-) -> Option<PathBuf> {
-    let mut root =
+) -> Option<ServiceNamespace> {
+    let root =
         base.filter(|base| base.is_absolute() && segment(stage) && instance.is_none_or(segment))?;
+    let mut relative = PathBuf::new();
     if stage != "prod" {
-        root.push(stage);
+        relative.push(stage);
     }
     if let Some(instance) = instance {
-        root.push("instances");
-        root.push(instance);
+        relative.push("instances");
+        relative.push(instance);
     }
-    Some(root)
+    Some(ServiceNamespace { root, relative })
 }
 
 /// Say which of the two things went wrong, because the repairs differ.
@@ -154,6 +164,9 @@ fn service_namespace(
 /// keeps the operating system's own words rather than a guessed cause.
 /// Which refusal an operating-system error is.
 fn unreadable(error: &std::io::Error) -> CredentialRefusal {
+    if nessa_local_storage::is_unsafe_file(error) {
+        return CredentialRefusal::Refused;
+    }
     match error.kind() {
         std::io::ErrorKind::NotFound => CredentialRefusal::NotProvisioned,
         std::io::ErrorKind::PermissionDenied => CredentialRefusal::Refused,
@@ -392,7 +405,7 @@ mod tests {
             Arc::new(endpoint_access(None)),
             credential,
             "ci",
-            "ws://127.0.0.1:7420/session",
+            "ws://127.0.0.1:7420",
         ))
     }
 
@@ -456,7 +469,7 @@ mod tests {
             Arc::new(endpoint_access(Some(endpoint))),
             &credential,
             "ci",
-            "ws://127.0.0.1:7420/session",
+            "ws://127.0.0.1:7420",
         ));
         assert!(result.is_err());
         assert_eq!(credential.reads(), 0);
@@ -549,13 +562,31 @@ mod tests {
         let base = || Some(absolute("data"));
 
         let root = service_namespace(base(), "prod", None);
-        assert_eq!(root, Some(absolute("data")));
+        assert_eq!(
+            root,
+            Some(ServiceNamespace {
+                root: absolute("data"),
+                relative: PathBuf::new()
+            })
+        );
 
         let root = service_namespace(base(), "dev", None);
-        assert_eq!(root, Some(absolute("data/dev")));
+        assert_eq!(
+            root,
+            Some(ServiceNamespace {
+                root: absolute("data"),
+                relative: PathBuf::from("dev")
+            })
+        );
 
         let root = service_namespace(base(), "dev", Some("wt"));
-        assert_eq!(root, Some(absolute("data/dev/instances/wt")));
+        assert_eq!(
+            root,
+            Some(ServiceNamespace {
+                root: absolute("data"),
+                relative: PathBuf::from("dev/instances/wt")
+            })
+        );
     }
 
     /// A namespace that cannot be trusted yields no root, and a credential with
@@ -668,6 +699,35 @@ mod tests {
             stage: "ci".into(),
         };
         assert!(storage.read("ci").is_err());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_namespace_cannot_redirect_the_credential_outside_its_data_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_directory("namespace-link");
+        let outside = temporary_directory("namespace-outside");
+        nessa_local_storage::create_directory(&outside.join("auth/surfaces")).unwrap();
+        let mut token = nessa_local_storage::open(
+            &outside.join("auth/surfaces/nessa-panel.token"),
+            nessa_local_storage::OpenMode::CreateNew,
+        )
+        .unwrap();
+        token.write_all(b"redirected-token").unwrap();
+        drop(token);
+        symlink(&outside, root.join("ci")).unwrap();
+
+        let storage = SurfaceCredential::for_namespace(
+            Some(ServiceNamespace {
+                root: root.clone(),
+                relative: PathBuf::from("ci"),
+            }),
+            "ci".into(),
+        );
+        assert_eq!(storage.read("ci").unwrap_err(), CredentialRefusal::Refused);
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }

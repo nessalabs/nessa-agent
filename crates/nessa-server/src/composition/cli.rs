@@ -30,19 +30,21 @@ pub(super) fn online(
         .listen_addr()
         .parse()
         .map_err(|_| failure("invalid local gateway address"))?;
-    let address = match config.gateway_log_directory() {
-        Some(logs) => DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(logs))
-            .execute()
-            .map_err(|error| failure(error.to_string()))?
-            .map(|endpoint| {
-                endpoint
-                    .web_socket_url()
-                    .trim_start_matches("ws://")
-                    .parse()
-                    .map_err(|_| failure("invalid published gateway address"))
-            })
-            .transpose()?
-            .unwrap_or(address),
+    let address = match config.gateway_endpoint_storage() {
+        Some((root, directory)) => {
+            DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(root, directory))
+                .execute()
+                .map_err(|error| failure(error.to_string()))?
+                .map(|endpoint| {
+                    endpoint
+                        .web_socket_url()
+                        .trim_start_matches("ws://")
+                        .parse()
+                        .map_err(|_| failure("invalid published gateway address"))
+                })
+                .transpose()?
+                .unwrap_or(address)
+        }
         None => address,
     };
     let file = credential_file

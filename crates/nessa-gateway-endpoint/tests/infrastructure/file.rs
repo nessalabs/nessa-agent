@@ -7,7 +7,22 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     thread,
+    time::{Duration, Instant},
 };
+
+fn publication(directory: &std::path::Path) -> FileEndpointPublication {
+    FileEndpointPublication::new(
+        directory.parent().unwrap().to_path_buf(),
+        directory.file_name().unwrap().into(),
+    )
+}
+
+fn discovery(directory: &std::path::Path) -> FileEndpointDiscovery {
+    FileEndpointDiscovery::new(
+        directory.parent().unwrap().to_path_buf(),
+        directory.file_name().unwrap().into(),
+    )
+}
 
 fn endpoint(port: u16) -> GatewayEndpoint {
     GatewayEndpoint::new(
@@ -22,7 +37,7 @@ fn canonical_publication_agrees_with_the_cross_runtime_fixture() {
     let fixture = include_str!("../../../../protocol/fixtures/gateway-endpoint.json");
     let temporary = tempfile::tempdir().unwrap();
     let logs = temporary.path().join("logs");
-    let publication = FileEndpointPublication::new(logs.clone());
+    let publication = publication(&logs);
     let endpoint = GatewayEndpoint::new(
         "ws://127.0.0.1:9137".into(),
         EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
@@ -104,11 +119,11 @@ fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket()
         endpoint.identity(),
     )
     .unwrap();
-    PublishGatewayEndpoint::new(&FileEndpointPublication::new(logs.clone()))
+    PublishGatewayEndpoint::new(&publication(&logs))
         .execute(&endpoint, Some(&managed))
         .unwrap();
     assert_eq!(
-        DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(logs))
+        DiscoverGatewayEndpoint::new(&discovery(&logs))
             .execute()
             .unwrap()
             .unwrap()
@@ -122,7 +137,7 @@ fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket()
 fn publication_atomically_replaces_the_previous_bound_port_and_managed_identity() {
     let temporary = tempfile::tempdir().unwrap();
     let logs = temporary.path().join("logs");
-    let adapter = FileEndpointPublication::new(logs.clone());
+    let adapter = publication(&logs);
     PublishGatewayEndpoint::new(&adapter)
         .execute(&endpoint(7421), None)
         .unwrap();
@@ -182,7 +197,7 @@ fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
     let temporary = tempfile::tempdir().unwrap();
     let logs = temporary.path().join("logs");
     let (address, server) = health_server("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd", 909);
-    let publication = FileEndpointPublication::new(logs.clone());
+    let publication = publication(&logs);
     PublishGatewayEndpoint::new(&publication)
         .execute(
             &GatewayEndpoint::new(
@@ -193,7 +208,7 @@ fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
             None,
         )
         .unwrap();
-    let discovered = DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(logs))
+    let discovered = DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
         .unwrap()
         .unwrap();
@@ -205,15 +220,13 @@ fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
 fn absent_record_falls_back_but_mismatched_identity_is_refused() {
     let temporary = tempfile::tempdir().unwrap();
     let logs = temporary.path().join("logs");
-    assert!(
-        DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(logs.clone()))
-            .execute()
-            .unwrap()
-            .is_none()
-    );
+    assert!(DiscoverGatewayEndpoint::new(&discovery(&logs))
+        .execute()
+        .unwrap()
+        .is_none());
 
     let (address, server) = health_server("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd", 910);
-    let publication = FileEndpointPublication::new(logs.clone());
+    let publication = publication(&logs);
     PublishGatewayEndpoint::new(&publication)
         .execute(
             &GatewayEndpoint::new(
@@ -224,9 +237,106 @@ fn absent_record_falls_back_but_mismatched_identity_is_refused() {
             None,
         )
         .unwrap();
-    let error = DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(logs))
+    let error = DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    server.join().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_intermediate_symlink_cannot_redirect_endpoint_read_or_publication() {
+    use std::os::unix::fs::symlink;
+
+    let trusted = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    symlink(outside.path(), trusted.path().join("logs")).unwrap();
+
+    let read = DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(
+        trusted.path().to_path_buf(),
+        "logs".into(),
+    ))
+    .execute()
+    .unwrap_err();
+    assert!(nessa_local_storage::is_unsafe_file(&read));
+
+    let write = PublishGatewayEndpoint::new(&FileEndpointPublication::new(
+        trusted.path().to_path_buf(),
+        "logs".into(),
+    ))
+    .execute(&endpoint(9137), None)
+    .unwrap_err();
+    assert!(nessa_local_storage::is_unsafe_file(&write));
+    assert!(!outside.path().join(ENDPOINT_FILE).exists());
+}
+
+#[test]
+fn health_correlation_has_one_total_deadline_across_slow_reads() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 1024];
+        let _ = stream.read(&mut request);
+        for byte in b"HTTP/1.1 200 OK".iter().take(8) {
+            if stream.write_all(&[*byte]).is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
+    });
+    let temporary = tempfile::tempdir().unwrap();
+    let logs = temporary.path().join("logs");
+    PublishGatewayEndpoint::new(&publication(&logs))
+        .execute(
+            &GatewayEndpoint::new(
+                format!("ws://{address}"),
+                endpoint(address.port()).identity().clone(),
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+
+    let started = Instant::now();
+    assert!(DiscoverGatewayEndpoint::new(&discovery(&logs))
+        .execute()
+        .is_err());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    server.join().unwrap();
+}
+
+#[test]
+fn bracketed_ipv6_loopback_is_discovered_over_a_real_health_socket() {
+    let listener = match TcpListener::bind("[::1]:0") {
+        Ok(listener) => listener,
+        Err(_) => return,
+    };
+    let address = listener.local_addr().unwrap();
+    let instance = "3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd";
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 1024];
+        let _ = stream.read(&mut request);
+        write!(stream, "HTTP/1.1 200 OK\r\nx-nessa-endpoint-instance: {instance}\r\nx-nessa-endpoint-process-id: 909\r\ncontent-length: 0\r\n\r\n").unwrap();
+    });
+    let temporary = tempfile::tempdir().unwrap();
+    let logs = temporary.path().join("logs");
+    let endpoint = GatewayEndpoint::new(
+        format!("ws://{address}"),
+        EndpointIdentity::new(instance.into(), 909).unwrap(),
+    )
+    .unwrap();
+    PublishGatewayEndpoint::new(&publication(&logs))
+        .execute(&endpoint, None)
+        .unwrap();
+    assert_eq!(
+        DiscoverGatewayEndpoint::new(&discovery(&logs))
+            .execute()
+            .unwrap()
+            .unwrap(),
+        endpoint
+    );
     server.join().unwrap();
 }

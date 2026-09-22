@@ -33,10 +33,10 @@ fn stage_and_requested_credential_destination_must_match_the_verified_endpoint()
     );
     assert!(access.resolve("dev").is_err());
     assert!(access
-        .permits_credential_for("prod", "ws://127.0.0.1:9137/session")
+        .permits_credential_for("prod", "ws://127.0.0.1:9137")
         .is_ok());
     assert!(access
-        .permits_credential_for("prod", "ws://127.0.0.1:7420/session")
+        .permits_credential_for("prod", "ws://127.0.0.1:7420")
         .is_err());
 }
 
@@ -51,6 +51,6 @@ fn malformed_or_mismatched_publication_failure_is_not_absence() {
     );
     assert!(access.resolve("prod").is_err());
     assert!(access
-        .permits_credential_for("prod", "ws://127.0.0.1:7420/session")
+        .permits_credential_for("prod", "ws://127.0.0.1:7420")
         .is_err());
 }

@@ -5,21 +5,22 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, ErrorKind, Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{IpAddr, SocketAddr, TcpStream},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const ENDPOINT_FILE: &str = "gateway-endpoint.json";
 
 /// Atomically replaces the endpoint record in this stage and instance's log directory.
 pub struct FileEndpointPublication {
+    root: PathBuf,
     directory: PathBuf,
 }
 
 impl FileEndpointPublication {
-    pub fn new(directory: PathBuf) -> Self {
-        Self { directory }
+    pub fn new(root: PathBuf, directory: PathBuf) -> Self {
+        Self { root, directory }
     }
 }
 
@@ -45,8 +46,9 @@ impl EndpointPublication for FileEndpointPublication {
         endpoint: &GatewayEndpoint,
         managed: Option<&ManagedRuntimeAdvertisement>,
     ) -> io::Result<()> {
-        nessa_local_storage::create_directory(&self.directory)?;
-        let mut file = nessa_local_storage::PrivateTempFile::new_in(&self.directory)?;
+        nessa_local_storage::create_directory_beneath(&self.root, &self.directory)?;
+        let mut file =
+            nessa_local_storage::PrivateTempFile::new_beneath(&self.root, &self.directory)?;
         let record = EndpointRecord {
             web_socket_url: endpoint.web_socket_url(),
             endpoint_instance: endpoint.identity().instance().to_owned(),
@@ -58,32 +60,35 @@ impl EndpointPublication for FileEndpointPublication {
         };
         serde_json::to_writer(file.as_file_mut(), &record)?;
         file.as_file().sync_all()?;
-        file.persist(&self.directory.join(ENDPOINT_FILE))?;
-        nessa_local_storage::sync_directory(&self.directory)
+        file.persist_beneath(&self.directory.join(ENDPOINT_FILE))?;
+        nessa_local_storage::sync_directory_beneath(&self.root, &self.directory)
     }
 }
 
 /// Private endpoint record plus bounded unauthenticated health correlation.
 pub struct FileEndpointDiscovery {
+    root: PathBuf,
     directory: PathBuf,
 }
 
 impl FileEndpointDiscovery {
-    pub fn new(directory: PathBuf) -> Self {
-        Self { directory }
+    pub fn new(root: PathBuf, directory: PathBuf) -> Self {
+        Self { root, directory }
     }
 }
 
 impl EndpointDiscovery for FileEndpointDiscovery {
     fn discover(&self) -> io::Result<Option<GatewayEndpoint>> {
         let path = self.directory.join(ENDPOINT_FILE);
-        let mut file = match nessa_local_storage::open(
+        let mut file = match nessa_local_storage::open_beneath(
+            &self.root,
             &path,
             nessa_local_storage::OpenMode::ReadNonblocking,
         ) {
             Ok(file) => file,
-            // Absence and an unreadable boundary retain today's configured
-            // address. A file we did read but could not trust fails below.
+            // Absence and ordinary I/O unavailability retain today's configured
+            // address. A present object that violates private storage is terminal.
+            Err(error) if nessa_local_storage::is_unsafe_file(&error) => return Err(error),
             Err(_) => return Ok(None),
         };
         let mut bytes = Vec::new();
@@ -172,10 +177,16 @@ fn record_address(record: &EndpointRecord) -> io::Result<SocketAddr> {
     {
         return Err(invalid_record());
     }
-    let host = url.host_str().ok_or_else(invalid_record)?;
-    let ip: std::net::IpAddr = host.parse().map_err(|_| invalid_record())?;
-    let port = url.port().ok_or_else(invalid_record)?;
-    if !ip.is_loopback() || port == 0 {
+    let ip = match url.host().ok_or_else(invalid_record)? {
+        url::Host::Ipv4(value) => IpAddr::V4(value),
+        url::Host::Ipv6(value) => IpAddr::V6(value),
+        url::Host::Domain(_) => return Err(invalid_record()),
+    };
+    let port = url.port_or_known_default().ok_or_else(invalid_record)?;
+    if !matches!(ip, IpAddr::V4(value) if value == std::net::Ipv4Addr::LOCALHOST)
+        && !matches!(ip, IpAddr::V6(value) if value == std::net::Ipv6Addr::LOCALHOST)
+        || port == 0
+    {
         return Err(invalid_record());
     }
     Ok(SocketAddr::new(ip, port))
@@ -203,18 +214,42 @@ impl HealthIdentity {
 }
 
 fn read_health(address: SocketAddr) -> io::Result<HealthIdentity> {
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(300))?;
-    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
-    stream.set_write_timeout(Some(Duration::from_millis(500)))?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut stream = TcpStream::connect_timeout(
+        &address,
+        remaining(deadline)?.min(Duration::from_millis(300)),
+    )?;
+    stream.set_write_timeout(Some(remaining(deadline)?))?;
     stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
     let mut bytes = Vec::new();
-    stream.take(8192).read_to_end(&mut bytes)?;
+    let mut chunk = [0u8; 1024];
+    while bytes.len() < 8192 && !bytes.windows(4).any(|value| value == b"\r\n\r\n") {
+        stream.set_read_timeout(Some(remaining(deadline)?))?;
+        let capacity = chunk.len().min(8192 - bytes.len());
+        let read = stream.read(&mut chunk[..capacity])?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
     parse_health(&bytes).ok_or_else(|| {
         io::Error::new(
             ErrorKind::PermissionDenied,
             "published gateway endpoint health is malformed",
         )
     })
+}
+
+fn remaining(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::TimedOut,
+                "gateway endpoint health deadline elapsed",
+            )
+        })
 }
 
 fn parse_health(bytes: &[u8]) -> Option<HealthIdentity> {

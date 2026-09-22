@@ -9,11 +9,19 @@ import {
   type CredentialSource,
   type GatewayEndpointSource,
 } from "@nessa/client"
+import { gatewayPort } from "../../../env/gateway-ports"
 
 /** The native host verifies the server publication before returning its URL. */
 export function nativeGatewayEndpointSource(): GatewayEndpointSource | undefined {
   if (!hasNativeHost()) return undefined
-  return { load: ({ stage }) => loadAssignedGatewayEndpoint(stage) }
+  return {
+    async load({ stage }) {
+      return (
+        (await loadAssignedGatewayEndpoint(stage)) ??
+        `ws://127.0.0.1:${gatewayPort(stage)}`
+      )
+    },
+  }
 }
 
 /** The native host exposes only the bundled chat credential, never arbitrary paths. */

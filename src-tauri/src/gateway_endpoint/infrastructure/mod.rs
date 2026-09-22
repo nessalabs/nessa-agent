@@ -2,16 +2,20 @@
 
 mod unavailable;
 
+use crate::surface_credential::ServiceNamespace;
 use nessa_gateway_endpoint::{
     application::EndpointDiscovery, infrastructure::FileEndpointDiscovery,
 };
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use unavailable::UnavailableEndpointDiscovery;
 
 /// Build discovery for composition's already-resolved service namespace.
-pub fn endpoint_discovery(namespace: Option<PathBuf>) -> Arc<dyn EndpointDiscovery> {
+pub fn endpoint_discovery(namespace: Option<ServiceNamespace>) -> Arc<dyn EndpointDiscovery> {
     match namespace {
-        Some(root) => Arc::new(FileEndpointDiscovery::new(root.join("logs"))),
+        Some(namespace) => Arc::new(FileEndpointDiscovery::new(
+            namespace.root,
+            namespace.relative.join("logs"),
+        )),
         None => Arc::new(UnavailableEndpointDiscovery),
     }
 }

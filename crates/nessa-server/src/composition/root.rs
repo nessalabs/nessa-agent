@@ -168,10 +168,10 @@ impl CompositionRoot {
             })
             .transpose()
             .map_err(|error| RunError::Runtime(error.into()))?;
-        let log_directory = config
-            .gateway_log_directory()
+        let (endpoint_root, endpoint_directory) = config
+            .gateway_endpoint_storage()
             .ok_or_else(|| RunError::Runtime("missing endpoint publication namespace".into()))?;
-        let publication = FileEndpointPublication::new(log_directory);
+        let publication = FileEndpointPublication::new(endpoint_root, endpoint_directory);
         let published_endpoint = endpoint.clone();
         let published_managed = managed.clone();
         tokio::task::spawn_blocking(move || {

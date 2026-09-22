@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { NessaEndpointDiscoveryError } from "../application/gateway-endpoint.js"
@@ -130,6 +132,56 @@ describe("local gateway endpoint discovery", () => {
           request: async () => health(),
         })
         await expect(endpoint?.load({ stage: "ci" })).resolves.toBe(record.webSocketUrl)
+      } finally {
+        await rm(root, { recursive: true })
+      }
+    },
+  )
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a symlinked publication as unsafe",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-link-"))
+      try {
+        const logs = join(root, "dev", "logs")
+        await mkdir(logs, { recursive: true })
+        const outside = join(root, "outside.json")
+        await writeFile(outside, JSON.stringify(record), { mode: 0o600 })
+        await promisify(execFile)("ln", [
+          "-s",
+          outside,
+          join(logs, "gateway-endpoint.json"),
+        ])
+        const endpoint = await nodeGatewayEndpointSource({
+          dataDir: root,
+          uid: process.getuid?.(),
+          request: async () => health(),
+        })
+        await expect(endpoint?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+      } finally {
+        await rm(root, { recursive: true })
+      }
+    },
+  )
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a fifo publication without waiting for a writer",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-fifo-"))
+      try {
+        const logs = join(root, "dev", "logs")
+        await mkdir(logs, { recursive: true })
+        await promisify(execFile)("mkfifo", [join(logs, "gateway-endpoint.json")])
+        const endpoint = await nodeGatewayEndpointSource({
+          dataDir: root,
+          uid: process.getuid?.(),
+          request: async () => health(),
+        })
+        await expect(endpoint?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
       } finally {
         await rm(root, { recursive: true })
       }
