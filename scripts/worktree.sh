@@ -165,16 +165,17 @@ hook_field() {
 
 # The ref a new worktree's branch starts from.
 #
-# Claude Code's own default is `worktree.baseRef: "fresh"` — the repository's
-# default branch on the remote — and replacing its creation means owing it the
-# same behaviour. `git worktree add -b <name> <path>` with no start-point does
-# something quite different: it branches from whatever HEAD the clone happens to
-# be sitting on. That is silent and wrong. A clone parked on a feature branch
-# would hand every background agent that branch's commits, and the pull request
-# they opened against main would carry them.
+# Manual and Claude worktrees both begin at the repository's remote default.
+# `git worktree add -b <name> <path>` with no start-point does something quite
+# different: it branches from whatever HEAD the clone happens to be sitting on.
+# That is silent and wrong. A clone parked on a feature branch would hand every
+# new worktree that branch's commits, and a pull request against main would carry
+# unrelated work.
 #
 # Falls back the way the documented behaviour does: origin/HEAD, then the local
 # default branch, then this checkout's HEAD when there is no remote at all.
+# It deliberately does not fetch: worktree creation remains available offline
+# and uses the last remote state the repository has already verified locally.
 default_base() {
   local ref
   ref="$(git -C "$repo_root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
@@ -279,15 +280,16 @@ cmd_isolate() {
 
 cmd_create() {
   check_name "${1:-}"
-  local branch="$1" path
+  local branch="$1" path base
   path="$(worktree_path "$branch")"
 
   [[ -e "$path" ]] && die "already exists: $path"
   git -C "$repo_root" show-ref --quiet --verify "refs/heads/$branch" \
     && die "branch '$branch' already exists — use it, or pick another name"
 
-  echo "→ worktree $path (branch $branch)"
-  git -C "$repo_root" worktree add -b "$branch" "$path" >/dev/null
+  base="$(default_base)"
+  echo "→ worktree $path (branch $branch from $base)"
+  git -C "$repo_root" worktree add --no-track -b "$branch" "$path" "$base" >/dev/null
 
   ensure_local_target "$path"
 
