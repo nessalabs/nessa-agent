@@ -10,13 +10,14 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
 import { NessaClient, NessaMutationError, NessaRpcError } from "@nessa/client"
+import { cargoTargetDirectory } from "./cargo-target.mjs"
 
 globalThis.WebSocket = WebSocket
 const root = fileURLToPath(new URL("../", import.meta.url))
 const directory = mkdtempSync(join(tmpdir(), "nessa-auth-bounds-"))
 const binary = join(
-  root,
-  "target/debug",
+  cargoTargetDirectory(root),
+  "debug",
   process.platform === "win32" ? "nessa.exe" : "nessa",
 )
 const listener = createServer().listen(0, "127.0.0.1")
