@@ -383,7 +383,9 @@ tokens keep their original expiry; generate a new token for ongoing access.
 Revocation and permission changes
 continue to apply to every connection and operation.
 
-For local development, run the gateway with `NESSA_STAGE=dev` (the default),
+For local development, run the gateway with `NESSA_STAGE=dev` (what a debug
+build defaults to; a release binary defaults to `prod`, the stage the packaged
+app registers its gateway under),
 then run `pnpm dev` and open `http://127.0.0.1:1420`. No certificate is needed.
 Both the gateway and frontend must use dev or CI stage for HTTP sign-in.
 Only numeric loopback (`127.0.0.1` or `[::1]`) permits HTTP/WS; `localhost`, LAN

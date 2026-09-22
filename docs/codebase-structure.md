@@ -641,8 +641,12 @@ context and the published protocol schema must agree on (`agreement.rs`).
 ## Installing an agent runtime
 
 `crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
-machine at the version Nessa has tested. Opencode is the only one it fetches
-today; Claude and Codex ride inside the application instead. That split was once
+machine at the version Nessa has tested. All three agents are pinned, and
+`install-agent` fetches and verifies any of them; Opencode is the only one that
+is also *launched* from what was fetched, because the desktop still resolves
+Claude and Codex inside the bundle. Their pins cover macOS on Apple silicon and
+no other platform, which is where the 467 MB was measured and the only archives
+anybody has listed. That split was once
 explained by Opencode being the agent a first-time user could reach with nothing
 signed in, and that turned out to be false — its free models are refused outside
 OpenCode's own application, so all three want the person's own account. What is

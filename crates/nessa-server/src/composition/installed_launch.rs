@@ -86,7 +86,22 @@ pub(super) fn installed_launch(
     let Some(release) = preferred_release(releases, host) else {
         return Ok(None);
     };
-    Ok(store.installed(&name, &release).ok().flatten())
+    match store.installed(&name, &release) {
+        Ok(installed) => Ok(installed),
+        Err(failure) => {
+            // Degraded, but not silently. Read as "not installed" the agent is
+            // dropped from `runtimes` and reported unconfigured, and if it was
+            // the selected one the fallback below changes what the app opens
+            // with — all from a disk fault this is the only place that sees.
+            tracing::warn!(
+                agent = agent.name(),
+                version = %release.version(),
+                %failure,
+                "the runtime store could not be read; treating the agent as not installed"
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// The arguments `agent`'s installed runtime is launched with.
