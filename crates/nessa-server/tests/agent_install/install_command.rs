@@ -82,12 +82,13 @@ fn installs_from_inside_the_runtime() {
 
 #[test]
 fn an_agent_nessa_does_not_install_is_named_as_such() {
-    // Claude and Codex are expected to be on the machine already. Asking to
-    // install one is a mistake worth a clear answer rather than a download that
-    // fails obscurely — and it must not touch the network to say so.
+    // A name the pin file says nothing about is a mistake worth a clear answer
+    // rather than a download that fails obscurely — and it must not touch the
+    // network to say so. Claude used to be the example here and is not one any
+    // more: all three agents Nessa drives are pinned.
     let root = temporary_root();
-    let claude = AgentName::parse("claude").expect("a plain agent name");
-    let failure = install(&claude, root.path()).expect_err("claude is not installed by nessa");
+    let unknown = AgentName::parse("gemini").expect("a plain agent name");
+    let failure = install(&unknown, root.path()).expect_err("gemini is not installed by nessa");
     assert!(
         failure.to_string().contains("not an agent nessa installs"),
         "unhelpful message: {failure}"
@@ -115,10 +116,10 @@ fn an_agent_with_no_build_for_this_machine_is_told_so() {
 #[test]
 fn nothing_is_written_for_an_agent_with_no_release() {
     let root = temporary_root();
-    let claude = AgentName::parse("claude").expect("a plain agent name");
-    let _ = install(&claude, root.path());
+    let unknown = AgentName::parse("gemini").expect("a plain agent name");
+    let _ = install(&unknown, root.path());
     assert!(
-        !root.path().join("claude").exists(),
+        !root.path().join("gemini").exists(),
         "a refused install left a directory behind"
     );
 }

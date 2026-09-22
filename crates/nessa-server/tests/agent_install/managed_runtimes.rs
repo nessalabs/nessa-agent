@@ -902,11 +902,11 @@ fn the_bound_is_spent_across_every_file_a_release_installs() {
     let release = package("1.0.0");
     let mut staged = staged(
         &store,
-        &tarball(&[
+        &gzipped(&tarball(&[
             ("package/vendor/bin/codex", &[0u8; 300]),
             ("package/vendor/codex-path/rg", &[0u8; 300]),
             ("package/package.json", b"{}"),
-        ]),
+        ])),
     );
     unpack_directories(&store, &release);
     let mut written = Vec::new();
@@ -1155,6 +1155,18 @@ fn a_discarded_archive_leaves_nothing_behind() {
 }
 
 /// The uncompressed tar bytes for each of `entries`, in order.
+/// One gzip member holding `tar`, which is what a release archive is.
+///
+/// `tarball` deliberately stops at the tar, because the tests about gzip
+/// members wrap it themselves. Everything else that hands an archive to the
+/// store needs this.
+fn gzipped(tar: &[u8]) -> Vec<u8> {
+    let mut encoder =
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(tar).expect("gzipping an in-memory tar");
+    encoder.finish().expect("finishing the gzip stream")
+}
+
 fn tarball(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for (path, body) in entries {
@@ -1434,7 +1446,11 @@ fn every_directory_an_install_creates_is_made_durable_from_the_inside_out() {
         expected,
         "the chain made durable is not the chain the install created"
     );
-    assert_eq!(expected.len(), 5, "the layout grew a level nothing syncs");
+    // Five for the store's own layout — artifact, version, `versions/`, the
+    // agent and the root — and two more for the directories the pin's own path
+    // needs inside the artifact, which a package has and which are made durable
+    // like any other.
+    assert_eq!(expected.len(), 7, "the layout grew a level nothing syncs");
 
     // And that `settle` walks all of it, in that order. Asserted through the
     // durability primitive rather than by inspecting the disk afterwards,

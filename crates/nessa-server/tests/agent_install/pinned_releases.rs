@@ -41,9 +41,25 @@ fn entry(
         "requiresAvx2": avx2,
         "version": "1.0.0",
         "archiveUrl": format!("https://registry.example/{digest_byte}.tgz"),
+        "archiveBytes": 46_009_615,
         "archiveDigest": std::iter::repeat_n(digest_byte, 64).collect::<String>(),
-        "executable": "package/bin/opencode",
+        "files": [{ "path": "package/bin/opencode", "role": "launch" }],
     })
+}
+
+/// The same entry, installing a package rather than one program.
+///
+/// Codex's shape: a program, a helper it finds through the directory it sits
+/// in, and a document. Kept beside [`entry`] so that the rules below can be
+/// asked of both shapes rather than only of the one Opencode has.
+fn package_entry(digest_byte: char) -> serde_json::Value {
+    let mut entry = entry("macos", "aarch64", None, false, digest_byte);
+    entry["files"] = serde_json::json!([
+        { "path": "package/package.json", "role": "document" },
+        { "path": "package/vendor/bin/codex", "role": "launch" },
+        { "path": "package/vendor/codex-path/rg", "role": "helper" },
+    ]);
+    entry
 }
 
 /// A pin document holding exactly `entries` for opencode.
@@ -309,10 +325,141 @@ fn each_build_has_its_own_archive() {
 
 #[test]
 fn an_agent_with_no_pins_has_no_releases() {
-    // Claude and Codex are not installed by Nessa. Asking is not an error; the
-    // answer is that there is nothing to install.
-    let claude = AgentName::parse("claude").expect("a plain agent name");
-    assert_eq!(releases_for(&claude), Ok(Vec::new()));
+    // Asking about an agent the file says nothing about is not an error; the
+    // answer is that there is nothing to install. All three agents Nessa drives
+    // are pinned now, so this asks about one that is not any of them rather
+    // than about Claude, which used to be the example and no longer is.
+    let unknown = AgentName::parse("gemini").expect("a plain agent name");
+    assert_eq!(releases_for(&unknown), Ok(Vec::new()));
+}
+
+#[test]
+fn the_agents_nessa_drives_are_all_pinned() {
+    // The file used to hold one agent because two were shipped inside the
+    // application. Naming them here is what makes a pin dropped in a merge a
+    // failing test rather than an agent that quietly cannot be installed.
+    for name in ["claude", "codex", "opencode"] {
+        let agent = AgentName::parse(name).expect("a plain agent name");
+        let releases = releases_for(&agent).expect("the pinned releases parse");
+        assert!(!releases.is_empty(), "{name} is not pinned");
+    }
+}
+
+#[test]
+fn a_package_shaped_release_reads_back_as_the_files_it_installs() {
+    // Two of the three runtimes are packages rather than single programs, so
+    // the reader has to carry a set of files and the role of each one through
+    // to the domain. Asked of the file that ships, not of a fixture.
+    let codex = AgentName::parse("codex").expect("a plain agent name");
+    let releases = releases_for(&codex).expect("the pinned releases parse");
+    let release = releases.first().expect("codex is pinned");
+    assert_eq!(
+        release.launch().as_str(),
+        "package/vendor/aarch64-apple-darwin/bin/codex"
+    );
+    let runnable: Vec<_> = release
+        .contents()
+        .files()
+        .iter()
+        .filter(|file| file.role().runnable())
+        .map(|file| file.path().as_str())
+        .collect();
+    assert_eq!(
+        runnable,
+        vec![
+            "package/vendor/aarch64-apple-darwin/bin/codex",
+            "package/vendor/aarch64-apple-darwin/bin/codex-code-mode-host",
+            "package/vendor/aarch64-apple-darwin/codex-path/rg",
+            "package/vendor/aarch64-apple-darwin/codex-resources/zsh/bin/zsh",
+        ],
+        "codex's four programs are not all installed runnable"
+    );
+    assert_eq!(
+        release.contents().files().len(),
+        7,
+        "codex's package is seven files"
+    );
+}
+
+#[test]
+fn a_release_that_names_no_program_to_launch_is_refused() {
+    // The one rule about a release's files that no single path can see, asked
+    // through the file rather than only of the domain: this is the shape a
+    // generator bug writes.
+    let mut nothing_to_launch = entry("macos", "aarch64", None, false, 'a');
+    nothing_to_launch["files"] =
+        serde_json::json!([{ "path": "package/package.json", "role": "document" }]);
+    assert!(
+        matches!(
+            releases_in(&document(vec![nothing_to_launch]), &opencode()),
+            Err(PinFileError::Invalid {
+                reason: PinRejected::Contents(_),
+                ..
+            })
+        ),
+        "a release with nothing to launch was accepted"
+    );
+}
+
+#[test]
+fn a_role_this_build_does_not_know_is_refused() {
+    // A role is a name written into a generated file, and the least privileged
+    // reading of an unknown one would install Codex's ripgrep unable to run —
+    // surfacing much later as a search that does not work.
+    let mut misspelled = entry("macos", "aarch64", None, false, 'a');
+    misspelled["files"] =
+        serde_json::json!([{ "path": "package/claude", "role": "executable" }]);
+    assert!(
+        matches!(
+            releases_in(&document(vec![misspelled]), &opencode()),
+            Err(PinFileError::Invalid {
+                reason: PinRejected::Contents(_),
+                ..
+            })
+        ),
+        "a role this build cannot read was accepted"
+    );
+}
+
+#[test]
+fn a_package_shaped_entry_reads_every_file_and_its_role() {
+    let releases = releases_in(&document(vec![package_entry('a')]), &opencode())
+        .expect("a package is a release");
+    let release = releases.first().expect("one release");
+    assert_eq!(release.launch().as_str(), "package/vendor/bin/codex");
+    assert_eq!(release.contents().files().len(), 3);
+    assert_eq!(
+        release
+            .contents()
+            .files()
+            .iter()
+            .map(|file| (file.path().as_str(), file.role().as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("package/package.json", "document"),
+            ("package/vendor/bin/codex", "launch"),
+            ("package/vendor/codex-path/rg", "helper"),
+        ]
+    );
+}
+
+#[test]
+fn an_archive_size_no_archive_has_is_refused() {
+    // The fetch is bounded by this number, so a pin that says nothing about it
+    // — or says something absurd — is the one field that hands a stranger
+    // permission to write to somebody's disk.
+    let mut zero = entry("macos", "aarch64", None, false, 'a');
+    zero["archiveBytes"] = serde_json::json!(0);
+    assert!(
+        matches!(
+            releases_in(&document(vec![zero]), &opencode()),
+            Err(PinFileError::Invalid {
+                reason: PinRejected::ArchiveSize(0),
+                ..
+            })
+        ),
+        "an archive of no bytes was accepted"
+    );
 }
 
 #[test]
