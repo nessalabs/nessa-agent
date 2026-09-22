@@ -88,7 +88,19 @@
       "steer": false,
       "resume": true,
       "permissions": true,
-      "imageInput": false
+      "imageInput": false,
+      "agentFeatures": {
+        "permissionDenial": "supported_for_offered_permission_reviews",
+        "nativeHookSuppression": "unknown",
+        "compactionReporting": "unsupported_not_implemented",
+        "modelSwitchReporting": "unsupported_not_implemented",
+        "permissionDeferral": "unsupported_not_implemented",
+        "elicitationForwarding": "unknown",
+        "preToolPolicy": "unsupported_not_implemented",
+        "policyEndTurn": "unsupported_not_implemented",
+        "policyCloseSession": "unsupported_not_implemented",
+        "incomingElicitation": "unsupported_not_implemented"
+      }
     },
     "truncated": false,
     "queueComplete": true,

@@ -9,10 +9,8 @@
 # gateway connection ever attempted. It looks like an app that will not connect.
 #
 # So the subtree is started as a job whose group is known, and the trap takes
-# that group down. Scoping to the group, rather than to the app's path, is
-# deliberate: worktrees symlink `target/` to the main checkout, so every
-# checkout's app resolves to the same binary and killing by path would let one
-# worktree stop another's running app.
+# that exact group down. Process ownership comes from the launch relationship;
+# it is not inferred later from an executable path.
 #
 # A SIGKILL to this script still orphans the app — nothing a trap can do about
 # that — but every ordinary exit, Ctrl-C and SIGTERM now takes it with us.

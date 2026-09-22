@@ -25,10 +25,14 @@ pub use service::{
     ConversationLimits, ConversationService, QuestionChoiceInput, RequestedAgent, SubmissionMode,
 };
 pub use view::{
-    ConversationAttachment, ConversationCapabilities, ConversationDisposition,
-    ConversationLinkedFile, ConversationMessage, ConversationMessageStatus, ConversationPending,
-    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationReorderOutcome, ConversationTool, ConversationView, SubmissionReceipt,
+    CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,
+    ConversationCapabilities, ConversationDisposition, ConversationLinkedFile, ConversationMessage,
+    ConversationMessageStatus, ConversationPending, ConversationPendingMode,
+    ConversationPermission, ConversationPermissionOption, ConversationReorderOutcome,
+    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
+    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
+    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
+    SubmissionReceipt,
 };
 
 #[cfg(test)]

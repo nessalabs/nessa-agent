@@ -286,7 +286,8 @@ Every agent starts here rather than running `git worktree` by hand:
 
 ```bash
 just worktree create add-something   # branch + worktree, ready to build
-just worktree clean                  # rebuild this crate, keep deps
+just worktree isolate                # migrate an existing shared-target checkout
+just worktree clean                  # rebuild this checkout's app/server crates
 just worktree list
 just worktree remove add-something   # the branch is kept
 ```
@@ -294,27 +295,72 @@ just worktree remove add-something   # the branch is kept
 These commands use `scripts/worktree.sh` on macOS and Linux. After entering the
 new checkout, run `just release fast` to build a fast release.
 
-A fresh worktree does not pay for a rebuild. It shares the main checkout's
-workspace `target/`, so cargo reuses the ~500 already-compiled dependency crates
-and only recompiles this repo's own crates — measured at **27 s** in a new
-worktree, against minutes from scratch. pnpm hardlinks from its global store, so
-`pnpm install` costs seconds and no disk.
+Each worktree owns its workspace `target/`. Cargo, Tauri, and scripts that run
+`target/debug/*` therefore read artifacts produced from the same checkout as
+their source. `scripts/worktree-target.test.mjs` enforces that boundary with two
+worktrees containing divergent versions of the same package: after A builds,
+B builds, and B runs, A's already-built executable must still report A.
 
-Cargo locks the shared target, so two worktrees building at once queue rather
-than corrupt each other.
+The separation costs a target directory per worktree. `sccache` still shares
+compiled dependencies across those directories when `RUSTC_WRAPPER=sccache` is
+set, and pnpm hardlinks from its global store. `just worktree clean` runs the
+package-scoped clean from the invoking checkout and refuses a symbolic target,
+so it cannot empty another checkout's output. Before cleaning, it asks Cargo for
+the effective target and proceeds only when that is this checkout's own
+`target/`.
 
-A bare `cargo clean` in any worktree does empty it for all of them, and that is
-not preventable — cargo has no notion of a protected shared target. It is
-**bounded** rather than fixed: sccache's cache lives in
-`~/Library/Caches/Mozilla.sccache`, outside the target directory entirely, so
-the worst case is one ~45 s rebuild rather than a cold one. Use
-`just worktree clean` instead: it runs
-`cargo clean -p nessa-app -p nessa-server`, which drops only this repo's crates
-— the things that are actually stale after a code change — and rebuilds in
-**4 s** with every dependency intact.
+An explicit `CARGO_TARGET_DIR` still overrides Cargo's default and therefore
+opts that command into the directory it names. Build-and-run scripts ask
+`cargo metadata` for the effective directory, so they execute the artifact from
+that same override instead of a stale checkout-local binary. Use a path unique
+to the checkout when setting it during parallel work. The override selects where
+builds and runs happen; it does not authorize `just worktree clean` to delete an
+external or another checkout's target. Clean such an intentional target directly
+from the process that owns it.
 
-Worktrees are created as **siblings** of this checkout
-(`../nessa-app-<name>`) so they can share this repo's workspace `target/`.
+Worktrees made by the former recipe still have `target/` linked to the original
+clone. From each such checkout, run `just worktree isolate` once. It unlinks only
+that exact former link, creates an empty local directory, and leaves the original
+artifacts untouched. A link to any other path is refused for manual inspection.
+New worktrees are created as **siblings** of this checkout
+(`../nessa-agent-<name>`) with a local target directory from the start.
+
+Claude Code makes worktrees of its own, for background agents and for subagents
+declaring `isolation: worktree`.
+`.claude/settings.json` configures
+[`WorktreeCreate` and `WorktreeRemove` hooks](https://code.claude.com/docs/en/worktrees)
+pointing at `./scripts/worktree.sh claude-hook` and `claude-hook-remove`. The
+create hook gives these worktrees the same isolated target ownership as the
+manual recipe.
+
+Replacing Claude Code's creation means owing it the behaviour it would have had.
+The `WorktreeCreate` payload carries exactly one field, `name`, and it is a
+worktree **slug** — not a branch and not a path — so everything else is the
+hook's job to match:
+
+| | What the hook does, and why |
+| --- | --- |
+| Location | `.claude/worktrees/<name>`, where Claude Code puts its own, already gitignored. Deliberately **not** the sibling directory `create` uses. Those are people's worktrees, and the two naming schemes are not the same function — a slug may contain dots, a `create` name may not — so keeping the namespaces apart is what stops an agent being handed somebody's checkout to commit to |
+| Branch | `worktree-<name>`, which is what Claude Code's own default names it |
+| Base | The repository's default branch, which is what `worktree.baseRef: "fresh"` means. `git worktree add -b` with no start-point instead branches from whatever the clone is sitting on, so a clone parked on a feature branch would have given every agent that branch's commits. `--no-track`, so the agent's `git push` and `git pull` don't act on main |
+
+Note that the documented input schema for `WorktreeCreate` lists `path` and
+`worktree_path` as well. Claude Code 2.1.278 sends neither; only `WorktreeRemove`
+carries `worktree_path`. The hook reads what is actually sent.
+
+The remove hook is not optional. Claude Code's periodic sweep only removes
+worktrees carrying a marker it writes itself, and one a hook created has none,
+so without it every worktree made this way would stay on disk for ever — the
+accumulation this exists to stop. It unlinks a legacy target link before removing
+the directory, leaving the link destination untouched, and deletes the branch
+only when the base already contains every commit on it. That last test is
+`merge-base --is-ancestor` rather than `git branch -d`, because `-d` means
+"merged into whatever this clone has checked out" and would refuse to tidy up an
+empty worktree branch whenever the clone sits on an unrelated branch.
+
+One thing the hook gives up: `.worktreeinclude` is not processed when a
+`WorktreeCreate` hook replaces creation. This repo has no such file, so nothing
+is lost today; add the copying to the hook if one is ever introduced.
 
 ## Build
 
@@ -343,6 +389,21 @@ from clean went 104s → **43s** at an 85% hit rate on the machine that measured
 it. `brew install sccache` or `apt install sccache`; it cannot cache
 incrementally-compiled crates, so it skips this app's own crate in dev builds —
 the win is the ~500 dependency crates, which is where the time goes.
+
+Measured again on `nessa-images`, the crate whose dependencies carry the
+`opt-level = 2` override, building into a target directory wiped between the
+two runs: **18.5 s → 4.3 s**, 39 of 39 compilations served from the cache. That
+gap is what a worktree with its own `target/`, or a stray `cargo clean`, costs
+when sccache is absent. Set it once in your shell profile:
+
+```sh
+command -v sccache >/dev/null 2>&1 && export RUSTC_WRAPPER=sccache
+```
+
+The guard is the point: the variable is only set where sccache exists, so the
+same profile is safe on a machine without it. It is deliberately not in
+`.cargo/config.toml` — a wrapper named there fails the build outright on any
+machine that has not installed it, including CI.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.

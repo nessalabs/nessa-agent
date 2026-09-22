@@ -82,12 +82,10 @@ function isNessaVite({ pid, command }) {
  *
  * The working directory is the evidence, because a command line is not: a
  * sibling checkout at `/work/nessa-agent-other` contains `/work/nessa-agent` as
- * a substring, and worktrees symlink `target/` into the main checkout so a
- * worktree's process genuinely runs this checkout's binary.
+ * a substring.
  *
  * Windows has no cwd to read here (`lsof` is not there), so it falls back to a
- * path-boundary check on the command — which rules out the sibling-prefix case
- * and cannot rule out a shared binary. That is weaker, and it is said out loud
+ * path-boundary check on the command. That is weaker, and it is said out loud
  * rather than left to look the same as the Unix answer.
  */
 /**
@@ -97,8 +95,7 @@ function isNessaVite({ pid, command }) {
  * out. Agent worktrees land under `.claude/worktrees/`, which is beneath this
  * root, so the same test called them ours and a run from the main checkout
  * would SIGTERM — then SIGKILL — a vite belonging to somebody else's session.
- * Sharing a `target/` symlink makes a worktree's process run this checkout's
- * binary; it does not make its dev server this checkout's to stop.
+ * Each nested checkout owns its process and build output independently.
  */
 const NESTED_CHECKOUTS = `${root}/.claude/worktrees/`
 

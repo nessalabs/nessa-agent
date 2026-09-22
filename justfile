@@ -9,7 +9,8 @@
 #   just release fast  testing-shaped release (macOS .app / Linux .deb / Windows nsis)
 #   just release  shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
 
-#   just worktree create <name>  feature checkout sharing the build cache
+#   just worktree create <name>  feature checkout with isolated build output
+#   just worktree isolate        migrate this checkout from the old shared target
 #   just worktree list           list checkouts
 
 # cmd so Windows does not need Git's sh. Unix still uses sh.
@@ -172,7 +173,7 @@ release mode="shipping":
 release mode="shipping":
     {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}node scripts/desktop/build.mjs --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
 
-# Manage feature worktrees: create <name>, list, remove <name>, or clean (requires Bash).
+# Manage feature worktrees: create <name>, isolate, list, remove <name>, or clean (requires Bash).
 [unix]
 [positional-arguments]
 worktree +args:

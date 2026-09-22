@@ -43,6 +43,18 @@ const view = (id: string, text = ""): ConversationView => ({
     resume: true,
     permissions: true,
     imageInput: false,
+    agentFeatures: {
+      permissionDenial: "unknown",
+      nativeHookSuppression: "unknown",
+      compactionReporting: "unsupported_not_implemented",
+      modelSwitchReporting: "unsupported_not_implemented",
+      permissionDeferral: "unsupported_not_implemented",
+      elicitationForwarding: "unknown",
+      preToolPolicy: "unsupported_not_implemented",
+      policyEndTurn: "unsupported_not_implemented",
+      policyCloseSession: "unsupported_not_implemented",
+      incomingElicitation: "unsupported_not_implemented",
+    },
   },
   truncated: false,
   queueComplete: true,
@@ -309,6 +321,24 @@ describe("gateway conversation projection", () => {
     // The panel's own word for a read it could not make sense of, not the
     // error's text: the scenario substitute rejects with a plain `Error`.
     expect(failed.readError).toBe("unavailable")
+  })
+
+  it("applies a revised capability snapshot without requiring message changes", async () => {
+    const effects = scenarioEffects("echo")
+    const initial = view("server", "capabilities:1")
+    const revised = view("server", "capabilities:2")
+    revised.capabilities.agentFeatures.permissionDenial =
+      "supported_for_offered_permission_reviews"
+    const read = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(revised)
+    const store = makeStore(createDependencies({ conversation: { ...effects, read } }))
+    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    await store.dispatch(refreshConversation("c0"))
+    await store.dispatch(refreshConversation("c0"))
+    const current = store.getState().conversation.conversations[0]!
+    expect(current.revision).toBe("capabilities:2")
+    expect(current.remote?.capabilities.agentFeatures.permissionDenial).toBe(
+      "supported_for_offered_permission_reviews",
+    )
   })
 
   it("routes permission decisions and queue removal with exact targets", async () => {

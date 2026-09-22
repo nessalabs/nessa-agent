@@ -42,6 +42,52 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
    [seams at the process boundary](#seams-at-the-process-boundary), which this
    gate is read together with.
 
+10. **A guarantee names its enforcer.** A comment, docstring, or test name that
+    says *never, always, cannot, exactly, every,* or *compile error* cites the
+    test or the type that makes it so — or it does not make the claim. Prose is
+    written from intent, and intent is what the author holds in their head while
+    the code moves underneath it. A claim nothing checks is worse than silence,
+    because the next reader is told not to look.
+11. **Construction over enumeration.** Where a value becomes syntax or selects
+    behaviour, constrain what may appear rather than listing what may not:
+    percent-encode to an allowed alphabet instead of refusing the characters
+    that have bitten you; a total `Record`/`match` instead of a partial map with
+    a fallback; a newtype that cannot hold the bad value instead of a check at
+    each call site. A list of known-bad cases is a record of what has already
+    gone wrong, not a rule.
+12. **Identity, not attributes.** Durable state is keyed on an identity minted
+    when the thing began — never on a name, a file list, the active tab, or any
+    other attribute that can change, repeat, or be recycled while the state
+    lives. An attribute is stale the moment it is written down.
+13. **One owner of a decision. Never two.** Every rule has exactly one
+    implementation, in the layer that owns it. A second implementation is a
+    defect on sight — not a safeguard, not defence in depth, not a harmless
+    convenience — and the fix is to delete it, not to keep the copies in step.
+    This holds however reasonable the copy looks: a stricter subset, a quick
+    pre-check, a friendlier message, a validation the other side "also" does.
+    Two authorities over one decision will disagree, and the disagreement
+    surfaces as a refusal nobody can explain.
+
+    An earlier layer may still refuse early, and should, so a person can act
+    while it is cheap — but only by *asking* the owner, or by consuming
+    something the owner publishes: a compiled pattern, a generated constant, a
+    shared schema. Published, never retyped. Where the owner cannot be reached
+    in time, publish the rule as data and derive both sides from it.
+
+    The test, and it is not optional: change the rule where it is owned and see
+    what fails. If nothing does, the copies are already lying. #122's review
+    caught a path bound counted in code points by the schema, UTF-8 bytes by the
+    client and the domain, and UTF-16 units by the panel; and a control
+    character one layer accepted and the next refused, which would have put the
+    refusal after send with no sentence, because the layer meant to speak first
+    had quietly said nothing. Both began as helpful early checks.
+
+14. **A gate runs where it claims to run.** Each check declares the environment
+    it must survive — bare Node with no `node_modules`, every supported target's
+    `-D warnings`, the CI package selection, contention — and something enforces
+    that declaration. "It passed" is not a result without "where, and under what
+    load"; a green run in the wrong environment has told you nothing.
+
 If a gate fails, fix it in the same PR.
 
 ## Local code review gate
@@ -107,47 +153,58 @@ that their combination describes a possible execution.
 - Every review report must state which relationships and boundaries were checked,
   the enforcing code and regression evidence, and explicit exclusions. A review
   fails this gate if it only lists individually validated types or isolated tests.
-- For lifecycle changes, name one owner of each transition and test the same
-  guarantees across every delivery mode that uses it. A second flag, error walker,
-  or cleanup path is not an independent implementation of the same authority.
-  A stop must be correlated with the affected work's admission; historical cleanup
-  cannot become the cancellation cause of a later input. Preserve the first cause
-  for each affected owner when later close requests arrive, and distinguish waiting
-  work that survives provider cleanup from active work that must stop.
-  For interrupted native steering, compare the saved transition with the owning
-  work permit, including automatic stops that do not notify explicit-close listeners.
-  Test retry and restoration, plus a genuine delivery failure with no earlier stop.
-  Test the ordering matrix, not only one failing example: stop before first poll,
-  stop while pending, acknowledgement before stop, and both ready in one poll.
-  Separate provider acknowledgement from local validation and persistence waits;
-  later cancellation cannot erase a received result. Cross diagnostic variants
-  with the same provider state, and the same diagnostic with different states.
-  Waiting receipts must settle or remain eligible to run according to their own
-  work permits, never according to an error-name allowlist.
-  Include a new explicit close joining an existing automatic stop: preserve old
-  owners' causes while attributing newly stopped waiters to the explicit caller.
-  Cross physical release with audit success/failure for both reported and locally
-  performed cleanup. Before a closed runner exits, every stopped receipt must
-  settle without depending on another explicit close or a particular control path.
-  Restoration and cleanup must serialize attachment ownership, not only admission.
-  Pause between retiring a cached cleanup report and arming the next attachment;
-  a concurrent close must own that attachment before reporting release. Assert
-  provider cleanup calls and retained ownership, not just a successful close result.
-  Follow operation-reported cleanup through the resource owner, outstanding close
-  waiters, final returned result, and last-handle drop. Retired work can still
-  report release of the same attachment; a restored attachment has a different
-  owner. Test both cases, including competing uncertain cleanup and audit failures.
-  Reconciliation and publication must be atomic with respect to incoming evidence;
-  repeated reconciliation must not duplicate failures or grow the report.
-  At gateway boundaries, extend ownership tests through caller disconnect and
-  reconnect: detached commands must retain bounded admission ownership, and
-  permission/close controls must remain available under normal-request pressure.
-  Compare live projections with saved terminal evidence in both arrival orders;
-  a replacement view must not revive removed server state or duplicate output.
-  Keep diagnostic errors out of admission and resource-ownership decisions:
-  transport rejection, provider settlement, local cancellation, physical cleanup,
-  and audit acknowledgement require explicit facts. Exercise identical diagnostics
-  with different physical states, and different diagnostics with the same state.
+- **Lifecycle transitions have one owner.** Name the owner of each transition and
+  test the same guarantees across every delivery mode that uses it. This is
+  [gate 13](#gates) applied to transitions: a second flag, error walker, or
+  cleanup path is not an independent implementation of the same authority. Test
+  each of the following against the ordering matrix rather than one failing
+  example — stop before first poll, stop while pending, acknowledgement before
+  stop, and both ready in one poll.
+
+  - _A cause outlives the event that set it._ Correlate a stop with the admission
+    of the work it affects; historical cleanup cannot become the cancellation
+    cause of a later input. When further close requests arrive, preserve the first
+    cause for each owner already stopped and attribute only newly stopped waiters
+    to the new caller — an explicit close joining an automatic stop does both at
+    once. Distinguish waiting work that survives provider cleanup from active work
+    that must stop.
+  - _Acknowledgement, local decision, and confirmed effect are separate facts._
+    Keep provider acknowledgement apart from local validation and persistence
+    waits; a later cancellation cannot erase a result already received. For
+    interrupted native steering, compare the saved transition against the owning
+    work permit, including automatic stops that never notify explicit-close
+    listeners, and test retry, restoration, and a genuine delivery failure with no
+    earlier stop.
+  - _A diagnostic is not a decision._ Transport rejection, provider settlement,
+    local cancellation, physical cleanup, and audit acknowledgement each require
+    an explicit fact; an error's shape decides neither admission nor resource
+    ownership. Waiting receipts settle, or stay eligible to run, by their own work
+    permits and never by an error-name allowlist. Cross identical diagnostics with
+    different provider and physical states, and different diagnostics with the
+    same state.
+  - _Release has an owner, and a report of release is not release._ Assert the
+    provider cleanup calls and what ownership is retained, not merely a successful
+    close result, and follow operation-reported cleanup through the resource
+    owner, outstanding close waiters, the final returned result, and the
+    last-handle drop. Restoration and cleanup serialize attachment ownership, not
+    only admission: a concurrent close must own an attachment before reporting its
+    release, so pause between retiring a cached cleanup report and arming the next
+    one. Retired work can still report release of the same attachment, and a
+    restored attachment has a different owner; test both, with competing uncertain
+    cleanup and with audit failure. Cross physical release with audit success and
+    failure, for reported and locally performed cleanup alike — released resources
+    must not turn a retained failure into an acknowledgement — covering cached
+    reports and reports arriving through provider operations as well as a direct
+    close. Before a closed runner exits, every stopped receipt settles without
+    depending on another explicit close or on one particular control path.
+  - _Reconciliation and publication are atomic with respect to incoming evidence._
+    Repeating them must not duplicate failures or grow the report.
+  - _Ownership outlives the caller._ At gateway boundaries, extend these tests
+    through caller disconnect and reconnect: a detached command keeps bounded
+    admission ownership, and permission and close controls stay available under
+    normal-request pressure. Compare live projections against saved terminal
+    evidence in both arrival orders; a replacement view must not revive removed
+    server state or duplicate output.
 - Identity among siblings. A key names an element among the children it sits
   with, not the data it is about. Two children of one parent under one key are
   one child to the renderer. React warns and does not refuse; what follows
@@ -204,15 +261,12 @@ that their combination describes a possible execution.
   inherited budget exhaustion as well as long ready streams. Once cleanup is
   unconfirmed, ready output must not starve settlement or cleanup retry; retain an
   already-ready result without continuing an unbounded observation drain.
-- Repeat cleanup after physical success with audit failure. Released resources
-  must not turn a retained failure into acknowledgement; test cached reports and
-  reports received through provider operations as well as direct close.
 
 ### Review dimensions
 
 | Dimension | Required questions and evidence |
 | --- | --- |
-| Authority and identity | Can Clone, restoration, a detached handle, or a public constructor create another mutable dispatch/decision authority? Does every delayed command identify its intended execution, including bulk operations? Can an old callback affect a reused identity in a later run? Read-only evidence may be shared; mutable authority must have one owner. |
+| Authority and identity | Can Clone, restoration, a detached handle, or a public constructor create another mutable dispatch/decision authority? Does every delayed command identify its intended execution, including bulk operations? Can an old callback affect a reused identity in a later run? Read-only evidence may be shared; mutable authority must have one owner — see gate 13, which holds for any rule, not only for authority objects. |
 | Domain invariants | Are legal transitions, sequence continuity, and stable correlation validated by their owning domain? Are cause/initiator combinations validated at the boundary that owns attribution? A valid individual record does not make a valid history. Enumerate accepted causes for each operation separately (permission cancellation, execution finish, session close); one valid cause enum is not valid at every lifecycle boundary. Execution-specific causes require execution correlation; idle attachment failures need their own meaning. Retain the first transition evidence needed to validate later settlement; a boolean closed flag loses the original cause. Keep a local closure distinct from a later independent execution failure: preserve both causes rather than requiring equality or leaving active state stranded. Check state after settlement as well as before it. Invalid input must leave authoritative state and prior evidence unchanged. |
 | Admission and concurrency | Identify the point at which the SDK owns a submitted command and the point at which close excludes new work. Exercise accepted commands overtaken by close, dropped waiters, queued work, native steering, preparation, hooks, and cleanup. Check incoming observations after close as well as outgoing commands; retaining an active execution for settlement does not authorize new state mutation. Inspect async lock waiters across select branches: handling one branch must not wait behind a suspended sibling future that only this task can poll. Cancellation between authority changes and their effects must not leave stale authority. Error publication belongs to that boundary too: a delayed old-generation failure must not revoke confirmed recovery of a new generation. Separate admission, delivery, and confirmed external effects. Trace every explicit and automatic shutdown caller through the same coordinator; test already-admitted controls as well as late arrivals. A control awaiting teardown must not prevent teardown from starting. Dropping a waiter must not release dispatch authority while provider work can continue; test both caller cancellation and task panic. |
 | Failure and cleanup | Raise admission barriers before asynchronous cleanup starts. Inspect direct and wrapped uncertain-cleanup results for every provider operation (preparation, execution, steering, answers, cancellation, and shutdown), repeated close, and successful recovery. No input may reach a context undergoing teardown; reopening requires confirmed cleanup. Include constructor failure and cancellation: ownership and exclusive leases must outlive any unconfirmed attachment, with a documented recovery path. Preserve the primary typed failure alongside audit and cleanup failures, including three-way failures; do not replace its cause with a generic runtime label. |
@@ -226,7 +280,11 @@ that their combination describes a possible execution.
 
 - For each finding, report severity, exact location, reachable trigger, violated
   contract, expected versus actual behavior, and a minimal reproduction or clear
-  source path. A regression should exercise the reported trigger and distinguish
+  source path. When a probe proves a test load-bearing by reverting
+  its fix, verify the edit landed before trusting the run — print the hunk, or
+  assert the file changed — and restore the tree afterwards. A revert that
+  silently fails to apply reads exactly like a test that does not bite, and a
+  green run then retires a guarantee nobody checked. A regression should exercise the reported trigger and distinguish
   the broken behavior from the fix; assert typed outcomes and authoritative state,
   not merely completion without a panic. Label uncertain hypotheses; a plausible narrative alone is not a
   confirmed bug. Do not infer repository-wide absence from one file or one PR.
@@ -291,7 +349,9 @@ TypeScript, backend and frontend, tests, scripts, configuration, and docs.
   runtimes, infrastructure, and model calls.
 - Put documentation with its feature and maintain a clear index. Extend the
   canonical document instead of introducing a second competing guide or standard.
-  Mark proposed work separately from implemented contracts.
+  Mark proposed work separately from implemented contracts. A proposed ADR or plan is not an
+  implemented feature: do not build an unrelated future system because a design
+  document discusses its ports.
 - Keep `mod.rs` maps current: explain ownership, dependencies, and lifecycle
   boundaries, with fenced ASCII diagrams and explicit arrow meanings where useful.
   Update affected imports, callers, test paths, documentation links, and local
@@ -299,6 +359,69 @@ TypeScript, backend and frontend, tests, scripts, configuration, and docs.
 - Treat organization as a completion gate, including delegated work: review the
   resulting file tree and module maps, check moved links and stale references,
   and run checks appropriate to the change before reporting completion.
+
+## Domain-driven design boundaries
+
+Follow pure domain-driven design. New backend contexts are organized into
+`domain`, `application`, and `infrastructure` layers. Existing `adapters`
+directories are infrastructure boundaries; their names do not change the
+dependency rules.
+
+- Model domain concepts explicitly: value objects for identities and constrained
+  values, entities for identity-bearing concepts, and aggregate roots where a
+  consistency boundary must protect related state. Use the domain language in
+  type and file names. Do not invent aggregates, repositories, or events for
+  concepts that have no such responsibility.
+- The domain owns invariants and decisions, and is their single owner under
+  [gate 13](#gates). Keep invariant-bearing fields private; expose validated
+  constructors and behavior that preserve those invariants. Application DTOs must
+  never serve as domain entities or authoritative state.
+- Domain code depends only on the domain and pure language/library facilities. No
+  application DTOs, serialization derives, transport/provider types, filesystem,
+  network, framework, clock reads, or infrastructure imports in the domain.
+- Application use cases coordinate domain behavior and effects through narrow
+  application-owned ports. They own boundary DTOs and explicit DTO/domain mapping;
+  they must not duplicate or become the sole owner of domain rules.
+- Infrastructure implements adapters and ports: JSON, persistence, provider APIs,
+  transport, and OS effects. Parse external representations there and route valid
+  input through application mapping and domain constructors. Composition wires
+  concrete dependencies; dependency direction always points inward.
+- Test domain invariants directly without JSON, databases, providers, or an
+  application runtime. Test application orchestration/projections separately, and
+  test infrastructure parsing and substitution at its boundary.
+
+Value objects have their own gate in [value objects](#value-objects), and
+lifecycle evidence its own in
+[audit evidence](#audit-evidence-is-part-of-the-behavior).
+
+### Where domain code lives
+
+- Group domain code by feature/context first (for example,
+  `domain/model_metadata/`), then by DDD role: `value_objects/`, `entities/`, and
+  `aggregates/` where those roles exist. The folder should make each type's role
+  clear.
+- Within a large context, group by responsibility before DDD role (for example,
+  `agent_execution/tools/entities/`). Use the same feature vocabulary in
+  application, infrastructure, tests, and documentation where that responsibility
+  exists; do not invent empty counterparts or split one consistency boundary into
+  independent aggregates.
+- Reserve `mod.rs` for module documentation, declarations, and re-exports. Put
+  structs, enums, functions, implementations, and tests in named files. Describe
+  each module in plain English: what it owns, why it exists, and how it connects
+  to the surrounding system. Include a small ASCII diagram where it clarifies
+  dependencies, ownership, or data flow, and explain what its arrows mean.
+- Look for reusable domain primitives before introducing feature-specific value
+  objects. Put values with shared meaning and invariants in
+  `domain/common/value_objects/` (for example, calendar dates). Keep common code
+  independent of feature types and errors; features add their own restrictions.
+  Prefer established pure libraries for date/time and URL parsing instead of
+  handwritten calendar or URL validation. Wrap them in domain value objects;
+  parsing libraries are allowed in the domain, infrastructure effects are not.
+  Preserve meaning and precision: a date is not automatically a timestamp. Avoid
+  speculative generic wrappers or a catch-all utilities module.
+- Combine closely related types in cohesive files; do not require one file per
+  type. Avoid a flat domain directory that mixes unrelated features. Moving a DTO
+  into a `domain` directory or adding empty layer folders is not a DDD refactor.
 
 ## Rust imports and type names
 
@@ -343,6 +466,14 @@ desktop host `src-tauri` is not a context and is bound by it anyway: a fetch
 written straight into a function there is unverifiable for exactly the reason it
 would be in an application layer, and a host has more outside things in it than
 anywhere else in the tree.
+
+Dependencies are supplied by typed constructor or factory injection. There is no
+global service locator and no mutable process-wide client or backend handle: a
+consumer takes the narrow thing it needs as a parameter, and composition decides
+which implementation that is. Backend and provider choices are made there too, so
+that local use stays independent of hosted signup and provider selection cannot
+route around policy. When a change adds a seam, test that a substitute really
+substitutes and that the application layer runs without the real one.
 
 The seam is for the boundary, not for every function. One port per kind of
 outside thing — the release channel, the keychain, the clock — not a wrapper per
@@ -492,11 +623,28 @@ reviewer still has to ask where the key came from.
 
 ## Value objects
 
+A value object is immutable and validated at construction; an aggregate root owns
+its consistency boundary, and an entity owns its identity and mutable state.
+
 Reject in-place mutation APIs (including private mutators, mutable references,
 and interior mutability) on domain value objects. Changes produce replacement
 values; entities and aggregates own mutable state and identity checks. Keep
 sparse update inputs distinct from accumulated snapshots so omitted fields
 cannot be mistaken for unknown state.
+
+## Rich content
+
+- Exercise representation boundaries, not only round trips: punctuation and
+  escapes next to structured parts, code/link/HTML contexts, adjacent parts, and
+  empty or whitespace-prefixed payloads. Rendered controls must remain reachable.
+- Keep one stored representation and derive the rest from it, per
+  [gate 13](#gates). Transport text and display titles are derived independently;
+  preserving payload whitespace must not make a label blank.
+- Review new imports through their transitive startup cost. Reuse the existing
+  lazy renderers for optional math, diagrams, and highlighting; dynamic chunks
+  still contribute to installed bundle size.
+- Check changed tests against module boundaries too. A green architecture check
+  covers only its implemented rules, not every requirement in this document.
 
 ## SDK API documentation
 
@@ -551,9 +699,42 @@ costs separately from bytes written to disk.
 
 ## Machine-readable command output
 
+Use `tracing` for SDK diagnostics and examples, and have executable composition
+initialize the subscriber. Other binaries adopt this only once tracing is wired
+into their composition; until that migration lands, the desktop host keeps its
+existing stderr diagnostics so startup failures stay visible.
+
 Primary command output, such as a JSON catalog intended for a pipe, is data rather
 than a diagnostic. Write it to standard output through the appropriate serializer
 or I/O writer without tracing metadata. Keep diagnostics on standard error through
 tracing and preserve a nonzero exit status on failure. Test documented commands
 with stdout and stderr captured separately; a logging-only test cannot verify the
 machine-readable output contract. This does not permit print macros for diagnostics.
+
+## Adding a check to CI
+
+`.github/workflows/local-auth.yml` is the gate every pull request waits on, and
+almost all of its time is `rustc`. A check added carelessly is not free: it is
+paid on every push, and on three runners if it lands in the matrix.
+
+- Put a new check in a job that already exists. A new job pays the whole setup
+  again — runner, checkout, toolchain, a cold dependency graph — to do work that
+  is often seconds long. `gateway-contract` is where a Linux-only or
+  platform-independent check belongs; the `local-auth` matrix is for checks whose
+  answer genuinely differs by platform.
+- Do not run the same check in more than one place; this is [gate 13](#gates) for
+  CI. `cargo fmt --all` in `gateway-contract` covers every crate on every
+  platform, because rustfmt does not read the platform. Before adding a per-crate
+  variant, ask what a second runner would learn.
+- Lint before test. Both compile the crate, and only one of them takes minutes to
+  report a `-D warnings` failure it could have reported first.
+- Build caches are written only from `main`. A pull request reads the tip's
+  artifacts and never evicts them, so a run on a branch is as warm as `main` was
+  and no warmer. Nothing needs doing for this; it is why a first run after a
+  dependency bump is slow.
+- Prose is not checked, and `scripts/documentation-only.mjs` is what lets a
+  documentation-only pull request skip the compile-heavy jobs. If you make
+  anything read a Markdown file — a crate embedding its README with
+  `include_str!`, a check that parses a document — that rule stops being true and
+  has to change with it. `documentation-only.test.mjs` fails with instructions
+  when the Rust half of it breaks; the rest is on you to notice.

@@ -93,7 +93,7 @@ fn spawn_worker<P: AcpProfile>(
     let (finished, completion) = watch::channel(None);
     let (events, stream) = EventQueueBudget::new().channel(16);
     let (ready, startup) = oneshot::channel();
-    let (operations, _) = watch::channel(OperationCapabilities::default());
+    let (operations, _) = watch::channel(ProviderOperationCapabilities::default());
     let recovery = Arc::new(ProcessCleanup::new(config.clone()));
     let task = tokio::spawn(run(
         scope,

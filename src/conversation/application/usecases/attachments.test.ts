@@ -6,6 +6,7 @@ import {
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
   type Conversation,
+  type ConversationCapabilities,
   type FileAttachment,
 } from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
@@ -63,12 +64,24 @@ const submission = {
   actionId: "action",
   mode: "queued" as const,
 }
-const capabilities = {
+const capabilities: ConversationCapabilities = {
   queue: true,
   steer: false,
   resume: false,
   permissions: false,
   imageInput: true,
+  agentFeatures: {
+    permissionDenial: "unknown",
+    nativeHookSuppression: "unknown",
+    compactionReporting: "unsupported_not_implemented",
+    modelSwitchReporting: "unsupported_not_implemented",
+    permissionDeferral: "unsupported_not_implemented",
+    elicitationForwarding: "unknown",
+    preToolPolicy: "unsupported_not_implemented",
+    policyEndTurn: "unsupported_not_implemented",
+    policyCloseSession: "unsupported_not_implemented",
+    incomingElicitation: "unsupported_not_implemented",
+  },
 }
 /** A view has arrived for this conversation, and it said the agent takes images. */
 const remote = {
