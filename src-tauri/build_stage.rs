@@ -7,7 +7,7 @@
 use std::{
     collections::BTreeSet,
     fmt::{Display, Formatter, Result as FormatResult},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde_json::Value;
@@ -78,6 +78,12 @@ pub fn frontend_stage_record(
         }
         _ => Err(BuildStageError::MissingFrontendDist),
     }
+}
+
+pub fn frontend_index(record: &Path) -> Option<PathBuf> {
+    record
+        .parent()
+        .map(|directory| directory.join("index.html"))
 }
 
 pub fn verify_frontend(

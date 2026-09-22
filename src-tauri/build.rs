@@ -40,7 +40,22 @@ fn main() {
 
 fn verify_frontend_stage(known: &BTreeSet<String>, bundle: &str) {
     let record = frontend_stage_record();
+    let index = build_stage::frontend_index(&record)
+        .expect("frontend stage record must have a containing asset directory");
     println!("cargo:rerun-if-changed={}", record.display());
+    println!("cargo:rerun-if-changed={}", index.display());
+    let index_metadata = fs::metadata(&index).unwrap_or_else(|error| {
+        panic!(
+            "frontend entry point is absent at {}: {error}. Build the frontend into the effective Tauri build.frontendDist before Cargo",
+            index.display()
+        )
+    });
+    if !index_metadata.is_file() {
+        panic!(
+            "frontend entry point at {} must be a file. Build the frontend into the effective Tauri build.frontendDist before Cargo",
+            index.display()
+        );
+    }
     let source = fs::read_to_string(&record).unwrap_or_else(|error| {
         panic!(
             "frontend build stage record is absent at {}: {error}. Run the desktop build command so the UI is built before Cargo",
