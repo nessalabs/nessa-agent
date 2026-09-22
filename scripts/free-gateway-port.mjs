@@ -120,9 +120,8 @@ function launchdLabel(pid) {
  *   - `/work/nessa-agent-other/target/debug/nessa server` contains
  *     `/work/nessa-agent` as a substring, so a sibling checkout's gateway read
  *     as ours and was sent SIGTERM.
- *   - Worktrees symlink `target/` into the main checkout, so a worktree's
- *     gateway genuinely *is* this checkout's binary — the same path, a
- *     different owner. No amount of path-boundary care fixes that one.
+ *   - A process may be launched through a wrapper or another path spelling;
+ *     neither makes its lifetime belong to this checkout.
  *
  * `just start` runs the server with this tree as its working directory, so a
  * leftover of ours has it; anything else is somebody else's and is reported
@@ -139,12 +138,10 @@ function isOurDevServer({ pid, command }) {
  *
  * The working directory is the evidence, because a command line is not: a
  * sibling checkout at `/work/nessa-agent-other` contains `/work/nessa-agent` as
- * a substring, and worktrees symlink `target/` into the main checkout so a
- * worktree's process genuinely runs this checkout's binary.
+ * a substring.
  *
  * Windows has no cwd to read here (`lsof` is not there), so it falls back to a
- * path-boundary check on the command — which rules out the sibling-prefix case
- * and cannot rule out a shared binary. That is weaker, and it is said out loud
+ * path-boundary check on the command. That is weaker, and it is said out loud
  * rather than left to look the same as the Unix answer.
  */
 function belongsToThisCheckout(pid, command) {
