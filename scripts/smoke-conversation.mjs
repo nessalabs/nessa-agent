@@ -173,7 +173,11 @@ try {
     (view) => view.capabilities.imageInput && view.capabilities.steer,
     "Claude image and steering capabilities",
   )
-  assert.equal(ready.runtime?.provider, "claude")
+  assert.deepEqual(ready.runtime, {
+    model: "claude-haiku-4-5-20251001",
+    provider: "claude-acp",
+    workspace,
+  })
 
   const originalImage = tinyPng
   assertValidTinyPng(originalImage)
