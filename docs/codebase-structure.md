@@ -700,7 +700,7 @@ private to its owner like everything else there.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases
-that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-opencode.mjs` regenerates
+that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-agents.mjs` regenerates
 the pin file by downloading and hashing every platform's archive. Tests under
 `tests/agent_install/` split the domain's rules, the ordering, the two adapters
 and the command's output.
