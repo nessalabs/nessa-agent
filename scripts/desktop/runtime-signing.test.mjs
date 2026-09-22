@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
-  RUNTIME_EXECUTABLES,
   runtimeEntitlements,
   signingArguments,
   signingIdentity,
   signingProblems,
 } from "./runtime-signing.mjs"
+import { runtimeExecutables } from "./runtime-layout.mjs"
 
 const IDENTITY = "Developer ID Application: Nessa Labs (ABCDE12345)"
 
@@ -61,7 +61,9 @@ test("entitlements are passed when the binary has any", () => {
 /** Only Node compiles code at runtime, so only Node is owed an exception. */
 test("node is the only executable with entitlements", () => {
   assert.equal(runtimeEntitlements("node"), "Entitlements.node.plist")
-  for (const name of RUNTIME_EXECUTABLES.filter((name) => name !== "node"))
+  for (const name of Object.values(runtimeExecutables("darwin")).filter(
+    (name) => name !== "node",
+  ))
     assert.equal(runtimeEntitlements(name), undefined, name)
 })
 
