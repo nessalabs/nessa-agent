@@ -101,13 +101,23 @@ mod tests {
     }
 
     #[test]
-    fn a_small_secret_does_not_retain_the_input_allocation_capacity() {
+    fn a_small_secret_uses_a_bounded_slice_representation() {
         let mut secret = Vec::with_capacity(1024 * 1024);
         secret.extend_from_slice(b"key");
+        let mut overallocated = String::with_capacity(1024 * 1024);
+        overallocated.push_str("key");
+        assert!(overallocated.capacity() > overallocated.len());
 
         let credential = AgentCredential::new(AgentCredentialKind::ApiKey, secret).unwrap();
 
         assert_eq!(credential.expose(), "key");
-        assert_eq!(std::mem::size_of_val::<str>(&credential.secret), 3);
+        assert_eq!(
+            std::mem::size_of_val(&credential.secret),
+            std::mem::size_of::<Box<str>>()
+        );
+        assert_ne!(
+            std::mem::size_of_val(&credential.secret),
+            std::mem::size_of_val(&overallocated)
+        );
     }
 }
