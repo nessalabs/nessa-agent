@@ -324,21 +324,30 @@ with no shared `target/` — a cold build of ~600 crates each time.
 pointing at `./scripts/worktree.sh claude-hook` and `claude-hook-remove`, which
 is the only supported way to replace that behaviour; there is no setting for it.
 
-Replacing Claude Code's creation means owing it the behaviour it would have had,
-so the hook takes the parts of the payload that decide those things rather than
-inventing them:
+Replacing Claude Code's creation means owing it the behaviour it would have had.
+The `WorktreeCreate` payload carries exactly one field, `name`, and it is a
+worktree **slug** — not a branch and not a path — so everything else is the
+hook's job to match:
 
-| Payload | Used for |
+| | What the hook does, and why |
 | --- | --- |
-| `worktree_path` | Where it goes. Claude Code's own location and reuse-by-name semantics are kept, and no directory is ever derived from a name here |
-| `name` | A worktree **slug**, not a branch. The branch is `worktree-<name>`, which is also what Claude Code would have named it — and the prefix is what stops a slug matching a person's branch from handing an agent that person's checkout |
-| — | The base is the repository's default branch, which is what `worktree.baseRef: "fresh"` means. `git worktree add -b` with no start-point instead branches from whatever the clone is sitting on, so a clone parked on a feature branch would have given every agent that branch's commits |
+| Location | `.claude/worktrees/<name>`, where Claude Code puts its own, already gitignored. Deliberately **not** the sibling directory `create` uses. Those are people's worktrees, and the two naming schemes are not the same function — a slug may contain dots, a `create` name may not — so keeping the namespaces apart is what stops an agent being handed somebody's checkout to commit to |
+| Branch | `worktree-<name>`, which is what Claude Code's own default names it |
+| Base | The repository's default branch, which is what `worktree.baseRef: "fresh"` means. `git worktree add -b` with no start-point instead branches from whatever the clone is sitting on, so a clone parked on a feature branch would have given every agent that branch's commits. `--no-track`, so the agent's `git push` and `git pull` don't act on main |
+
+Note that the documented input schema for `WorktreeCreate` lists `path` and
+`worktree_path` as well. Claude Code 2.1.278 sends neither; only `WorktreeRemove`
+carries `worktree_path`. The hook reads what is actually sent.
 
 The remove hook is not optional. Claude Code's periodic sweep only removes
 worktrees carrying a marker it writes itself, and one a hook created has none,
 so without it every worktree made this way would stay on disk for ever — the
 accumulation this exists to stop. It unlinks `target/` before removing the
-directory, for the reason the script's own warning gives.
+directory, for the reason the script's own warning gives, and deletes the branch
+only when the base already contains every commit on it. That last test is
+`merge-base --is-ancestor` rather than `git branch -d`, because `-d` means
+"merged into whatever this clone has checked out" and would refuse to tidy up an
+empty worktree branch whenever the clone sits on an unrelated branch.
 
 One thing the hook gives up: `.worktreeinclude` is not processed when a
 `WorktreeCreate` hook replaces creation. This repo has no such file, so nothing

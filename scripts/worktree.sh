@@ -85,6 +85,31 @@ check_name() {
   [[ "$1" =~ ^[A-Za-z0-9_/-]+$ ]] || die "invalid name '$1': use letters, digits, - _ /"
 }
 
+# A worktree slug Claude Code sent, checked for what it will be used as: a path.
+#
+# Its alphabet is not this script's. Claude Code accepts `[a-zA-Z0-9._-]` per
+# slash-separated segment, up to 64 characters — dots included — so names it
+# creates happily, such as `v1.2` or `release/1.0`, are not names `check_name`
+# would allow. Rejecting them here would refuse worktrees stock Claude Code
+# makes without complaint.
+#
+# What actually matters is that the slug becomes a directory under
+# `.claude/worktrees/`, so the checks are the ones a path needs: no empty or
+# dot segments to climb out of it, no leading dash to be read as an option.
+check_hook_name() {
+  local name="$1" segment
+  [[ -n "$name" ]] || die "WorktreeCreate: empty name"
+  [[ "$name" != -* ]] || die "WorktreeCreate: name may not start with a dash: $name"
+  local IFS=/
+  for segment in $name; do
+    [[ -n "$segment" ]] || die "WorktreeCreate: empty path segment in name: $name"
+    [[ "$segment" != . && "$segment" != .. ]] \
+      || die "WorktreeCreate: name may not contain a '.' or '..' segment: $name"
+    [[ "$segment" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
+      || die "WorktreeCreate: segment '$segment' is not a worktree name: $name"
+  done
+}
+
 # The directory a branch belongs in. One branch, one directory, both ways.
 #
 # A slash is fine in a branch and not in a directory name, so it has to become
@@ -140,7 +165,15 @@ hook_field() {
 default_base() {
   local ref
   ref="$(git -C "$repo_root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
-  if [[ -n "$ref" ]]; then printf '%s\n' "$ref"; return 0; fi
+  # `symbolic-ref` happily reports a target that no longer exists — a remote
+  # renamed master to main without `git remote set-head` leaves exactly that —
+  # and `worktree add` on a dangling ref fails, which would have broken every
+  # creation until someone repaired it by hand. Verified before it is used, so
+  # a stale pointer falls through to the branches below instead.
+  if [[ -n "$ref" ]] && git -C "$repo_root" rev-parse --verify --quiet "$ref" >/dev/null; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
   for ref in refs/remotes/origin/main refs/remotes/origin/master; do
     if git -C "$repo_root" rev-parse --verify --quiet "$ref" >/dev/null; then
       printf '%s\n' "$ref"
@@ -245,59 +278,67 @@ EOF
 # and several gigabytes, every time. Sixteen had accumulated here, ten carrying
 # their own target/, about 58 GB between them.
 #
-# This replaces that creation step, and replacing it means owing Claude Code the
-# behaviour it would have had. Three parts of the payload matter, and taking
-# them rather than inventing them is what keeps the two in step:
+# This replaces that creation step, which means owing Claude Code the behaviour
+# it would otherwise have had. The payload carries one field, `name`, and it is
+# a worktree slug — not a branch, and not a path. Everything else is this
+# script's job to match:
 #
-#   * `worktree_path` is where Claude Code was going to put it. Using it keeps
-#     the location, the reuse-by-name semantics, and the gitignored
-#     `.claude/worktrees/` layout, and means this hook never has to derive a
-#     directory from a name — the whole class of two-names-one-directory bugs
-#     simply is not reachable from here.
-#   * `name` is a worktree slug, not a branch. Claude Code's default branch for
-#     it is `worktree-<name>`, so that is what gets created. The prefix is also
-#     what stops a slug that happens to match a person's branch from handing an
-#     agent that person's checkout.
-#   * the base is `default_base`, the repository's default branch, which is what
-#     `worktree.baseRef: "fresh"` means and what Claude Code would have used.
+#   * The worktree goes under `.claude/worktrees/<name>`, which is where Claude
+#     Code puts its own and is already gitignored. Deliberately NOT the sibling
+#     directory `create` uses: those are people's worktrees, and the two naming
+#     schemes are not the same function. A slug is allowed dots, `create` is
+#     not, and mapping both into one namespace is how an agent would come to be
+#     handed a person's checkout to commit to. Separate namespaces cannot.
+#   * The branch is `worktree-<name>`, which is what Claude Code's own default
+#     names it, so its expectations about the branch still hold.
+#   * The base is the repository's default branch — `worktree.baseRef: "fresh"`,
+#     the default. `git worktree add -b` with no start-point instead branches
+#     from whatever HEAD the clone is sitting on; a clone parked on a feature
+#     branch would have handed every agent that branch's commits. `--no-track`
+#     because the base is a remote branch and inheriting it as upstream makes
+#     the agent's `git push` and `git pull` act on main.
 #
-# The protocol is the reason this is a command of its own rather than a flag on
-# `create`: Claude Code writes JSON on stdin and reads the path from stdout, so
-# stdout carries the path and nothing else, and every line meant for a person
-# goes to stderr. A non-zero exit aborts creation and shows stderr to the user.
+# The protocol is why this is a command of its own rather than a flag: Claude
+# Code writes JSON on stdin and reads the path from stdout, so stdout carries
+# the path and nothing else and every line meant for a person goes to stderr. A
+# non-zero exit aborts creation and shows stderr to the user.
 #
-# `pnpm install` failing is reported, not fatal: a Rust-only or docs-only
-# session should not lose its worktree to an unreachable registry.
+# Sharing the build cache and installing dependencies are both improvements to a
+# worktree, not conditions of one: neither failing is allowed to cost a worktree
+# git has already made.
 cmd_claude_hook() {
-  local payload name dir branch existing
+  local payload name dir branch existing occupant base
   payload="$(cat)"
   name="$(printf '%s' "$payload" | hook_field name)"
-  dir="$(printf '%s' "$payload" | hook_field worktree_path)"
   [[ -n "$name" ]] || die "WorktreeCreate: no .name in: $payload"
+  check_hook_name "$name"
 
-  # Only if Claude Code did not say where. Older versions did not send the
-  # field, and a derived path is better than no worktree.
-  [[ -n "$dir" ]] || { check_name "$name"; dir="$(worktree_path "$name")"; }
+  dir="$repo_root/.claude/worktrees/$name"
   branch="worktree-$name"
 
-  # Claude Code reuses a worktree whose directory already exists, by name, and
-  # the directory it named is the identity here — not a branch, which could be
-  # checked out in a person's own worktree.
+  # Claude Code reopens a worktree whose directory already exists, so this does
+  # too — but only when git agrees it is a worktree. A bare directory there
+  # would be handed back as a checkout that is not one, and Claude Code refuses
+  # those with a message about git metadata rather than about this.
   if [[ -e "$dir" ]]; then
-    echo "→ reusing $dir" >&2
-    ensure_shared_target "$dir"
+    occupant="$(branch_at_worktree "$dir")"
+    [[ -n "$occupant" ]] \
+      || die "$dir exists but git does not know it as a worktree.
+Remove it and let this recreate it, or pick another name."
+    echo "→ reusing $dir (on $occupant)" >&2
+    ensure_shared_target "$dir" || echo "→ build cache not shared; continuing" >&2
     printf '%s\n' "$dir"
     return 0
   fi
 
-  # A branch cannot be checked out twice, so `worktree add` would fail. This is
-  # reachable when a directory was deleted without git being told; the registry
-  # entry survives. Reuse the live one, and prune a stale one out of the way.
+  # A branch cannot be checked out twice, so `worktree add` would fail. Reachable
+  # when a directory was deleted without git being told: the registry entry
+  # outlives it.
   existing="$(worktree_for_branch "$branch")"
   if [[ -n "$existing" ]]; then
     if [[ -d "$existing" ]]; then
       echo "→ reusing $existing (branch $branch is checked out there)" >&2
-      ensure_shared_target "$existing"
+      ensure_shared_target "$existing" || echo "→ build cache not shared; continuing" >&2
       printf '%s\n' "$existing"
       return 0
     fi
@@ -305,17 +346,17 @@ cmd_claude_hook() {
     git -C "$repo_root" worktree prune >&2
   fi
 
+  mkdir -p "$(dirname "$dir")"
   if git -C "$repo_root" show-ref --quiet --verify "refs/heads/$branch"; then
     echo "→ worktree $dir (existing branch $branch)" >&2
     git -C "$repo_root" worktree add "$dir" "$branch" >&2
   else
-    local base
     base="$(default_base)"
     echo "→ worktree $dir (new branch $branch from $base)" >&2
-    git -C "$repo_root" worktree add -b "$branch" "$dir" "$base" >&2
+    git -C "$repo_root" worktree add --no-track -b "$branch" "$dir" "$base" >&2
   fi
 
-  ensure_shared_target "$dir"
+  ensure_shared_target "$dir" || echo "→ build cache not shared; continuing" >&2
 
   if ! (cd "$dir" && pnpm install --prefer-offline >&2); then
     echo "→ pnpm install failed; run it in $dir before building the frontend" >&2
@@ -328,26 +369,51 @@ cmd_claude_hook() {
 # Claude Code's WorktreeRemove hook.
 #
 # Required, not optional, once WorktreeCreate is set. Claude Code's periodic
-# sweep only removes worktrees carrying the marker it writes itself, and a
-# worktree a hook created has no marker — so without this, every worktree made
-# here would stay on disk for ever, which is the accumulation this whole change
-# is meant to stop.
+# sweep only removes worktrees carrying a marker it writes itself, and one a
+# hook created has none — so without this, every worktree made here would stay
+# on disk for ever, which is the accumulation this change exists to stop. For
+# the same reason Claude Code skips its own branch cleanup on this path, so the
+# branch is this hook's to delete too.
 #
-# The symlink comes out first, and that ordering is the same load-bearing one
-# `cmd_remove` documents: `target/` points into the main checkout's 99 GB build
-# cache, and anything that deletes the directory recursively while the link is
-# still in it takes every worktree's compiled artifacts with it.
+# `worktree_path` is the only field this event carries; `name` is not sent.
+#
+# The symlink comes out first, and that ordering is the load-bearing one
+# `cmd_remove` documents: `target/` points into the main checkout's build cache,
+# and anything deleting the directory recursively while the link is still in it
+# would take every worktree's compiled artifacts with it.
+#
+# The branch goes too, but only when it holds nothing. `git branch -d` is the
+# obvious way to ask that and the wrong one: it means "merged into the branch
+# this clone happens to have checked out", so a clone sitting on an unrelated
+# feature branch refuses to delete even a worktree branch with no commits at
+# all — every branch would accumulate, which is half the problem this hook is
+# for. The question worth asking is whether the branch has any commit the base
+# does not already have, and `merge-base --is-ancestor` asks exactly that.
 cmd_claude_hook_remove() {
-  local payload dir
+  local payload dir branch
   payload="$(cat)"
   dir="$(printf '%s' "$payload" | hook_field worktree_path)"
   [[ -n "$dir" ]] || die "WorktreeRemove: no .worktree_path in: $payload"
   [[ -e "$dir" ]] || return 0
 
+  branch="$(branch_at_worktree "$dir")"
   if [[ -L "$dir/target" ]]; then
     rm -f "$dir/target"
   fi
   git -C "$repo_root" worktree remove --force "$dir" >&2
+
+  # Only branches this hook names, and only when the base already contains
+  # everything on them. `-D` is safe here because that test, not git's default
+  # one, is the question actually being asked.
+  if [[ "$branch" == worktree-* ]]; then
+    local base
+    base="$(default_base)"
+    if git -C "$repo_root" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null; then
+      git -C "$repo_root" branch -D "$branch" >&2
+    else
+      echo "→ keeping branch $branch; it has commits $base does not" >&2
+    fi
+  fi
 }
 
 # Where a branch's worktree is, or would be. Prints one path, nothing else.
