@@ -60,8 +60,13 @@ pub enum StoreFailure {
     /// failed — and true of any of them, not only the program that is launched:
     /// Codex's runtime finds its ripgrep and its zsh through the directory it
     /// is installed in, so an archive missing one of those is as unusable as
-    /// one missing the program itself.
-    MissingExecutable(String),
+    /// one missing the program itself. Named for the archive rather than for
+    /// the executable because a release stopped being one file: this is raised
+    /// for a missing document as readily as for the program, and a reader who
+    /// went looking for a missing *executable* would be looking for the wrong
+    /// thing. It sits beside [`Self::MalformedArchive`], which is an archive
+    /// that could not be read at all rather than one read and found short.
+    IncompleteArchive(String),
     /// The archive is not a well-formed gzip tar.
     MalformedArchive(String),
 }
@@ -71,7 +76,7 @@ impl fmt::Display for StoreFailure {
         match self {
             Self::Unwritable(detail) => write!(f, "could not write the agent runtime: {detail}"),
             Self::Unreadable(detail) => write!(f, "could not read the agent runtime: {detail}"),
-            Self::MissingExecutable(path) => {
+            Self::IncompleteArchive(path) => {
                 write!(f, "the release archive does not contain {path}")
             }
             Self::MalformedArchive(detail) => {
@@ -236,7 +241,7 @@ pub trait RuntimeStore: Send + Sync {
     /// same open file that was measured, so an implementation may assume it is
     /// unpacking the pinned bytes. It may not assume anything about their
     /// *contents*: a file named by the pin can still be absent, which is
-    /// [`StoreFailure::MissingExecutable`].
+    /// [`StoreFailure::IncompleteArchive`].
     ///
     /// Durable on return: an executable this reports is one a machine that
     /// loses power immediately afterwards still has.

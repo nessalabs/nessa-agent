@@ -157,7 +157,7 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::Download(SourceFailure::TooLarge(_))
         | InstallFailure::Rejected(_)
         | InstallFailure::Store(
-            StoreFailure::MissingExecutable(_) | StoreFailure::MalformedArchive(_),
+            StoreFailure::IncompleteArchive(_) | StoreFailure::MalformedArchive(_),
         ) => format!(
             "{failure}; nothing was installed and this is not worth retrying — \
              report it rather than running the command again"

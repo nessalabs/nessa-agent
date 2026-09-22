@@ -789,7 +789,7 @@ fn an_archive_without_the_pinned_executable_is_named_as_such() {
             &release,
             &archive("package/bin/somethingelse", b"binary")
         ),
-        Err(StoreFailure::MissingExecutable(
+        Err(StoreFailure::IncompleteArchive(
             "package/bin/opencode".into()
         ))
     );
@@ -1690,7 +1690,7 @@ fn a_failed_install_does_not_remove_a_runtime_it_did_not_write() {
         .expect_err("an archive without the pinned executable");
 
     assert!(
-        matches!(failure, StoreFailure::MissingExecutable(_)),
+        matches!(failure, StoreFailure::IncompleteArchive(_)),
         "{failure:?}"
     );
     assert_eq!(
@@ -2223,7 +2223,7 @@ mod packages {
 
         assert_eq!(
             failure,
-            StoreFailure::MissingExecutable("package/vendor/codex-path/rg".into())
+            StoreFailure::IncompleteArchive("package/vendor/codex-path/rg".into())
         );
         for (path, _) in package_entries() {
             assert!(

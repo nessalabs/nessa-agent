@@ -620,7 +620,7 @@ impl ManagedRuntimes {
     /// files to undo, and a `Result` alone would carry nothing to undo them by.
     ///
     /// `budget` is spent across the whole release, and
-    /// [`StoreFailure::MissingExecutable`] is the archive simply not containing
+    /// [`StoreFailure::IncompleteArchive`] is the archive simply not containing
     /// a file the pin names — a pin that is wrong about its own contents rather
     /// than a machine that failed.
     fn unpack(
@@ -757,7 +757,7 @@ impl ManagedRuntimes {
         // The first by path, so the message does not depend on the order the
         // entries happened to come in.
         match wanted.values().next() {
-            Some(file) => Err(StoreFailure::MissingExecutable(
+            Some(file) => Err(StoreFailure::IncompleteArchive(
                 file.path().as_str().to_owned(),
             )),
             None => Ok(()),

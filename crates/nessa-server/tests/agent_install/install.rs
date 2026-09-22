@@ -278,7 +278,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
     // retrying that would never help.
     let root = tempfile::tempdir().expect("temporary root");
     let source = FakeSource::serving(b"archive bytes");
-    let missing = StoreFailure::MissingExecutable("package/bin/opencode".into());
+    let missing = StoreFailure::IncompleteArchive("package/bin/opencode".into());
     let store = FakeStore::empty(root.path()).failing_to_publish(missing.clone());
     let platform = platform();
     let host = host();

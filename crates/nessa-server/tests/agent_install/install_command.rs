@@ -149,7 +149,7 @@ fn every_failure_nothing_can_be_done_about_says_so() {
     for failure in [
         InstallFailure::Download(SourceFailure::TooLarge(512)),
         InstallFailure::Rejected(rejection()),
-        InstallFailure::Store(StoreFailure::MissingExecutable(
+        InstallFailure::Store(StoreFailure::IncompleteArchive(
             "package/bin/opencode".into(),
         )),
         InstallFailure::Store(StoreFailure::MalformedArchive("not a tar".into())),
