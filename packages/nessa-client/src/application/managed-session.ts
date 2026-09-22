@@ -14,6 +14,8 @@ export type ConnectedSession = {
   wire: SessionTransport
   ready: ProductSessionReady
   profile: "product"
+  /** Authenticated socket URL owned by this exact transport. */
+  url: string
 }
 
 /** RPCs issued during recovery fail immediately; they are never queued or replayed. */
@@ -55,6 +57,9 @@ export class ManagedSession {
   }
   get ready(): ProductSessionReady | undefined {
     return this.current?.ready
+  }
+  get url(): string | undefined {
+    return this.current?.url
   }
 
   request(method: string, params: unknown): Promise<unknown> {

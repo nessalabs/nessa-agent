@@ -62,17 +62,24 @@ describe("connectDevSession", () => {
 
   it("passes the configured credential source without supplying a dev token", async () => {
     const source = { load: vi.fn(async () => "private") }
+    const endpointSource = { load: vi.fn(async () => "ws://127.0.0.1:9137") }
     const connect = vi.fn().mockResolvedValue({
       productSession: {},
       server: { health: vi.fn(async () => ({})) },
       close: vi.fn(),
     })
-    await connectDevSession({ connect, credentialSource: source, stage: "ci" })
+    await connectDevSession({
+      connect,
+      credentialSource: source,
+      endpointSource,
+      stage: "ci",
+    })
     expect(connect).toHaveBeenCalledWith(
       expect.objectContaining({
         profile: "product",
         stage: "ci",
         credentialSource: source,
+        endpointSource,
       }),
     )
     expect(connect.mock.calls[0][0].auth).toBeUndefined()

@@ -3,10 +3,10 @@ import {
   type HealthResult,
   type ProductSessionReady,
   type CredentialSource,
+  type GatewayEndpointSource,
   type Stage,
 } from "@nessa/client"
 
-import { gatewayPort } from "../../../env/gateway-ports"
 import { host } from "../../../host"
 
 export type EstablishedDevSession = {
@@ -29,6 +29,7 @@ export class SessionHealthError extends Error {
 export type ConnectDevSessionDeps = {
   connect?: typeof NessaClient.connect
   credentialSource?: CredentialSource
+  endpointSource?: GatewayEndpointSource
   stage?: Stage
   clientId?: string
   browserUrl?: string
@@ -43,10 +44,9 @@ export async function connectDevSession(
   const client = await connect({
     profile: "product",
     stage,
-    // Without a proxied browser URL this talks to the gateway directly, so it
-    // asks the one table where this stage listens.
-    url: deps.browserUrl ?? `ws://127.0.0.1:${gatewayPort(stage)}/session`,
-    ...(deps.browserUrl ? { auth: { browserCookie: true as const } } : {}),
+    ...(deps.browserUrl
+      ? { url: deps.browserUrl, auth: { browserCookie: true as const } }
+      : { endpointSource: deps.endpointSource }),
     credentialSource: deps.credentialSource,
     role: "surface",
     surface: { kind: "panel", instance: crypto.randomUUID() },

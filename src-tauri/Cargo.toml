@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 nessa-local-storage = { path = "../crates/nessa-local-storage" }
+nessa-gateway-endpoint = { path = "../crates/nessa-gateway-endpoint" }
 # `macos-private-api` is what makes the transparent, undecorated window legal
 # on macOS; `tray-icon` and `image-png` back the menu bar item.
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }

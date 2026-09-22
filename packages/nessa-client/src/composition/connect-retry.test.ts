@@ -2,6 +2,7 @@ import { NessaClientConfig } from "../application/client-config.js"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { NessaClient } from "../presentation/nessa-client.js"
 import { NessaProtocolCompatibilityError } from "../application/protocol-compatibility-error.js"
+import { NessaEndpointDiscoveryError } from "../application/gateway-endpoint.js"
 import {
   retryProductConnection,
   RetryableConnectError,
@@ -127,6 +128,7 @@ const options = {
   surface: { kind: "cli" as const, instance: "test" },
   client: { id: "test", version: "1", platform: "node" as const },
   auth: { credential: "never-print-this-secret" },
+  endpointSource: { load: async () => undefined },
 }
 
 beforeEach(() => {
@@ -156,6 +158,108 @@ async function connect(
 }
 
 describe("product connection recovery", () => {
+  it("verifies discovery before loading or sending credentials", async () => {
+    const order: string[] = []
+    const result = NessaClient.connect({
+      ...options,
+      auth: undefined,
+      endpointSource: {
+        async load() {
+          order.push("endpoint")
+          return "ws://127.0.0.1:9137"
+        },
+      },
+      credentialSource: {
+        async load({ url }) {
+          order.push(`credential:${url}`)
+          return "discovered-credential"
+        },
+      },
+    })
+    await vi.runAllTimersAsync()
+    const client = await result
+    expect(order).toEqual(["endpoint", "credential:ws://127.0.0.1:9137"])
+    expect(sockets[0].url).toBe("ws://127.0.0.1:9137/session")
+    client.close()
+  })
+
+  it("never asks for a credential when present discovery is untrustworthy", async () => {
+    const credential = vi.fn()
+    const result = NessaClient.connect({
+      ...options,
+      auth: undefined,
+      endpointSource: {
+        async load() {
+          throw new NessaEndpointDiscoveryError("identity mismatch")
+        },
+      },
+      credentialSource: { load: credential },
+    })
+    await expect(result).rejects.toBeInstanceOf(NessaEndpointDiscoveryError)
+    expect(credential).not.toHaveBeenCalled()
+    expect(sockets).toHaveLength(0)
+  })
+
+  it("rediscovers and reloads credentials before each managed reconnect", async () => {
+    const endpoints = ["ws://127.0.0.1:9137", "ws://127.0.0.1:9138"]
+    const endpointSource = { load: vi.fn(async () => endpoints.shift()) }
+    const credentialSource = { load: vi.fn(async () => "current-credential") }
+    const connecting = NessaClient.connect({
+      ...options,
+      auth: undefined,
+      endpointSource,
+      credentialSource,
+      config: new NessaClientConfig({
+        reconnect: { initialDelayMs: 0, maxDelayMs: 0, jitter: false },
+      }),
+    })
+    await vi.runAllTimersAsync()
+    const client = await connecting
+    sockets[0].close(1012)
+    await vi.runAllTimersAsync()
+    expect(sockets.map((socket) => socket.url)).toEqual([
+      "ws://127.0.0.1:9137/session",
+      "ws://127.0.0.1:9138/session",
+    ])
+    expect(endpointSource.load).toHaveBeenCalledTimes(2)
+    expect(credentialSource.load).toHaveBeenCalledTimes(2)
+
+    const uploadRequest = vi.fn(async (_target: string) => {
+      throw new Error("stop after observing the upload target")
+    })
+    vi.stubGlobal("fetch", uploadRequest)
+    await expect(
+      client.attachments.upload("a".repeat(64), {
+        mimeType: "image/png",
+        bytes: new Blob(["payload"]),
+      }),
+    ).rejects.toMatchObject({ code: "unreachable" })
+    expect(uploadRequest.mock.calls[0]?.[0]).toBe("http://127.0.0.1:9138/attachments")
+    client.close()
+  })
+
+  it("uses a verified publication outside dev", async () => {
+    const connecting = NessaClient.connect({
+      ...options,
+      stage: "prod",
+      endpointSource: { load: async () => "wss://gateway.example.test" },
+    })
+    await vi.runAllTimersAsync()
+    const client = await connecting
+    expect(sockets[0]?.url).toBe("wss://gateway.example.test/session")
+    client.close()
+  })
+
+  it("preserves the explicit-URL requirement outside dev when publication is absent", async () => {
+    const result = NessaClient.connect({
+      ...options,
+      stage: "prod",
+      endpointSource: { load: async () => undefined },
+    })
+    await expect(result).rejects.toThrow("url is required for the prod stage")
+    expect(sockets).toHaveLength(0)
+  })
+
   it.each([
     "no-open",
     "no-challenge",

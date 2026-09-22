@@ -17,6 +17,7 @@ path = "src/main.rs"
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-images = { path = "../nessa-images" }
 nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"

@@ -1,8 +1,11 @@
 import { gatewayEffects } from "../conversation/adapters/gateway/effects"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
 import { sha256Digest } from "../panel/adapters/sha256"
-import { nativeCredentialSource } from "../session/adapters/client/credential-source"
-import type { CredentialSource } from "@nessa/client"
+import {
+  nativeCredentialSource,
+  nativeGatewayEndpointSource,
+} from "../session/adapters/client/credential-source"
+import type { CredentialSource, GatewayEndpointSource } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { createSessionHandle } from "../session/adapters/client/handle"
@@ -21,6 +24,7 @@ export function createDependencies(
     conversation?: ConversationEffects
     agents?: AgentReadinessSource
     credentialSource?: CredentialSource
+    endpointSource?: GatewayEndpointSource
     clientId?: string
     digest?: (bytes: Blob) => Promise<string>
     canChoosePaths?: boolean
@@ -121,6 +125,7 @@ export function createDependencies(
           stage: config.stage,
           clientId: options.clientId,
           credentialSource: options.credentialSource ?? nativeCredentialSource(),
+          endpointSource: options.endpointSource ?? nativeGatewayEndpointSource(),
         })),
     conversation:
       options.conversation ??

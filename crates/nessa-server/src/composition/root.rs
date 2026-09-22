@@ -13,6 +13,11 @@ use crate::{
     env::UptimeBackend,
 };
 use axum::Extension;
+use nessa_gateway_endpoint::{
+    application::{ManagedRuntimeAdvertisement, PublishGatewayEndpoint},
+    domain::{EndpointIdentity, GatewayEndpoint},
+    infrastructure::FileEndpointPublication,
+};
 use std::future::Future;
 use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -131,11 +136,6 @@ impl CompositionRoot {
         } else {
             None
         };
-        let mut router = http::router(product);
-        if let Some(identity) = &desktop_identity {
-            router = router.layer(Extension(identity.clone()));
-        }
-
         let listen_addr = config.listen_addr();
         let listener = tokio::net::TcpListener::bind(&listen_addr)
             .await
@@ -143,9 +143,51 @@ impl CompositionRoot {
                 addr: listen_addr.clone(),
                 source,
             })?;
+        let bound_address = listener.local_addr().map_err(RunError::Serve)?;
+        let endpoint_identity = EndpointIdentity::new(
+            desktop_identity
+                .as_ref()
+                .map(|identity| identity.instance().as_str().to_owned())
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            std::process::id(),
+        )
+        .map_err(|error| RunError::Runtime(error.into()))?;
+        let endpoint = GatewayEndpoint::new(bound_address, endpoint_identity.clone())
+            .map_err(|error| RunError::Runtime(error.into()))?;
+        let managed = desktop_identity
+            .as_ref()
+            .map(|identity| {
+                ManagedRuntimeAdvertisement::new(
+                    identity.fingerprint().as_str().to_owned(),
+                    identity.generation().as_str().to_owned(),
+                    identity.instance().as_str().to_owned(),
+                    identity.process_id(),
+                    endpoint.identity(),
+                )
+            })
+            .transpose()
+            .map_err(|error| RunError::Runtime(error.into()))?;
+        let log_directory = config
+            .gateway_log_directory()
+            .ok_or_else(|| RunError::Runtime("missing endpoint publication namespace".into()))?;
+        let publication = FileEndpointPublication::new(log_directory);
+        let published_endpoint = endpoint.clone();
+        let published_managed = managed.clone();
+        tokio::task::spawn_blocking(move || {
+            PublishGatewayEndpoint::new(&publication)
+                .execute(&published_endpoint, published_managed.as_ref())
+        })
+        .await
+        .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
+        .map_err(RunError::Serve)?;
+
+        let mut router = http::router(product).layer(Extension(endpoint_identity));
+        if let Some(identity) = &desktop_identity {
+            router = router.layer(Extension(identity.clone()));
+        }
 
         tracing::info!(
-            listen_addr = %listen_addr,
+            listen_addr = %bound_address,
             stage = config.stage.as_str(),
             "nessa server listening",
         );

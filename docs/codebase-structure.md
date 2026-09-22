@@ -264,6 +264,16 @@ from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
 
+`crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
+identity, application publication/discovery ports, and private-file adapters.
+Server composition publishes the actual listener address atomically beside
+`gateway.log`; local Rust clients accept it only when every identity field agrees
+with a bounded unauthenticated `/health` response. This correlation rejects stale
+and mismatched listeners but is not authentication. `nessa-server` and the desktop
+host compose the shared ports without depending on one another, and the Node
+client is held to the same canonical record by the cross-runtime fixture in
+`protocol/fixtures/gateway-endpoint.json`.
+
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or
 compresses it to PNG or JPEG, or says by type why it could not. It knows nothing

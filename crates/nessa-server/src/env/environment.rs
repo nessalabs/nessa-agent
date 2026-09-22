@@ -105,6 +105,19 @@ impl Environment {
     pub fn listen_addr(&self) -> String {
         format_socket_addr(&self.bind_host, self.port)
     }
+
+    /// The log directory in this already-resolved stage and instance namespace.
+    ///
+    /// Authentication composition requires `auth_directory` before serving, so
+    /// its parent is the one namespace authority. Endpoint publication uses the
+    /// sibling log directory without re-reading or re-interpreting environment
+    /// variables.
+    pub(crate) fn gateway_log_directory(&self) -> Option<std::path::PathBuf> {
+        self.auth_directory
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(|namespace| namespace.join("logs"))
+    }
 }
 
 fn load_auth_directory(
@@ -270,5 +283,20 @@ mod tests {
     fn formats_ipv6_loopback_listen_addr() {
         let config = Environment::load(&MockEnv::new().set(HOST, "::1")).expect("ipv6");
         assert_eq!(config.listen_addr(), "[::1]:7421");
+    }
+
+    #[test]
+    fn endpoint_publication_uses_the_resolved_auth_namespace() {
+        let config = Environment::load(
+            &MockEnv::new()
+                .set("NESSA_DATA_DIR", "/private/nessa")
+                .set(STAGE, "ci")
+                .set("NESSA_INSTANCE", "worker-7"),
+        )
+        .unwrap();
+        assert_eq!(
+            config.gateway_log_directory().unwrap(),
+            std::path::Path::new("/private/nessa/ci/instances/worker-7/logs")
+        );
     }
 }
