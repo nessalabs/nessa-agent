@@ -354,8 +354,11 @@ All additional Nessa tools use this MCP boundary. See the
 [server guide](../crates/nessa-mcp/README.md).
 
 `src/conversation/adapters/agent-stream/` maps replacement gateway projections to
-Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives activity
-rows from the shared Transcript; it does not parse provider wire formats.
+Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives one
+turn-level activity row from the shared Transcript; `ui/turn-activity.tsx` opens
+its ordered thought and tool detail. Neither parses provider wire formats.
+`ui/transcript.tsx` renders a turn's terminal status once at row level,
+independently of whether that turn contains text.
 
 ### Packaged gateway lifecycle
 
