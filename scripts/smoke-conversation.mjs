@@ -25,13 +25,13 @@ import {
 import { evidenceFor, readEvidence, waitFor } from "./conversation-smoke/evidence.mjs"
 import {
   collectCleanupFailures,
+  createFixtureSupervisor,
   createLossyProxy,
-  processIsGone,
   reservePort,
   startGateway,
   stopGateway,
-  stopOwnedFixtureProcesses,
 } from "./conversation-smoke/runtime.mjs"
+import { assertValidTinyPng, tinyPng } from "./conversation-smoke/tiny-png.mjs"
 
 globalThis.WebSocket = WebSocket
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -70,6 +70,7 @@ const cancelExecutionId = "execution-cancel"
 const clients = []
 let proxy
 let gateway
+let fixtureSupervisor
 let primaryFailure
 
 const connect = async (url) => {
@@ -108,6 +109,7 @@ const viewWith = (client, accept, description) => {
 
 try {
   mkdirSync(workspace)
+  fixtureSupervisor = await createFixtureSupervisor()
   const initialized = spawnSync(
     binary,
     ["auth", "init", "--local", "--owner-token-file", ownerPath],
@@ -128,7 +130,13 @@ try {
         runtimes: {
           claude: {
             command: process.execPath,
-            args: [fixturePath, "provider-evidence.jsonl", "provider-state.json"],
+            args: [
+              fixturePath,
+              "provider-evidence.jsonl",
+              "provider-state.json",
+              String(fixtureSupervisor.port),
+              fixtureSupervisor.nonce,
+            ],
             model: "claude-haiku-4-5-20251001",
             toolsEnabled: true,
             contextTokens: 100000,
@@ -167,10 +175,8 @@ try {
   )
   assert.equal(ready.runtime?.provider, "claude")
 
-  const originalImage = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlN8AAAAASUVORK5CYII=",
-    "base64",
-  )
+  const originalImage = tinyPng
+  assertValidTinyPng(originalImage)
   const originalDigest = `sha256:${createHash("sha256").update(originalImage).digest("hex")}`
   const beginning = await setupClient.attachments.begin(
     conversationId,
@@ -404,6 +410,17 @@ try {
       ),
     "active execution before close",
   )
+  await waitFor(
+    () =>
+      evidenceFor(
+        readEvidence(evidencePath),
+        "prompt",
+        providerSessionId,
+        cancelExecutionId,
+      ),
+    (events) => events.length === 1,
+    "provider prompt before close cancellation",
+  )
   assert.equal(
     evidenceFor(
       readEvidence(evidencePath),
@@ -452,8 +469,13 @@ try {
   )
   const resumedProcessId = resumes[0].processId
   await waitFor(
-    () => processIsGone(resumedProcessId),
-    Boolean,
+    () => ({
+      ended: readEvidence(evidencePath).some(
+        (event) => event.type === "process-end" && event.processId === resumedProcessId,
+      ),
+      connected: fixtureSupervisor.activeProcessIds().includes(resumedProcessId),
+    }),
+    ({ ended, connected }) => ended && !connected,
     "provider process cleanup after close",
   )
 } catch (error) {
@@ -472,15 +494,14 @@ const cleanupFailures = await collectCleanupFailures([
     run: () => client.close(),
   })),
   ...(proxy ? [{ name: "lossy proxy", run: () => proxy.close() }] : []),
+  ...(fixtureSupervisor
+    ? [{ name: "fixture supervisor", run: () => fixtureSupervisor.shutdown() }]
+    : []),
   ...(gateway ? [{ name: "gateway", run: () => stopGateway(gateway) }] : []),
-  {
-    name: "fixture processes",
-    run: () => stopOwnedFixtureProcesses(evidencePath),
-  },
 ])
 if (
   !cleanupFailures.some((failure) =>
-    ["gateway", "fixture processes"].includes(failure.cleanupName),
+    ["gateway", "fixture supervisor"].includes(failure.cleanupName),
   )
 ) {
   cleanupFailures.push(

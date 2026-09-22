@@ -10,11 +10,22 @@ import {
   writeFileSync,
 } from "node:fs"
 import process from "node:process"
+import { createConnection } from "node:net"
+import { once } from "node:events"
 import { createInterface } from "node:readline"
 import { fixtureCorrelation } from "./evidence.mjs"
 
-const [evidencePath, statePath] = process.argv.slice(2)
-assert.ok(evidencePath && statePath, "fixture evidence and state paths are required")
+const [evidencePath, statePath, supervisorPortText, supervisorNonce] =
+  process.argv.slice(2)
+const supervisorPort = Number(supervisorPortText)
+assert.ok(
+  evidencePath &&
+    statePath &&
+    Number.isSafeInteger(supervisorPort) &&
+    supervisorPort > 0 &&
+    supervisorNonce,
+  "fixture evidence, state, and supervisor arguments are required",
+)
 const model = process.env.ANTHROPIC_MODEL
 assert.ok(model, "Claude model configuration is required")
 assert.equal(model, process.env.ANTHROPIC_CUSTOM_MODEL_OPTION)
@@ -238,14 +249,55 @@ async function receive(message) {
   throw new Error(`unexpected ACP message: ${JSON.stringify(message)}`)
 }
 
+const supervisor = createConnection(supervisorPort, "127.0.0.1")
+await once(supervisor, "connect")
+supervisor.write(
+  `${JSON.stringify({ nonce: supervisorNonce, processId: process.pid })}\n`,
+)
+let finishControl
+const controlFinished = new Promise((resolve) => {
+  finishControl = resolve
+})
+let controlInput = ""
+supervisor.on("data", (bytes) => {
+  controlInput += bytes.toString()
+  if (controlInput.length > 64) {
+    finishControl(new Error("fixture supervisor command exceeds its bound"))
+    return
+  }
+  if (!controlInput.includes("\n")) return
+  finishControl(
+    controlInput === "shutdown\n"
+      ? undefined
+      : new Error("unexpected fixture supervisor command"),
+  )
+})
+supervisor.on("error", (error) => finishControl(error))
+supervisor.on("close", () =>
+  finishControl(new Error("fixture supervisor connection closed")),
+)
+
 record({ type: "process-start", processId: process.pid })
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
-for await (const line of lines) {
-  try {
+let fixtureFailure
+const consumeInput = async () => {
+  for await (const line of lines) {
     await receive(JSON.parse(line))
-  } catch (error) {
-    record({ type: "fixture-failure", message: error?.message ?? String(error) })
-    throw error
   }
 }
-record({ type: "process-end", processId: process.pid, providerSessionId })
+try {
+  const controlFailure = await Promise.race([
+    consumeInput().then(() => undefined),
+    controlFinished,
+  ])
+  if (controlFailure) throw controlFailure
+} catch (error) {
+  fixtureFailure = error
+  record({ type: "fixture-failure", message: error?.message ?? String(error) })
+} finally {
+  lines.close()
+  process.stdin.destroy()
+  record({ type: "process-end", processId: process.pid, providerSessionId })
+}
+if (fixtureFailure) process.stderr.write(`${fixtureFailure.stack ?? fixtureFailure}\n`)
+process.exit(fixtureFailure ? 1 : 0)

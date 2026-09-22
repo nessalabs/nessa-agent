@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { once } from "node:events"
-import { existsSync } from "node:fs"
 import { createServer } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
-import { readEvidence, waitFor } from "./evidence.mjs"
+import { waitFor } from "./evidence.mjs"
 
 export async function reservePort() {
   const listener = createServer().listen(0, "127.0.0.1")
@@ -218,64 +218,79 @@ export async function createLossyProxy(upstreamUrl, droppedRequestId) {
   }
 }
 
-export function processIsGone(processId) {
-  try {
-    process.kill(processId, 0)
-    return false
-  } catch (error) {
-    if (error?.code === "ESRCH") return true
-    throw error
-  }
-}
+export async function createFixtureSupervisor() {
+  const nonce = randomBytes(32).toString("hex")
+  const registered = new Map()
+  const sockets = new Set()
+  let closing = false
+  const server = createServer((socket) => {
+    sockets.add(socket)
+    let registration = ""
+    socket.on("data", (bytes) => {
+      if (registered.has(socket)) return
+      registration += bytes.toString()
+      if (registration.length > 1024) {
+        socket.destroy()
+        return
+      }
+      const newline = registration.indexOf("\n")
+      if (newline < 0) return
+      try {
+        const message = JSON.parse(registration.slice(0, newline))
+        assert.equal(message.nonce, nonce)
+        assert.ok(Number.isSafeInteger(message.processId) && message.processId > 0)
+        assert.equal(registration.slice(newline + 1), "")
+        registered.set(socket, message.processId)
+      } catch {
+        socket.destroy()
+      }
+    })
+    socket.on("close", () => {
+      sockets.delete(socket)
+      registered.delete(socket)
+    })
+    socket.on("error", () => {
+      if (!closing) socket.destroy()
+    })
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
 
-async function stopProcess(processId) {
-  if (processIsGone(processId)) return
-  try {
-    process.kill(processId, "SIGTERM")
-  } catch (error) {
-    if (error?.code === "ESRCH") return
-    throw error
+  return {
+    port: address.port,
+    nonce,
+    activeProcessIds: () => [...registered.values()],
+    shutdown: async ({ processTimeoutMs = 2_000, serverTimeoutMs = 2_000 } = {}) => {
+      closing = true
+      for (const socket of registered.keys()) socket.write("shutdown\n")
+      let processFailure
+      try {
+        await waitFor(
+          () => registered.size,
+          (size) => size === 0,
+          "fixture control connections to close",
+          processTimeoutMs,
+        )
+      } catch (error) {
+        processFailure = error
+        for (const socket of sockets) socket.destroy()
+      }
+      for (const socket of sockets) socket.destroy()
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("fixture supervisor did not close")),
+          serverTimeoutMs,
+        )
+        server.close(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+      if (processFailure) throw processFailure
+    },
   }
-  try {
-    await waitFor(
-      () => processIsGone(processId),
-      Boolean,
-      `fixture process ${processId}`,
-      1_000,
-    )
-    return
-  } catch {
-    /* The owned fixture did not honor TERM; the bounded force-kill is next. */
-  }
-  try {
-    process.kill(processId, "SIGKILL")
-  } catch (error) {
-    if (error?.code === "ESRCH") return
-    throw error
-  }
-  await waitFor(
-    () => processIsGone(processId),
-    Boolean,
-    `force-killed fixture process ${processId}`,
-    1_000,
-  )
-}
-
-export async function stopOwnedFixtureProcesses(evidencePath) {
-  if (!existsSync(evidencePath)) return
-  const events = readEvidence(evidencePath)
-  const processIds = new Set(
-    events
-      .filter(
-        (event) =>
-          event.type === "process-start" && Number.isSafeInteger(event.processId),
-      )
-      .map((event) => event.processId),
-  )
-  for (const event of events)
-    if (event.type === "process-end" && Number.isSafeInteger(event.processId))
-      processIds.delete(event.processId)
-  for (const processId of processIds) await stopProcess(processId)
 }
 
 export async function collectCleanupFailures(cleanups) {

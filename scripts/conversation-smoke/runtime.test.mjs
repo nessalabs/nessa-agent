@@ -1,20 +1,20 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
+import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { WebSocket, WebSocketServer } from "ws"
+import { waitFor } from "./evidence.mjs"
 import {
   collectCleanupFailures,
+  createFixtureSupervisor,
   createLossyProxy,
-  processIsGone,
   reservePort,
   startGateway,
   stopGateway,
-  stopOwnedFixtureProcesses,
 } from "./runtime.mjs"
 
 test("lossy proxy turns a thrown frame decoder into an awaited failure", async () => {
@@ -112,33 +112,35 @@ test("cleanup keeps sequencing after independent failures", async () => {
   assert.equal(failures[1].cause.message, "fixture survived")
 })
 
-test("fixture cleanup terminates only journaled processes without an end event", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "nessa-fixture-cleanup-"))
-  const evidencePath = join(directory, "evidence.ndjson")
-  const unfinished = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"])
-  const ended = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"])
-  await Promise.all([once(unfinished, "spawn"), once(ended, "spawn")])
-  const unfinishedExit = once(unfinished, "exit")
-  const endedExit = once(ended, "exit")
-  writeFileSync(
-    evidencePath,
-    [
-      { type: "process-start", processId: unfinished.pid },
-      { type: "process-start", processId: ended.pid },
-      { type: "process-end", processId: ended.pid },
-    ]
-      .map((event) => JSON.stringify(event))
-      .join("\n") + "\n",
-  )
+test("fixture supervisor shuts down only the nonce-authenticated live process", async () => {
+  const supervisor = await createFixtureSupervisor()
+  const owned = createConnection(supervisor.port, "127.0.0.1")
+  const unrelated = createConnection(supervisor.port, "127.0.0.1")
+  let ownedCommand = ""
+  let unrelatedCommand = ""
   try {
-    await stopOwnedFixtureProcesses(evidencePath)
-    await unfinishedExit
-    assert.equal(processIsGone(unfinished.pid), true)
-    assert.equal(processIsGone(ended.pid), false)
+    await Promise.all([once(owned, "connect"), once(unrelated, "connect")])
+    owned.on("data", (bytes) => {
+      ownedCommand += bytes.toString()
+      if (ownedCommand === "shutdown\n") owned.end()
+    })
+    unrelated.on("data", (bytes) => {
+      unrelatedCommand += bytes.toString()
+    })
+    const unrelatedClose = once(unrelated, "close")
+    owned.write(`${JSON.stringify({ nonce: supervisor.nonce, processId: 4321 })}\n`)
+    unrelated.write(`${JSON.stringify({ nonce: "wrong-owner", processId: 4321 })}\n`)
+    await unrelatedClose
+    await waitFor(
+      () => supervisor.activeProcessIds(),
+      (processIds) => processIds.length === 1,
+      "authenticated fixture registration",
+    )
+    await supervisor.shutdown()
+    assert.equal(ownedCommand, "shutdown\n")
+    assert.equal(unrelatedCommand, "")
   } finally {
-    if (!processIsGone(unfinished.pid)) unfinished.kill("SIGKILL")
-    if (!processIsGone(ended.pid)) ended.kill("SIGKILL")
-    await Promise.allSettled([unfinishedExit, endedExit])
-    rmSync(directory, { recursive: true, force: true })
+    owned.destroy()
+    unrelated.destroy()
   }
 })
