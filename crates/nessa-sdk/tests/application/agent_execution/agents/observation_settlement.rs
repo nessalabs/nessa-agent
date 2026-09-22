@@ -42,7 +42,6 @@ impl AgentProvider for SettlementProvider {
                     ExecutionSessionId::new("settlement-context").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(SettlementEvents(
                     self.0.receiver.lock().unwrap().take().unwrap(),

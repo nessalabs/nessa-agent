@@ -36,7 +36,6 @@ impl AgentProvider for PayloadProvider {
                     ExecutionSessionId::new("provider").unwrap(),
                     Arc::new(PayloadBackend(started.clone())),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(PayloadEvents(self.0.lock().unwrap().take(), started)),
             })

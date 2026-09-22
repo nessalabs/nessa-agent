@@ -313,15 +313,6 @@ impl SessionLifecycle {
             _ => crate::application::agent_execution::providers::OperationCapabilities::default(),
         }
     }
-    pub(super) fn current_attachment(&self) -> Result<AttachedProvider, AgentError> {
-        let state = self.state.lock().expect("session lifecycle");
-        match &state.attachment {
-            AttachmentState::Attached { provider, .. } if state.provider_ready => {
-                Ok(provider.clone())
-            }
-            _ => Err(AgentError::AttachmentUnavailable(Self::phase(&state))),
-        }
-    }
     pub(super) fn authorize_attachment(
         self: &Arc<Self>,
         request: AttachmentRequest,

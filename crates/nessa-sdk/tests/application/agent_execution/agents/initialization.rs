@@ -6,6 +6,7 @@ use std::{
     sync::atomic::AtomicBool,
     task::{Context, Poll},
 };
+use tokio::sync::Notify;
 
 #[derive(Default)]
 struct AttachmentAuditProbe {
@@ -170,7 +171,6 @@ impl AgentProvider for PanickingCleanupProvider {
                     ExecutionSessionId::new("panic-cleanup-context").unwrap(),
                     Arc::new(PanickingCleanupBackend(Mutex::new(Some(self.failure)))),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TestEvents(events)),
             })

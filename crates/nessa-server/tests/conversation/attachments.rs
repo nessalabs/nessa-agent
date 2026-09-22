@@ -9,8 +9,8 @@ use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
-        image_fixture, only, AcceptingCreationAudit, MemoryAttachments, MemoryRepository, Provider,
-        ProviderFactory, RecordingFileLinkAudit, TestClock,
+        image_fixture, image_fixture_with_model, only, AcceptingCreationAudit, MemoryAttachments,
+        MemoryRepository, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -257,7 +257,7 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -367,7 +367,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
     let repository = Arc::new(MemoryRepository::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -495,8 +495,7 @@ async fn a_retry_of_a_delivered_image_turn_does_not_depend_on_its_upload_still_b
 async fn an_agent_that_advertises_images_in_front_of_a_model_offered_none_takes_no_images() {
     // Each fact is valid alone; together they describe an image nobody can see.
     let attachments = Arc::new(MemoryAttachments::default());
-    let (service, provider, _, _) = image_fixture(true, Some(attachments.clone()));
-    provider.model_images.store(false, Ordering::SeqCst);
+    let (service, _, _, _) = image_fixture_with_model(true, false, Some(attachments.clone()));
     let id = new_id();
     service
         .create(id.clone(), caller("panel", "create"), None)

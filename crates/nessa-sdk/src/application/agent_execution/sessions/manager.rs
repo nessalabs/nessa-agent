@@ -347,19 +347,11 @@ impl SessionManager {
         evidence.committed = Some(next);
         Ok(AttachedProvider { session, events })
     }
-    pub(crate) fn attachment_cleanup(&self) -> Option<Arc<AttachmentLease>> {
-        self.attachment
-            .needs_cleanup()
-            .then(|| self.attachment.clone())
-    }
     pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {
         self.attachment.clone()
     }
     pub(crate) fn protective_storage_lease(&self) -> Arc<dyn SessionStorageLease> {
         self.storage_lease.clone()
-    }
-    pub(crate) async fn attached(&self, events: Arc<Mutex<Box<dyn ExecutionEventStream>>>) {
-        self.attachment.attached(events).await;
     }
     pub(crate) async fn begin(
         &self,

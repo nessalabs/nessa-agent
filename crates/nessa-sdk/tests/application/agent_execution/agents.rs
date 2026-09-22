@@ -248,7 +248,6 @@ impl AgentProvider for TestProvider {
                         outcome: self.outcome.clone(),
                     }),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TestEvents(receiver)),
             })

@@ -1,9 +1,9 @@
 //! WorkStatus persistence and close barriers under deterministic caller cancellation.
 
 use super::{actor, invoke, request, MemoryStorage, TestProvider};
-use crate::application::agent_execution::support::close_action;
+use crate::application::agent_execution::support::{attached_agent, close_action};
 use nessa_sdk::application::agent_execution::{
-    agents::{Agent, AgentError},
+    agents::AgentError,
     sessions::{
         SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
         StorageFuture,

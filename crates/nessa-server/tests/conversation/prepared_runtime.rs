@@ -85,7 +85,7 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
     let records = Arc::new(MemoryRecords::default());
     let audit = Arc::new(RecordingAudit::default());
     let warm_up = AgentWarmUp::new(
-        Arc::new(Provider(provider.clone())),
+        Arc::new(Provider::new(provider.clone())),
         Arc::new(crate::conversation_test_support::AcceptingAudit),
         Arc::new(InMemoryStorage::new()),
         records.clone(),
@@ -99,7 +99,7 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
                 HashMap::from([(
                     AgentId::Claude,
                     ConversationAgent {
-                        provider: Arc::new(Provider(provider.clone())),
+                        provider: Arc::new(Provider::new(provider.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
                         readiness: Some(Arc::new(PreparedRuntime(warm_up.clone()))),

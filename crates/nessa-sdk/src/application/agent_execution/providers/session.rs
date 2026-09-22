@@ -5,9 +5,9 @@ use super::{
     ProviderExecutionReply, ProviderOperationFailure, ProviderOperationFuture,
     ProviderSessionBackend, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
-use crate::application::agent_execution::agents::{AgentError, AgentFuture};
+use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::{
-    executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest},
+    executions::ExecutionRequest,
     permissions::{
         CancellationOrigin, PermissionAnswer, PermissionCancellation,
         PermissionCancellationRequest, PermissionResolution, PermissionSelectionState,
@@ -46,30 +46,23 @@ pub struct ProviderSession {
     id: ExecutionSessionId,
     backend: Arc<dyn ProviderSessionBackend>,
     capabilities: EffectiveCapabilities,
-    audit: Arc<dyn ExecutionAudit>,
 }
 impl ProviderSession {
-    /// Wrap `backend` with its provider context `id`, immutable model admission
-    /// `capabilities`, and mandatory application `audit` port. The same sink records
-    /// provider lifecycle evidence and caller-attributed queue changes. Construction
-    /// performs no I/O and opens no provider context.
+    /// Wrap `backend` with its provider context `id` and immutable model admission
+    /// `capabilities`. Construction performs no I/O and opens no provider context.
+    /// The provider backend retains the audit sink used for provider effects; the
+    /// owning [`Agent`](crate::application::agent_execution::agents::Agent) receives
+    /// the application audit sink when it is prepared.
     pub fn new(
         id: ExecutionSessionId,
         backend: Arc<dyn ProviderSessionBackend>,
         capabilities: EffectiveCapabilities,
-        audit: Arc<dyn ExecutionAudit>,
     ) -> Self {
         Self {
             id,
             backend,
             capabilities,
-            audit,
         }
-    }
-    /// Deliver application-owned lifecycle evidence to the mandatory audit sink.
-    /// The sink defines its bounded acknowledgement and durability contract.
-    pub(crate) fn record_audit(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
-        self.audit.record(record)
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move { self.backend.prepare_invocation().await })

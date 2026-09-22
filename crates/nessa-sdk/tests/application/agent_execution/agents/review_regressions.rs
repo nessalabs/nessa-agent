@@ -74,7 +74,6 @@ impl AgentProvider for ProbeFactory {
                     ExecutionSessionId::new("review").unwrap(),
                     self.backend.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TestEvents(self.receiver.lock().unwrap().take().unwrap())),
             })

@@ -129,7 +129,6 @@ impl AgentProvider for TestProvider {
                     ExecutionSessionId::new("fixture").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(EmptyEvents),
             })

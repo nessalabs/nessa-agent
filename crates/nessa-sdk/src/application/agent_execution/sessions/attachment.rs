@@ -114,49 +114,6 @@ impl AttachmentLease {
             runtime: Handle::current(),
         }
     }
-    pub(crate) fn new(lease: Arc<dyn SessionStorageLease>, session: ProviderSession) -> Self {
-        Self::with_target(lease, CleanupTarget::Session(session))
-    }
-    pub(crate) fn unknown_open(lease: Arc<dyn SessionStorageLease>) -> Self {
-        Self {
-            state: Mutex::new(AttachmentState::UnknownOpen(lease)),
-            cleanup_report: StateMutex::new(None),
-            pending: AtomicBool::new(true),
-            drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
-            runtime: Handle::current(),
-        }
-    }
-    pub(crate) fn failed_open(
-        lease: Arc<dyn SessionStorageLease>,
-        cleanup: Arc<dyn ProviderCleanup>,
-    ) -> Self {
-        Self::with_target(lease, CleanupTarget::FailedOpen(cleanup))
-    }
-    fn with_target(lease: Arc<dyn SessionStorageLease>, target: CleanupTarget) -> Self {
-        Self {
-            state: Mutex::new(AttachmentState::Attached(Resources {
-                target,
-                _lease: lease,
-                _events: None,
-            })),
-            cleanup_report: StateMutex::new(None),
-            pending: AtomicBool::new(true),
-            drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
-            runtime: Handle::current(),
-        }
-    }
-    pub(crate) async fn attached(&self, events: Arc<Mutex<Box<dyn ExecutionEventStream>>>) {
-        self.retain_events(events).await;
-        *self.drop_reason.lock().expect("attachment drop reason") =
-            CleanupReason::new(SessionCloseRequest::SessionHandlesDropped);
-    }
-    pub(crate) async fn retain_events(&self, events: Arc<Mutex<Box<dyn ExecutionEventStream>>>) {
-        let mut state = self.state.lock().await;
-        let AttachmentState::Attached(resources) = &mut *state else {
-            panic!("initialized attachment");
-        };
-        resources._events = Some(events);
-    }
     pub(crate) async fn arm(
         &self,
         lease: Arc<dyn SessionStorageLease>,

@@ -55,7 +55,6 @@ impl AgentProvider for GatedFactory {
                         closing,
                     }),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(Events(receiver)),
             })

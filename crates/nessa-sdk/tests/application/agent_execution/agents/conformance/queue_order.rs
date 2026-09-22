@@ -36,7 +36,7 @@ async fn waiting() -> (
     Arc<WorkflowBackend>,
     MemoryStorage,
     oneshot::Sender<()>,
-    Vec<QueuedInvocation>,
+    Vec<QueueAdmission>,
 ) {
     let (agent, backend, storage) = workflow().await;
     let (release, gate) = oneshot::channel();

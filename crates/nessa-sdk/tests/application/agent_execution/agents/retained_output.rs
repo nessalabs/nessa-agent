@@ -33,7 +33,6 @@ impl AgentProvider for OutputProvider {
                     ExecutionSessionId::new("output-session").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(OutputEvents(self.0.clone())),
             })

@@ -151,7 +151,6 @@ impl AgentProvider for Provider {
                     ExecutionSessionId::new("handoff").unwrap(),
                     self.0.clone(),
                     capabilities,
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents),
             })

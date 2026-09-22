@@ -212,14 +212,27 @@ pub(crate) fn image_fixture(
     Arc<MemoryRepository>,
     Arc<InMemoryStorage>,
 ) {
+    image_fixture_with_model(image_input, image_input, attachments)
+}
+
+pub(crate) fn image_fixture_with_model(
+    image_input: bool,
+    model_images: bool,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
+) -> (
+    ConversationService,
+    Arc<ProviderFactory>,
+    Arc<MemoryRepository>,
+    Arc<InMemoryStorage>,
+) {
     let provider = Arc::new(ProviderFactory::default());
     provider.image_input.store(image_input, Ordering::SeqCst);
-    provider.model_images.store(image_input, Ordering::SeqCst);
+    provider.model_images.store(model_images, Ordering::SeqCst);
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -266,7 +279,7 @@ pub(crate) fn fixture(
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -280,16 +293,31 @@ pub(crate) fn fixture(
     .unwrap();
     (service, provider, repository, storage)
 }
-pub(crate) struct Provider(pub(crate) Arc<ProviderFactory>);
+pub(crate) struct Provider {
+    factory: Arc<ProviderFactory>,
+    configured_capabilities: EffectiveCapabilities,
+}
+impl Provider {
+    pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
+        let configured_capabilities = capabilities(factory.model_images.load(Ordering::SeqCst));
+        Self {
+            factory,
+            configured_capabilities,
+        }
+    }
+}
 impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gateway-test", "test", "test").unwrap()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.configured_capabilities
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
-            self.0.open_calls.fetch_add(1, Ordering::SeqCst);
-            self.0.opening.notify_one();
-            let gate = self.0.open_gate.lock().unwrap().take();
+            self.factory.open_calls.fetch_add(1, Ordering::SeqCst);
+            self.factory.opening.notify_one();
+            let gate = self.factory.open_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
@@ -300,11 +328,10 @@ impl AgentProvider for Provider {
                         ExecutionSessionId::new(uuid::Uuid::new_v4().to_string()).unwrap()
                     }),
                     Arc::new(Backend {
-                        factory: self.0.clone(),
+                        factory: self.factory.clone(),
                         sender,
                     }),
-                    capabilities(self.0.model_images.load(Ordering::SeqCst)),
-                    Arc::new(AcceptingAudit),
+                    self.configured_capabilities.clone(),
                 ),
                 events: Box::new(Events(receiver)),
             })
@@ -452,7 +479,7 @@ impl ProviderSessionBackend for Backend {
         })
     }
 }
-fn capabilities(image_input: bool) -> EffectiveCapabilities {
+pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
     let text = ModalitiesDto {
         text: true,
         image: false,

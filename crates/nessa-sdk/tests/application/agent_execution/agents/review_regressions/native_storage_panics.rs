@@ -130,8 +130,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         let delivery = timeout(Duration::from_secs(2), steering)
             .await
             .unwrap()
-            .unwrap()
-            .expect("provider acknowledgement remains owned");
+            .unwrap();
         assert!(matches!(
             &delivery,
             SteeringDelivery::Injected {
@@ -146,8 +145,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         )
         .await
         .unwrap()
-        .unwrap()
-        .expect("retry returns owned provider acknowledgement");
+        .unwrap();
         assert!(matches!(
             retry,
             SteeringDelivery::Injected {

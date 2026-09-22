@@ -51,7 +51,7 @@ async fn conversation() -> (
     let audit = Arc::new(RecordingFileLinkAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider))),
+            agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: Arc::new(MemoryRepository::default()),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -442,7 +442,7 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
     provider.image_input.store(false, Ordering::SeqCst);
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider))),
+            agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(RefuseFirstInput {
                 refused: Arc::new(AtomicBool::new(false)),
                 inner: Arc::new(InMemoryStorage::new()),

@@ -12,8 +12,8 @@ use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
-        fixture, only, AcceptingCreationAudit, MemoryRepository, Provider, ProviderFactory,
-        RecordingFileLinkAudit, TestClock,
+        capabilities, fixture, only, AcceptingCreationAudit, MemoryRepository, Provider,
+        ProviderFactory, RecordingFileLinkAudit, TestClock,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -32,7 +32,10 @@ use nessa_sdk::{
             SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
         },
     },
-    domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
+    domain::{
+        agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
+        effective_capabilities::value_objects::EffectiveCapabilities,
+    },
     infrastructure::session_storage::InMemoryStorage,
 };
 use std::{
@@ -206,7 +209,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
@@ -260,7 +263,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
@@ -357,7 +360,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
@@ -465,7 +468,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
@@ -488,7 +491,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository,
             creation_audit: audit.clone(),
@@ -552,7 +555,7 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: audit.clone(),
@@ -816,7 +819,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
 
     let restarted = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1003,7 +1006,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1064,7 +1067,7 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider))),
+            agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1112,6 +1115,9 @@ impl AgentProvider for FailOnceProvider {
     fn identity(&self) -> ProviderIdentity {
         self.delegate.identity()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.delegate.capabilities()
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Deadline)) })
@@ -1125,7 +1131,7 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
     let provider = Arc::new(FailOnceProvider {
         attempts: AtomicUsize::new(0),
-        delegate: Provider(provider.clone()),
+        delegate: Provider::new(provider.clone()),
     });
     let service = ConversationService::new(
         ConversationDependencies {
@@ -1178,10 +1184,14 @@ impl ProviderCleanup for UncertainCleanup {
 struct UncertainOpenProvider {
     attempts: AtomicUsize,
     identity: ProviderIdentity,
+    capabilities: EffectiveCapabilities,
 }
 impl AgentProvider for UncertainOpenProvider {
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
     }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
@@ -1271,7 +1281,7 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1329,7 +1339,7 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1412,7 +1422,7 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1499,7 +1509,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1567,7 +1577,7 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1615,6 +1625,9 @@ impl AgentProvider for StartupDeadlineOnceProvider {
     fn identity(&self) -> ProviderIdentity {
         self.delegate.identity()
     }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.delegate.capabilities()
+    }
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             Box::pin(async { Err(ProviderOpenError::no_resources(startup_deadline())) })
@@ -1630,7 +1643,7 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
     let provider = Arc::new(StartupDeadlineOnceProvider {
         attempts: AtomicUsize::new(0),
-        delegate: Provider(provider.clone()),
+        delegate: Provider::new(provider.clone()),
     });
     let service = ConversationService::new(
         ConversationDependencies {
@@ -1685,10 +1698,14 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
 struct UncertainStartupDeadlineProvider {
     attempts: AtomicUsize,
     identity: ProviderIdentity,
+    capabilities: EffectiveCapabilities,
 }
 impl AgentProvider for UncertainStartupDeadlineProvider {
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
     }
     fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
@@ -1708,6 +1725,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     let provider = Arc::new(UncertainStartupDeadlineProvider {
         attempts: AtomicUsize::new(0),
         identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
+        capabilities: capabilities(false),
     });
     let service = ConversationService::new(
         ConversationDependencies {
@@ -1746,6 +1764,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     let provider = Arc::new(UncertainOpenProvider {
         attempts: AtomicUsize::new(0),
         identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
+        capabilities: capabilities(false),
     });
     let service = ConversationService::new(
         ConversationDependencies {
@@ -1828,7 +1847,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -1865,7 +1884,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider))),
+            agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(PanickingStorage),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -2041,7 +2060,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider))),
+            agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(HostileStorage),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -2169,7 +2188,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 (
                     AgentId::Claude,
                     ConversationAgent {
-                        provider: Arc::new(Provider(claude.clone())),
+                        provider: Arc::new(Provider::new(claude.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
                         readiness: None,
@@ -2178,7 +2197,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                 (
                     AgentId::Codex,
                     ConversationAgent {
-                        provider: Arc::new(Provider(codex.clone())),
+                        provider: Arc::new(Provider::new(codex.clone())),
                         execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                         reserved_output_tokens: 4096,
                         readiness: None,
@@ -2261,7 +2280,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
         (
             id,
             ConversationAgent {
-                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
@@ -2352,7 +2371,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
         (
             id,
             ConversationAgent {
-                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
@@ -2456,7 +2475,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
         (
             id,
             ConversationAgent {
-                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
@@ -2639,7 +2658,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: audit.clone(),
@@ -2762,7 +2781,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
         HashMap::from([(
             AgentId::Claude,
             ConversationAgent {
-                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
                 execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
@@ -2780,7 +2799,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
     let nothing_reserved = HashMap::from([(
         AgentId::Claude,
         ConversationAgent {
-            provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+            provider: Arc::new(Provider::new(factory.clone())) as Arc<dyn AgentProvider>,
             execution_audit: Arc::new(crate::conversation_test_support::AcceptingAudit),
             reserved_output_tokens: 0,
             readiness: None,
@@ -2818,7 +2837,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                     (
                         AgentId::Claude,
                         ConversationAgent {
-                            provider: Arc::new(Provider(claude.clone())),
+                            provider: Arc::new(Provider::new(claude.clone())),
                             execution_audit: Arc::new(
                                 crate::conversation_test_support::AcceptingAudit,
                             ),
@@ -2829,7 +2848,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
                     (
                         AgentId::Codex,
                         ConversationAgent {
-                            provider: Arc::new(Provider(codex.clone())),
+                            provider: Arc::new(Provider::new(codex.clone())),
                             execution_audit: Arc::new(
                                 crate::conversation_test_support::AcceptingAudit,
                             ),

@@ -94,7 +94,6 @@ impl AgentProvider for WorkflowProvider {
                     ExecutionSessionId::new("workflow-context").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    self.0.audit.clone(),
                 ),
                 events: Box::new(WorkflowEvents(
                     self.0.receiver.lock().unwrap().take().unwrap(),

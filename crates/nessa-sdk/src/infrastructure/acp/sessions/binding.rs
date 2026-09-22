@@ -56,7 +56,6 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         ProviderOpenError::no_resources(cause)
     })?;
     let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
-    let session_audit = audit.clone();
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),
         operation_capabilities,
@@ -99,7 +98,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         image_budget,
     });
     Ok(OpenedProviderSession {
-        session: ProviderSession::new(session_id, session, capabilities, session_audit),
+        session: ProviderSession::new(session_id, session, capabilities),
         events: Box::new(Events {
             current: Some(initial_events),
             queued,

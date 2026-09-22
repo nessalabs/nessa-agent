@@ -83,7 +83,7 @@ fn fixture() -> Fixture {
     let audit = Arc::new(RecordingAudit::default());
     Fixture {
         warm_up: AgentWarmUp::new(
-            Arc::new(Provider(provider.clone())),
+            Arc::new(Provider::new(provider.clone())),
             Arc::new(AcceptingAudit),
             Arc::new(InMemoryStorage::new()),
             records.clone(),

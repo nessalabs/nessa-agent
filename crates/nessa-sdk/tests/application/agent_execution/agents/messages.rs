@@ -84,10 +84,10 @@ async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
     );
     let writes = storage.0.lock().unwrap().writes;
     let provider = TestProvider::new();
-    assert!(
-        matches!(attached_agent(provider.clone(), storage.manager().await).await,
-        Err(error) if matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_))))
-    );
+    assert!(matches!(
+        attached_agent(provider.clone(), storage.manager().await).await,
+        Err(AgentError::Storage(StorageError::Corrupt(_)))
+    ));
     assert!(provider.calls.opens.lock().unwrap().is_empty());
     assert_eq!(storage.0.lock().unwrap().writes, writes);
     assert_eq!(
@@ -228,7 +228,6 @@ impl AgentProvider for ImageProvider {
                         sender,
                     }),
                     image_capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TestEvents(receiver)),
             })
