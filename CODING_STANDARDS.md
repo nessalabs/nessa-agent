@@ -42,6 +42,33 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
    [seams at the process boundary](#seams-at-the-process-boundary), which this
    gate is read together with.
 
+10. **A guarantee names its enforcer.** A comment, docstring, or test name that
+    says *never, always, cannot, exactly, every,* or *compile error* cites the
+    test or the type that makes it so — or it does not make the claim. Prose is
+    written from intent, and intent is what the author holds in their head while
+    the code moves underneath it. A claim nothing checks is worse than silence,
+    because the next reader is told not to look.
+11. **Construction over enumeration.** Where a value becomes syntax or selects
+    behaviour, constrain what may appear rather than listing what may not:
+    percent-encode to an allowed alphabet instead of refusing the characters
+    that have bitten you; a total `Record`/`match` instead of a partial map with
+    a fallback; a newtype that cannot hold the bad value instead of a check at
+    each call site. A list of known-bad cases is a record of what has already
+    gone wrong, not a rule.
+12. **Identity, not attributes.** Durable state is keyed on an identity minted
+    when the thing began — never on a name, a file list, the active tab, or any
+    other attribute that can change, repeat, or be recycled while the state
+    lives. An attribute is stale the moment it is written down.
+13. **Refuse at the earliest layer that knows.** If a layer can already tell
+    that something will be refused, it refuses there, while the person can still
+    act on it — not at the last boundary able to say no. Ask of every refusal:
+    what is the earliest point at which this was knowable?
+14. **A gate runs where it claims to run.** Each check declares the environment
+    it must survive — bare Node with no `node_modules`, every supported target's
+    `-D warnings`, the CI package selection, contention — and something enforces
+    that declaration. "It passed" is not a result without "where, and under what
+    load"; a green run in the wrong environment has told you nothing.
+
 If a gate fails, fix it in the same PR.
 
 ## Local code review gate
@@ -226,7 +253,11 @@ that their combination describes a possible execution.
 
 - For each finding, report severity, exact location, reachable trigger, violated
   contract, expected versus actual behavior, and a minimal reproduction or clear
-  source path. A regression should exercise the reported trigger and distinguish
+  source path. When a probe proves a test load-bearing by reverting
+  its fix, verify the edit landed before trusting the run — print the hunk, or
+  assert the file changed — and restore the tree afterwards. A revert that
+  silently fails to apply reads exactly like a test that does not bite, and a
+  green run then retires a guarantee nobody checked. A regression should exercise the reported trigger and distinguish
   the broken behavior from the fix; assert typed outcomes and authoritative state,
   not merely completion without a panic. Label uncertain hypotheses; a plausible narrative alone is not a
   confirmed bug. Do not infer repository-wide absence from one file or one PR.
