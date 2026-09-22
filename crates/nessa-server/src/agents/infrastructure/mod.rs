@@ -16,6 +16,8 @@
 //! second edge above. A third agent gets its own sibling module rather than a
 //! branch inside an existing one.
 mod agent_credentials;
+#[cfg(target_os = "macos")]
+mod agent_credentials_macos;
 mod claude;
 mod codex;
 mod credentials;

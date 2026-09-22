@@ -32,7 +32,7 @@ impl ServiceConfiguration {
         if instance.as_deref().is_some_and(|value| !segment(value)) {
             return Err(ServiceConfigurationError::Instance);
         }
-        if !normalized_absolute(&data_root) {
+        if !absolute_without_parent(&data_root) {
             return Err(ServiceConfigurationError::DataRoot);
         }
         if port == 0 {
@@ -40,7 +40,7 @@ impl ServiceConfiguration {
         }
         if claude_config_directory
             .as_deref()
-            .is_some_and(|directory| !normalized_absolute(directory))
+            .is_some_and(|directory| !absolute_without_parent(directory))
         {
             return Err(ServiceConfigurationError::ClaudeConfigDirectory);
         }
@@ -100,11 +100,11 @@ fn segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn normalized_absolute(value: &Path) -> bool {
+fn absolute_without_parent(value: &Path) -> bool {
     value.is_absolute()
         && value
             .components()
-            .all(|component| !matches!(component, Component::CurDir | Component::ParentDir))
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 /// Why persisted service settings cannot identify a safe service.
@@ -127,10 +127,10 @@ impl fmt::Display for ServiceConfigurationError {
         formatter.write_str(match self {
             Self::Stage => "gateway stage must be one nonempty namespace segment",
             Self::Instance => "gateway instance must be one nonempty namespace segment",
-            Self::DataRoot => "gateway data root must be absolute and normalized",
+            Self::DataRoot => "gateway data root must be absolute without parent traversal",
             Self::Port => "gateway port must be nonzero",
             Self::ClaudeConfigDirectory => {
-                "Claude config directory must be absolute and normalized"
+                "Claude config directory must be absolute without parent traversal"
             }
         })
     }
@@ -152,20 +152,21 @@ mod tests {
     use super::*;
 
     fn configuration() -> ServiceConfiguration {
-        ServiceConfiguration::new(
-            "prod".into(),
-            PathBuf::from("/Users/me/.nessa"),
-            None,
-            7420,
-            None,
-        )
-        .unwrap()
+        ServiceConfiguration::new("prod".into(), absolute("nessa"), None, 7420, None).unwrap()
+    }
+
+    fn absolute(name: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"C:\{name}"))
+        } else {
+            PathBuf::from(format!("/{name}"))
+        }
     }
 
     #[test]
     fn every_path_and_namespace_is_validated_before_registration() {
         assert_eq!(
-            ServiceConfiguration::new("../prod".into(), "/root".into(), None, 7420, None),
+            ServiceConfiguration::new("../prod".into(), absolute("root"), None, 7420, None,),
             Err(ServiceConfigurationError::Stage)
         );
         assert_eq!(
@@ -175,7 +176,7 @@ mod tests {
         assert_eq!(
             ServiceConfiguration::new(
                 "prod".into(),
-                "/root".into(),
+                absolute("root"),
                 Some("../other".into()),
                 7420,
                 None,
@@ -183,11 +184,17 @@ mod tests {
             Err(ServiceConfigurationError::Instance)
         );
         assert_eq!(
-            ServiceConfiguration::new("prod".into(), "/root".into(), None, 0, None),
+            ServiceConfiguration::new("prod".into(), absolute("root"), None, 0, None),
             Err(ServiceConfigurationError::Port)
         );
         assert_eq!(
-            ServiceConfiguration::new("prod".into(), "/root/../other".into(), None, 7420, None,),
+            ServiceConfiguration::new(
+                "prod".into(),
+                absolute("root").join("..").join("other"),
+                None,
+                7420,
+                None,
+            ),
             Err(ServiceConfigurationError::DataRoot)
         );
         assert_eq!(
@@ -200,12 +207,12 @@ mod tests {
     fn a_provider_change_produces_a_replacement_value() {
         let original = configuration();
         let changed = original
-            .with_claude_config_directory(Some("/Users/me/.claude-work".into()))
+            .with_claude_config_directory(Some(absolute("claude-work")))
             .unwrap();
         assert_eq!(original.claude_config_directory(), None);
         assert_eq!(
             changed.claude_config_directory(),
-            Some(Path::new("/Users/me/.claude-work"))
+            Some(absolute("claude-work").as_path())
         );
     }
 }

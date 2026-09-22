@@ -60,7 +60,10 @@ libc = "0.2"
 # Nessa-owned agent API keys live in the login keychain. This crate is already
 # in the desktop dependency graph; naming it here exposes the typed Security
 # framework API without putting a secret in a subprocess argument.
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
 security-framework = "3.7"
+security-framework-sys = "2.17"
 
 [dev-dependencies]
 tempfile = "3"

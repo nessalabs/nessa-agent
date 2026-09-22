@@ -35,7 +35,7 @@ impl AgentCredential {
             return Err(AgentCredentialFailure::Invalid);
         }
         let secret = String::from_utf8(secret).map_err(|_| AgentCredentialFailure::Invalid)?;
-        if secret.chars().any(char::is_control) {
+        if secret.chars().all(char::is_whitespace) || secret.chars().any(char::is_control) {
             return Err(AgentCredentialFailure::Invalid);
         }
         Ok(Self { kind, secret })
@@ -77,7 +77,12 @@ mod credential_tests {
 
     #[test]
     fn credentials_accept_only_bounded_plain_utf8_text() {
-        for secret in [Vec::new(), b"line\nbreak".to_vec(), vec![0xff]] {
+        for secret in [
+            Vec::new(),
+            b"line\nbreak".to_vec(),
+            b"  \t".to_vec(),
+            vec![0xff],
+        ] {
             assert_eq!(
                 AgentCredential::new(AgentCredentialKind::ApiKey, secret).err(),
                 Some(AgentCredentialFailure::Invalid)

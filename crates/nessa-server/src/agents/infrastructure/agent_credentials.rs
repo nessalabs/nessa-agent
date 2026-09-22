@@ -120,26 +120,7 @@ impl KeychainReader for LoginKeychain {
         service: &str,
         account: &str,
     ) -> Result<Option<Vec<u8>>, AgentCredentialFailure> {
-        use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
-
-        let result = ItemSearchOptions::new()
-            .class(ItemClass::generic_password())
-            .service(service)
-            .account(account)
-            .load_data(true)
-            // A background gateway must never put up a keychain prompt. A
-            // locked or access-controlled item is unavailable, not absent.
-            .skip_authenticated_items(true)
-            .search();
-        match result {
-            Ok(mut items) => match items.pop() {
-                Some(SearchResult::Data(secret)) => Ok(Some(secret)),
-                Some(_) => Err(AgentCredentialFailure::Invalid),
-                None => Ok(None),
-            },
-            Err(error) if error.code() == -25300 => Ok(None),
-            Err(_) => Err(AgentCredentialFailure::Unavailable),
-        }
+        super::agent_credentials_macos::read(service, account)
     }
 }
 
