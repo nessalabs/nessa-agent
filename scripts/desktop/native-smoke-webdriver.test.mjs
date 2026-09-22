@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { webdriverBudgets, webdriverRequest } from "./native-smoke-webdriver.mjs"
+import {
+  observeWebdriverStartup,
+  webdriverBudgets,
+  webdriverRequest,
+} from "./native-smoke-webdriver.mjs"
 
 const response = (value) => ({
   ok: true,
@@ -70,5 +74,67 @@ test("a timed-out command retains its phase, elapsed time, budget, and cause", a
       assert.equal(error.cause, timeout)
       return true
     },
+  )
+})
+
+function pendingUntilAborted(events, name) {
+  return (signal) =>
+    new Promise((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          events.push(`${name} aborted`)
+          reject(signal.reason)
+        },
+        { once: true },
+      )
+    }).finally(() => events.push(`${name} settled`))
+}
+
+test("a session failure aborts and settles application observation before returning", async () => {
+  const events = []
+  const failure = new Error("session handshake failed")
+
+  await assert.rejects(
+    observeWebdriverStartup({
+      createSession: async () => {
+        events.push("session failed")
+        throw failure
+      },
+      observeApplication: pendingUntilAborted(events, "application"),
+    }),
+    failure,
+  )
+  assert.deepEqual(events, [
+    "session failed",
+    "application aborted",
+    "application settled",
+  ])
+})
+
+test("an application failure aborts and settles session creation before returning", async () => {
+  const events = []
+  const failure = new Error("application PID never appeared")
+
+  await assert.rejects(
+    observeWebdriverStartup({
+      createSession: pendingUntilAborted(events, "session"),
+      observeApplication: async () => {
+        events.push("application failed")
+        throw failure
+      },
+    }),
+    failure,
+  )
+  assert.deepEqual(events, ["application failed", "session aborted", "session settled"])
+})
+
+test("successful startup returns both independently observed facts", async () => {
+  assert.deepEqual(
+    await observeWebdriverStartup({
+      createSession: async () => ({ sessionId: "session" }),
+      observeApplication: async () => 4321,
+    }),
+    { session: { sessionId: "session" }, application: 4321 },
   )
 })

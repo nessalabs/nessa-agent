@@ -32,8 +32,15 @@ import {
   watchInterruptions,
 } from "./native-smoke-processes.mjs"
 import { builtExecutables } from "./native-smoke-build.mjs"
-import { retainNativeSmokeFailure } from "./native-smoke-evidence.mjs"
-import { webdriverRequest } from "./native-smoke-webdriver.mjs"
+import {
+  renderNativeSmokeError,
+  retainNativeSmokeFailure,
+} from "./native-smoke-evidence.mjs"
+import {
+  observeWebdriverStartup,
+  webdriverBudgets,
+  webdriverRequest,
+} from "./native-smoke-webdriver.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const elementKey = "element-6066-11e4-a52e-4f735466cecf"
@@ -406,53 +413,41 @@ try {
   markPhase("Tauri WebDriver ready", `pid=${driver.pid}`)
 
   markPhase("WebDriver session requested")
-  const sessionOutcome = webdriver(
-    driverPort,
-    "POST",
-    "/session",
-    {
-      capabilities: {
-        alwaysMatch: { "tauri:options": { application: wrapper } },
-      },
+  const startup = await observeWebdriverStartup({
+    createSession: (signal) =>
+      webdriver(
+        driverPort,
+        "POST",
+        "/session",
+        {
+          capabilities: {
+            alwaysMatch: { "tauri:options": { application: wrapper } },
+          },
+        },
+        {
+          phase: "create WebDriver session",
+          lifecycle: "session",
+          signal: AbortSignal.any([interruption.signal, signal]),
+        },
+      ),
+    observeApplication: async (signal) => {
+      const pid = await eventually(
+        "application launch during WebDriver session creation",
+        () => {
+          if (!existsSync(appPidPath)) return false
+          const recorded = Number(readFileSync(appPidPath, "utf8").trim())
+          return alive(recorded) && recorded
+        },
+        webdriverBudgets.session,
+        AbortSignal.any([interruption.signal, signal]),
+      )
+      appPid = pid
+      markPhase("application launched", `pid=${appPid}; session startup active`)
+      return pid
     },
-    { phase: "create WebDriver session", lifecycle: "session" },
-  ).then(
-    (value) => ({ ok: true, value }),
-    (error) => ({ ok: false, error }),
-  )
-  const appOutcome = eventually(
-    "application launch during WebDriver session creation",
-    () => {
-      if (!existsSync(appPidPath)) return false
-      const pid = Number(readFileSync(appPidPath, "utf8").trim())
-      return alive(pid) && pid
-    },
-    30_000,
-  ).then(
-    (value) => ({ ok: true, value }),
-    (error) => ({ ok: false, error }),
-  )
-  const first = await Promise.race([
-    sessionOutcome.then((result) => ({ source: "session", result })),
-    appOutcome.then((result) => ({ source: "application", result })),
-  ])
-  if (!first.result.ok) throw first.result.error
-
-  let created
-  if (first.source === "application") {
-    appPid = first.result.value
-    markPhase("application launched", `pid=${appPid}; session pending`)
-    const result = await sessionOutcome
-    if (!result.ok) throw result.error
-    created = result.value
-  } else {
-    created = first.result.value
-    const result = await appOutcome
-    if (!result.ok) throw result.error
-    appPid = result.value
-    markPhase("application launched", `pid=${appPid}`)
-  }
-  session = created.sessionId
+  })
+  appPid = startup.application
+  session = startup.session.sessionId
   assert.ok(session, "WebDriver did not return a session id")
   markPhase("WebDriver session ready", `session=${session}`)
 
@@ -577,9 +572,10 @@ try {
     }
   }
   if (failure) {
-    const failureText = failure?.stack ?? String(failure)
+    let failureText = renderNativeSmokeError(failure)
     logs.push(`[failure] ${failureText}\n`)
     console.error(logs.join("").slice(-12_000))
+    console.error(`native smoke failure:\n${failureText}`)
     if (failureArtifactRoot) {
       try {
         const retained = retainNativeSmokeFailure(failureArtifactRoot, instance, {
@@ -601,8 +597,9 @@ try {
         })
         console.error(`native smoke failure artifacts: ${retained}`)
       } catch (artifactError) {
-        console.error(`could not retain native smoke failure artifacts: ${artifactError}`)
         failure = new AggregateError([failure, artifactError])
+        failureText = renderNativeSmokeError(failure)
+        console.error(`could not retain native smoke failure artifacts:\n${failureText}`)
       }
     }
   }

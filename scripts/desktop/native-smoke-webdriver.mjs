@@ -3,6 +3,42 @@ export const webdriverBudgets = Object.freeze({
   session: 60_000,
 })
 
+const settle = async (start) => {
+  try {
+    return { ok: true, value: await start() }
+  } catch (error) {
+    return { ok: false, error }
+  }
+}
+
+/** Own both observations required for a launched WebDriver session. */
+export async function observeWebdriverStartup({ createSession, observeApplication }) {
+  const controller = new AbortController()
+  const session = settle(() => createSession(controller.signal))
+  const application = settle(() => observeApplication(controller.signal))
+  const labelled = [
+    session.then((result) => ({ owner: "session", result })),
+    application.then((result) => ({ owner: "application", result })),
+  ]
+  const first = await Promise.race(labelled)
+  if (!first.result.ok) {
+    controller.abort(first.result.error)
+    await Promise.all([session, application])
+    throw first.result.error
+  }
+
+  const second = await (first.owner === "session" ? application : session)
+  if (!second.ok) {
+    controller.abort(second.error)
+    await Promise.all([session, application])
+    throw second.error
+  }
+
+  return first.owner === "session"
+    ? { session: first.result.value, application: second.value }
+    : { session: second.value, application: first.result.value }
+}
+
 /** One labelled WebDriver request with a lifecycle-specific, bounded budget. */
 export async function webdriverRequest({
   port,
