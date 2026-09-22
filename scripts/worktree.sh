@@ -94,6 +94,44 @@ worktree_path() { printf '%s/%s-%s' "$parent" "$repo_name" "${1//\//-}"; }
 # A real directory is never replaced. A worktree that already has one has
 # already built into it, and swapping it for a link would strand gigabytes
 # where nothing will look for them again.
+# Read `.name` from the hook payload on stdin.
+#
+# Node rather than jq: node is already required to run anything here — the
+# `pnpm install` a few lines later is node — while jq is not declared anywhere
+# in setup and a stock macOS may not have it. A hook that exits 127 before
+# creating the worktree would take Claude Code's worktrees with it.
+#
+# Prints nothing when the payload is not an object with a string `name`, which
+# the caller reports with the payload it actually got.
+hook_name() {
+  node -e '
+    let raw = ""
+    process.stdin.on("data", (chunk) => (raw += chunk))
+    process.stdin.on("end", () => {
+      try {
+        const { name } = JSON.parse(raw)
+        if (typeof name === "string") process.stdout.write(name)
+      } catch {}
+    })
+  '
+}
+
+# Where git has a branch checked out, if anywhere. Empty when it is not.
+worktree_for_branch() {
+  git -C "$repo_root" worktree list --porcelain | awk -v want="refs/heads/$1" '
+    /^worktree /  { path = substr($0, 10) }
+    /^branch /    { if (substr($0, 8) == want) { print path; exit } }
+  '
+}
+
+# The branch checked out at a path, if git knows the path as a worktree.
+branch_at_worktree() {
+  git -C "$repo_root" worktree list --porcelain | awk -v want="$1" '
+    /^worktree /  { path = substr($0, 10) }
+    /^branch /    { if (path == want) { sub("^refs/heads/", "", $2); print $2; exit } }
+  '
+}
+
 ensure_shared_target() {
   local path="$1" shared="$repo_root/target"
   mkdir -p "$shared"
@@ -168,16 +206,41 @@ EOF
 # with "use your default" — it can only print a path — so a name this cannot
 # place is better as a loud failure than as a directory nobody expects.
 cmd_claude_hook() {
-  local payload name path
+  local payload name path checked_out occupant
   payload="$(cat)"
-  name="$(printf '%s' "$payload" | jq -r '.name // empty')"
+  name="$(printf '%s' "$payload" | hook_name)"
   [[ -n "$name" ]] || die "WorktreeCreate hook: no .name in: $payload"
   check_name "$name"
-  path="$(worktree_path "$name")"
 
-  if [[ -d "$path" ]]; then
-    echo "→ reusing $path" >&2
-  elif git -C "$repo_root" show-ref --quiet --verify "refs/heads/$name"; then
+  # Reuse is decided by which branch git has checked out where, never by a
+  # directory existing. Two different names can land on one path — `check_name`
+  # allows both `foo/bar` and `foo-bar`, and `worktree_path` turns the slash
+  # into a dash, so they collide — and answering "that directory is there" would
+  # hand back a checkout sitting on someone else's branch for an agent to commit
+  # to. Asking git instead also finds a branch checked out somewhere this
+  # function would never have looked, such as the `.claude/worktrees/` copies
+  # made before this hook existed; git refuses to check a branch out twice, so
+  # finding it first is also what keeps `worktree add` from failing.
+  checked_out="$(worktree_for_branch "$name")"
+  if [[ -n "$checked_out" ]]; then
+    echo "→ reusing $checked_out (branch $name already checked out there)" >&2
+    ensure_shared_target "$checked_out"
+    printf '%s\n' "$checked_out"
+    return 0
+  fi
+
+  path="$(worktree_path "$name")"
+  if [[ -e "$path" ]]; then
+    occupant="$(branch_at_worktree "$path")"
+    [[ -n "$occupant" ]] \
+      && die "cannot place branch '$name' at $path: git has '$occupant' checked out there.
+Two names reach one directory — 'a/b' and 'a-b' both become '...-a-b'.
+Remove that worktree, or ask for a name that does not collide."
+    die "cannot place branch '$name' at $path: something is there that git does not know as a worktree.
+Remove it, or ask for a name that does not collide."
+  fi
+
+  if git -C "$repo_root" show-ref --quiet --verify "refs/heads/$name"; then
     echo "→ worktree $path (existing branch $name)" >&2
     git -C "$repo_root" worktree add "$path" "$name" >&2
   else
