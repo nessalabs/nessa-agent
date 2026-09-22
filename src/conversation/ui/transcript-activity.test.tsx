@@ -3,7 +3,7 @@ import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { textContent, type Conversation } from "../model"
+import { textContent, type AgentFeatures, type Conversation } from "../model"
 import { Transcript } from "./transcript"
 
 class TestResizeObserver {
@@ -16,6 +16,19 @@ const store = {
   getState: () => ({}),
   subscribe: () => () => {},
   replaceReducer: vi.fn(),
+}
+
+const agentFeatures: AgentFeatures = {
+  permissionDenial: "unknown",
+  nativeHookSuppression: "unknown",
+  compactionReporting: "unsupported_not_implemented",
+  modelSwitchReporting: "unsupported_not_implemented",
+  permissionDeferral: "unsupported_not_implemented",
+  elicitationForwarding: "unknown",
+  preToolPolicy: "unsupported_not_implemented",
+  policyEndTurn: "unsupported_not_implemented",
+  policyCloseSession: "unsupported_not_implemented",
+  incomingElicitation: "unsupported_not_implemented",
 }
 
 function workingConversation(id: string): Conversation {
@@ -85,6 +98,7 @@ function workingConversation(id: string): Conversation {
         resume: true,
         permissions: true,
         imageInput: true,
+        agentFeatures,
       },
       queueComplete: false,
       truncated: false,
@@ -145,6 +159,7 @@ function terminalConversation(
         resume: true,
         permissions: true,
         imageInput: true,
+        agentFeatures,
       },
       queueComplete: true,
       truncated: false,

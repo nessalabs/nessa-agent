@@ -23,11 +23,11 @@ use nessa_sdk::{
             },
             providers::{
                 AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
-                ExecutionReport, ObservationFailure, OpenedProviderSession, OperationCapabilities,
+                ExecutionReport, ObservationFailure, OpenedProviderSession,
                 ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationFailure,
-                ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-                ProviderSessionState, SessionCloseRequest,
+                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationCapabilities,
+                ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
+                ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
             },
         },
         dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
@@ -353,11 +353,11 @@ struct Backend {
     sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
 }
 impl ProviderSessionBackend for Backend {
-    fn operation_capabilities(&self) -> OperationCapabilities {
-        OperationCapabilities {
+    fn operation_capabilities(&self) -> ProviderOperationCapabilities {
+        ProviderOperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
-            ..OperationCapabilities::default()
+            ..ProviderOperationCapabilities::default()
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {

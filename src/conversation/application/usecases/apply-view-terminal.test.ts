@@ -31,6 +31,18 @@ const providerFailure = (revision: string): ConversationView => ({
     resume: false,
     permissions: true,
     imageInput: false,
+    agentFeatures: {
+      permissionDenial: "unknown",
+      nativeHookSuppression: "unknown",
+      compactionReporting: "unsupported_not_implemented",
+      modelSwitchReporting: "unsupported_not_implemented",
+      permissionDeferral: "unsupported_not_implemented",
+      elicitationForwarding: "unknown",
+      preToolPolicy: "unsupported_not_implemented",
+      policyEndTurn: "unsupported_not_implemented",
+      policyCloseSession: "unsupported_not_implemented",
+      incomingElicitation: "unsupported_not_implemented",
+    },
   },
 })
 

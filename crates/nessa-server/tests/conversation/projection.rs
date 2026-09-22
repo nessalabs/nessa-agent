@@ -1,8 +1,9 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::Projection, ConversationCaller, ConversationCapabilities, ConversationDependencies,
-    ConversationLimits, ConversationMessageStatus, ConversationPendingMode, ConversationService,
-    SubmissionMode, SubmittedMessage,
+    projection::Projection, ConversationAgentFeatures, ConversationCaller,
+    ConversationCapabilities, ConversationDependencies, ConversationLimits,
+    ConversationMessageStatus, ConversationPendingMode, ConversationService,
+    PermissionDenialSupport, SubmissionMode, SubmittedMessage,
 };
 use crate::{
     conversation::domain::ConversationId,
@@ -20,8 +21,8 @@ use nessa_sdk::{
         },
         permissions::ActionContext,
         providers::{
-            ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
-            ProviderIdentity, ProviderSessionState,
+            ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
+            ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
         },
         sessions::{InvocationRecord, SessionSnapshot},
         tools::ToolReviewInput,
@@ -50,6 +51,7 @@ fn projection() -> Projection {
             resume: false,
             permissions: true,
             image_input: false,
+            agent_features: OperationCapabilities::default().into(),
         },
         None,
     )
@@ -61,6 +63,42 @@ fn caller(action: &str) -> ConversationCaller {
         surface_id: "panel".into(),
         action_id: action.into(),
     }
+}
+
+#[test]
+fn application_absences_project_as_not_implemented() {
+    let value = serde_json::to_value(ConversationAgentFeatures::from(
+        OperationCapabilities::default(),
+    ))
+    .unwrap();
+    assert_eq!(value["permissionDenial"], "unknown");
+    assert_eq!(value["nativeHookSuppression"], "unknown");
+    assert_eq!(value["compactionReporting"], "unsupported_not_implemented");
+    assert_eq!(value["modelSwitchReporting"], "unsupported_not_implemented");
+    assert_eq!(value["permissionDeferral"], "unsupported_not_implemented");
+    assert_eq!(value["preToolPolicy"], "unsupported_not_implemented");
+    assert_eq!(value["policyEndTurn"], "unsupported_not_implemented");
+    assert_eq!(value["policyCloseSession"], "unsupported_not_implemented");
+    assert_eq!(value["incomingElicitation"], "unsupported_not_implemented");
+}
+
+#[test]
+fn capability_changes_advance_the_replacement_revision_once() {
+    let mut projection = projection();
+    let before = projection.read();
+    projection.capabilities(before.capabilities.clone());
+    assert_eq!(projection.read().revision, before.revision);
+
+    let mut changed = before.capabilities;
+    changed.agent_features.permission_denial =
+        PermissionDenialSupport::SupportedForOfferedPermissionReviews;
+    projection.capabilities(changed.clone());
+    let after = projection.read();
+    assert_ne!(after.revision, before.revision);
+    assert_eq!(after.capabilities, changed);
+
+    projection.capabilities(changed);
+    assert_eq!(projection.read().revision, after.revision);
 }
 fn event(update: ExecutionUpdate) -> ExecutionEvent {
     ExecutionEvent::new(ExecutionId::new("execution").unwrap(), update)
@@ -292,6 +330,7 @@ fn provider_diagnostic_survives_receipt_failure_and_snapshot_restoration() {
             resume: false,
             permissions: true,
             image_input: false,
+            agent_features: OperationCapabilities::default().into(),
         },
         Some(&snapshot),
     );
@@ -320,6 +359,7 @@ fn provider_diagnostic_and_independent_failure_are_both_visible() {
             resume: false,
             permissions: true,
             image_input: false,
+            agent_features: OperationCapabilities::default().into(),
         },
         Some(&snapshot),
     );
@@ -349,6 +389,7 @@ fn successful_provider_result_with_later_failure_does_not_claim_provider_refusal
             resume: false,
             permissions: true,
             image_input: false,
+            agent_features: OperationCapabilities::default().into(),
         },
         Some(&snapshot),
     );
@@ -379,6 +420,7 @@ fn blank_provider_diagnostic_and_missing_snapshot_use_reachable_generic_notice()
             resume: false,
             permissions: true,
             image_input: false,
+            agent_features: OperationCapabilities::default().into(),
         },
         Some(&snapshot),
     );

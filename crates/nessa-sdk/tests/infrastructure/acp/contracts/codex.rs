@@ -1,7 +1,6 @@
 //! The Codex profile against a handler speaking Codex's own shapes: what it
 //! selects, what it refuses to proceed without, and what survives translation.
 use super::support::*;
-use crate::application::agent_execution::providers::OperationCapabilities;
 use crate::domain::agent_execution::tools::ToolContent;
 
 #[tokio::test]
@@ -338,17 +337,13 @@ async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
     // worker requires `promptRequired` and would read anything else as a
     // protocol violation and tear the session down. The profile declines, so
     // steering queues a prompt instead — see `codex_acp/sessions/profile.rs`.
-    assert_eq!(
-        opened.session.operation_capabilities(),
-        OperationCapabilities {
-            negotiated: true,
-            native_steering: false,
-            session_resume: true,
-            // The fixture binding is given no image source, so this connection
-            // carries none whatever the agent advertised.
-            image_input: false,
-        }
-    );
+    let capabilities = opened.session.operation_capabilities();
+    assert!(capabilities.negotiated());
+    assert!(!capabilities.native_steering());
+    assert!(capabilities.session_resume());
+    // The fixture binding is given no image source, so this connection carries
+    // none whatever the agent advertised.
+    assert!(!capabilities.image_input());
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

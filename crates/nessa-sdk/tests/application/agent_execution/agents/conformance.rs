@@ -106,12 +106,13 @@ impl ExecutionEventStream for WorkflowEvents {
     }
 }
 impl ProviderSessionBackend for WorkflowBackend {
-    fn operation_capabilities(&self) -> OperationCapabilities {
-        OperationCapabilities {
+    fn operation_capabilities(&self) -> ProviderOperationCapabilities {
+        ProviderOperationCapabilities {
             negotiated: true,
             native_steering: true,
             session_resume: true,
             image_input: false,
+            ..ProviderOperationCapabilities::default()
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
