@@ -1,5 +1,22 @@
 use super::support::*;
-use crate::application::agent_execution::providers::OperationCapabilities;
+use crate::application::agent_execution::providers::{
+    OperationCapabilities, PermissionDeferralCapability, PermissionDenialCapability,
+};
+
+fn assert_capabilities(actual: OperationCapabilities, native_steering: bool, session_resume: bool) {
+    assert!(actual.negotiated());
+    assert_eq!(actual.native_steering(), native_steering);
+    assert_eq!(actual.session_resume(), session_resume);
+    assert!(!actual.image_input());
+    assert_eq!(
+        actual.permission_denial(),
+        PermissionDenialCapability::SupportedForOfferedPermissionReviews
+    );
+    assert_eq!(
+        actual.permission_deferral(),
+        PermissionDeferralCapability::UnsupportedNotImplemented
+    );
+}
 
 async fn steering_session(mode: &str) -> (TempDir, OpenedProviderSession) {
     let (root, mut config, model) = test_acp_configuration(mode, 32);
@@ -321,14 +338,10 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
     let _slot = process_test_slot().await;
     for mode in ["steering-unsupported", "resume-unsupported"] {
         let (_root, opened) = steering_session(mode).await;
-        assert_eq!(
+        assert_capabilities(
             opened.session.operation_capabilities(),
-            OperationCapabilities {
-                negotiated: true,
-                native_steering: false,
-                session_resume: mode != "resume-unsupported",
-                image_input: false,
-            }
+            false,
+            mode != "resume-unsupported",
         );
         opened
             .session
@@ -338,15 +351,7 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
             .unwrap();
     }
     let (_root, mut opened) = steering_session("steering-capabilities-change").await;
-    assert_eq!(
-        opened.session.operation_capabilities(),
-        OperationCapabilities {
-            negotiated: true,
-            native_steering: true,
-            session_resume: true,
-            image_input: false,
-        }
-    );
+    assert_capabilities(opened.session.operation_capabilities(), true, true);
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -356,15 +361,7 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
     // A provider's resume receipt precedes configuration and reader publication.
     // Await preparation, which owns that entire readiness boundary.
     opened.session.prepare_invocation().await.unwrap();
-    assert_eq!(
-        opened.session.operation_capabilities(),
-        OperationCapabilities {
-            negotiated: true,
-            native_steering: false,
-            session_resume: true,
-            image_input: false,
-        }
-    );
+    assert_capabilities(opened.session.operation_capabilities(), false, true);
     let active = start(&opened, "restored").await;
     assert_eq!(
         next(&mut opened).await,
@@ -383,8 +380,8 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
 async fn failed_restoration_clears_previously_negotiated_operation_support() {
     let _slot = process_test_slot().await;
     let (_root, opened) = steering_session("steering-resume-removed").await;
-    assert!(opened.session.operation_capabilities().native_steering);
-    assert!(opened.session.operation_capabilities().session_resume);
+    assert!(opened.session.operation_capabilities().native_steering());
+    assert!(opened.session.operation_capabilities().session_resume());
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

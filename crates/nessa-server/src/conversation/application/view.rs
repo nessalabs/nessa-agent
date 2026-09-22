@@ -1,8 +1,17 @@
-use nessa_sdk::domain::agent_execution::prompts::{ImageReference, LinkedFile};
+use nessa_sdk::{
+    application::agent_execution::providers::{
+        CompactionReportingCapability, ElicitationForwardingCapability,
+        IncomingElicitationCapability, ModelSwitchReportingCapability,
+        NativeHookSuppressionCapability, OperationCapabilities, PermissionDeferralCapability,
+        PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
+        PreToolPolicyCapability,
+    },
+    domain::agent_execution::prompts::{ImageReference, LinkedFile},
+};
 use serde::Serialize;
 
 /// A bounded replacement view. Its revision is transient and is not a durable event cursor.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationView {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +122,171 @@ pub struct ConversationCapabilities {
     pub permissions: bool,
     /// The opened agent advertised image input and this gateway can supply the bytes.
     pub image_input: bool,
+    pub agent_features: ConversationAgentFeatures,
+}
+
+/// User-visible support facts for provider transport and Nessa policy integration.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationAgentFeatures {
+    pub permission_denial: PermissionDenialSupport,
+    pub native_hook_suppression: NativeHookSuppressionSupport,
+    pub compaction_reporting: CompactionReportingSupport,
+    pub model_switch_reporting: ModelSwitchReportingSupport,
+    pub permission_deferral: PermissionDeferralSupport,
+    pub elicitation_forwarding: ElicitationForwardingSupport,
+    pub pre_tool_policy: PreToolPolicySupport,
+    pub policy_end_turn: PolicyEndTurnSupport,
+    pub policy_close_session: PolicyCloseSessionSupport,
+    pub incoming_elicitation: IncomingElicitationSupport,
+}
+
+macro_rules! support_enum {
+    ($name:ident { $($variant:ident),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum $name { $($variant),+ }
+    };
+}
+
+support_enum!(PermissionDenialSupport {
+    Unknown,
+    Unsupported,
+    SupportedForOfferedPermissionReviews
+});
+support_enum!(NativeHookSuppressionSupport {
+    Unknown,
+    Unsupported,
+    SupportedForUserConfiguredHooks
+});
+support_enum!(CompactionReportingSupport {
+    UnsupportedNotImplemented,
+    SupportedWithInvocationCorrelation
+});
+support_enum!(ModelSwitchReportingSupport {
+    UnsupportedNotImplemented,
+    SupportedAfterValidatedSwitch
+});
+support_enum!(PermissionDeferralSupport {
+    UnsupportedNotImplemented,
+    SupportedWithNonterminalOutcome
+});
+support_enum!(ElicitationForwardingSupport {
+    Unknown,
+    Unsupported,
+    SupportedWithCorrelatedRoundTrip
+});
+support_enum!(PreToolPolicySupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedAtPermissionGate
+});
+support_enum!(PolicyEndTurnSupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedForCurrentInvocation
+});
+support_enum!(PolicyCloseSessionSupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedForSession
+});
+support_enum!(IncomingElicitationSupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedWithCorrelatedRoundTrip
+});
+
+impl From<OperationCapabilities> for ConversationAgentFeatures {
+    fn from(value: OperationCapabilities) -> Self {
+        Self {
+            permission_denial: match value.permission_denial() {
+                PermissionDenialCapability::Unknown => PermissionDenialSupport::Unknown,
+                PermissionDenialCapability::Unsupported => PermissionDenialSupport::Unsupported,
+                PermissionDenialCapability::SupportedForOfferedPermissionReviews => {
+                    PermissionDenialSupport::SupportedForOfferedPermissionReviews
+                }
+            },
+            native_hook_suppression: match value.native_hook_suppression() {
+                NativeHookSuppressionCapability::Unknown => NativeHookSuppressionSupport::Unknown,
+                NativeHookSuppressionCapability::Unsupported => {
+                    NativeHookSuppressionSupport::Unsupported
+                }
+                NativeHookSuppressionCapability::SupportedForUserConfiguredHooks => {
+                    NativeHookSuppressionSupport::SupportedForUserConfiguredHooks
+                }
+            },
+            compaction_reporting: match value.compaction_reporting() {
+                CompactionReportingCapability::UnsupportedNotImplemented => {
+                    CompactionReportingSupport::UnsupportedNotImplemented
+                }
+                CompactionReportingCapability::SupportedWithInvocationCorrelation => {
+                    CompactionReportingSupport::SupportedWithInvocationCorrelation
+                }
+            },
+            model_switch_reporting: match value.model_switch_reporting() {
+                ModelSwitchReportingCapability::UnsupportedNotImplemented => {
+                    ModelSwitchReportingSupport::UnsupportedNotImplemented
+                }
+                ModelSwitchReportingCapability::SupportedAfterValidatedSwitch => {
+                    ModelSwitchReportingSupport::SupportedAfterValidatedSwitch
+                }
+            },
+            permission_deferral: match value.permission_deferral() {
+                PermissionDeferralCapability::UnsupportedNotImplemented => {
+                    PermissionDeferralSupport::UnsupportedNotImplemented
+                }
+                PermissionDeferralCapability::SupportedWithNonterminalOutcome => {
+                    PermissionDeferralSupport::SupportedWithNonterminalOutcome
+                }
+            },
+            elicitation_forwarding: match value.elicitation_forwarding() {
+                ElicitationForwardingCapability::Unknown => ElicitationForwardingSupport::Unknown,
+                ElicitationForwardingCapability::Unsupported => {
+                    ElicitationForwardingSupport::Unsupported
+                }
+                ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip => {
+                    ElicitationForwardingSupport::SupportedWithCorrelatedRoundTrip
+                }
+            },
+            pre_tool_policy: match value.pre_tool_policy() {
+                PreToolPolicyCapability::Unknown => PreToolPolicySupport::Unknown,
+                PreToolPolicyCapability::UnsupportedNotImplemented => {
+                    PreToolPolicySupport::UnsupportedNotImplemented
+                }
+                PreToolPolicyCapability::SupportedAtPermissionGate => {
+                    PreToolPolicySupport::SupportedAtPermissionGate
+                }
+            },
+            policy_end_turn: match value.policy_end_turn() {
+                PolicyEndTurnCapability::Unknown => PolicyEndTurnSupport::Unknown,
+                PolicyEndTurnCapability::UnsupportedNotImplemented => {
+                    PolicyEndTurnSupport::UnsupportedNotImplemented
+                }
+                PolicyEndTurnCapability::SupportedForCurrentInvocation => {
+                    PolicyEndTurnSupport::SupportedForCurrentInvocation
+                }
+            },
+            policy_close_session: match value.policy_close_session() {
+                PolicyCloseSessionCapability::Unknown => PolicyCloseSessionSupport::Unknown,
+                PolicyCloseSessionCapability::UnsupportedNotImplemented => {
+                    PolicyCloseSessionSupport::UnsupportedNotImplemented
+                }
+                PolicyCloseSessionCapability::SupportedForSession => {
+                    PolicyCloseSessionSupport::SupportedForSession
+                }
+            },
+            incoming_elicitation: match value.incoming_elicitation() {
+                IncomingElicitationCapability::Unknown => IncomingElicitationSupport::Unknown,
+                IncomingElicitationCapability::UnsupportedNotImplemented => {
+                    IncomingElicitationSupport::UnsupportedNotImplemented
+                }
+                IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip => {
+                    IncomingElicitationSupport::SupportedWithCorrelatedRoundTrip
+                }
+            },
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -230,6 +230,86 @@ export const ConversationDisposition = {
 } as const
 export type ConversationDisposition =
   (typeof ConversationDisposition)[keyof typeof ConversationDisposition]
+export const PermissionDenialSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedForOfferedPermissionReviews: "supported_for_offered_permission_reviews",
+} as const
+export type PermissionDenialSupport =
+  (typeof PermissionDenialSupport)[keyof typeof PermissionDenialSupport]
+export const NativeHookSuppressionSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedForUserConfiguredHooks: "supported_for_user_configured_hooks",
+} as const
+export type NativeHookSuppressionSupport =
+  (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
+export const CompactionReportingSupport = {
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedWithInvocationCorrelation: "supported_with_invocation_correlation",
+} as const
+export type CompactionReportingSupport =
+  (typeof CompactionReportingSupport)[keyof typeof CompactionReportingSupport]
+export const ModelSwitchReportingSupport = {
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedAfterValidatedSwitch: "supported_after_validated_switch",
+} as const
+export type ModelSwitchReportingSupport =
+  (typeof ModelSwitchReportingSupport)[keyof typeof ModelSwitchReportingSupport]
+export const PermissionDeferralSupport = {
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedWithNonterminalOutcome: "supported_with_nonterminal_outcome",
+} as const
+export type PermissionDeferralSupport =
+  (typeof PermissionDeferralSupport)[keyof typeof PermissionDeferralSupport]
+export const ElicitationForwardingSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedWithCorrelatedRoundTrip: "supported_with_correlated_round_trip",
+} as const
+export type ElicitationForwardingSupport =
+  (typeof ElicitationForwardingSupport)[keyof typeof ElicitationForwardingSupport]
+export const PreToolPolicySupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedAtPermissionGate: "supported_at_permission_gate",
+} as const
+export type PreToolPolicySupport =
+  (typeof PreToolPolicySupport)[keyof typeof PreToolPolicySupport]
+export const PolicyEndTurnSupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedForCurrentInvocation: "supported_for_current_invocation",
+} as const
+export type PolicyEndTurnSupport =
+  (typeof PolicyEndTurnSupport)[keyof typeof PolicyEndTurnSupport]
+export const PolicyCloseSessionSupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedForSession: "supported_for_session",
+} as const
+export type PolicyCloseSessionSupport =
+  (typeof PolicyCloseSessionSupport)[keyof typeof PolicyCloseSessionSupport]
+export const IncomingElicitationSupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedWithCorrelatedRoundTrip: "supported_with_correlated_round_trip",
+} as const
+export type IncomingElicitationSupport =
+  (typeof IncomingElicitationSupport)[keyof typeof IncomingElicitationSupport]
+/** Scoped provider transport facts and effective Nessa policy integration support. */
+export interface ConversationAgentFeatures {
+  permissionDenial: PermissionDenialSupport
+  nativeHookSuppression: NativeHookSuppressionSupport
+  compactionReporting: CompactionReportingSupport
+  modelSwitchReporting: ModelSwitchReportingSupport
+  permissionDeferral: PermissionDeferralSupport
+  elicitationForwarding: ElicitationForwardingSupport
+  preToolPolicy: PreToolPolicySupport
+  policyEndTurn: PolicyEndTurnSupport
+  policyCloseSession: PolicyCloseSessionSupport
+  incomingElicitation: IncomingElicitationSupport
+}
 /** Operations supported by this configured agent. */
 export interface ConversationCapabilities {
   /** Can queue input at invocation boundaries. */
@@ -242,6 +322,7 @@ export interface ConversationCapabilities {
   permissions: boolean
   /** The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none. */
   imageInput: boolean
+  agentFeatures: ConversationAgentFeatures
 }
 /** One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message. */
 export interface ImageAttachment {

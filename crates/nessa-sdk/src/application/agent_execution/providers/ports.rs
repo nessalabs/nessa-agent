@@ -1,9 +1,9 @@
 #![deny(missing_docs)]
 
 use super::{
-    CleanupFuture, OperationCapabilities, ProviderExecutionFuture, ProviderIdentity,
-    ProviderObservationFuture, ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
-    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
+    CleanupFuture, ProviderExecutionFuture, ProviderIdentity, ProviderObservationFuture,
+    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderSession, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::ProviderOpenFuture;
@@ -30,11 +30,12 @@ pub struct CloseOutcome {
 /// context before executing again, and fails explicitly if it cannot be restored.
 /// Dropping all handles requests shutdown; hosts must await close before exit.
 pub trait ProviderSessionBackend: Send + Sync {
-    /// Return currently advertised provider operations without I/O or restoration.
-    /// Implementations should refresh negotiated support when reconnecting. The
-    /// conservative default advertises neither native steering nor restoration.
-    fn operation_capabilities(&self) -> OperationCapabilities {
-        OperationCapabilities::default()
+    /// Return currently established provider facts without I/O or restoration.
+    /// Implementations should reset provider-derived facts before reconnecting and
+    /// refresh them only after verification. [`ProviderSession`] resolves this raw
+    /// snapshot into effective application support. The default is unnegotiated.
+    fn operation_capabilities(&self) -> ProviderOperationCapabilities {
+        ProviderOperationCapabilities::default()
     }
 
     /// Refuse, before it is accepted, an `input` this backend already knows it

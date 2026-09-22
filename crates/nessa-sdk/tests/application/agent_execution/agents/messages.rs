@@ -233,7 +233,7 @@ impl AgentProvider for ImageProvider {
     }
 }
 impl ProviderSessionBackend for ImageBackend {
-    fn operation_capabilities(&self) -> OperationCapabilities {
+    fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         self.agent
     }
     fn validate_input(&self, _: &ExecutionRequest) -> Result<(), AgentError> {
@@ -288,25 +288,84 @@ impl ProviderSessionBackend for ImageBackend {
     }
 }
 
-const AGENT_TAKES_IMAGES: OperationCapabilities = OperationCapabilities {
+const AGENT_TAKES_IMAGES: ProviderOperationCapabilities = ProviderOperationCapabilities {
     negotiated: true,
     native_steering: false,
     session_resume: false,
     image_input: true,
+    permission_denial: PermissionDenialCapability::Unknown,
+    native_hook_suppression: NativeHookSuppressionCapability::Unknown,
+    compaction_reporting: ProviderCompactionReportingCapability::Unknown,
+    model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
+    permission_deferral: ProviderPermissionDeferralCapability::Unknown,
+    elicitation_forwarding: ElicitationForwardingCapability::Unknown,
 };
-const AGENT_TAKES_NO_IMAGES: OperationCapabilities = OperationCapabilities {
+const AGENT_TAKES_NO_IMAGES: ProviderOperationCapabilities = ProviderOperationCapabilities {
     image_input: false,
     ..AGENT_TAKES_IMAGES
 };
-const AGENT_NOT_YET_KNOWN: OperationCapabilities = OperationCapabilities {
+const AGENT_NOT_YET_KNOWN: ProviderOperationCapabilities = ProviderOperationCapabilities {
     negotiated: false,
     ..AGENT_TAKES_NO_IMAGES
 };
 
+#[tokio::test]
+async fn provider_advertisements_cannot_enable_missing_application_integrations() {
+    let provider = ImageProvider::new(
+        ProviderOperationCapabilities {
+            negotiated: true,
+            permission_denial: PermissionDenialCapability::SupportedForOfferedPermissionReviews,
+            native_hook_suppression:
+                NativeHookSuppressionCapability::SupportedForUserConfiguredHooks,
+            compaction_reporting:
+                ProviderCompactionReportingCapability::SupportedWithInvocationCorrelation,
+            model_switch_reporting:
+                ProviderModelSwitchReportingCapability::SupportedAfterValidatedSwitch,
+            permission_deferral:
+                ProviderPermissionDeferralCapability::SupportedWithNonterminalOutcome,
+            elicitation_forwarding:
+                ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip,
+            ..ProviderOperationCapabilities::default()
+        },
+        None,
+    );
+    let storage = MemoryStorage::default();
+    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
+    let capabilities = agent.operation_capabilities();
+    assert_eq!(
+        capabilities.compaction_reporting(),
+        CompactionReportingCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.model_switch_reporting(),
+        ModelSwitchReportingCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.permission_deferral(),
+        PermissionDeferralCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.pre_tool_policy(),
+        PreToolPolicyCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.policy_end_turn(),
+        PolicyEndTurnCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.policy_close_session(),
+        PolicyCloseSessionCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.incoming_elicitation(),
+        IncomingElicitationCapability::UnsupportedNotImplemented
+    );
+}
+
 /// Submit `input` every way an Agent accepts input and require the same
 /// outcome each time. A refusal must have saved and sent nothing.
 async fn every_entry(
-    agent_answer: OperationCapabilities,
+    agent_answer: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
     input: &ExecutionRequest,
     expected: Result<ExecutionOutcome, AgentError>,

@@ -164,6 +164,7 @@ export type {
   ConversationPermissionOption,
   ConversationTool,
   ConversationCapabilities,
+  ConversationAgentFeatures,
   ConversationMessageStatus,
   ConversationDisposition,
   ConversationPendingMode,
