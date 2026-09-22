@@ -1,7 +1,7 @@
-//! Pure endpoint identity and loopback-address invariants.
+//! Pure values for local gateway identity, address, and publication agreement.
 
-mod endpoint;
+mod value_objects;
 
-pub use endpoint::{
+pub use value_objects::{
     EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement, ManagedRuntimeIdentity,
 };

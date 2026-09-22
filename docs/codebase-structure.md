@@ -268,6 +268,10 @@ tree can be written to by anything else uses the second.
 
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
+Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
+validates the listener and process identity, while `advertisement.rs` enforces
+agreement between that endpoint and optional desktop-managed identity. Tests
+mirror those responsibilities under `tests/domain/value_objects/`.
 Server composition publishes the actual listener address atomically beside
 `gateway.log`; local Rust clients accept it only when every identity field agrees
 with a bounded unauthenticated `/health` response. This correlation rejects stale

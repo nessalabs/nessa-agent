@@ -7,10 +7,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, ErrorKind, Read, Write},
-    net::{IpAddr, SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream},
     path::PathBuf,
     time::{Duration, Instant},
 };
+use url::{Host, Url};
 
 pub const ENDPOINT_FILE: &str = "gateway-endpoint.json";
 
@@ -164,15 +165,15 @@ fn record_advertisement(record: &EndpointRecord) -> io::Result<GatewayEndpointAd
 
 fn advertisement_address(endpoint: &GatewayEndpoint) -> io::Result<SocketAddr> {
     let web_socket_url = endpoint.web_socket_url();
-    let url = url::Url::parse(&web_socket_url).map_err(|_| invalid_record())?;
+    let url = Url::parse(&web_socket_url).map_err(|_| invalid_record())?;
     let ip = match url.host().ok_or_else(invalid_record)? {
-        url::Host::Ipv4(value) => IpAddr::V4(value),
-        url::Host::Ipv6(value) => IpAddr::V6(value),
-        url::Host::Domain(_) => return Err(invalid_record()),
+        Host::Ipv4(value) => IpAddr::V4(value),
+        Host::Ipv6(value) => IpAddr::V6(value),
+        Host::Domain(_) => return Err(invalid_record()),
     };
     let port = url.port_or_known_default().ok_or_else(invalid_record)?;
-    if !matches!(ip, IpAddr::V4(value) if value == std::net::Ipv4Addr::LOCALHOST)
-        && !matches!(ip, IpAddr::V6(value) if value == std::net::Ipv6Addr::LOCALHOST)
+    if !matches!(ip, IpAddr::V4(value) if value == Ipv4Addr::LOCALHOST)
+        && !matches!(ip, IpAddr::V6(value) if value == Ipv6Addr::LOCALHOST)
         || port == 0
     {
         return Err(invalid_record());
