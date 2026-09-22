@@ -2,6 +2,11 @@ import * as React from "react"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
+import { nativeGatewayStartup } from "../adapters/gateway-startup"
+import {
+  createGatewayStartupMonitor,
+  type GatewayStartupStatus,
+} from "../application/gateway-startup"
 import { playCue } from "./sound"
 import { listenForDismiss } from "./dismiss-shortcut"
 import { createReadinessCheck } from "../application/readiness-check"
@@ -10,6 +15,7 @@ import type { AgentReadinessSource } from "../application/ports"
 import { summonAccelerator } from "../model/shortcut-display"
 import {
   beginOnboarding,
+  clearReadiness,
   chooseAgent,
   completeOnboarding,
   confirmAgent,
@@ -57,16 +63,20 @@ export interface Onboarding {
   accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
   platform: ShortcutPlatform
+  /** What the native host reports about bringing up its managed gateway. */
+  gatewayStartup: GatewayStartupStatus
   begin: () => void
   choose: (id: AgentId) => void
   confirm: () => void
   finish: () => void
   /** Leave setup without finishing it. */
   dismiss: () => void
-  /** Ask the runtimes again. For a gateway that was still starting up, or an
-   * agent signed in since setup opened. Does nothing while an ask is already in
-   * flight — its answer is the one a second ask would be waiting for. */
+  /** Ask the runtimes again after an agent was installed or signed in. Does
+   * nothing while an ask is already in flight, or while the managed gateway is
+   * not ready to answer. */
   recheck: () => void
+  /** Ask the native host to retry a failed gateway startup. */
+  retryGatewayStartup: () => void
   /** True while an ask is in flight, so the control that starts one can show
    * that it is working rather than looking like it did nothing. */
   checking: boolean
@@ -146,26 +156,54 @@ export function useOnboarding(
   const ask = React.useCallback(() => {
     void readiness.check()
   }, [readiness])
-  const recheck = ask
+  const [gatewayStartupState, setGatewayStartupState] =
+    React.useState<GatewayStartupStatus>({ revision: -1, state: "starting" })
+  const startup = React.useMemo(
+    () =>
+      createGatewayStartupMonitor(nativeGatewayStartup, (next) => {
+        setGatewayStartupState(next)
+        if (next.state === "ready" || next.state === "unmanaged") {
+          void readiness.check()
+          return
+        }
+        readiness.abandon()
+        setState(clearReadiness)
+      }),
+    [readiness],
+  )
 
   React.useEffect(() => {
-    ask()
-    return () => readiness.abandon()
-  }, [ask, readiness])
+    startup.start()
+    return () => {
+      startup.stop()
+      readiness.abandon()
+    }
+  }, [readiness, startup])
 
-  // The one ask nobody presses a button for: reaching the picker. Between the
-  // window opening and someone reading the list, a gateway that was starting up
-  // has had its chance to finish, and the list is about to be acted on. It is
-  // one more ask, not a loop — setup opens on the welcome step, so the two asks
-  // are the opening one and this one.
+  const recheck = React.useCallback(() => {
+    if (
+      gatewayStartupState.state === "ready" ||
+      gatewayStartupState.state === "unmanaged"
+    ) {
+      ask()
+    }
+  }, [ask, gatewayStartupState.state])
+  const retryStartup = React.useCallback(() => {
+    void startup.retry().catch(() => undefined)
+  }, [startup])
+
+  // The unmanaged browser path keeps its original second ask on reaching the
+  // picker. It has no native lifecycle event to trigger a fresh answer, and the
+  // list is about to be acted on. A managed host asks once on its confirmed
+  // transition to ready instead.
   //
   // It is also subject to the one-ask-at-a-time rule above: if the opening ask
   // has not answered yet, that answer is already the one this step wants.
   const picking = state.step === "agent"
   React.useEffect(() => {
-    if (!picking) return
+    if (!picking || gatewayStartupState.state !== "unmanaged") return
     ask()
-  }, [picking, ask])
+  }, [picking, ask, gatewayStartupState.state])
 
   const keys = summonAccelerator(shortcuts)
   const platform = shortcutPlatform()
@@ -242,6 +280,7 @@ export function useOnboarding(
     active,
     accelerator: keys,
     platform,
+    gatewayStartup: gatewayStartupState,
     // Every button that moves setup forward sounds the same, because each is
     // the same act. Picking an agent is not one of them — it switches a thing
     // on — and finishing gets the only celebratory cue setup has.
@@ -279,6 +318,7 @@ export function useOnboarding(
       setState(dismissOnboarding)
     }, [practising]),
     recheck,
+    retryGatewayStartup: retryStartup,
     checking,
   }
 }

@@ -27,3 +27,17 @@ export interface AgentReadinessSource {
   /** Ask once. Never rejects: every way of not getting an answer is a value. */
   read(): Promise<AgentReadinessAnswer>
 }
+
+/** The host-owned progress of the gateway reconciliation for this launch. */
+export type GatewayStartup =
+  | { readonly revision: number; readonly state: "unmanaged" }
+  | { readonly revision: number; readonly state: "starting" }
+  | { readonly revision: number; readonly state: "ready" }
+  | { readonly revision: number; readonly state: "failed"; readonly message: string }
+
+/** Where setup observes and retries the native gateway lifecycle. */
+export interface GatewayStartupSource {
+  snapshot(): Promise<GatewayStartup>
+  subscribe(handler: (startup: GatewayStartup) => void): Promise<() => void>
+  retry(): Promise<void>
+}

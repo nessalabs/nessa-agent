@@ -7,6 +7,7 @@ import {
   recordReadiness,
   recordReadinessFailure,
   beginOnboarding,
+  clearReadiness,
   chooseAgent,
   completeOnboarding,
   confirmAgent,
@@ -70,6 +71,17 @@ describe("first-run setup", () => {
     expect(agentChoice("codex")?.supported).toBe(true)
     expect(agentReadiness(picking, "codex")).toBe("not-installed")
     expect(chooseAgent(picking, "codex")).toBe(picking)
+  })
+
+  it("drops a choice when the managed gateway starts again", () => {
+    const chosen = chooseAgent(startAgentChoice(withClaudeReady()), "claude")
+
+    expect(clearReadiness(chosen)).toEqual({
+      step: "agent",
+      agent: undefined,
+      readiness: undefined,
+      readinessFailure: undefined,
+    })
   })
 
   it("offers nothing until the runtimes have been asked", () => {

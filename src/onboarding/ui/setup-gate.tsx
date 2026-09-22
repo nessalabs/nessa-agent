@@ -231,6 +231,8 @@ export function SetupGate({
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           onRecheck={onboarding.recheck}
+          onRetryGateway={onboarding.retryGatewayStartup}
+          gatewayStartup={onboarding.gatewayStartup}
           checking={onboarding.checking}
           platform={onboarding.platform}
         />

@@ -6,6 +6,9 @@
  * declared here and again in `src-tauri/src/host.rs`; a Rust test fails if a
  * name on that side is missing from this file.
  */
+import type { GatewayStartup } from "../onboarding/application/ports"
+export type { GatewayStartup } from "../onboarding/application/ports"
+
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 const HOST_EVENTS = {
@@ -23,7 +26,37 @@ const HOST_EVENTS = {
   attachmentDragging: "nessa://attachment-dragging",
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
+  gatewayStartup: "nessa://gateway-startup",
 } as const
+
+/**
+ * The latest gateway startup transition retained by the host.
+ *
+ * The browser has no native gateway lifecycle. Its same-origin server is
+ * already the thing setup asks, so it reports that the native lifecycle is
+ * unmanaged and keeps the existing browser workflow.
+ */
+export async function gatewayStartup(): Promise<GatewayStartup> {
+  if (!inTauri) return { revision: 0, state: "unmanaged" }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<GatewayStartup>("gateway_startup")
+}
+
+/** Subscribes to host-owned gateway startup transitions. */
+export async function onGatewayStartup(handler: (startup: GatewayStartup) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<GatewayStartup>(HOST_EVENTS.gatewayStartup, ({ payload }) =>
+    handler(payload),
+  )
+}
+
+/** Asks the host to retry a failed gateway reconciliation. */
+export async function retryGatewayStartup(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("retry_gateway_startup")
+}
 
 /**
  * The frosted surface is a native window effect, so the clear surface has to

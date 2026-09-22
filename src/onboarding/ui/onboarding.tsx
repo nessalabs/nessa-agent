@@ -3,6 +3,7 @@ import { Check } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
+import type { GatewayStartupStatus } from "../application/gateway-startup"
 import type { ShortcutPlatform } from "../model/shortcut-display"
 import { Button } from "@nessa-ui/react/button"
 import {
@@ -195,7 +196,11 @@ const SetupStep = React.forwardRef<
 function readinessNote(
   readiness: AgentReadiness,
   failure: AgentReadinessFailure | undefined,
+  startup: GatewayStartupStatus,
 ): string | undefined {
+  if (startup.state === "starting") return "Starting Nessa…"
+  if (startup.state === "failed") return "Nessa needs attention"
+  if (startup.state === "unavailable") return "Can’t check Nessa startup"
   if (readiness === "ready") return undefined
   if (readiness === "not-supported") return "Coming soon"
   if (readiness === "needs-authentication") return "Needs sign-in"
@@ -223,6 +228,7 @@ function AgentOption({
   name,
   readiness,
   failure,
+  startup,
   selected,
   onSelect,
 }: {
@@ -230,10 +236,11 @@ function AgentOption({
   name: string
   readiness: AgentReadiness
   failure: AgentReadinessFailure | undefined
+  startup: GatewayStartupStatus
   selected: boolean
   onSelect: (id: AgentId) => void
 }) {
-  const note = readinessNote(readiness, failure)
+  const note = readinessNote(readiness, failure, startup)
   return (
     <button
       type="button"
@@ -279,16 +286,19 @@ function AgentOption({
  */
 export function Onboarding({
   state,
+  gatewayStartup,
   accelerator,
   onBegin,
   onChoose,
   onConfirm,
   onFinish,
   onRecheck,
+  onRetryGateway,
   checking = false,
   platform,
 }: {
   state: OnboardingState
+  gatewayStartup: GatewayStartupStatus
   accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
   platform: ShortcutPlatform
@@ -298,6 +308,8 @@ export function Onboarding({
   onFinish: () => void
   /** Ask the runtimes again, for whoever has just fixed what was wrong. */
   onRecheck: () => void
+  /** Ask the native owner to reconcile the gateway again after a failure. */
+  onRetryGateway: () => void
   /** True while an ask is in flight. The button that starts one says so and
    * stops taking presses, because each ask runs a real probe per agent and a
    * button that looks inert invites being pressed again. */
@@ -404,7 +416,12 @@ export function Onboarding({
   // true while this screen is up — a gateway still starting, a sign-in done in
   // another window, an agent installed in a terminal — and until now the answer
   // setup happened to get first was the answer it kept for good.
-  const stuck = !AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
+  const gatewayUnavailable =
+    gatewayStartup.state === "starting" ||
+    gatewayStartup.state === "failed" ||
+    gatewayStartup.state === "unavailable"
+  const stuck =
+    gatewayUnavailable || !AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
   return (
     <SetupStage>
       <SetupPanel ref={step}>
@@ -419,6 +436,7 @@ export function Onboarding({
               name={choice.name}
               readiness={agentReadiness(state, choice.id)}
               failure={state.readinessFailure}
+              startup={gatewayStartup}
               selected={state.agent === choice.id}
               onSelect={onChoose}
             />
@@ -430,21 +448,45 @@ export function Onboarding({
           // to do about it. Polite rather than assertive, because it appears
           // while the list beneath it is being read.
           <div role="status" aria-live="polite" className="flex flex-col gap-2">
-            <p className="nessa-text-2 text-muted-foreground">
-              {state.readinessFailure
-                ? "Nessa could not ask what is installed here."
-                : "No agent here can start yet."}{" "}
-              Sign in or start one, then check again.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              className="rounded-full"
-              disabled={checking}
-              onClick={onRecheck}
-            >
-              {checking ? "Checking…" : "Check again"}
-            </Button>
+            {gatewayStartup.state === "starting" ? (
+              <p className="nessa-text-2 text-muted-foreground">
+                Nessa is starting its background service. Agent availability will appear
+                when it’s ready.
+              </p>
+            ) : gatewayStartup.state === "failed" ||
+              gatewayStartup.state === "unavailable" ? (
+              <>
+                <p className="nessa-text-2 text-muted-foreground">
+                  {gatewayStartup.message}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={onRetryGateway}
+                >
+                  Try starting Nessa again
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="nessa-text-2 text-muted-foreground">
+                  {state.readinessFailure
+                    ? "Nessa could not ask what is installed here."
+                    : "No agent here can start yet."}{" "}
+                  Sign in or start one, then check again.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  disabled={checking}
+                  onClick={onRecheck}
+                >
+                  {checking ? "Checking…" : "Check again"}
+                </Button>
+              </>
+            )}
           </div>
         ) : null}
         <Button
