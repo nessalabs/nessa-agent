@@ -3,6 +3,7 @@
 
 mod attachments;
 mod composition;
+mod diagnostics;
 mod gateway;
 mod host;
 mod launch;
@@ -43,6 +44,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(diagnostics::init())
         // Before any window exists, so it covers the panel `tauri.conf.json`
         // declares as well as the setup window built later: a link clicked in
         // a Nessa window goes to the person's browser, and never turns the
