@@ -177,7 +177,7 @@ fn explicit_offline_command_records_only_its_verified_process_attribution() {
 }
 
 #[cfg(unix)]
-fn assert_unsafe_registry_refusal(run: &Run) {
+fn assert_unsafe_refusal(run: &Run, target: &Path, role: &str) {
     let message = stderr(run);
     assert_eq!(run.output.status.code(), Some(28), "{message}");
     assert!(
@@ -187,7 +187,9 @@ fn assert_unsafe_registry_refusal(run: &Run) {
     assert_eq!(fs::read(&run.registry).unwrap(), INVALID);
     let records = records(&run.auth);
     assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["target"]["value"], target.to_str().unwrap());
     assert_eq!(records[0]["fault"]["kind"], "unsafe_storage");
+    assert_eq!(records[0]["fault"]["role"], role);
 }
 
 #[cfg(unix)]
@@ -202,7 +204,7 @@ fn public_registry_permissions_are_refused_and_audited_without_rewrite() {
         },
     );
 
-    assert_unsafe_registry_refusal(&run);
+    assert_unsafe_refusal(&run, &run.registry, "registry");
     assert_eq!(
         fs::metadata(&run.registry).unwrap().permissions().mode() & 0o777,
         0o644
@@ -217,7 +219,7 @@ fn hard_linked_registry_is_refused_and_audited_without_unlinking_evidence() {
         |auth, registry| fs::hard_link(registry, auth.join("registry-evidence-link")).unwrap(),
     );
 
-    assert_unsafe_registry_refusal(&run);
+    assert_unsafe_refusal(&run, &run.registry, "registry");
     assert_eq!(
         fs::read(run.auth.join("registry-evidence-link")).unwrap(),
         INVALID
@@ -238,11 +240,78 @@ fn registry_symlink_is_refused_and_audited_without_changing_its_target() {
         },
     );
 
-    assert_unsafe_registry_refusal(&run);
+    assert_unsafe_refusal(&run, &run.registry, "registry");
     assert_eq!(
         fs::read(run.auth.join("registry-evidence.json")).unwrap(),
         INVALID
     );
+}
+
+#[cfg(unix)]
+fn lock_path(auth: &Path) -> PathBuf {
+    auth.join("credentials.v1.lock")
+}
+
+#[cfg(unix)]
+#[test]
+fn public_lock_permissions_are_refused_and_audited_without_touching_the_registry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let run = run_with(
+        |_| vec!["server".into()],
+        |auth, _| {
+            let lock = lock_path(auth);
+            nessa_local_storage::open(&lock, nessa_local_storage::OpenMode::CreateNew).unwrap();
+            fs::set_permissions(lock, fs::Permissions::from_mode(0o644)).unwrap();
+        },
+    );
+    let lock = lock_path(&run.auth);
+
+    assert_unsafe_refusal(&run, &lock, "lock");
+    assert_eq!(fs::read(&run.registry).unwrap(), INVALID);
+    assert_eq!(
+        fs::metadata(lock).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(!stderr(&run).contains("auth init"));
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_linked_lock_is_refused_and_audited_without_unlinking_evidence() {
+    let run = run_with(
+        |_| vec!["server".into()],
+        |auth, _| {
+            let lock = lock_path(auth);
+            nessa_local_storage::open(&lock, nessa_local_storage::OpenMode::CreateNew).unwrap();
+            fs::hard_link(&lock, auth.join("lock-evidence-link")).unwrap();
+        },
+    );
+    let lock = lock_path(&run.auth);
+
+    assert_unsafe_refusal(&run, &lock, "lock");
+    assert!(run.auth.join("lock-evidence-link").is_file());
+    assert_eq!(fs::read(&run.registry).unwrap(), INVALID);
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_symlink_is_refused_and_audited_without_changing_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let run = run_with(
+        |_| vec!["server".into()],
+        |auth, _| {
+            let evidence = auth.join("lock-evidence");
+            nessa_local_storage::open(&evidence, nessa_local_storage::OpenMode::CreateNew).unwrap();
+            symlink(&evidence, lock_path(auth)).unwrap();
+        },
+    );
+    let lock = lock_path(&run.auth);
+
+    assert_unsafe_refusal(&run, &lock, "lock");
+    assert!(run.auth.join("lock-evidence").is_file());
+    assert_eq!(fs::read(&run.registry).unwrap(), INVALID);
 }
 
 #[cfg(unix)]

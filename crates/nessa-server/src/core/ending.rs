@@ -130,7 +130,7 @@ mod tests {
     use crate::env::{EnvironmentError, HOST};
     use nessa_auth::adapters::local::LocalStoreError;
     use nessa_auth::application::credential_registry::{
-        CredentialRegistryAuditError, CredentialRegistryFault,
+        CredentialRegistryAuditError, CredentialRegistryFault, CredentialRegistryStorageRole,
     };
     use std::io::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
@@ -266,7 +266,7 @@ mod tests {
         let launch = managed(home.path());
         let invalid = || LocalStoreError::InvalidRegistry {
             path: home.path().join("auth/credentials.v1.json"),
-            fault: CredentialRegistryFault::UnsafeStorage,
+            fault: CredentialRegistryFault::UnsafeStorage(CredentialRegistryStorageRole::Registry),
         };
 
         for refusal_audit in [
@@ -291,7 +291,9 @@ mod tests {
             &RunError::registry(
                 LocalStoreError::InvalidRegistry {
                     path: obstructed.path().join("auth/credentials.v1.json"),
-                    fault: CredentialRegistryFault::UnsafeStorage,
+                    fault: CredentialRegistryFault::UnsafeStorage(
+                        CredentialRegistryStorageRole::Registry,
+                    ),
                 },
                 None,
             ),

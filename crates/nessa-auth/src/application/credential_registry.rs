@@ -43,9 +43,27 @@ pub enum CredentialRegistryFault {
         /// Configured maximum registry size.
         maximum_bytes: u64,
     },
-    /// The registry name, ancestry, ownership, permissions, file type, or link
-    /// count failed the private-storage boundary.
-    UnsafeStorage,
+    /// An authoritative registry file failed the private-storage boundary.
+    UnsafeStorage(CredentialRegistryStorageRole),
+}
+
+/// The authority-bearing file that failed private-storage validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialRegistryStorageRole {
+    /// The credential state and lifecycle evidence file.
+    Registry,
+    /// The sibling lifetime lock that establishes one registry owner.
+    Lock,
+}
+
+impl CredentialRegistryStorageRole {
+    /// Return the stable audit representation of the file's authority role.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Registry => "registry",
+            Self::Lock => "lock",
+        }
+    }
 }
 
 /// Safe categories from `serde_json`; no rejected value is retained.
@@ -130,8 +148,10 @@ impl fmt::Display for CredentialRegistryFault {
                 formatter,
                 "file size {observed_bytes} bytes exceeds the {maximum_bytes}-byte limit"
             ),
-            Self::UnsafeStorage => formatter.write_str(
-                "file or path is not private, single-linked storage owned by the current OS user",
+            Self::UnsafeStorage(role) => write!(
+                formatter,
+                "{} file or path is not private, single-linked storage owned by the current OS user",
+                role.as_str()
             ),
         }
     }

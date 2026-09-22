@@ -85,8 +85,9 @@ the application records target, unchanged-before/after meaning, cause, and the
 known initiator in a private sibling audit directory. Audit failure remains
 visible beside the original refusal. Neither path edits or deletes the registry.
 The local refusal sink addresses every directory and record beneath the verified
-auth root, refuses symbolic-link ancestry, and syncs each parent after creating
-its child before it publishes and syncs the record.
+auth root and refuses symbolic-link ancestry. Unix syncs each parent after
+creating its child; Windows revalidates the tree, flushes the record file, and
+uses a write-through move because it has no directory-fsync equivalent.
 
 ## Authentication is not ongoing authorization
 

@@ -391,6 +391,21 @@ pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
+/// Mark the already-open reservation for deletion instead of resolving its
+/// path again. The handle remains bound to the file even if an ancestor name is
+/// concurrently replaced, so cleanup cannot delete an outside same-name file.
+pub fn remove_reserved_beneath(file: &File, _: &Path, _: &Path) -> io::Result<()> {
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+    unsafe {
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        ))
+    }
+}
+
 /// Remove an empty directory named relative to an already-private root.
 pub fn remove_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
     let path = beneath(root, relative)?;
@@ -443,6 +458,19 @@ pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
             MOVEFILE_WRITE_THROUGH,
         ))
     }
+}
+pub fn publish_new_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    if from.components().next().is_none()
+        || to.components().next().is_none()
+        || from
+            .components()
+            .chain(to.components())
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    publish_new(&root.join(from), &root.join(to))
 }
 pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     if from.components().next().is_none()

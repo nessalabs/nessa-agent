@@ -45,23 +45,25 @@ fn unsafe_file() -> io::Error {
     )
 }
 
-/// Create a private directory tree beneath a trusted root and durably publish
-/// every directory name before creating its child.
+/// Create a private directory tree one anchored component at a time beneath a
+/// trusted root.
 ///
 /// The path must be non-empty, relative, and contain only normal components.
-/// Each prefix is created through the platform's anchored `beneath` operation,
-/// then its established parent is synced before descent continues. The final
-/// directory is synced before success, so callers do not need a later file
-/// publication to establish the directory tree itself.
-pub fn create_durable_directory_beneath(root: &Path, directory: &Path) -> io::Result<()> {
-    create_durable_directory_with(
+/// Each prefix is created through the platform's anchored `beneath` operation.
+/// On Unix, its established parent is synced before descent and the final leaf
+/// is synced before success. Windows has no directory-fsync equivalent, so the
+/// same calls revalidate the private tree; a record publisher must separately
+/// flush its file and use the platform's write-through move. This function does
+/// not claim survival of arbitrary power loss.
+pub fn create_private_directory_tree_beneath(root: &Path, directory: &Path) -> io::Result<()> {
+    create_private_directory_tree_with(
         directory,
         |relative| create_directory_beneath(root, relative),
         |relative| sync_directory_beneath(root, relative),
     )
 }
 
-fn create_durable_directory_with(
+fn create_private_directory_tree_with(
     directory: &Path,
     mut create: impl FnMut(&Path) -> io::Result<()>,
     mut sync: impl FnMut(&Path) -> io::Result<()>,
@@ -84,9 +86,10 @@ fn create_durable_directory_with(
 
 /// A temporary file protected at creation, before any secret bytes are written.
 pub struct PrivateTempFile {
-    file: File,
+    file: Option<File>,
     path: PathBuf,
     beneath: Option<(PathBuf, PathBuf)>,
+    cleanup_required: bool,
 }
 impl PrivateTempFile {
     pub fn new_in(parent: &Path) -> io::Result<Self> {
@@ -99,9 +102,10 @@ impl PrivateTempFile {
             match open(&path, OpenMode::CreateNew) {
                 Ok(file) => {
                     return Ok(Self {
-                        file,
+                        file: Some(file),
                         path,
                         beneath: None,
+                        cleanup_required: true,
                     })
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -123,9 +127,10 @@ impl PrivateTempFile {
             match open_beneath(root, &relative, OpenMode::CreateNew) {
                 Ok(file) => {
                     return Ok(Self {
-                        file,
+                        file: Some(file),
                         path: root.join(&relative),
                         beneath: Some((root.to_path_buf(), relative)),
+                        cleanup_required: true,
                     });
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -138,13 +143,15 @@ impl PrivateTempFile {
         ))
     }
     pub fn as_file(&self) -> &File {
-        &self.file
+        self.file.as_ref().expect("temporary file is open")
     }
     pub fn as_file_mut(&mut self) -> &mut File {
-        &mut self.file
+        self.file.as_mut().expect("temporary file is open")
     }
-    pub fn persist(self, destination: &Path) -> io::Result<()> {
-        replace(&self.path, destination)
+    pub fn persist(mut self, destination: &Path) -> io::Result<()> {
+        replace(&self.path, destination)?;
+        self.cleanup_required = false;
+        Ok(())
     }
     /// Publish this file under `destination` only if that name is still unused.
     ///
@@ -161,8 +168,10 @@ impl PrivateTempFile {
     ///
     /// # Errors
     /// Any platform publication failure, including a taken destination.
-    pub fn publish(self, destination: &Path) -> io::Result<()> {
-        publish_new(&self.path, destination)
+    pub fn publish(mut self, destination: &Path) -> io::Result<()> {
+        publish_new(&self.path, destination)?;
+        self.cleanup_required = false;
+        Ok(())
     }
     /// Remove temporary files a killed process left in `directory`.
     ///
@@ -188,14 +197,70 @@ impl PrivateTempFile {
         Ok(())
     }
     /// Atomically publish this temporary file to a path beneath the same trusted root.
-    pub fn persist_beneath(self, destination: &Path) -> io::Result<()> {
-        let (root, relative) = self.beneath.as_ref().ok_or_else(unsafe_file)?;
-        replace_beneath(root, relative, destination)
+    pub fn persist_beneath(mut self, destination: &Path) -> io::Result<()> {
+        let (root, relative) = self.beneath.clone().ok_or_else(unsafe_file)?;
+        match replace_beneath(&root, &relative, destination) {
+            Ok(()) => {
+                self.cleanup_required = false;
+                Ok(())
+            }
+            Err(publication) => self.publication_failed(publication),
+        }
+    }
+
+    /// Publish this file under a new relative name beneath the trusted root.
+    ///
+    /// The destination is never replaced. `AlreadyExists` means another owner
+    /// already published that name. On any failure, anchored temporary cleanup
+    /// is attempted and a cleanup failure is reported beside the publication
+    /// failure.
+    pub fn publish_new_beneath(mut self, destination: &Path) -> io::Result<()> {
+        let (root, relative) = self.beneath.clone().ok_or_else(unsafe_file)?;
+        match platform::publish_new_beneath(&root, &relative, destination) {
+            Ok(()) => {
+                self.cleanup_required = false;
+                Ok(())
+            }
+            Err(publication) => self.publication_failed(publication),
+        }
+    }
+
+    fn publication_failed(&mut self, publication: io::Error) -> io::Result<()> {
+        match self.remove_reserved() {
+            Ok(()) => {
+                self.cleanup_required = false;
+                drop(self.file.take());
+                Err(publication)
+            }
+            Err(cleanup) => Err(io::Error::new(
+                publication.kind(),
+                format!(
+                    "publication failed: {publication}; anchored temporary cleanup also failed: {cleanup}"
+                ),
+            )),
+        }
+    }
+
+    fn remove_reserved(&self) -> io::Result<()> {
+        match &self.beneath {
+            Some((root, relative)) => platform::remove_reserved_beneath(
+                self.file.as_ref().ok_or_else(unsafe_file)?,
+                root,
+                relative,
+            ),
+            None => std::fs::remove_file(&self.path),
+        }
     }
 }
 impl Drop for PrivateTempFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if self.cleanup_required {
+            // Drop cannot report cleanup failure. Anchored reservations never
+            // fall back to an absolute path, so a swapped ancestor can retain
+            // the original temporary but cannot redirect deletion elsewhere.
+            let _ = self.remove_reserved();
+        }
+        drop(self.file.take());
     }
 }
 
@@ -207,10 +272,10 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn durable_directory_syncs_each_name_before_descent_and_the_leaf_before_success() {
+    fn private_directory_tree_syncs_each_name_before_descent_and_the_leaf_before_success() {
         let steps = std::cell::RefCell::new(Vec::new());
 
-        create_durable_directory_with(
+        create_private_directory_tree_with(
             Path::new("audit/refusals"),
             |path| {
                 steps
@@ -238,10 +303,10 @@ mod tests {
     }
 
     #[test]
-    fn durable_directory_sync_failure_stops_before_creating_a_child() {
+    fn private_directory_tree_sync_failure_stops_before_creating_a_child() {
         let mut created = Vec::new();
 
-        let error = create_durable_directory_with(
+        let error = create_private_directory_tree_with(
             Path::new("audit/refusals"),
             |path| {
                 created.push(path.to_path_buf());
@@ -253,6 +318,90 @@ mod tests {
 
         assert_eq!(error.to_string(), "injected parent sync failure");
         assert_eq!(created, [PathBuf::from("audit")]);
+    }
+
+    #[test]
+    fn anchored_publication_never_replaces_an_existing_record() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit/refusals")).unwrap();
+        let destination = Path::new("audit/refusals/record.json");
+
+        let mut first = PrivateTempFile::new_beneath(&root, Path::new("audit/refusals")).unwrap();
+        first.as_file_mut().write_all(b"first").unwrap();
+        first.as_file().sync_all().unwrap();
+        first.publish_new_beneath(destination).unwrap();
+
+        let mut second = PrivateTempFile::new_beneath(&root, Path::new("audit/refusals")).unwrap();
+        second.as_file_mut().write_all(b"second").unwrap();
+        second.as_file().sync_all().unwrap();
+        let error = second.publish_new_beneath(destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(root.join(destination)).unwrap(), b"first");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchored_drop_cannot_follow_replaced_ancestry_to_delete_outside() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit/refusals")).unwrap();
+        let mut temp = PrivateTempFile::new_beneath(&root, Path::new("audit/refusals")).unwrap();
+        temp.as_file_mut().write_all(b"reserved").unwrap();
+        let name = temp.path.file_name().unwrap().to_owned();
+        std::fs::rename(root.join("audit"), root.join("held-audit")).unwrap();
+        let outside = temporary.path().join("outside");
+        create_directory(&outside).unwrap();
+        std::fs::write(outside.join(&name), b"outside").unwrap();
+        symlink(&outside, root.join("audit")).unwrap();
+
+        drop(temp);
+
+        assert_eq!(std::fs::read(outside.join(&name)).unwrap(), b"outside");
+        assert_eq!(
+            std::fs::read(root.join("held-audit/refusals").join(name)).unwrap(),
+            b"reserved"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_anchored_publication_reports_retained_cleanup_without_outside_delete() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit/refusals")).unwrap();
+        let mut temp = PrivateTempFile::new_beneath(&root, Path::new("audit/refusals")).unwrap();
+        temp.as_file_mut().write_all(b"reserved").unwrap();
+        let name = temp.path.file_name().unwrap().to_owned();
+        std::fs::rename(root.join("audit"), root.join("held-audit")).unwrap();
+        let outside = temporary.path().join("outside");
+        create_directory(&outside).unwrap();
+        std::fs::write(outside.join(&name), b"outside").unwrap();
+        symlink(&outside, root.join("audit")).unwrap();
+
+        let error = temp
+            .persist_beneath(Path::new("audit/refusals/record.json"))
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("anchored temporary cleanup also failed"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(outside.join(&name)).unwrap(), b"outside");
+        assert_eq!(
+            std::fs::read(root.join("held-audit/refusals").join(name)).unwrap(),
+            b"reserved"
+        );
     }
 
     /// The step `publish` is built out of, and the whole of what it promises.

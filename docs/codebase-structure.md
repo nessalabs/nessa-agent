@@ -263,7 +263,8 @@ syntax, schema, invariant, size, or storage fault and never rewrites the
 rejected file. `adapters/local/registry_refusal_audit.rs` records the target,
 before/after meaning, cause, and known initiator outside the untrusted registry.
 It creates and publishes only beneath the verified auth root, syncs each parent
-after creating its child, and reports a sink failure beside the primary fault.
+after creating its child on Unix, applies the Windows guarantees described
+below, and reports a sink failure beside the primary fault.
 Server composition supplies whether the open came from gateway startup,
 automatic provisioning, or an explicit local command.
 
@@ -275,9 +276,10 @@ path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
-`create_durable_directory_beneath` establishes a nested private tree one name
-at a time, syncing each parent before descent and the final leaf before success;
-audit sinks use it before publishing records into a previously absent tree.
+`create_private_directory_tree_beneath` establishes a nested private tree one
+name at a time. Unix syncs each parent before descent and the final leaf before
+success. Windows revalidates the anchored tree because it has no directory-fsync
+equivalent; sinks flush record files and use write-through moves separately.
 
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or

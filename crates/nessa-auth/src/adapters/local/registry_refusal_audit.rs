@@ -9,7 +9,7 @@ use crate::application::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use nessa_local_storage::{
-    create_durable_directory_beneath, sync_directory_beneath, PrivateTempFile,
+    create_private_directory_tree_beneath, sync_directory_beneath, PrivateTempFile,
 };
 use serde_json::{json, Value};
 use std::{
@@ -43,7 +43,7 @@ impl CredentialRegistryRefusalAudit for DurableCredentialRegistryRefusalAudit {
         &self,
         refusal: &CredentialRegistryRefusal,
     ) -> Result<(), CredentialRegistryAuditError> {
-        create_durable_directory_beneath(&self.root, &self.directory).map_err(unavailable)?;
+        create_private_directory_tree_beneath(&self.root, &self.directory).map_err(unavailable)?;
         let id = record_id()?;
         let value = json!({
             "recordId": id,
@@ -63,7 +63,7 @@ impl CredentialRegistryRefusalAudit for DurableCredentialRegistryRefusalAudit {
         serde_json::to_writer(file.as_file_mut(), &value).map_err(unavailable)?;
         file.as_file_mut().write_all(b"\n").map_err(unavailable)?;
         file.as_file().sync_all().map_err(unavailable)?;
-        file.persist_beneath(&self.directory.join(format!("{id}.json")))
+        file.publish_new_beneath(&self.directory.join(format!("{id}.json")))
             .map_err(unavailable)?;
         sync_directory_beneath(&self.root, &self.directory).map_err(unavailable)
     }
@@ -108,8 +108,9 @@ fn fault_value(fault: &CredentialRegistryFault) -> Value {
             "observedBytes": observed_bytes,
             "maximumBytes": maximum_bytes,
         }),
-        CredentialRegistryFault::UnsafeStorage => json!({
+        CredentialRegistryFault::UnsafeStorage(role) => json!({
             "kind": "unsafe_storage",
+            "role": role.as_str(),
         }),
     }
 }
@@ -256,7 +257,9 @@ mod tests {
         );
         let refusal = CredentialRegistryRefusal::new(
             root.join("credentials.v1.json"),
-            CredentialRegistryFault::UnsafeStorage,
+            CredentialRegistryFault::UnsafeStorage(
+                crate::application::credential_registry::CredentialRegistryStorageRole::Registry,
+            ),
             CredentialRegistryRefusalCause::GatewayStartup,
             CredentialRegistryRefusalInitiator::Automatic,
         );
