@@ -12,13 +12,17 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import selectors
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 
 POLICY = {"*": "deny", "read": "allow", "grep": "allow", "glob": "allow", "list": "allow"}
+RPC_DEADLINE_SECONDS = 15
+MAXIMUM_RPC_BYTES = 1024 * 1024
 
 
 def clean_environment(home: pathlib.Path, data: pathlib.Path) -> dict[str, str]:
@@ -38,26 +42,83 @@ def clean_environment(home: pathlib.Path, data: pathlib.Path) -> dict[str, str]:
     }
 
 
-def rpc(process: subprocess.Popen, identifier: int, method: str, params: dict) -> dict:
-    process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}) + "\n")
-    process.stdin.flush()
-    for line in process.stdout:
-        message = json.loads(line)
-        if message.get("id") == identifier:
-            if "error" in message:
-                raise AssertionError(f"{method} failed: {message['error']}")
-            return message["result"]
-    raise AssertionError(f"Opencode exited before answering {method}")
+class RpcClient:
+    def __init__(self, process: subprocess.Popen, deadline_seconds: float = RPC_DEADLINE_SECONDS):
+        self.process = process
+        self.deadline_seconds = deadline_seconds
+        self.buffer = bytearray()
+
+    def call(self, identifier: int, method: str, params: dict) -> dict:
+        request = json.dumps({
+            "jsonrpc": "2.0", "id": identifier, "method": method, "params": params,
+        }).encode() + b"\n"
+        self.process.stdin.write(request)
+        self.process.stdin.flush()
+        deadline = time.monotonic() + self.deadline_seconds
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.process.stdout, selectors.EVENT_READ)
+            while True:
+                while b"\n" in self.buffer:
+                    line, _, remainder = self.buffer.partition(b"\n")
+                    self.buffer = bytearray(remainder)
+                    message = json.loads(line)
+                    if message.get("id") == identifier:
+                        if "error" in message:
+                            raise AssertionError(f"{method} failed: {message['error']}")
+                        return message["result"]
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise TimeoutError(f"Opencode did not answer {method} before the RPC deadline")
+                chunk = os.read(self.process.stdout.fileno(), 64 * 1024)
+                if not chunk:
+                    raise AssertionError(f"Opencode exited before answering {method}")
+                self.buffer.extend(chunk)
+                if len(self.buffer) > MAXIMUM_RPC_BYTES:
+                    raise AssertionError(f"Opencode exceeded the RPC response limit for {method}")
 
 
-def acp_session(binary: pathlib.Path, workspace: pathlib.Path, environment: dict[str, str], restore: str | None = None) -> str:
+def stop_process_group(process: subprocess.Popen) -> None:
+    if process.stdin:
+        try:
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=2)
+    # The group can outlive its leader or contain a descendant that ignored
+    # SIGTERM. Terminate it before the harness acknowledges completion.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def acp_session(
+    binary: pathlib.Path,
+    workspace: pathlib.Path,
+    environment: dict[str, str],
+    restore: str | None = None,
+    deadline_seconds: float = RPC_DEADLINE_SECONDS,
+) -> str:
     process = subprocess.Popen(
         [binary, "acp"], cwd=workspace, env=environment,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, start_new_session=True,
+        start_new_session=True,
     )
     try:
-        initialized = rpc(process, 1, "initialize", {
+        rpc = RpcClient(process, deadline_seconds)
+        initialized = rpc.call(1, "initialize", {
             "protocolVersion": 1,
             "clientInfo": {"name": "nessa-boundary-harness", "version": "0"},
             "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
@@ -68,16 +129,43 @@ def acp_session(binary: pathlib.Path, workspace: pathlib.Path, environment: dict
         if restore is not None:
             method = "session/resume"
             params["sessionId"] = restore
-        result = rpc(process, 2, method, params)
+        result = rpc.call(2, method, params)
         return result.get("sessionId", restore)
     finally:
-        if process.stdin:
-            process.stdin.close()
+        stop_process_group(process)
+
+
+def silent_provider() -> None:
+    with tempfile.TemporaryDirectory(prefix="nessa-opencode-silent-") as temporary:
+        root = pathlib.Path(temporary)
+        provider = root / "silent_provider.py"
+        pid_file = root / "pid"
+        provider.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os,pathlib,signal,sys\n"
+            f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+            "sys.stdin.buffer.readline()\n"
+            "signal.pause()\n"
+        )
+        provider.chmod(0o700)
         try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5)
+            acp_session(
+                provider,
+                root,
+                {**os.environ},
+                deadline_seconds=1,
+            )
+        except TimeoutError as error:
+            assert "initialize" in str(error)
+        else:
+            raise AssertionError("silent provider did not reach the RPC deadline")
+        pid = int(pid_file.read_text())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("silent provider survived RPC deadline cleanup")
 
 
 def write_hostile_source(directory: pathlib.Path, markers: dict[str, pathlib.Path], mcp: pathlib.Path) -> None:
@@ -196,18 +284,18 @@ def catalogue(binary: pathlib.Path, catalogue_path: pathlib.Path, model_id: str,
         process = subprocess.Popen(
             [binary, "acp"], cwd=workspace, env=environment,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True,
+            start_new_session=True,
         )
         try:
-            rpc(process, 1, "initialize", {
+            rpc = RpcClient(process)
+            rpc.call(1, "initialize", {
                 "protocolVersion": 1,
                 "clientInfo": {"name": "nessa-catalogue-harness", "version": "0"},
                 "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
             })
-            result = rpc(process, 2, "session/new", {"cwd": str(workspace), "mcpServers": []})
+            result = rpc.call(2, "session/new", {"cwd": str(workspace), "mcpServers": []})
         finally:
-            process.stdin.close()
-            process.wait(timeout=10)
+            stop_process_group(process)
         model_option = next(option for option in result["configOptions"] if option["id"] == "model")
         offered = {option["value"] for option in model_option["options"]}
         catalogue_data = json.loads(catalogue_path.read_text())
@@ -220,7 +308,11 @@ def catalogue(binary: pathlib.Path, catalogue_path: pathlib.Path, model_id: str,
 
 
 if __name__ == "__main__":
-    command, executable, *rest = sys.argv[1:]
+    command, *rest = sys.argv[1:]
+    if command == "silent-provider":
+        silent_provider()
+        sys.exit(0)
+    executable, *rest = rest
     binary = pathlib.Path(executable).resolve()
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
     assert version.returncode == 0 and version.stdout.strip() == "1.18.31"

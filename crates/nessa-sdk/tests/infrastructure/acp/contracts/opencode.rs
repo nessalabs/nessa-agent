@@ -14,23 +14,133 @@
 use super::support::*;
 use crate::domain::agent_execution::tools::ToolContent;
 use crate::infrastructure::model_metadata_json::load_catalog;
-use std::{fs::File, path::PathBuf, process::Command};
+use std::{
+    fs::File,
+    io::Read,
+    path::PathBuf,
+    process::{Command, ExitStatus, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+const HARNESS_DEADLINE: Duration = Duration::from_secs(60);
+const MAXIMUM_HARNESS_OUTPUT_BYTES: usize = 64 * 1024;
+
+struct HarnessOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn bounded_output(mut pipe: impl Read) -> Vec<u8> {
+    let mut retained = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    while let Ok(count) = pipe.read(&mut chunk) {
+        if count == 0 {
+            break;
+        }
+        let available = MAXIMUM_HARNESS_OUTPUT_BYTES.saturating_sub(retained.len());
+        retained.extend_from_slice(&chunk[..count.min(available)]);
+    }
+    retained
+}
+
+#[cfg(unix)]
+fn terminate_harness_group(identifier: u32) {
+    // SAFETY: a negative identifier addresses the isolated process group made
+    // for this child. SIGKILL needs no shared memory or signal handler state.
+    unsafe {
+        libc::kill(-(identifier as i32), libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn terminate_harness_group(identifier: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &identifier.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn run_python_harness(arguments: &[&str]) -> HarnessOutput {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/infrastructure/acp/contracts/fixtures/opencode_live_boundary.py");
+    let mut command = Command::new("python3");
+    command
+        .arg(fixture)
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().unwrap();
+    let identifier = child.id();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    thread::scope(|scope| {
+        let stdout_reader = scope.spawn(|| bounded_output(stdout));
+        let stderr_reader = scope.spawn(|| bounded_output(stderr));
+        let (status_sender, status_receiver) = mpsc::sync_channel(1);
+        scope.spawn(move || {
+            let _ = status_sender.send(child.wait());
+        });
+        let status = match status_receiver.recv_timeout(HARNESS_DEADLINE) {
+            Ok(status) => status,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                terminate_harness_group(identifier);
+                status_receiver
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("harness process did not exit after process-group cleanup")
+                    .unwrap();
+                panic!("Python Opencode harness exceeded its deadline");
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                terminate_harness_group(identifier);
+                panic!("harness process waiter disconnected")
+            }
+        };
+        terminate_harness_group(identifier);
+        HarnessOutput {
+            status: status.unwrap(),
+            stdout: stdout_reader.join().unwrap(),
+            stderr: stderr_reader.join().unwrap(),
+        }
+    })
+}
 
 fn run_live_opencode_harness(mode: &str, arguments: &[PathBuf]) {
     let binary = std::env::var_os("NESSA_PINNED_OPENCODE_BINARY")
         .expect("set NESSA_PINNED_OPENCODE_BINARY to an audited 1.18.31 executable");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/infrastructure/acp/contracts/fixtures/opencode_live_boundary.py");
-    let output = Command::new("python3")
-        .arg(fixture)
-        .arg(mode)
-        .arg(binary)
-        .args(arguments)
-        .output()
-        .unwrap();
+    let binary = binary.to_string_lossy();
+    let arguments = arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy())
+        .collect::<Vec<_>>();
+    let mut harness_arguments = vec![mode, binary.as_ref()];
+    harness_arguments.extend(arguments.iter().map(|argument| argument.as_ref()));
+    let output = run_python_harness(&harness_arguments);
     assert!(
         output.status.success(),
-        "live Opencode {mode} harness failed: {}",
+        "live Opencode {mode} harness failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn silent_provider_reaches_rpc_deadline_and_is_reaped() {
+    let output = run_python_harness(&["silent-provider"]);
+    assert!(
+        output.status.success(),
+        "silent-provider regression failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
