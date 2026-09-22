@@ -918,7 +918,9 @@ mod tests {
     }
 
     use crate::{
-        agents_test_support::StubAgentProbe, app::ports::Clock as UptimeClock,
+        agents_test_support::StubAgentProbe,
+        app::ports::Clock as UptimeClock,
+        browser_session::{application::SessionStore, domain::value_objects::BrowserSessionState},
         product::ProductDependencies,
     };
     use nessa_auth::{
@@ -1680,23 +1682,19 @@ mod tests {
 
     struct PresenceStore {
         present: Arc<AtomicBool>,
-        session: crate::browser_session::application::BrowserSession,
+        session: BrowserSessionState,
     }
-    impl crate::browser_session::application::SessionStore for PresenceStore {
+    impl SessionStore for PresenceStore {
         fn insert<'a>(
             &'a self,
             _: String,
-            _: crate::browser_session::application::BrowserSession,
+            _: BrowserSessionState,
             _: Option<String>,
             _: u64,
-        ) -> PortFuture<'a, Option<(String, crate::browser_session::application::BrowserSession)>>
-        {
+        ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
             Box::pin(async { Err(AccessError::Unsupported) })
         }
-        fn get<'a>(
-            &'a self,
-            _: String,
-        ) -> PortFuture<'a, Option<crate::browser_session::application::BrowserSession>> {
+        fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSessionState>> {
             Box::pin(async move {
                 Ok(self
                     .present
@@ -1719,7 +1717,7 @@ mod tests {
         fn abandon_login<'a>(
             &'a self,
             _: String,
-            _: Option<(String, crate::browser_session::application::BrowserSession)>,
+            _: Option<(String, BrowserSessionState)>,
             _: u64,
         ) -> PortFuture<'a, ()> {
             Box::pin(async { Err(AccessError::Unsupported) })
@@ -1729,7 +1727,7 @@ mod tests {
             _: String,
             _: u64,
             _: CredentialId,
-        ) -> PortFuture<'a, crate::browser_session::application::BrowserSession> {
+        ) -> PortFuture<'a, BrowserSessionState> {
             Box::pin(async { Err(AccessError::Unsupported) })
         }
     }
@@ -1775,7 +1773,7 @@ mod tests {
         let present = Arc::new(AtomicBool::new(true));
         let store = Arc::new(PresenceStore {
             present: present.clone(),
-            session: crate::browser_session::application::BrowserSession::new(
+            session: BrowserSessionState::new(
                 session.context().credential_id().clone(),
                 "https://127.0.0.1:1443".into(),
                 100,
@@ -1806,7 +1804,7 @@ mod tests {
         let present = Arc::new(AtomicBool::new(true));
         let store = Arc::new(PresenceStore {
             present: present.clone(),
-            session: crate::browser_session::application::BrowserSession::new(
+            session: BrowserSessionState::new(
                 session.context().credential_id().clone(),
                 "https://127.0.0.1:1443".into(),
                 100,
