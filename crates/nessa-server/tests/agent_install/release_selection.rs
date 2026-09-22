@@ -48,12 +48,9 @@ fn requirements_filter_before_preference_and_none_remains_distinct() {
     let demanding = release(Libc::Gnu, true, 'a');
     let baseline = release(Libc::Gnu, false, 'b');
     assert_eq!(
-        preferred_release(
-            vec![demanding, baseline.clone()],
-            &host(false, Libc::Gnu),
-        )
-        .unwrap()
-        .archive_digest(),
+        preferred_release(vec![demanding, baseline.clone()], &host(false, Libc::Gnu),)
+            .unwrap()
+            .archive_digest(),
         baseline.archive_digest()
     );
     assert_eq!(

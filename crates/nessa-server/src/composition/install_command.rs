@@ -7,9 +7,7 @@ use serde_json::{json, Value};
 use crate::agent_install::application::{
     InstallAgentRuntime, InstallFailure, InstalledRuntime, SourceFailure, StoreFailure,
 };
-use crate::agent_install::domain::{
-    preferred_release, AgentName, HostPlatform, PinnedRelease,
-};
+use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform, PinnedRelease};
 use crate::agent_install::infrastructure::{
     host_platform, releases_for, HttpsArchives, ManagedRuntimes,
 };
