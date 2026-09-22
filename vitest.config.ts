@@ -1,5 +1,25 @@
+import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { defineConfig } from "vitest/config"
+
+const designSystemEditorDependencies = existsSync(
+  resolve("node_modules/@nessa-ui/react"),
+)
+  ? [
+      "@nessa-ui/react > @tiptap/core",
+      "@nessa-ui/react > @tiptap/react",
+      "@nessa-ui/react > @tiptap/pm/model",
+      "@nessa-ui/react > @tiptap/pm/state",
+      "@nessa-ui/react > @tiptap/pm/view",
+      "@nessa-ui/react > @tiptap/extension-code-block",
+      "@nessa-ui/react > @tiptap/starter-kit",
+      "@nessa-ui/react > @tiptap/markdown",
+      "@nessa-ui/react > @tiptap/extension-task-list",
+      "@nessa-ui/react > @tiptap/extension-task-item",
+      "@nessa-ui/react > @tiptap/extension-table",
+      "@nessa-ui/react > @tiptap/extension-image",
+    ]
+  : []
 
 export default defineConfig({
   resolve: {
@@ -20,6 +40,14 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "packages/**/*.test.ts"],
     environment: "node",
+    deps: {
+      optimizer: {
+        web: {
+          enabled: true,
+          include: designSystemEditorDependencies,
+        },
+      },
+    },
     server: {
       deps: {
         // Radix resolves React through the vendored design system's own pnpm
