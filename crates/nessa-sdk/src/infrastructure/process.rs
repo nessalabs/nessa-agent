@@ -36,6 +36,8 @@ pub(crate) struct ProcessStartFailure {
 pub(crate) struct RetainedDirectory {
     state: DirectoryRelease,
     releaser: Arc<dyn DirectoryReleaser>,
+    #[cfg(all(test, unix))]
+    cleanup_confirmation: Option<oneshot::Sender<()>>,
 }
 
 enum DirectoryRelease {
@@ -69,6 +71,13 @@ impl ProcessStartFailure {
     pub(crate) fn into_parts(self) -> (AgentError, Option<RetainedDirectory>) {
         (self.cause, self.recovery)
     }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn observe_confirmed_cleanup(&mut self, confirmation: oneshot::Sender<()>) {
+        if let Some(directory) = self.recovery.as_mut() {
+            directory.observe_confirmed_cleanup(confirmation);
+        }
+    }
 }
 
 impl fmt::Debug for ProcessStartFailure {
@@ -95,6 +104,8 @@ impl RetainedDirectory {
         Self {
             state: DirectoryRelease::Retained(path),
             releaser,
+            #[cfg(all(test, unix))]
+            cleanup_confirmation: None,
         }
     }
 
@@ -117,14 +128,31 @@ impl RetainedDirectory {
             timeout(budget, task).await
         };
         match result {
-            Ok(Ok(Ok(()))) => Ok(()),
-            Ok(Ok(Err(error))) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(Ok(Ok(()))) => {
+                #[cfg(all(test, unix))]
+                if let Some(confirmation) = self.cleanup_confirmation.take() {
+                    let _ = confirmation.send(());
+                }
+                Ok(())
+            }
+            Ok(Ok(Err(error))) if error.kind() == io::ErrorKind::NotFound => {
+                #[cfg(all(test, unix))]
+                if let Some(confirmation) = self.cleanup_confirmation.take() {
+                    let _ = confirmation.send(());
+                }
+                Ok(())
+            }
             Ok(Ok(Err(_))) | Ok(Err(_)) => {
                 self.state = DirectoryRelease::Retained(self.path().to_path_buf());
                 Err(AgentError::CleanupUncertain)
             }
             Err(_) => Err(AgentError::CleanupUncertain),
         }
+    }
+
+    #[cfg(all(test, unix))]
+    fn observe_confirmed_cleanup(&mut self, confirmation: oneshot::Sender<()>) {
+        self.cleanup_confirmation = Some(confirmation);
     }
 }
 

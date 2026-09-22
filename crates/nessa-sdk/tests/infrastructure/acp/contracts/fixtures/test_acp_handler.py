@@ -21,6 +21,9 @@ for line in sys.stdin:
     elif method == "session/new":
         assert set(params) == {"cwd", "mcpServers"}
         send({"id": message["id"], "result": {"sessionId": session}})
+    elif method == "session/resume":
+        assert params["sessionId"] == session
+        send({"id": message["id"], "result": {"sessionId": session}})
     elif method == "session/prompt":
         assert params["sessionId"] == session
         pending = message["id"]

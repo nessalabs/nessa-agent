@@ -12,7 +12,9 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
 };
-use crate::application::agent_execution::providers::{ResourceCleanup, SessionCloseRequest};
+use crate::application::agent_execution::providers::{
+    ProviderSessionState, ResourceCleanup, SessionCloseRequest,
+};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
 use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, MessageKind};
@@ -33,7 +35,10 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -447,6 +452,163 @@ fn cleanup_fault_process(config: &AcpConfig) -> binding::ProcessFactory {
     })
 }
 
+fn one_failed_restoration(
+    config: &AcpConfig,
+    cleanup_confirmation: Option<oneshot::Sender<()>>,
+) -> (
+    binding::ProcessFactory,
+    Arc<Mutex<Option<PathBuf>>>,
+    Arc<AtomicUsize>,
+) {
+    let config = config.clone();
+    let failed_directory = Arc::new(Mutex::new(None));
+    let observed_directory = failed_directory.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = calls.clone();
+    let cleanup_confirmation = Mutex::new(cleanup_confirmation);
+    let process = Arc::new(move || {
+        if observed_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            let mut failure = match ProcessScope::spawn_with_private_directory(|path| {
+                *observed_directory.lock().unwrap() = Some(path.to_path_buf());
+                tokio::process::Command::new("/definitely/not/a/real/restored-provider")
+            }) {
+                Ok(_) => panic!("invalid restoration executable unexpectedly spawned"),
+                Err(failure) => failure,
+            };
+            if let Some(confirmation) = cleanup_confirmation.lock().unwrap().take() {
+                failure.observe_confirmed_cleanup(confirmation);
+            }
+            return Err(failure);
+        }
+        let mut command = tokio::process::Command::new(&config.executable);
+        command
+            .args(&config.arguments)
+            .env_clear()
+            .current_dir(&config.workspace);
+        ProcessScope::spawn(command).map_err(Into::into)
+    });
+    (process, failed_directory, calls)
+}
+
+async fn stop_initial_generation(
+    opened: &mut crate::application::agent_execution::providers::OpenedProviderSession,
+    root: &tempfile::TempDir,
+) {
+    let pid = read_process_id(root);
+    assert_eq!(unsafe { libc::kill(-pid, libc::SIGKILL) }, 0);
+    let _ = timeout(Duration::from_secs(10), opened.events.next())
+        .await
+        .expect("stopped generation reports completion");
+}
+
+#[tokio::test]
+async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_starts() {
+    let (root, config, capabilities) = profile_setup();
+    let (process, failed_directory, calls) = one_failed_restoration(&config, None);
+    let mut opened = binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+    )
+    .await
+    .unwrap();
+    stop_initial_generation(&mut opened, &root).await;
+
+    let failure = opened.session.prepare_invocation().await.unwrap_err();
+    assert!(matches!(
+        failure.session_state(),
+        ProviderSessionState::CleanupRequired
+    ));
+    assert!(matches!(failure.error(), AgentError::Transport(_)));
+    let directory = failed_directory.lock().unwrap().clone().unwrap();
+    assert!(directory.is_dir());
+
+    opened.session.prepare_invocation().await.unwrap();
+    assert!(!directory.exists());
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(
+            ActionContext::new("host", "tests", "close-restored").unwrap(),
+        ))
+        .await
+        .into_result()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn close_retries_the_failed_restoration_instead_of_the_old_generation() {
+    let (root, config, capabilities) = profile_setup();
+    let (process, failed_directory, calls) = one_failed_restoration(&config, None);
+    let mut opened = binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+    )
+    .await
+    .unwrap();
+    stop_initial_generation(&mut opened, &root).await;
+    let failure = opened.session.prepare_invocation().await.unwrap_err();
+    let original = failure.error().clone();
+    let directory = failed_directory.lock().unwrap().clone().unwrap();
+
+    let report = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(
+            ActionContext::new("host", "tests", "close-failed-restore").unwrap(),
+        ))
+        .await;
+
+    assert!(matches!(report.resources(), ResourceCleanup::Confirmed(_)));
+    assert_eq!(report.operation_failure(), Some(&original));
+    assert!(!directory.exists());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn dropping_a_failed_restoration_keeps_its_directory_until_confirmed_cleanup() {
+    let (root, config, capabilities) = profile_setup();
+    let (confirmed, confirmation) = oneshot::channel();
+    let (process, failed_directory, calls) = one_failed_restoration(&config, Some(confirmed));
+    let mut opened = binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+    )
+    .await
+    .unwrap();
+    stop_initial_generation(&mut opened, &root).await;
+    assert!(opened.session.prepare_invocation().await.is_err());
+    let directory = failed_directory.lock().unwrap().clone().unwrap();
+    assert!(directory.is_dir());
+
+    drop(opened);
+    timeout(Duration::from_secs(10), confirmation)
+        .await
+        .expect("abandoned restoration cleanup is confirmed")
+        .unwrap();
+    assert!(!directory.exists());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
 #[tokio::test]
 async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
     let (_root, config, capabilities) = profile_setup();
@@ -462,7 +624,7 @@ async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
     let failure = Mutex::new(Some(failure));
     let process = Arc::new(move || Err(failure.lock().unwrap().take().unwrap()));
 
-    let failure = binding::open(
+    let failure = match binding::open(
         process,
         config,
         capabilities,
@@ -474,7 +636,10 @@ async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
         None,
     )
     .await
-    .unwrap_err();
+    {
+        Err(failure) => failure,
+        Ok(_) => panic!("invalid executable unexpectedly opened a session"),
+    };
     assert!(matches!(failure.cause(), AgentError::Transport(_)));
     assert!(directory.is_dir());
     let cleanup = failure.cleanup().expect("retained directory cleanup");

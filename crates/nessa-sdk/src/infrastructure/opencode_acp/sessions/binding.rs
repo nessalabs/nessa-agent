@@ -16,7 +16,11 @@ use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
 use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
 use crate::infrastructure::process::ProcessScope;
-use std::{ffi::OsString, path::Path, path::PathBuf, sync::Arc};
+use std::{
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::process::Command;
 
 /// What an Opencode session launched by this binding is allowed to do, as the
@@ -381,8 +385,8 @@ fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
         "OPENCODE_CONFIG_CONTENT",
         "OPENCODE_CONFIG_DIR",
     ] {
-        config.environment.remove(key);
-        config.credential_environment.remove(key);
+        config.environment.remove(OsStr::new(key));
+        config.credential_environment.remove(OsStr::new(key));
     }
     config.environment.insert("XDG_DATA_HOME".into(), data_home);
     Ok(config)
@@ -391,7 +395,7 @@ fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
 fn nonempty_environment(config: &AcpConfig, key: &str) -> Option<OsString> {
     config
         .environment
-        .get(key)
+        .get(OsStr::new(key))
         .filter(|value| !value.is_empty())
         .cloned()
 }

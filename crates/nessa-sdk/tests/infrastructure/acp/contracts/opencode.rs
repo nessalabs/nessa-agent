@@ -13,6 +13,7 @@
 //! not that Opencode sends them.
 use super::support::*;
 use crate::domain::agent_execution::tools::ToolContent;
+use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::infrastructure::{model_metadata_json::load_catalog, process::ProcessScope};
 use std::{fs::File, path::PathBuf, time::Duration};
 use tokio::{io::AsyncReadExt, process::ChildStdout, time::timeout};
@@ -227,10 +228,11 @@ async fn compiled_binding_opens_and_restores_with_the_pinned_binary() {
         File::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/models.json")).unwrap(),
     )
     .unwrap();
-    let model = catalog.select("opencode", "opencode/big-pickle").unwrap();
+    let model = ModelMetadata::try_from(catalog.select("opencode", "opencode/big-pickle").unwrap())
+        .unwrap();
     let binding = OpencodeAcpProvider::new(
         config,
-        model,
+        &model,
         TokenLimits::new(128_000, 32_000).unwrap(),
         Arc::new(RecordingAudit::default()),
     )
