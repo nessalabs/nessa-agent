@@ -1,6 +1,8 @@
 //! Process-boundary regressions for issue #113.
 
 use serde_json::Value;
+#[cfg(unix)]
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::{
     fs,
     io::Write,
@@ -67,9 +69,9 @@ fn stderr(run: &Run) -> String {
     String::from_utf8_lossy(&run.output.stderr).into_owned()
 }
 
-/// Display may use an equivalent OS spelling such as a Windows short path, so
-/// compare the complete resolved identity. The structured audit assertion below
-/// separately requires the original lossless target spelling.
+/// Display may use an equivalent OS spelling, so compare the complete resolved
+/// identity. The structured audit assertion below separately requires the
+/// original lossless target spelling.
 fn assert_human_target(message: &str, target: &Path) {
     let displayed = message
         .split_once("credential registry at ")
@@ -221,8 +223,6 @@ fn assert_unsafe_refusal(run: &Run, target: &Path, role: &str) {
 #[cfg(unix)]
 #[test]
 fn public_registry_permissions_are_refused_and_audited_without_rewrite() {
-    use std::os::unix::fs::PermissionsExt;
-
     let run = run_with(
         |_| vec!["server".into()],
         |_, registry| {
@@ -255,8 +255,6 @@ fn hard_linked_registry_is_refused_and_audited_without_unlinking_evidence() {
 #[cfg(unix)]
 #[test]
 fn registry_symlink_is_refused_and_audited_without_changing_its_target() {
-    use std::os::unix::fs::symlink;
-
     let run = run_with(
         |_| vec!["server".into()],
         |auth, registry| {
@@ -281,8 +279,6 @@ fn lock_path(auth: &Path) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn public_lock_permissions_are_refused_and_audited_without_touching_the_registry() {
-    use std::os::unix::fs::PermissionsExt;
-
     let run = run_with(
         |_| vec!["server".into()],
         |auth, _| {
@@ -323,8 +319,6 @@ fn hard_linked_lock_is_refused_and_audited_without_unlinking_evidence() {
 #[cfg(unix)]
 #[test]
 fn lock_symlink_is_refused_and_audited_without_changing_its_target() {
-    use std::os::unix::fs::symlink;
-
     let run = run_with(
         |_| vec!["server".into()],
         |auth, _| {
@@ -343,8 +337,6 @@ fn lock_symlink_is_refused_and_audited_without_changing_its_target() {
 #[cfg(unix)]
 #[test]
 fn unsafe_lock_preserves_an_initialized_registry_byte_for_byte() {
-    use std::os::unix::fs::PermissionsExt;
-
     let root = tempfile::tempdir().unwrap();
     let auth = root.path().join("ci/auth");
     let registry = auth.join("credentials.v1.json");
@@ -382,8 +374,6 @@ fn unsafe_lock_preserves_an_initialized_registry_byte_for_byte() {
 #[cfg(unix)]
 #[test]
 fn unsafe_lock_does_not_create_an_absent_registry() {
-    use std::os::unix::fs::PermissionsExt;
-
     let root = tempfile::tempdir().unwrap();
     let auth = root.path().join("ci/auth");
     nessa_local_storage::create_directory(&auth).unwrap();
@@ -406,8 +396,6 @@ fn unsafe_lock_does_not_create_an_absent_registry() {
 #[cfg(unix)]
 #[test]
 fn audit_ancestry_symlink_reports_sink_failure_without_writing_outside_root() {
-    use std::os::unix::fs::symlink;
-
     let run = run_with(
         |_| vec!["server".into()],
         |auth, _| {
