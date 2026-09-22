@@ -270,11 +270,37 @@ replays messages; resume fetches up to 20 messages to restore state and does not
 replay them. Neither handler exposes a dedicated plugin resume callback. These
 are pinned source observations, not exercised restoration tests.
 
+### Controlled Claude SDK callback bridge probe
+
+On 2026-09-22, an isolated fixture exercised the actual SDK `0.3.257` JavaScript
+bridge with an owned fake CLI selected explicitly by
+`pathToClaudeCodeExecutable`. The registry tarball SHA-256 was
+`ccc63d1abbf816d30a242f8c76e006b082180910c2220916c47d44e53c8426c0`.
+The runner cleared the inherited environment, supplied fresh scratch home/config
+and temporary directories, disabled setting sources and session persistence, and
+made no model or authenticated provider call. The coordinating reviewer inspected
+the fixture and independently reran its assertions successfully. This is a
+record of a local controlled probe, not a repository regression suite.
+
+| Controlled callback | Exercised bridge result |
+| --- | --- |
+| PreToolUse | Input and separate tool-use ID reached the callback; returned deny, rewrite/context fields and generic message fields were serialized unchanged with the original request ID. |
+| SessionStart | Supplied resume source and timing/token/cache fields reached the callback; returned context/title fields retained request correlation. |
+| Stop | Returned `continue: false`, stop reason and system message were serialized unchanged. |
+| PostToolUse callback throws | SDK serialized a correlated error containing the controlled failure reason. |
+
+The fake peer used callback IDs registered by the SDK during initialization and
+supplied the event frames itself. Transporting output fields together does not
+prove the native runtime accepts that combination. This probe establishes neither
+actual tool veto/rewrite nor model-visible context, native event timing, matcher
+or timeout behavior, command-hook behavior, ACP forwarding or real session-resume
+lifecycle delivery. Those consuming boundaries remain separate acceptance work.
+
 ### Behavior evidence still needed
 
 | Boundary | Established by this survey | Remaining behavior evidence |
 | --- | --- | --- |
-| Claude callback/native command outputs | SDK declarations and packaged native branches distinguish callback and executable-command behavior. | Controlled callback delivery, failure and resume inputs; native command precedence, actual model context and execution veto. |
+| Claude callback/native command outputs | SDK declarations, packaged native branches, and the isolated four-callback bridge probe above. | Native callback timing/timeout, real resume delivery, command precedence, actual model context and execution veto. |
 | Codex event engine | Exact source, schemas, output validation and upstream test cases; those Rust tests were not run here. | Controlled runner tests for rewrite/deny/context, malformed/timeout/exit behavior and cold versus running resume. |
 | Opencode plugin/ACP handlers | Active transform call sites, sequential awaits, generic event dispatch and load/resume source. | Stubbed dispatch/restoration tests plus actual tool/model-boundary effects. |
 | Kiro | Signed local artifact identity, help and static strings only. | A pinned integration basis and event/context/output/failure/ACP behavior tests. |
