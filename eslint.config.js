@@ -3,7 +3,16 @@ import reactHooks from "eslint-plugin-react-hooks"
 import globals from "globals"
 import tseslint from "typescript-eslint"
 
-import nessa from "./scripts/eslint/composer-notices.mjs"
+import { composerNotices } from "./scripts/eslint/composer-notices.mjs"
+import { inheritedLookups } from "./scripts/eslint/inherited-lookups.mjs"
+
+/** This repository's own rules. Each one is documented where it is written. */
+const nessa = {
+  rules: {
+    "composer-notices": composerNotices,
+    "inherited-lookups": inheritedLookups,
+  },
+}
 
 const tauriSeam = {
   "no-restricted-imports": [
@@ -45,10 +54,16 @@ export default tseslint.config(
     },
     plugins: {
       "react-hooks": reactHooks,
+      nessa,
     },
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "error",
+      // `in` finds what a table inherits as well as what it holds, so a key
+      // that arrived from outside the process reads a function off
+      // `Object.prototype` and passes the guard. See the rule for why this is
+      // the one shape of #110 worth a rule.
+      "nessa/inherited-lookups": "error",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
@@ -79,7 +94,6 @@ export default tseslint.config(
   },
   {
     files: ["src/panel/ui/app.tsx"],
-    plugins: { nessa },
     rules: {
       "no-restricted-syntax": [
         "error",

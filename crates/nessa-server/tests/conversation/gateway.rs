@@ -315,16 +315,26 @@ mod gateway {
             .ok
         );
         for params in [
-            json!({"conversationId":"00000000-0000-4000-8000-00000000000A","requestId":"send","executionId":"execution","text":"hello","attachments":[]}),
-            json!({"conversationId":id,"requestId":"😀".repeat(65),"executionId":"execution","text":"hello","attachments":[]}),
-            json!({"conversationId":id,"requestId":"send","executionId":"😀".repeat(65),"text":"hello","attachments":[]}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"😀".repeat(2049),"attachments":[]}),
+            json!({"conversationId":"00000000-0000-4000-8000-00000000000A","requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[]}),
+            json!({"conversationId":id,"requestId":"😀".repeat(65),"executionId":"execution","text":"hello","attachments":[],"files":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"😀".repeat(65),"text":"hello","attachments":[],"files":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"😀".repeat(2049),"attachments":[],"files":[]}),
             // One contract: the attachment list is always present, and a message is never empty.
             json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello"}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":" \n","attachments":[]}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":"sha256:00","mimeType":"image/png","size":1}]}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/svg+xml","size":1}]}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/png","size":0}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":" \n","attachments":[],"files":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":"sha256:00","mimeType":"image/png","size":1}],"files":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/svg+xml","size":1}],"files":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/png","size":0}],"files":[]}),
+            // A linked file names an absolute path that can be carried in a
+            // link, and nothing else reaches the agent.
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[{"path":"report.pdf"}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[{"path":"/tmp/a\nb.pdf"}]}),
+            // Shaped like a path the schema accepts, but naming a directory,
+            // which only the gateway's domain rule refuses.
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[{"path":"/tmp/"}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[{"path":"/tmp/.."}]}),
+            // A name beside the path would be a second thing to disagree with it.
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[],"files":[{"path":"/tmp/a.pdf","name":"a.pdf"}]}),
         ] {
             let response =
                 chat_request(&state, &session, "conversation.send", params).await;
@@ -336,7 +346,7 @@ mod gateway {
                 &state,
                 &session,
                 "conversation.send",
-                json!({"conversationId":id,"requestId":"😀".repeat(64),"executionId":"😀".repeat(64),"text":"😀".repeat(2048),"attachments":[]}),
+                json!({"conversationId":id,"requestId":"😀".repeat(64),"executionId":"😀".repeat(64),"text":"😀".repeat(2048),"attachments":[],"files":[]}),
             )
             .await
             .ok
@@ -487,7 +497,7 @@ mod gateway {
                 &peer,
                 execution,
                 "conversation.send",
-                json!({"conversationId":id,"requestId":execution,"executionId":execution,"text":execution,"attachments":[]}),
+                json!({"conversationId":id,"requestId":execution,"executionId":execution,"text":execution,"attachments":[],"files":[]}),
             );
             assert_eq!(response(&mut peer).await["ok"], true);
             if execution == "running" {

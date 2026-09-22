@@ -41,6 +41,7 @@ const failedUpload: FileAttachment = {
   type: "file",
   id: "b",
   name: "b.png",
+  path: null,
   mimeType: "image/png",
   size: 3,
   previewUrl: "blob:test",
@@ -71,7 +72,11 @@ function worstCase() {
       onRetry: install,
     }),
     attachments: React.createElement(AttachmentNotices, {
-      refusal: { reason: "file-too-large", names: ["holiday.mp4"] },
+      canChoosePaths: true,
+      refusal: {
+        reason: "file-too-large",
+        files: [{ name: "holiday.mp4", type: "video/mp4" }],
+      },
       files: [failedUpload],
       imageInput: true,
       onRetryUploads: () => {},
@@ -201,6 +206,7 @@ it("leaves nothing behind when there is nothing to say", async () => {
         // The real component, saying nothing: it renders an empty fragment
         // rather than a node, which is what keeps the box empty.
         attachments: React.createElement(AttachmentNotices, {
+          canChoosePaths: true,
           refusal: null,
           files: [],
           imageInput: true,

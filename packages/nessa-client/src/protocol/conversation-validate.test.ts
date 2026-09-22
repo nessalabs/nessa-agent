@@ -24,6 +24,7 @@ function view() {
         executionId: "queued",
         userText: "hello",
         attachments: [],
+        files: [],
         status: "queued",
         parts: [],
       },
@@ -31,11 +32,20 @@ function view() {
         executionId: "running",
         userText: "run",
         attachments: [],
+        files: [],
         status: "running",
         parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool" }],
       },
     ],
-    pending: [{ executionId: "queued", text: "hello", attachments: [], mode: "queued" }],
+    pending: [
+      {
+        executionId: "queued",
+        text: "hello",
+        attachments: [],
+        files: [],
+        mode: "queued",
+      },
+    ],
     permissions: [],
     tools: [
       {
@@ -144,6 +154,7 @@ describe("conversation view agreement", () => {
     // Field order belongs to the serializer; the same image is the same image.
     Object.assign(value.pending[0]!, {
       attachments: [{ size: 3, mimeType: "image/png", digest: DIGEST }],
+      files: [],
     })
     const checked = conversationView(value, "conversation")
     expect(checked.messages[0]!.attachments).toEqual([image()])

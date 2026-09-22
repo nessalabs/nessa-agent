@@ -5,7 +5,7 @@ use crate::application::agent_execution::executions::{
 };
 use crate::domain::agent_execution::{
     permissions::PermissionOption,
-    prompts::UserMessage,
+    prompts::{LinkedFile, UserMessage},
     tools::{FileLocation, ToolContent},
 };
 use std::mem::size_of;
@@ -29,6 +29,8 @@ pub(super) enum Shape {
     Metadata,
     Images,
     Image,
+    Files,
+    FileLink,
     Provider,
     Actor,
     Events,
@@ -83,6 +85,8 @@ impl Shape {
             (Metadata, "execution_id") | (Event, "execution_id" | "message_id") => Text(256),
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
             (Metadata, "user_images") => Images,
+            (Metadata, "user_files") => Files,
+            (FileLink, "path") => Text(LinkedFile::MAX_PATH_BYTES),
             (Image, "digest") => Text(DIGEST_BYTES),
             (Image, "media_type") => Text(MEDIA_TYPE_BYTES),
             (Event, "update") => Update,
@@ -121,14 +125,20 @@ impl Shape {
         }
     }
     /// Whether an object of this shape may hold `key` at all. A saved image is
-    /// exactly a digest, a media type, and a size: anything else is refused
-    /// before its value is read, rather than after the record is built.
+    /// exactly a digest, a media type, and a size, and a saved file link is
+    /// exactly a path: anything else is refused before its value is read,
+    /// rather than after the record is built.
     pub(super) fn allows(self, key: &str) -> bool {
-        !matches!(self, Image) || matches!(key, "digest" | "media_type" | "size")
+        match self {
+            Image => matches!(key, "digest" | "media_type" | "size"),
+            FileLink => key == "path",
+            _ => true,
+        }
     }
     pub(super) fn element(self) -> Self {
         match self {
             Self::Images => Self::Image,
+            Self::Files => Self::FileLink,
             Self::Changes => Self::Change,
             Self::Events => Self::Event,
             Self::Hooks => Self::Hook,
@@ -148,6 +158,8 @@ impl Shape {
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.
             Self::Images => UserMessage::MAX_IMAGES,
+            // The same, for the paths a message points at.
+            Self::Files => UserMessage::MAX_FILES,
             // Collection slots alone cannot exceed the live 32 MiB tool/review
             // budget, even when every element carries an empty payload.
             Self::Content => LARGE_STRING / size_of::<ToolContent>(),

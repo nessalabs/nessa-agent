@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 import {
+  isImageFile,
+  linkedFile,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
+  type Conversation,
   type FileAttachment,
 } from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
@@ -38,6 +41,7 @@ const file = (id: string, size = 1): FileAttachment => ({
   mimeType: "text/plain",
   previewUrl: "blob:test-file",
   upload: { status: "not-started" },
+  path: null,
 })
 
 const DIGEST = `sha256:${"ab".repeat(32)}`
@@ -133,6 +137,7 @@ describe("a draft file's upload state", () => {
     const claimed = {
       ...image("a"),
       upload: { status: "stored" as const, image: reference() },
+      path: null,
     }
     const tabs = attachFiles(emptyLocalTabs(), [claimed], "c0")
     expect(tabs.conversations[0]!.draft).toEqual([image("a")])
@@ -235,6 +240,7 @@ describe("a draft file's upload state", () => {
     })
     expect(result.conversations[0]!.draft[0]).toMatchObject({
       upload: { status: "failed", reason: "rejected" },
+      path: null,
     })
   })
 
@@ -284,6 +290,7 @@ describe("a draft file's upload state", () => {
     const claimed = {
       ...image("b"),
       upload: { status: "stored" as const, image: reference() },
+      path: null,
     }
     expect(
       setDraft(emptyLocalTabs(), { draft: [claimed] }).conversations[0]!.draft,
@@ -311,6 +318,7 @@ describe("a draft file's upload state", () => {
     })
     expect(done.conversations[0]!.draft[0]).toMatchObject({
       upload: { status: "stored", image: reference() },
+      path: null,
     })
   })
 
@@ -355,6 +363,7 @@ describe("a draft file's upload state", () => {
     const uploading = changeUpload(tabs, { fileId: "a", to: "uploading" })
     expect(uploading.conversations[0]!.draft[0]).toMatchObject({
       upload: { status: "uploading" },
+      path: null,
     })
   })
 })
@@ -417,14 +426,15 @@ describe("why a draft is declined before anything is sent", () => {
   }
 
   it("takes a draft that can go, whatever the caller left out of its prose", () => {
-    expect(declineReason(withImages(true), { content: hello })).toBeNull()
+    expect(declineReason(withImages(true), { content: hello }, true)).toBeNull()
     // Text alone needs no view: whether the agent takes images is not asked.
     expect(
-      declineReason(emptyLocalTabs().conversations[0]!, { content: hello }),
+      declineReason(emptyLocalTabs().conversations[0]!, { content: hello }, true),
     ).toBeNull()
   })
 
-  it.each<[string, Parameters<typeof declineReason>, string]>([
+  type DeclineCase = [Conversation, Parameters<typeof declineReason>[1]]
+  it.each<[string, DeclineCase, string]>([
     [
       "the caller has no session",
       [withImages(true), { content: hello, connected: false }],
@@ -467,7 +477,7 @@ describe("why a draft is declined before anything is sent", () => {
       "image-input-unsupported",
     ],
   ])("declines because %s", (_name, args, kind) => {
-    const decline = declineReason(...args)
+    const decline = declineReason(...args, true)
     expect(decline).toMatchObject({ kind })
     // Every decline says something but the empty draft: there is nothing to
     // tell about nothing, and the composer shows the rest above itself.
@@ -475,9 +485,26 @@ describe("why a draft is declined before anything is sent", () => {
   })
 
   it("asks for a fresh view only when the decline is 'not known yet'", () => {
-    expect(declineReason(withImages(), { content: hello })?.askAgain).toBe(true)
+    expect(declineReason(withImages(), { content: hello }, true)?.askAgain).toBe(true)
     for (const conv of [withImages(false), withImages(true)])
-      expect(declineReason(conv, { content: [] })?.askAgain).toBeUndefined()
+      expect(declineReason(conv, { content: [] }, true)?.askAgain).toBeUndefined()
+  })
+
+  it("does not send a browser to a picker that would refuse the file again", () => {
+    // A file nothing can say the location of. In the app there is a route out
+    // of that and the sentence names it; in a browser there is not, and naming
+    // it anyway would hand back another file with no path and the same refusal
+    // — while the notice over the composer said the opposite at the same time.
+    const conv = attachFiles(emptyLocalTabs(), [file("notes")], "c0").conversations[0]!
+    const inApp = declineReason(conv, { content: hello }, true)
+    const inBrowser = declineReason(conv, { content: hello }, false)
+    expect(inApp?.kind).toBe("unsupported-file")
+    expect(inBrowser?.kind).toBe("unsupported-file")
+    expect(inApp?.message).toContain("choose it with +")
+    expect(inBrowser?.message).not.toContain("+")
+    expect(inBrowser?.message).toContain("Nessa app")
+    // Both still name the file and both still keep the draft.
+    for (const decline of [inApp, inBrowser]) expect(decline?.message).toContain("notes")
   })
 
   it("sends the draft's own files, never the caller's copy of one", () => {
@@ -702,13 +729,24 @@ describe("sending a draft that holds images", () => {
 
   it("says something different, and useful, for each refusal", () => {
     const messages = [
-      imageRefusalMessage({ kind: "unsupported-file", name: "notes.pdf" }),
-      imageRefusalMessage({ kind: "upload-failed", name: "a.png" }),
-      imageRefusalMessage({ kind: "upload-in-flight" }),
-      imageRefusalMessage({ kind: "too-many-images" }),
-      imageRefusalMessage({ kind: "images-too-large" }),
+      imageRefusalMessage({ kind: "unsupported-file", name: "notes.pdf" }, true),
+      imageRefusalMessage({ kind: "upload-failed", name: "a.png" }, true),
+      imageRefusalMessage({ kind: "upload-in-flight" }, true),
+      imageRefusalMessage({ kind: "too-many-images" }, true),
+      imageRefusalMessage({ kind: "images-too-large" }, true),
+      imageRefusalMessage({ kind: "too-many-files" }, true),
     ]
     expect(new Set(messages).size).toBe(messages.length)
+    // Only the one about a file with no location turns on the surface; every
+    // other refusal is the same fact wherever it is read.
+    for (const refusal of [
+      { kind: "upload-failed", name: "a.png" },
+      { kind: "upload-in-flight" },
+      { kind: "too-many-images" },
+      { kind: "images-too-large" },
+      { kind: "too-many-files" },
+    ] as const)
+      expect(imageRefusalMessage(refusal, false)).toBe(imageRefusalMessage(refusal, true))
     expect(messages[0]).toContain("notes.pdf")
     expect(messages[1]).toContain("a.png")
   })
@@ -775,5 +813,81 @@ describe("originals kept to paint sent turns", () => {
       "file",
       "image-reference",
     ])
+  })
+})
+
+describe("the file's type decides its route, never the gesture", () => {
+  const opened = (id: string, name: string, browserType: string) => ({
+    ...file(id),
+    name,
+    mimeType: browserType,
+    path: null,
+  })
+  const chosen = (id: string, name: string) => ({
+    ...file(id),
+    name,
+    // What the picker hands over: a name, a path, and no idea what is in it.
+    mimeType: "application/octet-stream",
+    previewUrl: "",
+    path: `/Users/ada/${name}`,
+  })
+  const attachedTo = (files: FileAttachment[]) => {
+    const draft = attachFiles(emptyLocalTabs(), files, "c0").conversations[0]!.draft
+    return draft.filter((part): part is FileAttachment => part.type === "file")
+  }
+
+  it("names an unopened file by its extension, so a chosen image is still an image", () => {
+    // The gap this pins. A picked file arrives typed as nothing, so its name is
+    // the only evidence; without the extension deciding, a `.heic` chosen with
+    // + would have been pointed at by path while the same file dropped was
+    // uploaded — the same file behaving differently by gesture, which is the
+    // thing this rule exists to prevent.
+    const [heic, png, pdf] = attachedTo([
+      chosen("a", "holiday.heic"),
+      chosen("b", "screenshot.png"),
+      chosen("c", "report.pdf"),
+    ])
+    expect(heic!.mimeType).toBe("image/heic")
+    expect(png!.mimeType).toBe("image/png")
+    expect(isImageFile(heic!.mimeType)).toBe(true)
+    expect(isImageFile(png!.mimeType)).toBe(true)
+    // An image is carried, so it is never pointed at, path or no path.
+    expect(linkedFile(heic!)).toBe(false)
+    expect(linkedFile(png!)).toBe(false)
+    // And anything else is, which is what makes it sendable at all.
+    expect(pdf!.mimeType).toBe("application/octet-stream")
+    expect(linkedFile(pdf!)).toBe(true)
+  })
+
+  it("gives the same file the same route whichever way it arrived", () => {
+    // One file, four ways in. The browser types a drop and a paste; the picker
+    // types nothing. Every one of them must land on the same route.
+    const dropped = opened("a", "screenshot.png", "image/png")
+    const pasted = opened("b", "screenshot.png", "image/png")
+    // Some browsers report a RAW file as nothing at all, which is the same
+    // evidence the picker gives.
+    const untypedDrop = opened("c", "holiday.heic", "")
+    const picked = chosen("d", "holiday.heic")
+    const routes = attachedTo([dropped, pasted, untypedDrop, picked]).map((part) => ({
+      image: isImageFile(part.mimeType),
+      linked: linkedFile(part),
+    }))
+    expect(routes).toEqual([
+      { image: true, linked: false },
+      { image: true, linked: false },
+      { image: true, linked: false },
+      { image: true, linked: false },
+    ])
+  })
+
+  it("keeps the browser's own answer ahead of the extension", () => {
+    // A `.txt` the browser typed as plain text is not re-decided by its name,
+    // and a name that says nothing leaves the type where it was.
+    const [text, unknown] = attachedTo([
+      opened("a", "notes.txt", "text/plain"),
+      opened("b", "archive", ""),
+    ])
+    expect(text!.mimeType).toBe("text/plain")
+    expect(unknown!.mimeType).toBe("application/octet-stream")
   })
 })

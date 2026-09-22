@@ -33,6 +33,7 @@ const file = {
   size: 1,
   previewUrl: "blob:test-file",
   upload: { status: "not-started" as const },
+  path: null,
 }
 
 /** An editor holding "hello"; file tiles live in the draft, never in the editor. */

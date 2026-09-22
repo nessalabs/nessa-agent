@@ -98,6 +98,27 @@ describe("writing an accelerator", () => {
     expect(acceleratorKeys("", "apple")).toEqual([])
     expect(formatAccelerator(" Cmd + Shift + a ", "apple")).toBe("⌘⇧A")
   })
+
+  /**
+   * An accelerator is whatever the host's shortcut document wrote, and the
+   * spelling tables are objects, so they answer to names nobody put in them.
+   * `toLowerCase` hides most of those — `toString` becomes `tostring`, which
+   * is nothing — but `constructor` and `__proto__` are already lowercase and
+   * came back as a function and as `Object.prototype`. Both went into a
+   * declared `string[]`: a keycap React will not draw, and an accessible name
+   * reading `⌘function Object() { [native code] }`.
+   */
+  it("does not take a keycap off Object.prototype", () => {
+    for (const token of ["constructor", "__proto__"]) {
+      for (const platform of ["apple", "windows", "linux"] as const) {
+        const caps = acceleratorKeys(`CmdOrCtrl+${token}`, platform)
+        expect(caps.every((cap) => typeof cap === "string")).toBe(true)
+        expect(caps).toEqual([platform === "apple" ? "⌘" : "Ctrl", token])
+      }
+      expect(formatAccelerator(token, "apple")).toBe(token)
+      expect(formatAccelerator(`CmdOrCtrl+${token}`, "linux")).toBe(`Ctrl+${token}`)
+    }
+  })
 })
 
 describe("answering a chord pressed one key at a time", () => {

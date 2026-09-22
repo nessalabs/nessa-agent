@@ -3,6 +3,8 @@
 
 use super::PermissionResolution;
 use crate::application::agent_execution::agents::AgentError;
+use crate::domain::agent_execution::executions::ExecutionId;
+use crate::domain::agent_execution::permissions::ReviewDecline;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 
 /// Observed delivery stage of an already selected permission answer.
@@ -43,6 +45,69 @@ impl PermissionAnswerRecord {
         &self.resolution
     }
     /// Local selection or observed wire-delivery result; never proof of tool execution.
+    pub fn delivery(&self) -> &PermissionAnswerDelivery {
+        &self.delivery
+    }
+}
+
+/// Immutable evidence that a review was refused before a host could be offered it.
+///
+/// A decline is an answer the binding gave on its own: the agent asked to use a
+/// tool and was told no, without anybody being shown a choice. That is worth
+/// the same evidence as an answered review, and it needs the same two facts
+/// kept apart — what was decided locally, and what the wire did with it.
+/// [`PermissionAnswerDelivery`] carries the second, because a refusal is
+/// delivered exactly the way a selection is and a reader should not have to
+/// learn two vocabularies for one thing.
+///
+/// There is no permission identity here, and its absence is the point: the
+/// request never became one. Correlation is the execution the agent was working
+/// on when it asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewDeclineRecord {
+    session_id: ExecutionSessionId,
+    execution_id: ExecutionId,
+    decline: ReviewDecline,
+    delivery: PermissionAnswerDelivery,
+}
+impl ReviewDeclineRecord {
+    /// Record that `decline` was decided for `execution_id` within `session_id`.
+    ///
+    /// `delivery` describes this binding's own progress — [`Selected`] before a
+    /// response is written, then [`Written`] or [`Failed`] once the write has
+    /// been observed. It never claims the provider accepted the refusal or that
+    /// the tool did not run; an agent that is told no has still been told
+    /// something, and what it does next is its own.
+    ///
+    /// [`Selected`]: PermissionAnswerDelivery::Selected
+    /// [`Written`]: PermissionAnswerDelivery::Written
+    /// [`Failed`]: PermissionAnswerDelivery::Failed
+    pub fn new(
+        session_id: ExecutionSessionId,
+        execution_id: ExecutionId,
+        decline: ReviewDecline,
+        delivery: PermissionAnswerDelivery,
+    ) -> Self {
+        Self {
+            session_id,
+            execution_id,
+            decline,
+            delivery,
+        }
+    }
+    /// Provider session whose agent was refused.
+    pub fn session_id(&self) -> &ExecutionSessionId {
+        &self.session_id
+    }
+    /// Execution the agent was running when it asked for the tool.
+    pub fn execution_id(&self) -> &ExecutionId {
+        &self.execution_id
+    }
+    /// Which tool was refused, where it could be named, and why.
+    pub fn decline(&self) -> &ReviewDecline {
+        &self.decline
+    }
+    /// Local decision or observed write result; never provider acknowledgement.
     pub fn delivery(&self) -> &PermissionAnswerDelivery {
         &self.delivery
     }

@@ -26,5 +26,5 @@ pub use approval::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference,
     PermissionResolution,
 };
-pub use audit::{PermissionAnswerDelivery, PermissionAnswerRecord};
+pub use audit::{PermissionAnswerDelivery, PermissionAnswerRecord, ReviewDeclineRecord};
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};

@@ -1,6 +1,6 @@
 import { Paperclip, Plus } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
-import { isImageFile, type FileAttachment } from "../../conversation"
+import { isImageFile, linkedFile, type FileAttachment } from "../../conversation"
 import {
   attachmentNotices,
   type AttachmentNotice,
@@ -72,6 +72,7 @@ export function AttachmentNotices({
   refusal,
   files,
   imageInput,
+  canChoosePaths,
   onRetryUploads,
   onChooseFiles,
   onDismissRefusal,
@@ -80,6 +81,12 @@ export function AttachmentNotices({
   files: readonly FileAttachment[]
   /** Undefined while the gateway has not answered, which is not a no. */
   imageInput: boolean | undefined
+  /**
+   * Whether this surface has a picker that can say where a file is. Passed in
+   * rather than asked for here: a component renders or coordinates, never
+   * both, and the host is composition's to know about.
+   */
+  canChoosePaths: boolean
   onRetryUploads: (files: readonly string[]) => void
   onChooseFiles: () => void
   onDismissRefusal: () => void
@@ -90,9 +97,11 @@ export function AttachmentNotices({
       id: file.id,
       name: file.name,
       image: isImageFile(file.mimeType),
+      linked: linkedFile(file),
       upload: file.upload,
     })),
     imageInput,
+    canChoosePaths,
   })
   return (
     <>
@@ -119,10 +128,20 @@ export function AttachmentNotices({
  * paragraph this replaces. The region is here first and the text arrives into
  * it. The visible half is the busy tile in the composer; this adds no chrome.
  */
+/**
+ * The busy tiles, said out loud.
+ *
+ * "Getting ready" rather than "reading" or "downloading", because the tile
+ * covers three things that are the same to wait for and different underneath:
+ * an image being fetched from a URL, a file being read off the disk, and a
+ * file a cloud service is being asked for. A sentence naming any one of those
+ * mechanisms would be a lie about the other two — and would become a lie about
+ * all of them the day a fourth is added.
+ */
 export function AttachmentReadingStatus({ reading }: { reading: boolean }) {
   return (
     <span role="status" aria-live="polite" className="sr-only">
-      {reading ? "Reading files…" : ""}
+      {reading ? "Getting files ready…" : ""}
     </span>
   )
 }

@@ -33,6 +33,7 @@ const file = (upload: FileAttachment["upload"]): FileAttachment => ({
   name: "photo.png",
   mimeType: "image/png",
   size: 3,
+  path: null,
   previewUrl: "blob:test",
   upload,
 })

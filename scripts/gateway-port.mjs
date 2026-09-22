@@ -23,7 +23,10 @@ const table = JSON.parse(
  * @returns {number}
  */
 export function gatewayPort(stage) {
-  const port = table.stages[stage]
+  // `Object.hasOwn` before the read, because a plain lookup finds `toString`
+  // and `constructor` on every object — including the one this argument can be
+  // when it came straight off the command line.
+  const port = Object.hasOwn(table.stages, stage) ? table.stages[stage] : undefined
   if (typeof port !== "number") throw new Error(`No gateway port for stage ${stage}`)
   return port
 }
@@ -46,7 +49,11 @@ export function selectedStage(env = process.env) {
   // reads `Dev` as dev and frees and probes 7421, while the server refuses to
   // start at all and the host's launchd registration finds no port for `Dev`.
   // One value, three different failures, and none of them says what is wrong.
-  if (!(named in table.stages))
+  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `toString`
+  // and `constructor` are in every table and `NESSA_STAGE=constructor` came out
+  // of here as a stage. Kept identical to `parseStage` in
+  // `src/env/gateway-ports.ts`, which is the same rule for the same variable.
+  if (!Object.hasOwn(table.stages, named))
     throw new Error(
       `NESSA_STAGE=${named} is not a stage. ` +
         `The server accepts exactly: ${Object.keys(table.stages).join(", ")}.`,

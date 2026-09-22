@@ -1,4 +1,4 @@
-import type { ImageReference } from "../model"
+import type { ImageReference, LinkedFile } from "../model"
 import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
@@ -15,6 +15,8 @@ export type ConversationView = {
     userText: string
     /** Images sent with this turn, by reference. The view never carries bytes. */
     attachments: ImageReference[]
+    /** Files this turn pointed the agent at, by path. */
+    files: LinkedFile[]
     error?: string
     status: string
   }[]
@@ -22,6 +24,7 @@ export type ConversationView = {
     executionId: string
     text: string
     attachments: ImageReference[]
+    files: LinkedFile[]
     mode: "queued" | "steering"
   }[]
   permissions: {
@@ -58,9 +61,14 @@ export type Submission = {
   conversationId: string
   executionId: string
   actionId: string
-  /** May be blank only when `attachments` is not empty. */
+  /** May be blank only when `attachments` or `files` is not empty. */
   text: string
   /** Images already staged into this conversation. A retry re-sends the same list. */
   attachments: ImageReference[]
+  /**
+   * Files on this machine the message points the agent at, by path. Nothing
+   * was uploaded for these; a retry re-sends the same list.
+   */
+  files: LinkedFile[]
 }
 export type SubmissionReceipt = { executionId: string; disposition: string }

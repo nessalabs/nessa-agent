@@ -39,6 +39,33 @@ test("a stage the server would refuse is refused here, in the same words", () =>
   assert.throws(() => selectedStage({ NESSA_STAGE: "staging" }), /dev, ci, alpha, prod/)
 })
 
+/**
+ * `in` walks the prototype chain, so the guard above was true for every name
+ * `Object.prototype` carries and `NESSA_STAGE=toString` came out of here as a
+ * stage — one `just start` frees a socket for, registers under, and probes.
+ * The same value in `src/env/gateway-ports.ts` reached `gatewayOrigin` and
+ * built a URL out of a function; these two parsers read one variable against
+ * one table and have to refuse the same things.
+ */
+test("a name every object answers to is not a stage here either", () => {
+  for (const named of [
+    "toString",
+    "constructor",
+    "valueOf",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "__proto__",
+  ]) {
+    assert.throws(() => selectedStage({ NESSA_STAGE: named }), /is not a stage/)
+    assert.throws(() => selectedPort({ NESSA_STAGE: named }), /is not a stage/)
+    // `node scripts/gateway-port.mjs <stage>` reaches the table with no guard
+    // in front of it at all.
+    assert.throws(() => gatewayPort(named), /No gateway port/)
+  }
+})
+
 test("an explicit port wins, because it wins for the server too", () => {
   assert.equal(selectedPort({ NESSA_PORT: "7999" }), 7999)
   assert.equal(selectedPort({ NESSA_STAGE: "ci", NESSA_PORT: "7999" }), 7999)

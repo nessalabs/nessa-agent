@@ -29,6 +29,7 @@ export type CommandFailure =
   | "agent-unsupported"
   | "conversations-not-configured"
   | "agent-startup-deadline"
+  | "conversation-state-unreadable"
   | "invalid-request"
 
 /**
@@ -81,7 +82,17 @@ export type CommandFailure =
  * must get, and a sentence good enough for an unknown answer is good enough for
  * a known one nobody can act on.
  */
-export type ReadFailure = "configuration-changed" | "unavailable"
+export type ReadFailure =
+  | "configuration-changed"
+  /**
+   * The gateway cannot read this conversation's saved state, and will not be
+   * able to later: it caches that failure and answers every later read from it
+   * without going near the provider again. Distinct from `unavailable`
+   * precisely because that one promises the panel keeps trying, and here there
+   * is nothing to keep trying with.
+   */
+  | "state-unreadable"
+  | "unavailable"
 
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"

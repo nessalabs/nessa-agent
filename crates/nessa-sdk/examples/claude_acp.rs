@@ -68,6 +68,16 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "Permission answer observed"
                     );
                 }
+                ExecutionAuditRecord::ReviewDeclined(declined) => {
+                    tracing::info!(
+                        session = declined.session_id().as_str(),
+                        execution = declined.execution_id().as_str(),
+                        tool = declined.decline().declared().unwrap_or("<unnamed>"),
+                        reason = ?declined.decline().reason(),
+                        delivery = ?declined.delivery(),
+                        "Review declined without being offered"
+                    );
+                }
             }
             Ok(())
         })

@@ -59,6 +59,7 @@ const image = (id: string, change: Partial<FileAttachment> = {}): FileAttachment
   size: 3,
   previewUrl: `blob:${id}`,
   upload: { status: "not-started" },
+  path: null,
   ...change,
 })
 const described = (file: FileAttachment) => ({
@@ -67,7 +68,12 @@ const described = (file: FileAttachment) => ({
   size: file.size,
 })
 
-function storeWith(overrides: Partial<ConversationEffects> = {}) {
+/**
+ * `canChoosePaths` is the surface fact composition injects: whether there is a
+ * picker that can say where a file is. It defaults to the app's answer, which
+ * is what every test here but one is about.
+ */
+function storeWith(overrides: Partial<ConversationEffects> = {}, canChoosePaths = true) {
   const echo = scenarioEffects("echo")
   const effects = {
     ...echo,
@@ -77,7 +83,7 @@ function storeWith(overrides: Partial<ConversationEffects> = {}) {
     stageAttachment: vi.fn<ConversationEffects["stageAttachment"]>(async () => stored),
     ...overrides,
   }
-  const store = makeStore(createDependencies({ conversation: effects }))
+  const store = makeStore(createDependencies({ conversation: effects, canChoosePaths }))
   const draft = () => store.getState().conversation.conversations[0]!.draft
   const current = () => store.getState().conversation.conversations[0]!
   return { store, effects, draft, current }
@@ -130,6 +136,27 @@ it("refuses a file that is not an image, and says which", async () => {
       content,
     )
   expect(context.effects.stageAttachment).not.toHaveBeenCalled()
+})
+
+// The refusal and the notice over the composer are two surfaces saying one
+// thing, so they have to agree. The notice already turns on whether there is a
+// picker that can say where a file is; this proves the refused send is told
+// from the same fact, and that the fact reaches the thunk from composition
+// rather than being assumed here — the conversation vertical is not allowed to
+// ask the host, and a default of "yes" would send a browser to its own file
+// input, which hands back another file with no path and the same refusal.
+it("does not send a browser to a picker that would refuse the file again", async () => {
+  for (const [canChoosePaths, sentence] of [
+    [true, /choose it with \+/],
+    [false, /Nessa app/],
+  ] as const) {
+    const context = storeWith({}, canChoosePaths)
+    const notes = image("notes", { name: "notes.pdf", mimeType: "application/pdf" })
+    context.store.dispatch(attachFiles({ files: [notes], conversationId: "c0" }))
+    await expectRefused(context, "unsupported-file", sentence)
+    // Neither surface ever offers what the other one rules out.
+    expect(context.current().error).not.toMatch(canChoosePaths ? /Nessa app/ : /\+/)
+  }
 })
 
 it("refuses more stored bytes than one message carries, counted over what came back", async () => {
@@ -290,6 +317,9 @@ it.each([
   ["image-input-unsupported", /does not take images/],
   ["conversation-capacity", /too many conversations/],
   ["conversation-not-found", /no longer has this conversation/],
+  // The word the client used to report as uncertain, so this sentence and the
+  // notice above the composer were both unreachable.
+  ["conversation-state-unreadable", /cannot read this conversation's saved state/],
 ] as const)(
   "knows a message refused as %s was not sent: says why, and brings it back still stored",
   async (reason, text) => {

@@ -141,8 +141,12 @@ export {
 export {
   asImageAttachment,
   imageAttachmentsProblem,
+  linkedFileProblem,
+  linkedFilesProblem,
   IMAGE_ATTACHMENT_TYPES,
+  MAX_FILE_PATH_BYTES,
   MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_MESSAGE_FILES,
   MAX_MESSAGE_IMAGE_BYTES,
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
@@ -151,6 +155,7 @@ export {
 export type {
   ConversationView,
   ImageAttachment,
+  LinkedFile,
   ConversationMessage,
   ConversationPart,
   ConversationRuntime,

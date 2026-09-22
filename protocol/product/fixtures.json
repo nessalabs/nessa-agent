@@ -51,6 +51,11 @@
         "mimeType": "image/png",
         "size": 1
       }
+    ],
+    "files": [
+      {
+        "path": "/Users/ada/notes/report.pdf"
+      }
     ]
   },
   "AttachmentBeginParams": {

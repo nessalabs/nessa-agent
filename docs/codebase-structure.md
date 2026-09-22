@@ -299,6 +299,23 @@ A message refers to images by digest, never by bytes: the service asks its
 accepts the message, and `close` releases what the conversation holds in the
 closer's name, reporting a failed release without hiding a failed agent close.
 The [attachments context](#attachments) implements that port.
+A message may also point at files on this machine by path, which is how anything
+that is not an image travels: nothing is uploaded, so there is no hold to check
+and no ownership to verify, and the whole of what the gateway checks is that the
+path means the file that was chosen, through the SDK's `LinkedFile` — absolute,
+no control character, no component that a URI would drop or resolve away. It
+checks nothing about the markdown link the agent is handed the path inside;
+`prompt_content.rs` owns that, by encoding the two strings it interpolates
+rather than by naming characters a path may not hold. What it records instead is who
+pointed the agent there — `ConversationFileLinkAudit` and its
+`DurableConversationFileLinkAudit` adapter, one record per conversation and
+submission, committed before the message is admitted and written only for a
+submission the agent has not already seen — a repeat is the SDK's to settle, and
+recording one would let a conflicting retry write evidence naming paths it never
+delivered. The record is evidence of the naming, which is intent: not a read,
+not a delivery, not even an admission. A sink that cannot take it refuses the
+send, and a sink already holding different paths for that submission refuses it
+too. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
@@ -632,6 +649,120 @@ for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
 an `image/*` `attachment.begin` on such a gateway is refused with
 `image_input_unsupported` rather than answered with a ticket for bytes no
 message could name.
+`src-tauri/src/attachments/` is the desktop half: the file a person picks, as
+a path rather than as bytes. `FilePicker` is the operating system's own dialog,
+`ChosenFiles` is the filesystem — a chosen file's kind, length and bytes —
+`ContentTypes` is the platform's own type database, `AttachmentTickets` is
+the desk the one-shot tickets are minted at and spent, `DragBoard` is the drag
+pasteboard, and `Readiness` is the chooser that decides who can fetch a file
+that is not on this disk yet. Separate ports, because they are separate outside
+things: a dialog needs a window server, a disk answers about a path, a type
+database is Launch Services or shared-mime-info answering about a format, a
+ticket needs the operating system's randomness to mint and its clock to expire,
+a pasteboard belongs to a drag session and is gone when that session is, and a
+cloud service answers about a placeholder on its own schedule. The length and the contents stay together because they are the
+same disk answering at the same moment, and only one double can stage a file
+that turns out longer than it claimed. The ticket desk is a port for the same
+reason and one more: it is where the rule that a page cannot name a path lives,
+so a substitute has to be able to stage the two refusals no real desk can be
+made to produce on demand — a ticket presented twice, and one presented too
+late. All of them are built in `composition.rs` and injected.
+
+The content type is what keeps the product rule honest. A dropped file is typed
+by the platform through the browser; a picked one had nothing to type it, so it
+was classified from a 24-entry extension table and every format the platform
+knew and the table lacked — `.ico`, `.jpe`, `.svgz`, `.jp2`, `.xbm`, `.tga`,
+`.dib` — uploaded when dropped and travelled as a path when picked. Now both
+routes ask the platform first and fall back to the table, which is one call with
+one set of inputs. macOS is untested and Linux has never been run; that is
+stated in the module header too.
+
+Dropping is the host's too, for one reason: `dragDropEnabled: true` is the only
+way a dropped file's path can be known, and turning it on costs the webview
+*every* HTML5 drag event rather than only the ones carrying files — wry's
+listener returns `true` and the drop never reaches the DOM. So the page receives
+no drag or drop events at all in the app, and `attachments/dropping.rs` supplies
+what it lost: dropped files go through the same `describe_each` a picker
+selection goes through, dragged text and web-page images are read off the drag
+pasteboard (`attachments/dragged.rs`, snapshotted on `Enter`, because the
+session's payload is gone by the time a drop event reaches a handler), a dropped
+folder is walked here under `MOST_FOLDER_FILES` and `MOST_FOLDER_ENTRIES`
+instead of by the page, and a `dragging` event tells the panel when to draw the
+drop target.
+
+Both gestures name themselves, through `Announce::began` — a drop when it lands,
+a `+` selection the moment the picker's answer comes back — and that name is a
+`Batch`: a private-field newtype minted in `attachments/batch.rs` and nowhere
+else, so no answer can be built without one. Dropping `Default` alone had been a
+speed bump, since a struct literal with `String::new()` still compiled.
+
+A **drop** gives one of three answers, and two of them land on a draft: the
+files and the refusal. Both travel back on the `Dropped` with the name attached,
+and the panel routes both by it. The third is dragged text, which goes to the
+focused composer and names no draft — so a drag carrying no paths is never
+announced, and the name it is given anyway is never looked up. That is
+`attach_begun_by`, and it is a rule with a test rather than a condition inside a
+function that needs a window.
+
+A **`+`** differs in what needs the name, not in where the name comes from. The
+page begins that gesture, so it captured the draft at the press and passes it
+straight to `addChosenFiles`; the name is what the *tile* needs, because the
+host draws that mid-call and has nothing else to go on. `began` says
+`gesture: "picked"`, and the panel answers with the draft it is already holding
+rather than reading the open tab a second time — one capture either way. Two
+reads of one fact agreed only while nothing could change between them, and what
+guaranteed that was the picker being modal: rfd's presentation choice, not a
+promise. `readiness.rs` has the seam test that pins `"picked"`, because that
+literal is the whole of what makes the distinction work and nothing else checked
+it.
+
+The name exists because an attach can be three quarters of a minute behind its
+gesture, and by then the open tab is no evidence of anything. Only the drop
+announced itself for a while, so a `+` selection of two placeholders put its
+second tile on whichever tab was open when the second file finished; and the
+refusal branch read the open tab even for a drop that had a name, so a folder
+refused late took a tile off one draft and told a different one about a file it
+had never seen. Neither guesses now. A drag of text is deliberately not named:
+it pastes into the focused composer and never looks a name up, and naming it
+spent one of the sixty-four the panel remembers.
+
+`attachments/readiness.rs` is the seam for a file that is not readable yet. A
+file iCloud is keeping answers a `stat` with a real name, type and length and
+has nothing behind it, and a path handed over for one of those is a path the
+agent fails to open some minutes later with nothing on screen to explain it.
+Handlers claim a file by asking the operating system what it is keeping — the
+dispatch is on the file's *state*, never on its type, since the type already
+decides the route and must go on deciding only that — and each owes a bound, a
+typed outcome, and no history: once the bytes are here it is an ordinary local
+file. There is an iCloud handler and a refusal; other File Provider extensions
+are dataless in the same way and are not handled, because whether they
+materialise on read is theirs to decide and nothing here can find out. While a
+file is being readied the panel shows a named tile that does not claim the file
+is attached and holds the send, and it goes on any outcome.
+
+Nothing that is not a regular file is opened, and both the look and the read
+carry deadlines on plain threads rather than the blocking pool, so a FIFO or a
+stalled mount costs one thread instead of wedging the panel for the session. A
+read is authorised by a one-shot ticket the picker minted, not by a path the
+page names.
+`attachment` and `attachment_bytes` are the whole rule and are pure: an absolute
+path with its final component and its length, or bytes within the bound, or a
+typed `NotAttached` refusal. A path that is not valid UTF-8 is refused rather
+than lossily renamed, a file past `LARGEST_ATTACHMENT_BYTES` is refused before
+it is allocated, and one unusable file refuses the whole selection instead of
+shortening it silently; cancelling is an empty answer, not a failure. The page
+calls `choose_attachment_files` and, with the ticket it answered with,
+`read_attachment_bytes` through `src/host/window.ts`, and the host calls the dialog plugin, so
+`src-tauri/capabilities/` stays as it was — the same arrangement as
+`install_update`.
+
+The reading exists because the file's type decides its route and the gesture
+never does. An image is uploaded and normalised however it was attached, so the
+images among a picker's answers are read back before they are staged, while
+everything else travels as the path alone. `src/conversation/model/attachments.ts`
+owns that decision in `declaredMediaType`, which for a file nobody opened has
+only the name to go on.
+
 Holds live until their conversation closes; what expires on its own is an unused
 ticket. Tests under `tests/attachments/` split domain rules, the service over
 doubles, the real store on a real filesystem, audit records, the adapters, the

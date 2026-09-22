@@ -1,7 +1,9 @@
 import {
   contentText,
+  messageFiles,
   messageImages,
   messageLabel,
+  MAX_SEND_FILES,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
   type CommandFailure,
@@ -18,8 +20,9 @@ import type { LocalTabs } from "../local-tabs"
  * Retain each local submission independently; busy work does not reject a queueable draft.
  *
  * `content` is the whole message: its text and its files. It becomes a turn only
- * if every file in it can go as an image reference, so a turn never shows a file
- * that was not sent. A message of images alone is a message.
+ * if every file in it can go — as an image reference, or as a path the agent is
+ * pointed at — so a turn never shows a file that was not sent. A message of
+ * images alone, or of files alone, is a message.
  */
 export function beginSend(
   tabs: LocalTabs,
@@ -42,7 +45,8 @@ export function beginSend(
   const sendable = messageImages(input.content)
   if (!sendable.ok) return tabs
   const text = contentText(input.content)
-  if (!text.trim() && sendable.images.length === 0) return tabs
+  const attached = sendable.images.length + messageFiles(input.content).length
+  if (!text.trim() && attached === 0) return tabs
   const firstImage = input.content.find((part) => part.type === "file")
   const taken = takeTurnId(tabs)
   const userTurn: UserTurn = {
@@ -59,8 +63,9 @@ export function beginSend(
     cancellationStatus: undefined,
     title:
       conv.turns.length === 0 && !conv.titleEdited
-        ? // A message of images alone is titled by what was attached.
-          messageLabel(text, sendable.images.length, firstImage?.name).slice(0, 48)
+        ? // A message of attachments alone is titled by what was attached,
+          // whether those travelled as bytes or as paths.
+          messageLabel(text, attached, firstImage?.name).slice(0, 48)
         : conv.title,
     turns: [...conv.turns, userTurn],
     draft: [],
@@ -71,11 +76,31 @@ export function beginSend(
   })
 }
 
-/** What to tell somebody whose files kept a draft from sending. The draft is always kept. */
-export function imageRefusalMessage(refusal: ImageRefusal): string {
+/**
+ * What to tell somebody whose files kept a draft from sending. The draft is
+ * always kept.
+ *
+ * `canChoosePaths` is whether this surface has a picker that can say where a
+ * file is, and only one sentence turns on it — the same condition the composer's
+ * own notice about that file turns on, and for the same reason. Sending
+ * somebody to `+` where `+` is a browser's file input is sending them to be
+ * refused again in the same words, and the notice above the composer would be
+ * saying the opposite of this at the same moment.
+ */
+export function imageRefusalMessage(
+  refusal: ImageRefusal,
+  canChoosePaths: boolean,
+): string {
   switch (refusal.kind) {
     case "unsupported-file":
-      return `"${refusal.name}" cannot be sent: messages carry images, and no other files yet. Remove it to send.`
+      // A file that is not an image and that nothing could say the location of.
+      // In the app that is now only a paste: the host owns the drag as well as
+      // the picker, so a dropped file arrives with its path like a picked one.
+      // In a browser nothing has a location and there is no route at all,
+      // which is the only honest thing to say there.
+      return canChoosePaths
+        ? `"${refusal.name}" cannot be sent: pasted bytes have no location, and the agent needs one. Drop the file on Nessa or choose it with +, or remove it to send.`
+        : `"${refusal.name}" cannot be sent: a browser never says where a file is, and the agent needs that. Remove it to send, or send it from the Nessa app.`
     case "upload-failed":
       return `"${refusal.name}" did not upload; its tile says why. Retry it there or remove it, then send again.`
     case "upload-in-flight":
@@ -84,6 +109,8 @@ export function imageRefusalMessage(refusal: ImageRefusal): string {
       return `A message carries up to ${MAX_SEND_IMAGES} images. Remove some to send.`
     case "images-too-large":
       return `A message carries up to ${MAX_SEND_TOTAL_IMAGE_BYTES / (1024 * 1024)} MiB of images in total, as the gateway stores them. Remove some to send.`
+    case "too-many-files":
+      return `A message points at up to ${MAX_SEND_FILES} files. Remove some to send.`
   }
 }
 
@@ -113,6 +140,8 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "The gateway no longer has this conversation, so the message was not sent. It is back in the draft."
     case "conversation-capacity":
       return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
+    case "conversation-state-unreadable":
+      return "Nessa cannot read this conversation's saved state, so the message was not sent. It is back in the draft; start a new conversation to send it."
     case "agent-not-configured":
     case "agent-unsupported":
     case "conversations-not-configured":
@@ -171,6 +200,7 @@ export function draftMessage(
 export function declineReason(
   conv: Conversation,
   input: { content: MessageContent; connected?: boolean },
+  canChoosePaths: boolean,
 ): DraftDecline | null {
   if (input.connected === false)
     return {
@@ -191,15 +221,19 @@ export function declineReason(
   const content = draftMessage(conv, input.content)
   const sendable = messageImages(content)
   if (!sendable.ok)
-    return { kind: sendable.refusal.kind, message: imageRefusalMessage(sendable.refusal) }
+    return {
+      kind: sendable.refusal.kind,
+      message: imageRefusalMessage(sendable.refusal, canChoosePaths),
+    }
   const text = contentText(content)
   // Refused rather than silently fulfilled, so every way this declines a draft
   // looks the same from outside: a rejection carrying a reason. A caller that
   // has to know whether the draft left — the composer deciding whether its
   // full-pane editor is finished with — cannot tell "nothing to send" from
-  // "sent" otherwise. An image is something to say: only a draft with neither
-  // text nor images is empty.
-  if (!text.trim() && sendable.images.length === 0) return { kind: "empty-draft" }
+  // "sent" otherwise. An image or a file is something to say: only a draft
+  // with none of the three is empty.
+  if (!text.trim() && sendable.images.length === 0 && messageFiles(content).length === 0)
+    return { kind: "empty-draft" }
   if (new TextEncoder().encode(text).length > 8192)
     return {
       kind: "message-too-large",

@@ -282,6 +282,24 @@ for (const file of walk(src)) {
     fail(file, "the store must not import the panel chrome")
   }
 
+  // Whether this surface can say where a file is decides two things that have
+  // to agree: the notice over the composer, and the sentence a refused send
+  // gets. They disagreed, because the panel asked the host and composition
+  // asked it again — one fact with two readers is a seam that generates the
+  // divergence it was meant to prevent. The conversation vertical is already
+  // barred from the host above; the panel is the other reader, and it takes
+  // the answer as `canChoosePaths` instead of asking.
+  if (
+    path.startsWith("src/panel/") &&
+    !path.endsWith(".test.ts") &&
+    /hasNativeHost\s*\(/.test(text)
+  ) {
+    fail(
+      file,
+      "the panel takes canChoosePaths from composition; it does not ask the host again",
+    )
+  }
+
   if ((path === "src/app.tsx" || path.endsWith("/app.tsx")) && /Linux[A-Z]/.test(text)) {
     fail(
       file,

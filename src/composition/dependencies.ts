@@ -11,6 +11,7 @@ import type { ConversationEffects } from "../conversation/application/ports"
 import { httpAgentReadiness } from "../onboarding/adapters/agents"
 import { loadChosenAgent } from "../host"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
+import { hasNativeHost } from "../host"
 
 /** Construct once per application. Overrides are explicit, never a service locator. */
 export function createDependencies(
@@ -22,6 +23,7 @@ export function createDependencies(
     credentialSource?: CredentialSource
     clientId?: string
     digest?: (bytes: Blob) => Promise<string>
+    canChoosePaths?: boolean
   } = {},
 ) {
   const config = options.environment ?? loadEnvironment({})
@@ -102,6 +104,12 @@ export function createDependencies(
     // like any other read, so it arrives here rather than being reached for:
     // tests hash with a function they wrote and never touch `crypto.subtle`.
     digest: options.digest ?? sha256Digest,
+    // Whether this surface has a picker that can say where a file is. Only the
+    // desktop host's does; a browser's file input hands over bytes and never
+    // their location. The conversation vertical needs it to say why a file
+    // cannot be sent, and is not allowed to ask the host itself — so it is
+    // answered once here and injected, like every other outside fact.
+    canChoosePaths: options.canChoosePaths ?? hasNativeHost(),
     // Setup's one pre-session question. Constructed here so the surface takes
     // it as a dependency rather than importing the transport it happens to use.
     agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),

@@ -6,7 +6,9 @@ use super::{
         SubmissionReceipt,
     },
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
-    ConversationError, ConversationRepository, RuntimeReadiness, SubmittedImage,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationRepository, RuntimeReadiness,
+    SubmittedMessage,
 };
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{Conversation, ConversationId};
@@ -32,7 +34,7 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageReference, PromptText, UserMessage},
+    prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
     sessions::SessionId,
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
@@ -241,6 +243,7 @@ struct Inner {
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn ConversationCreationAudit>,
+    file_link_audit: Arc<dyn ConversationFileLinkAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
@@ -320,6 +323,10 @@ pub struct ConversationDependencies {
     pub storage: Arc<dyn SessionStorage>,
     pub metadata: Arc<dyn ConversationRepository>,
     pub creation_audit: Arc<dyn ConversationCreationAudit>,
+    /// Records that a message pointed the agent at files on this machine.
+    /// Not optional: a message may name a path on any gateway, so there is no
+    /// configuration under which that grant goes unrecorded.
+    pub file_link_audit: Arc<dyn ConversationFileLinkAudit>,
     /// `None` when this gateway keeps no uploads: every image is then refused.
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
     pub clock: Arc<dyn Clock>,
@@ -336,6 +343,7 @@ impl ConversationService {
             storage,
             metadata,
             creation_audit,
+            file_link_audit,
             attachments,
             clock,
         } = dependencies;
@@ -353,6 +361,7 @@ impl ConversationService {
                 storage,
                 metadata,
                 creation_audit,
+                file_link_audit,
                 attachments,
                 clock,
                 limits,
@@ -838,12 +847,16 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
         execution_id: String,
-        text: String,
-        images: Vec<SubmittedImage>,
+        message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
         let service = self.clone();
         supervised(async move {
+            let SubmittedMessage {
+                text,
+                images,
+                files,
+            } = message;
             let _admission = service.admit().await?;
             let actor = caller.actor()?;
             if text.len() > service.inner.limits.max_input_bytes {
@@ -870,8 +883,19 @@ impl ConversationService {
                     .map_err(|_| ConversationError::InvalidInput)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let message =
-                UserMessage::new(prompt, images).map_err(|_| ConversationError::InvalidInput)?;
+            // Nothing is opened, resolved, or followed here. Whether the file
+            // is there is only true or false when the agent opens it, which is
+            // later than this and behind a permission the reader answers, so a
+            // check now would prove nothing and would refuse a file the reader
+            // is about to create. What the gateway does check is the whole of
+            // what it can: that the path can be said faithfully, which is the
+            // domain's rule and which every path travels through.
+            let files = files
+                .into_iter()
+                .map(|file| LinkedFile::new(file.path).map_err(|_| ConversationError::InvalidInput))
+                .collect::<Result<Vec<_>, _>>()?;
+            let message = UserMessage::new(prompt, images, files)
+                .map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             // A submission the agent already has is the agent's to answer: the
             // same message recovers its original delivery and any other is a
@@ -907,6 +931,45 @@ impl ConversationService {
                         return Err(ConversationError::AttachmentNotFound);
                     }
                 }
+            }
+            // A message naming paths is recorded before it is admitted, and
+            // what is recorded is the naming — not a read, and not even a
+            // successful admission, both of which happen later and may not
+            // happen at all. Before rather than after because the failure to
+            // avoid is an agent holding a path with no record of who pointed it
+            // there; a record for a submission that is then refused is the
+            // harmless direction, and is still true.
+            //
+            // Only for a submission the agent has not already seen. A retry is
+            // the SDK's to settle: the same message recovers its original
+            // delivery, and any other message under the same identity is a
+            // conflict it refuses. Recording here would write evidence naming
+            // paths that the conflicting retry never delivered — and, because
+            // the first submission of that identity may have named no files at
+            // all and so written nothing to contradict, that evidence would
+            // stand unopposed. That is the forgery this condition closes.
+            if !message.files().is_empty() && !known {
+                service
+                    .inner
+                    .file_link_audit
+                    .record(ConversationFileLinkAuditRecord {
+                        conversation_id: id.clone(),
+                        organization_id: caller.organization_id.clone(),
+                        execution_id: execution_id.clone(),
+                        paths: message
+                            .files()
+                            .iter()
+                            .map(|file| file.path().to_owned())
+                            .collect(),
+                        before: ConversationFileLinkState::NotNamed,
+                        after: ConversationFileLinkState::Named,
+                        cause: ConversationFileLinkCause::CallerSubmitted,
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        observed_at_ms: service.inner.clock.unix_milliseconds(),
+                    })
+                    .await
+                    .map_err(|_| ConversationError::Audit)?;
             }
             // Reserve the full effective context budget consistently across retries.
             // ACP owns hidden context/tokenization; this is a conservative admission

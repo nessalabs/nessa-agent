@@ -48,11 +48,56 @@ through `binding.system_prompt()`. If omitted, the harness uses its own default;
 Nessa does not claim to capture those hidden instructions. Standard ACP has no
 portable system-prompt setter, so this extension stays in `claude_acp`.
 
-A `UserMessage` is one turn's `PromptText`, its images, or both. It refers to
-each image by `ImageReference` (SHA-256 digest, one of four media types, and
-size) and never holds bytes, so a request stays small enough to compare for retry
-identity, queue, and persist whole. Its constructor owns the rules: text or at
-least one image, at most 10 images, 5 MiB each and 10 MiB together.
+A `UserMessage` is one turn's `PromptText`, the images it carries, the files it
+points at, or any combination of them. It refers to each image by
+`ImageReference` (SHA-256 digest, one of four media types, and size) and never
+holds bytes, so a request stays small enough to compare for retry identity,
+queue, and persist whole. Its constructor owns the rules: at least one of the
+three, at most 10 images, 5 MiB each and 10 MiB together, and at most 10 files.
+
+A `LinkedFile` is the other half, and it is carried in the opposite way. It holds
+one absolute path and nothing else — no digest, no media type, no size, because
+nothing about the file travels and nothing here opens it. It becomes a
+`resource_link` block, which every ACP agent accepts, and what the agent does
+with one is put the text `[@name](file://…)` in front of the model; the model may
+then read the file with its own file tool, or may not. Nothing waits to find out.
+The name is the path's last component, derived rather than carried, so the two
+cannot disagree about which file is meant.
+
+Its constructor owns rules about what the path *means*, which is all that can
+be known without opening anything: absolute, no control character, ending in a
+file name, every component below the root a name rather than `.`, `..` or
+nothing, and at most 4096 bytes. Each of those is a rule about a path that would
+name a different file from the one chosen — a dot component is resolved away and
+an empty one is dropped when a path is written as a URI — or, for a control
+character, a path nobody can be shown before they approve the read. A path that
+is not UTF-8 cannot be described at all, and whoever obtained it says so rather
+than passing on a lossy rendering.
+
+**No rule here is about markdown, and that is the point.** There used to be one:
+square brackets were refused anywhere in a path, because the adapter writes the
+file into the prompt as `[@name](uri)` and a bracket could close the label. It
+was written twice and was wrong twice about which characters could do that —
+`)` ends a destination at the first unmatched one, and `\` escapes whatever
+follows it, so a name ending in a backslash ate the adapter's own `]` and turned
+the whole attachment into prose carrying its own `file://` URI. Both were found
+after shipping.
+
+So the rule is gone rather than extended a third time, and the two strings the
+adapter interpolates are constrained instead of the paths people may own. The
+URI is percent-encoded down to the RFC 3986 unreserved set plus `/` and `%`; the
+label backslash-escapes every ASCII punctuation character. Neither needs to know
+markdown's grammar to be safe from it, which is the property a list of
+metacharacters could not have. `prompt_link_attacks.rs` states the whole
+guarantee — one link per file, each destination decoding to that file's path,
+each label that file's name, and no text outside the links — and checks it over
+every Unicode scalar with a CommonMark parser the crate did not write.
+
+Nothing here is resolved, followed, or checked for existence. Whether the file is
+there is only true or false when the agent opens it, which is later and — under a
+tool policy that puts `Read` in `ask` — after a person has approved that read.
+Linked files need no `UserImageSource`, no capability from the agent, and no
+model limits: `resource_link` is one of the two baseline ACP content kinds.
 
 Image input has four gates, and each can only narrow the one before it. The
 model's metadata must list image input and record its `ImageInputLimits` (media

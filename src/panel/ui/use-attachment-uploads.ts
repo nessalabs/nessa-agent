@@ -46,14 +46,32 @@ export function useAttachmentUploads(
   const pump = React.useCallback(() => {
     const { chat, resources, digest } = latest.current
     const waiting = chat.conversations.flatMap((conversation) =>
-      conversation.draft.flatMap((part) =>
-        part.type === "file" &&
-        part.upload.status === "not-started" &&
-        isImageFile(part.mimeType) &&
-        !settled.current.has(part.id)
-          ? [{ conversationId: conversation.id, id: part.id, mimeType: part.mimeType }]
-          : [],
-      ),
+      // An agent that has said it takes no images is not asked to take one.
+      // Attaching refuses an image for such a conversation outright, so the
+      // case left here is the one attaching cannot catch: a file attached
+      // while the answer was still unknown, with the answer arriving after.
+      // Spending the upload anyway costs the window's bytes and the gateway's
+      // slots for a refusal that is already certain, and lands the tile in the
+      // red that means something went wrong. Nothing did.
+      //
+      // `undefined` still uploads. It is not a no, and an image refused on a
+      // gateway that had simply not answered yet would be refused for good.
+      conversation.remote?.capabilities.imageInput === false
+        ? []
+        : conversation.draft.flatMap((part) =>
+            part.type === "file" &&
+            part.upload.status === "not-started" &&
+            isImageFile(part.mimeType) &&
+            !settled.current.has(part.id)
+              ? [
+                  {
+                    conversationId: conversation.id,
+                    id: part.id,
+                    mimeType: part.mimeType,
+                  },
+                ]
+              : [],
+          ),
     )
     for (const file of nextUploads(waiting, new Set(inFlight.current.keys()))) {
       const stopping = new AbortController()

@@ -640,6 +640,22 @@
       },
       "required": ["digest", "mimeType", "size"]
     },
+    "LinkedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One file a message points the agent at. The gateway, the agent and the panel run on one machine, so the path travels and the bytes never do; the agent opens the file itself, with the reader's approval, or does not open it at all.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "pattern": "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
+          "description": "Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown — the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's."
+        }
+      },
+      "required": ["path"]
+    },
     "AttachmentBeginParams": {
       "type": "object",
       "additionalProperties": false,
@@ -768,6 +784,14 @@
           },
           "description": "Images the user sent with this turn, in attachment order."
         },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/LinkedFile"
+          },
+          "description": "Files the user pointed this turn at, in attachment order. No bytes were ever carried for them."
+        },
         "status": {
           "$ref": "#/$defs/ConversationMessageStatus",
           "description": "Current invocation state."
@@ -801,7 +825,7 @@
           "description": "Target event count when steering was admitted locally; does not imply provider consumption timing."
         }
       },
-      "required": ["executionId", "userText", "attachments", "status", "parts"]
+      "required": ["executionId", "userText", "attachments", "files", "status", "parts"]
     },
     "ConversationPending": {
       "type": "object",
@@ -831,12 +855,20 @@
           },
           "description": "Images waiting with this input, in attachment order."
         },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/LinkedFile"
+          },
+          "description": "Files the waiting input points at, in attachment order."
+        },
         "mode": {
           "$ref": "#/$defs/ConversationPendingMode",
           "description": "Queue or steering admission."
         }
       },
-      "required": ["executionId", "text", "attachments", "mode"]
+      "required": ["executionId", "text", "attachments", "files", "mode"]
     },
     "ConversationPermissionOption": {
       "type": "object",
@@ -1160,9 +1192,24 @@
             "$ref": "#/$defs/ImageAttachment"
           },
           "description": "Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone."
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/LinkedFile"
+          },
+          "description": "Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none."
         }
       },
-      "required": ["conversationId", "requestId", "executionId", "text", "attachments"]
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "text",
+        "attachments",
+        "files"
+      ]
     },
     "ConversationRemoveParams": {
       "type": "object",
@@ -1497,6 +1544,7 @@
         "conversation_capacity",
         "conversation_closed",
         "conversation_configuration_changed",
+        "conversation_state_unreadable",
         "conversation_storage_unavailable",
         "temporarily_unavailable",
         "audit_unavailable",

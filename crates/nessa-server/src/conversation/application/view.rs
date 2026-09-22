@@ -1,4 +1,4 @@
-use nessa_sdk::domain::agent_execution::prompts::ImageReference;
+use nessa_sdk::domain::agent_execution::prompts::{ImageReference, LinkedFile};
 use serde::Serialize;
 
 /// A bounded replacement view. Its revision is transient and is not a durable event cursor.
@@ -31,6 +31,7 @@ pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
     pub attachments: Vec<ConversationAttachment>,
+    pub files: Vec<ConversationLinkedFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub status: ConversationMessageStatus,
@@ -43,6 +44,7 @@ pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ConversationAttachment>,
+    pub files: Vec<ConversationLinkedFile>,
     pub mode: ConversationPendingMode,
 }
 /// One image a turn referred to. The view never carries its bytes.
@@ -59,6 +61,20 @@ impl From<&ImageReference> for ConversationAttachment {
             digest: image.digest().to_string(),
             mime_type: image.media_type().as_str().into(),
             size: image.size(),
+        }
+    }
+}
+/// One file a turn pointed the agent at. The view carries the path, because
+/// the path is the whole of what the turn carried; nothing was ever read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationLinkedFile {
+    pub path: String,
+}
+impl From<&LinkedFile> for ConversationLinkedFile {
+    fn from(file: &LinkedFile) -> Self {
+        Self {
+            path: file.path().into(),
         }
     }
 }

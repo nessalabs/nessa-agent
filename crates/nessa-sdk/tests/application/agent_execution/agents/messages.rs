@@ -115,6 +115,7 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                 user_message: UserMessage::new(
                     text.map(|text| PromptText::new(text).unwrap()),
                     vec![image],
+                    Vec::new(),
                 )
                 .unwrap(),
                 ..request("image")
@@ -332,7 +333,8 @@ async fn every_entry(
 }
 fn with_images(id: &str, images: Vec<ImageReference>) -> ExecutionRequest {
     ExecutionRequest {
-        user_message: UserMessage::new(Some(PromptText::new("look").unwrap()), images).unwrap(),
+        user_message: UserMessage::new(Some(PromptText::new("look").unwrap()), images, Vec::new())
+            .unwrap(),
         ..request(id)
     }
 }

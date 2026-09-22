@@ -2,7 +2,9 @@ import * as React from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
+import { messageFiles, referencedContent } from "../model"
 import { MessageContentView } from "./message-content"
+import { MessageImages } from "./message-images"
 
 describe("structural pasted parts", () => {
   it.each([
@@ -90,6 +92,7 @@ describe("a sent turn's images", () => {
       status: "stored" as const,
       image: { digest, mimeType: "image/png" as const, size: 2048 },
     },
+    path: null,
   }
   const render = (content: React.ComponentProps<typeof MessageContentView>["content"]) =>
     renderToStaticMarkup(
@@ -102,7 +105,7 @@ describe("a sent turn's images", () => {
     expect(html).not.toContain(digest)
     expect(html).toContain('src="blob:finder"')
     expect(html).toContain('alt="finder.png"')
-    expect(html).toContain('aria-label="1 image"')
+    expect(html).toContain('aria-label="1 attachment"')
     // No text, so no empty Markdown block ahead of the tile.
     expect(html).not.toMatch(/<(p|div)\b/)
   })
@@ -124,7 +127,7 @@ describe("a sent turn's images", () => {
     ])
     expect(html).not.toContain("<img")
     expect(html).toContain("IMG_0042.CR3")
-    expect(html).toContain('aria-label="1 image"')
+    expect(html).toContain('aria-label="1 attachment"')
   })
 
   it("keeps the text and shows every image after it, local and referenced alike", () => {
@@ -134,7 +137,7 @@ describe("a sent turn's images", () => {
       { type: "image-reference", digest, mimeType: "image/webp", size: 3 },
     ])
     expect(html).toContain("<strong>these</strong>")
-    expect(html).toContain('aria-label="2 images"')
+    expect(html).toContain('aria-label="2 attachments"')
     expect(html.indexOf("<strong>")).toBeLessThan(html.indexOf("<ul"))
     expect(html).toContain("WebP image, 3 B")
   })
@@ -147,5 +150,60 @@ describe("a sent turn's images", () => {
     ])
     expect(html).not.toContain("<img")
     expect(html).not.toContain("nessa-message-images")
+  })
+
+  it("shows a file the turn pointed at, by name, with its path to hover", () => {
+    // Attached in this window: the tile is named by the file and titled by
+    // where it is, because the path is what the agent was given and what a
+    // permission prompt will quote.
+    const html = renderToStaticMarkup(
+      React.createElement(MessageImages, {
+        content: [
+          { type: "text", text: "read this" },
+          {
+            ...local,
+            id: "d",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            previewUrl: "",
+            path: "/Users/ada/notes/report.pdf",
+          },
+        ],
+      }),
+    )
+    expect(html).toContain('aria-label="1 attachment"')
+    expect(html).toContain('title="/Users/ada/notes/report.pdf"')
+    expect(html).toContain("report.pdf<")
+    // Nothing was ever held for it, so nothing is painted and nothing fetched.
+    expect(html).not.toContain("<img")
+    expect(html).not.toContain("blob:")
+  })
+
+  it("keeps a turn's files after a reload, when only the gateway remembers them", () => {
+    // The regression this covers: the view carries the paths a turn named, and
+    // a turn rebuilt from it used to drop them, so a reload silently emptied
+    // the attachment row while the agent had been given those files.
+    const restored = referencedContent(
+      "read these",
+      [],
+      [
+        { path: "/Users/ada/report.pdf" },
+        { path: "/Users/ada/notes/summary (final).md" },
+      ],
+    )
+    const html = renderToStaticMarkup(
+      React.createElement(MessageImages, { content: restored }),
+    )
+    expect(html).toContain('aria-label="2 attachments"')
+    expect(html).toContain('title="/Users/ada/report.pdf"')
+    expect(html).toContain('title="/Users/ada/notes/summary (final).md"')
+    // Labelled by name, not by the whole path, which would not fit.
+    expect(html).toContain("report.pdf<")
+    expect(html).toContain("summary (final).md<")
+    // And a retry of that turn still names exactly the same paths.
+    expect(messageFiles(restored)).toEqual([
+      { path: "/Users/ada/report.pdf" },
+      { path: "/Users/ada/notes/summary (final).md" },
+    ])
   })
 })

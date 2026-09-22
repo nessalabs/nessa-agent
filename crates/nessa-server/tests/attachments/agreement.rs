@@ -5,7 +5,7 @@
 use crate::attachments::domain::{Attachment, MediaType};
 use nessa_images::Encoding;
 use nessa_sdk::domain::{
-    agent_execution::prompts::{ImageReference, UserMessage},
+    agent_execution::prompts::{ImageReference, LinkedFile, UserMessage},
     common::value_objects::ImageMediaType,
 };
 use serde_json::Value;
@@ -92,4 +92,133 @@ fn the_protocol_schema_states_the_same_numbers_the_sdk_enforces() {
         Some(Attachment::MAX_BYTES)
     );
     const { assert!(Attachment::MAX_BYTES > ImageReference::MAX_BYTES) }
+
+    // A linked file has no size at all — nothing is uploaded for it — so the
+    // only numbers to agree on are how long a path may be and how many of them
+    // one message may name.
+    //
+    // The length is in bytes, and `x-utf8MaxBytes` is the keyword that says so.
+    // `maxLength` counts code points, so it is a coarse upper bound and not the
+    // rule: equating the two is how a path of 4,095 CJK characters — 12,286
+    // bytes — passed every check here and was refused on arrival.
+    let path = &definition(&schema, "LinkedFile")["properties"]["path"];
+    assert_eq!(
+        path["x-utf8MaxBytes"].as_u64(),
+        Some(LinkedFile::MAX_PATH_BYTES as u64)
+    );
+    // Never tighter than the byte rule, or a path the gateway accepts would be
+    // refused by a validator that reads only the standard keyword.
+    assert!(
+        path["maxLength"]
+            .as_u64()
+            .expect("a coarse bound is published")
+            >= LinkedFile::MAX_PATH_BYTES as u64
+    );
+    // And the domain really does count bytes, which is the half a corpus of
+    // ASCII paths can never show: these two have the same number of characters
+    // and only one of them fits.
+    let ascii = format!("/{}", "a".repeat(LinkedFile::MAX_PATH_BYTES - 1));
+    let multibyte = format!("/{}", "あ".repeat(LinkedFile::MAX_PATH_BYTES - 1));
+    assert_eq!(ascii.chars().count(), multibyte.chars().count());
+    assert!(LinkedFile::new(ascii).is_ok());
+    assert_eq!(
+        LinkedFile::new(multibyte),
+        Err(
+            nessa_sdk::domain::agent_execution::ExecutionError::ValueTooLong {
+                field: "linked file path",
+                max_bytes: LinkedFile::MAX_PATH_BYTES,
+            }
+        )
+    );
+    for named in [
+        "ConversationMessage",
+        "ConversationPending",
+        "ConversationSendParams",
+    ] {
+        assert_eq!(
+            definition(&schema, named)["properties"]["files"]["maxItems"].as_u64(),
+            Some(UserMessage::MAX_FILES as u64),
+            "{named}"
+        );
+    }
+}
+
+/// The schema's path pattern is a coarse gate in front of the domain's rule,
+/// so what it accepts must be a superset of what the domain accepts, and every
+/// character rule it states must be one the domain states too. Anything the
+/// schema let through that the domain refuses is answered `invalid_request`;
+/// anything the schema refuses that the domain would have taken is a file a
+/// person could never attach, which is the failure worth catching here.
+#[test]
+fn the_published_path_rule_and_the_domain_rule_describe_the_same_paths() {
+    let schema = schema();
+    let pattern = definition(&schema, "LinkedFile")["properties"]["path"]["pattern"]
+        .as_str()
+        .expect("the published path rule is a string");
+    // Written for the JSON Schema dialect's regular expressions, which is why
+    // it is checked by hand rather than compiled here: each class it names is
+    // one the domain names, in the same direction.
+    assert!(pattern.starts_with("^(?:/"), "{pattern}");
+    for refused in [
+        // Control characters, both ranges. C1 was the gap: the published rule
+        // named only C0 and DEL while the domain uses `char::is_control`, so a
+        // path holding U+0085 passed every client and was refused on arrival.
+        "\\u0000-\\u001f",
+        "\\u007f",
+        "\\u0080-\\u009f",
+        // A separator inside a component, which is what makes every component
+        // nonempty and forbids a trailing one.
+        "[^/",
+        // And a component that is `.` or `..`.
+        "(?!\\.{1,2}(?:/|$))",
+    ] {
+        assert!(pattern.contains(refused), "{pattern} is missing {refused}");
+    }
+
+    for path in [
+        "/Users/ada/report.pdf",
+        "/Users/ada/report (final) 100% \"good\".pdf",
+        "/Users/ada/отчёт.pdf",
+        "/Users/ada/.zshrc",
+        "/Users/ada/...",
+        "/Users/ada/2026-09-20 10:30.txt",
+        // Brackets and backslashes were refused by both, because the agent is
+        // handed the path inside a markdown link. The ACP adapter encodes both
+        // halves of that link now, so neither rule has an opinion here.
+        "/Users/ada/[draft] notes.pdf",
+        "/Users/ada/a]b.pdf",
+        "/Users/ada/back\\slash",
+        "/a",
+    ] {
+        assert!(
+            LinkedFile::new(path.into()).is_ok(),
+            "the schema admits {path:?} but the domain refuses it"
+        );
+    }
+
+    // And the other direction, which is the one that was wrong: every shape the
+    // domain refuses is one the published rule refuses too, so a third-party
+    // SDK reading the schema turns the same paths away that the gateway does.
+    // The pattern is checked against these in `scripts/check-product-protocol.mjs`,
+    // where there is a regular-expression engine for the published dialect;
+    // what is asserted here is that the domain and that list agree on them.
+    for refused in [
+        "/tmp/a\u{85}b.pdf",
+        "/tmp/a\u{9f}b.pdf",
+        "/tmp/a\u{7f}b.pdf",
+        "/tmp/",
+        "/",
+        "//tmp/a.pdf",
+        "/tmp//a.pdf",
+        "/tmp/.",
+        "/tmp/..",
+        "/tmp/../etc/passwd",
+        "/tmp/./a.pdf",
+        "report.pdf",
+    ] {
+        assert!(
+            LinkedFile::new(refused.into()).is_err(),
+            "the published rule refuses {refused:?} and the domain does not"
+        );
+    }
 }

@@ -72,6 +72,20 @@ const resources: AttachmentResources = {
       size: file.size,
       previewUrl: "blob:test",
       upload: { status: "not-started" as const },
+      path: null,
+    })),
+  // The host's picker never reads bytes, so a chosen file arrives with its
+  // path and nothing to preview.
+  addChosen: (chosen) =>
+    chosen.map((file) => ({
+      type: "file" as const,
+      id: `r${taken++}`,
+      name: file.name,
+      mimeType: "application/octet-stream",
+      size: file.size,
+      previewUrl: "",
+      upload: { status: "not-started" as const },
+      path: file.path,
     })),
   canAdd: () => true,
   bytes: () => undefined,
@@ -94,6 +108,7 @@ function Surface() {
       React.createElement("div", { "data-panel": true }),
       React.createElement("button", { type: "submit" }, "Send"),
       React.createElement(AttachmentNotices, {
+        canChoosePaths: true,
         refusal: attachments.refusal,
         files: attachments.files,
         imageInput: chat.active.remote?.capabilities.imageInput,
@@ -335,19 +350,32 @@ it("does not say one conversation's refusal above another's composer", async () 
   expect(announced()).toEqual([expect.stringContaining("File is too large")])
 })
 
-it("refuses a file the + picker would refuse too, and does not send anybody to it", async () => {
-  // The 720 MB .mp4 from the report. Both routes hold a file to the same bound,
-  // which is exactly why the advice to try the other one was wrong.
+it("sends the dropped video from the report to the route that can carry it", async () => {
+  // The 720 MB .mp4 the issue opened with. A drop has to carry the bytes into
+  // this window, so it is refused — but the picker does not carry anything, it
+  // learns where the file is and the message names that. So the way out is
+  // real, and is offered, where it used to be a dead end with no hint at all.
   await mount()
   await drop([huge()])
   expect(announced()[0]).toContain("64 MiB")
-  expect(button("Choose files")).toBeNull()
+  expect(announced()[0]).toMatch(/choose it with \+/i)
+  expect(button("Choose files")).not.toBeNull()
   expect(button("Retry")).toBeNull()
 
   await React.act(async () => {
     button("Dismiss notification")!.click()
   })
   expect(announced()).toEqual([])
+})
+
+it("offers no route for an oversized image, which every route has to carry", async () => {
+  // The same bound, and this time it really is a dead end: an image is
+  // uploaded wherever it came from, so the picker refuses it too.
+  await mount()
+  await drop([weighing("holiday.heic", MAX_ATTACHMENT_BYTES + 1, "")])
+  expect(announced()[0]).toContain("64 MiB")
+  expect(announced()[0]).not.toMatch(/\+|choos/i)
+  expect(button("Choose files")).toBeNull()
 })
 
 it("keeps a refusal that the conversation, not the panel, turned the send away for", async () => {
@@ -367,6 +395,7 @@ it("keeps a refusal that the conversation, not the panel, turned the send away f
             size: 2,
             previewUrl: "blob:test",
             upload: { status: "not-started" },
+            path: null,
           },
         ],
         conversationId: "c0",

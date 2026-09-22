@@ -140,6 +140,50 @@ describe("conversation notification", () => {
       retry: { kind: "refresh" },
     })
   })
+  it("tells somebody whose saved conversation cannot be read, whatever else failed", () => {
+    // The word had a notice written for it and the notice was unreachable in the
+    // only case that produces it. A gateway that cannot read a conversation's
+    // saved state caches that failure and answers *every* command from it, so a
+    // command error always sits beside this read error — and the guard above
+    // was `readError === "configuration-changed"`, one word rather than the
+    // vocabulary. What arrived instead was "Conversation needs attention" and a
+    // Refresh that could not work: the regression #114 shipped to fix, back for
+    // the new word.
+    const alone = conversation("tab")
+    alone.readError = "state-unreadable"
+    const beside = conversation("tab")
+    beside.readError = "state-unreadable"
+    beside.error = "Nessa cannot read this conversation's saved state."
+    beside.failure = "conversation-state-unreadable"
+    const withAnUnsentDraft = conversation("tab")
+    withAnUnsentDraft.readError = "state-unreadable"
+    withAnUnsentDraft.error = "offline"
+    withAnUnsentDraft.draft = [{ type: "text", text: "draft" }]
+    withAnUnsentDraft.turns = [
+      { id: "turn", from: "user", content: [], receipt: "failed", error: "offline" },
+    ]
+    for (const value of [alone, beside, withAnUnsentDraft])
+      expect(conversationNotice(value)).toEqual({
+        title: "Conversation cannot be read",
+        description:
+          "Nessa cannot read this conversation's saved state, so it cannot be opened again. Start a new conversation to carry on.",
+        retry: null,
+      })
+  })
+  it("offers no action for any read failure the gateway will not answer differently", () => {
+    // Stated over the vocabulary rather than one word at a time: whichever read
+    // failures are permanent, none of them may end in something to press. A
+    // notice that keeps offering a refresh for a conversation that cannot be
+    // read is the whole defect, and it is not specific to either word.
+    for (const reason of ["configuration-changed", "state-unreadable"] as const) {
+      const value = conversation("tab")
+      value.readError = reason
+      value.error = "something else also failed"
+      const notice = conversationNotice(value)
+      expect(notice?.retry, reason).toBeNull()
+      expect(notice?.description, reason).toMatch(/[Ss]tart a new conversation/)
+    }
+  })
   it("lets a conversation the gateway will not serve again outrank every other notice", () => {
     // The exception, and the reason it is one: every other notice on this tab
     // ends in an action — refresh, resend, retry this submission — that a

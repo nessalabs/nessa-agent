@@ -4,8 +4,9 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ImageAttachment,
+  LinkedFile,
 } from "../generated/product.js"
-import { imageAttachments } from "./attachment-validate.js"
+import { imageAttachments, linkedFiles } from "./attachment-validate.js"
 
 const utf8 = new TextEncoder()
 
@@ -53,6 +54,10 @@ function identity(item: Record<string, unknown>, key: string) {
 /** Field order is the serializer's business; compare what the images are. */
 function imagesKey(images: readonly ImageAttachment[]) {
   return JSON.stringify(images.map((image) => [image.digest, image.mimeType, image.size]))
+}
+/** The same, for the paths a turn points at: the paths, in order. */
+function filesKey(files: readonly LinkedFile[]) {
+  return JSON.stringify(files.map((file) => file.path))
 }
 function oneOf(value: string, values: string[]) {
   if (!values.includes(value)) throw new Error("Invalid conversation state")
@@ -117,12 +122,14 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageStatuses = new Map<string, string>()
   const messageTexts = new Map<string, string>()
   const messageImages = new Map<string, string>()
+  const messageFiles = new Map<string, string>()
   const toolPartIds = new Set<string>()
   for (const message of messages) {
     exact(message, [
       "executionId",
       "userText",
       "attachments",
+      "files",
       "status",
       "error",
       "steeringTarget",
@@ -191,10 +198,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       executionId,
       imagesKey(imageAttachments(message.attachments, "message attachments")),
     )
+    messageFiles.set(executionId, filesKey(linkedFiles(message.files, "message files")))
   }
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
-    exact(pending, ["executionId", "text", "attachments", "mode"])
+    exact(pending, ["executionId", "text", "attachments", "files", "mode"])
     const executionId = identity(pending, "executionId")
     if (pendingIds.has(executionId))
       throw new Error("Conversation response repeats a pending execution")
@@ -208,6 +216,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     const pendingImages = imagesKey(
       imageAttachments(pending.attachments, "pending attachments"),
     )
+    const pendingFiles = filesKey(linkedFiles(pending.files, "pending files"))
     oneOf(text(pending, "mode"), ["queued", "steering"])
     // The waiting input and its queued message are one submission seen twice;
     // the same text over different images is as contradictory as different text.
@@ -215,7 +224,8 @@ export function conversationView(value: unknown, expected: string): Conversation
       !item.truncated &&
       item.queueComplete &&
       (messageTexts.get(executionId) !== pendingText ||
-        messageImages.get(executionId) !== pendingImages)
+        messageImages.get(executionId) !== pendingImages ||
+        messageFiles.get(executionId) !== pendingFiles)
     )
       throw new Error("Pending execution contradicts its queued message")
   }

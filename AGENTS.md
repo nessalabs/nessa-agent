@@ -179,3 +179,31 @@ Inspect the resulting layout and verify module maps, moved links, and checks.
   contribute to installed bundle size.
 - Check changed tests against module boundaries too. A green architecture check
   covers only its implemented rules, not every requirement in this guide.
+
+## Adding a check to CI
+
+`.github/workflows/local-auth.yml` is the gate every pull request waits on, and
+almost all of its time is `rustc`. A check added carelessly is not free: it is
+paid on every push, and on three runners if it lands in the matrix.
+
+- Put a new check in a job that already exists. A new job pays the whole setup
+  again — runner, checkout, toolchain, a cold dependency graph — to do work that
+  is often seconds long. `gateway-contract` is where a Linux-only or
+  platform-independent check belongs; the `local-auth` matrix is for checks whose
+  answer genuinely differs by platform.
+- Do not run the same check in more than one place. `cargo fmt --all` in
+  `gateway-contract` covers every crate on every platform, because rustfmt does
+  not read the platform. Before adding a per-crate variant, ask what a second
+  runner would learn.
+- Lint before test. Both compile the crate, and only one of them takes minutes to
+  report a `-D warnings` failure it could have reported first.
+- Build caches are written only from `main`. A pull request reads the tip's
+  artifacts and never evicts them, so a run on a branch is as warm as `main` was
+  and no warmer. Nothing needs doing for this; it is why a first run after a
+  dependency bump is slow.
+- Prose is not checked, and `scripts/documentation-only.mjs` is what lets a
+  documentation-only pull request skip the compile-heavy jobs. If you make
+  anything read a Markdown file — a crate embedding its README with
+  `include_str!`, a check that parses a document — that rule stops being true and
+  has to change with it. `documentation-only.test.mjs` fails with instructions
+  when the Rust half of it breaks; the rest is on you to notice.

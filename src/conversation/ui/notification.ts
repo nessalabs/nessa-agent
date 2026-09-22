@@ -31,6 +31,17 @@ function readNotice(reason: ReadFailure): ConversationNotice {
           "This chat uses a different agent configuration. Start a new conversation with the current setup.",
         retry: null,
       }
+    // The gateway could not read what it saved for this conversation, and it
+    // caches that: every later read is answered from the failure without going
+    // near the provider. So there is no retry to offer, exactly as above, and
+    // for a firmer reason — this one it is certain about.
+    case "state-unreadable":
+      return {
+        title: "Conversation cannot be read",
+        description:
+          "Nessa cannot read this conversation's saved state, so it cannot be opened again. Start a new conversation to carry on.",
+        retry: null,
+      }
     // Everything else, including a cause this build has no name for. It claims
     // only what is certainly true of all of them — deliberately not that the
     // gateway will come back, which no code it sends actually means.
@@ -41,6 +52,34 @@ function readNotice(reason: ReadFailure): ConversationNotice {
           "Nessa could not read this conversation from the gateway, so what is shown may be out of date. It keeps trying.",
         retry: { kind: "refresh" },
       }
+  }
+}
+
+/**
+ * Whether a read failure is about the conversation itself rather than about one
+ * request, and so has to be said even when a command failed alongside it.
+ *
+ * Every other notice below ends in an action — refresh, resend, retry this
+ * submission — and for these two there is no action that can now succeed. A
+ * lost close acknowledgement inviting a refresh is the case that makes it
+ * concrete: the refresh it asks for is exactly what is no longer possible.
+ *
+ * A `switch` and not a comparison against one word. `conversation.readError ===
+ * "configuration-changed"` is what it was, and when `state-unreadable` joined
+ * the vocabulary it compiled, the notice written for it became unreachable in
+ * the only case that matters — a gateway that cannot read a conversation
+ * answers every command from that same failure, so a command error always
+ * coexists — and somebody got "Conversation needs attention" with a Refresh
+ * that could not work. That is the regression #114 shipped to fix. Adding a
+ * word to {@link ReadFailure} now does not compile until it is answered here.
+ */
+function outranksACommand(reason: ReadFailure): boolean {
+  switch (reason) {
+    case "configuration-changed":
+    case "state-unreadable":
+      return true
+    case "unavailable":
+      return false
   }
 }
 
@@ -59,15 +98,12 @@ function readNotice(reason: ReadFailure): ConversationNotice {
 export function conversationNotice(
   conversation: Conversation,
 ): ConversationNotice | null {
-  // Except for the one read failure that is about the conversation rather than
-  // about a request: the gateway will not serve this one again, so every other
-  // notice here ends in an action — refresh, resend, retry this submission —
-  // that cannot now succeed. A lost close acknowledgement inviting a refresh is
-  // the case that makes it concrete: the refresh it asks for is exactly what is
-  // no longer possible. What became of each message is not lost with the slot;
-  // the turn keeps its own receipt, and the transcript still shows it.
-  if (conversation.readError === "configuration-changed")
-    return readNotice("configuration-changed")
+  // Except for the read failures that are about the conversation rather than
+  // about a request; see `outranksACommand`. What became of each message is not
+  // lost with the slot: the turn keeps its own receipt, and the transcript
+  // still shows it.
+  if (conversation.readError && outranksACommand(conversation.readError))
+    return readNotice(conversation.readError)
   const unknown = conversation.turns.find(
     (turn) => turn.from === "user" && turn.receipt === "unknown" && turn.executionId,
   )

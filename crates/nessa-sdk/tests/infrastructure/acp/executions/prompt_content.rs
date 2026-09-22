@@ -3,7 +3,7 @@
 use super::*;
 use crate::application::agent_execution::providers::UserImageFuture;
 use crate::domain::{
-    agent_execution::prompts::PromptText,
+    agent_execution::prompts::{LinkedFile, PromptText},
     common::value_objects::{ImageMediaType, Sha256Digest},
 };
 use crate::infrastructure::json_rpc;
@@ -29,7 +29,12 @@ fn sized(size: u64) -> ImageReference {
     .unwrap()
 }
 fn message(text: Option<&str>, images: Vec<ImageReference>) -> UserMessage {
-    UserMessage::new(text.map(|text| PromptText::new(text).unwrap()), images).unwrap()
+    UserMessage::new(
+        text.map(|text| PromptText::new(text).unwrap()),
+        images,
+        Vec::new(),
+    )
+    .unwrap()
 }
 fn figure(message: &UserMessage) -> u64 {
     match fits_one_frame(message, 0) {
@@ -204,6 +209,143 @@ async fn an_answer_of_any_other_length_is_a_mismatch_even_when_its_digest_agrees
         result.err(),
         Some(AgentError::UserImage(UserImageError::Mismatch))
     );
+}
+
+/// A message of `text` and the files at `paths`, with no images.
+fn linking(text: Option<&str>, paths: &[&str]) -> UserMessage {
+    UserMessage::new(
+        text.map(|text| PromptText::new(text).unwrap()),
+        Vec::new(),
+        paths
+            .iter()
+            .map(|path| LinkedFile::new((*path).into()).unwrap())
+            .collect(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_file_becomes_a_resource_link_after_the_text_and_the_images() {
+    let sent = UserMessage::new(
+        Some(PromptText::new("look at these").unwrap()),
+        vec![reference(b"image", ImageMediaType::Png)],
+        vec![LinkedFile::new("/Users/ada/report.pdf".into()).unwrap()],
+    )
+    .unwrap();
+    let blocks = content_blocks(&sent, ImageBlocks::none().charged(None));
+    // One image block is owed and none was supplied, so this is the mismatch
+    // guard rather than the link; the link is checked without images below.
+    assert!(matches!(blocks, Err(AgentError::Protocol(_))));
+
+    let sent = linking(Some("look at these"), &["/Users/ada/report.pdf"]);
+    assert_eq!(
+        content_blocks(&sent, ImageBlocks::none()).unwrap(),
+        vec![
+            json!({"type":"text","text":"look at these"}),
+            json!({
+                "type": "resource_link",
+                "uri": "file:///Users/ada/report.pdf",
+                // The dot is escaped because the adapter writes this name into
+                // a markdown label; see `markdown_label`.
+                "name": r"report\.pdf",
+            }),
+        ]
+    );
+
+    // Attachment order is kept, and a file alone is a whole prompt.
+    let sent = linking(None, &["/b.txt", "/a.txt"]);
+    let blocks = content_blocks(&sent, ImageBlocks::none()).unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0]["uri"], json!("file:///b.txt"));
+    assert_eq!(blocks[1]["uri"], json!("file:///a.txt"));
+}
+
+/// What the agent writes into the model's text is `[@name](uri)`, so these are
+/// the two strings that decide whether the model is pointed at the file the
+/// person chose. Both are written down here as exact strings, because an
+/// encoding is easiest to review as the thing it produces.
+///
+/// Whether either can be read as markdown syntax is not this test's question
+/// and cannot be settled by a table: `prompt_link_attacks.rs` answers it over
+/// every Unicode scalar, with a CommonMark parser this crate did not write.
+#[test]
+fn a_links_uri_is_percent_encoded_and_its_name_is_escaped() {
+    for (path, uri, name) in [
+        ("/tmp/report.pdf", "file:///tmp/report.pdf", r"report\.pdf"),
+        // Everything outside the unreserved set is escaped, whether a URI
+        // requires it or not: the alphabet is the rule, not a list of hazards.
+        (
+            "/tmp/my report.pdf",
+            "file:///tmp/my%20report.pdf",
+            r"my report\.pdf",
+        ),
+        (
+            "/tmp/a#b?c%d.pdf",
+            "file:///tmp/a%23b%3Fc%25d.pdf",
+            r"a\#b\?c\%d\.pdf",
+        ),
+        (
+            "/tmp/report (final).pdf",
+            "file:///tmp/report%20%28final%29.pdf",
+            r"report \(final\)\.pdf",
+        ),
+        (
+            "/tmp/report).pdf",
+            "file:///tmp/report%29.pdf",
+            r"report\)\.pdf",
+        ),
+        // A name ending in a backslash, which used to eat the label's own
+        // closing bracket and turn the whole attachment into prose.
+        ("/tmp/report\\", "file:///tmp/report%5C", r"report\\"),
+        // Brackets are ordinary in a name again, because nothing downstream
+        // depends on their absence any more.
+        (
+            "/tmp/[draft] notes.pdf",
+            "file:///tmp/%5Bdraft%5D%20notes.pdf",
+            r"\[draft\] notes\.pdf",
+        ),
+        // A colon is encoded too. It needs no encoding to parse, and encoding
+        // it costs nothing; deciding per character which ones "need" it is how
+        // this went wrong twice.
+        (
+            "/tmp/2026-09-20 10:30.txt",
+            "file:///tmp/2026-09-20%2010%3A30.txt",
+            r"2026\-09\-20 10\:30\.txt",
+        ),
+        // Non-Latin names are percent-encoded as UTF-8 in the URI and left
+        // alone in the name: nothing outside ASCII is punctuation to escape.
+        (
+            "/tmp/отчёт.pdf",
+            "file:///tmp/%D0%BE%D1%82%D1%87%D1%91%D1%82.pdf",
+            r"отчёт\.pdf",
+        ),
+    ] {
+        let sent = linking(None, &[path]);
+        let blocks = content_blocks(&sent, ImageBlocks::none()).unwrap();
+        assert_eq!(blocks[0]["uri"], json!(uri), "{path}");
+        assert_eq!(blocks[0]["name"], json!(name), "{path}");
+    }
+}
+
+#[test]
+fn a_links_own_length_is_counted_against_the_frame() {
+    let bare = figure(&linking(Some("x"), &[]));
+    let one = figure(&linking(Some("x"), &["/tmp/report.pdf"]));
+    // The block, its encoded URI, and its name are all measured, so the figure
+    // grows by more than the fixed part alone.
+    assert!(one > bare + "file:///tmp/report.pdf".len() as u64);
+
+    // The longest ten paths still leave a normal frame room to spare, which is
+    // why no byte budget stands over files.
+    let longest = format!("/{}", "a".repeat(LinkedFile::MAX_PATH_BYTES - 1));
+    let paths = vec![longest.as_str(); UserMessage::MAX_FILES];
+    assert_eq!(fits_one_frame(&linking(None, &paths), 1024 * 1024), Ok(()));
+
+    // And they are counted, not waved through: a frame that small refuses them.
+    assert!(matches!(
+        fits_one_frame(&linking(None, &paths), 32 * 1024),
+        Err(AgentError::MessageTooLarge { .. })
+    ));
 }
 
 #[test]

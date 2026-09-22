@@ -3,14 +3,14 @@
 use super::{
     AttachmentReleaseCause, ConversationAttachment, ConversationCaller, ConversationDependencies,
     ConversationError, ConversationLimits, ConversationMessageStatus, ConversationRepository,
-    ConversationService, SubmissionMode, SubmittedImage,
+    ConversationService, SubmissionMode, SubmittedImage, SubmittedMessage,
 };
 use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
         image_fixture, only, AcceptingCreationAudit, MemoryAttachments, MemoryRepository, Provider,
-        ProviderFactory, TestClock,
+        ProviderFactory, RecordingFileLinkAudit, TestClock,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -91,8 +91,11 @@ async fn send(
             id.clone(),
             caller("panel", execution),
             execution.into(),
-            text.into(),
-            images.iter().map(submitted).collect(),
+            SubmittedMessage {
+                text: text.into(),
+                images: images.iter().map(submitted).collect(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -258,6 +261,7 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: Some(attachments),
             clock: Arc::new(TestClock),
         },
@@ -367,6 +371,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: Some(attachments.clone()),
             clock: Arc::new(TestClock),
         },
