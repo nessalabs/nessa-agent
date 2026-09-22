@@ -13,7 +13,8 @@ use sha2::Sha256;
 use tar::{EntryType, Header};
 
 use crate::agent_install::domain::{
-    AgentName, ArchivePath, ArchiveUrl, Libc, ReleasePlatform, ReleaseRequirements,
+    AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, Libc, ReleaseContents, ReleaseFile,
+    ReleasePlatform, ReleaseRequirements,
 };
 use crate::agent_install_test_support::temporary_root;
 
@@ -61,6 +62,63 @@ fn release(version: &str, executable: &str) -> PinnedRelease {
     artifact(version, executable, &"a".repeat(64), "macos", "aarch64")
 }
 
+/// How long the archive these tests pin says it is. Nothing here fetches, so
+/// the number only has to be a length an archive could have.
+const ARCHIVE_BYTES: u64 = 1024 * 1024;
+
+/// Contents holding one program and nothing else, which is Opencode's shape.
+fn one_program(path: &str) -> ReleaseContents {
+    installing(&[(path, FileRole::Launch)])
+}
+
+/// Contents holding exactly these files in these roles.
+fn installing(files: &[(&str, FileRole)]) -> ReleaseContents {
+    ReleaseContents::new(
+        files
+            .iter()
+            .map(|(path, role)| {
+                ReleaseFile::new(ArchivePath::parse(path).expect("contained path"), *role)
+            })
+            .collect(),
+    )
+    .expect("a release that names one program to launch")
+}
+
+/// A release installing a whole package rather than one program.
+///
+/// Codex's shape, cut down to what a test can build in memory: a program, a
+/// helper the program finds through the directory it sits in, and a document
+/// that is installed unrunnable.
+fn package(version: &str) -> PinnedRelease {
+    release_installing(
+        version,
+        &"a".repeat(64),
+        installing(&[
+            ("package/vendor/bin/codex", FileRole::Launch),
+            ("package/vendor/codex-path/rg", FileRole::Helper),
+            ("package/package.json", FileRole::Document),
+        ]),
+    )
+}
+
+/// The three entries `package` names, as a tarball carries them.
+fn package_entries() -> Vec<(&'static str, &'static [u8])> {
+    vec![
+        ("package/vendor/bin/codex", b"codex program".as_slice()),
+        ("package/vendor/codex-path/rg", b"ripgrep".as_slice()),
+        ("package/package.json", b"{}".as_slice()),
+    ]
+}
+
+/// Where one of `package`'s files lands.
+fn package_path(root: &Path, path: &str) -> PathBuf {
+    let mut at = artifact_path(root);
+    for segment in path.split('/') {
+        at = at.join(segment);
+    }
+    at
+}
+
 /// A release naming one specific artifact of a version.
 ///
 /// The digest and the platform are arguments because they are what tells two
@@ -79,8 +137,23 @@ fn artifact(
         ReleasePlatform::new(operating_system, architecture).expect("usable platform"),
         ReleaseRequirements::default(),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(ARCHIVE_BYTES).expect("usable archive size"),
         ArchiveDigest::parse(digest).expect("usable digest"),
-        ArchivePath::parse(executable).expect("contained path"),
+        one_program(executable),
+    )
+    .expect("a release whose requirements fit its platform")
+}
+
+/// The same, for a release whose contents are more than one program.
+fn release_installing(version: &str, digest: &str, contents: ReleaseContents) -> PinnedRelease {
+    PinnedRelease::new(
+        ReleaseVersion::parse(version).expect("usable version"),
+        ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
+        ReleaseRequirements::default(),
+        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(ARCHIVE_BYTES).expect("usable archive size"),
+        ArchiveDigest::parse(digest).expect("usable digest"),
+        contents,
     )
     .expect("a release whose requirements fit its platform")
 }
@@ -136,6 +209,32 @@ fn artifact_relative() -> PathBuf {
         .join("a".repeat(64))
 }
 
+/// The directories `unpack` expects to already exist, made the way `publish`
+/// makes them.
+///
+/// `unpack` is called directly by the tests that exercise the bound, and it is
+/// deliberately not the step that creates anything: `publish` makes every
+/// directory the pin's paths need before a single entry is read, so that a
+/// release this machine cannot hold fails before anything is written.
+fn unpack_directories(store: &ManagedRuntimes, release: &PinnedRelease) {
+    store
+        .private_directory(&store.artifact_root(&agent(), release))
+        .expect("a private artifact directory");
+    for directory in store.content_directories(&agent(), release) {
+        store
+            .private_directory(&directory)
+            .expect("a private directory inside the artifact");
+    }
+}
+
+/// Where the executable lands, spelled the way the store spells it.
+fn installed_relative() -> PathBuf {
+    artifact_relative()
+        .join("package")
+        .join("bin")
+        .join("opencode")
+}
+
 /// That same directory, created the way the store does.
 ///
 /// Made with the store's own primitive rather than `create_dir_all`, because
@@ -147,8 +246,15 @@ fn artifact_directory(root: &Path) -> PathBuf {
 }
 
 /// Where `publish` puts the executable for the release these tests use.
+///
+/// The archive's own path below the artifact directory, not the file name
+/// alone: a package's files find each other through the directories they sit
+/// in, so the layout is reproduced rather than flattened.
 fn installed_path(root: &Path) -> PathBuf {
-    artifact_path(root).join("opencode")
+    artifact_path(root)
+        .join("package")
+        .join("bin")
+        .join("opencode")
 }
 
 /// The record this store writes for the release these tests use.
@@ -168,7 +274,7 @@ fn record_of(version: &str, executable: &str) -> serde_json::Value {
         "libc": serde_json::Value::Null,
         "requires_avx2": false,
         "digest": "a".repeat(64),
-        "executable": executable,
+        "files": [{ "path": executable, "role": "launch" }],
     })
 }
 
@@ -768,22 +874,56 @@ fn an_archive_that_expands_past_the_bound_is_refused() {
     // A kilobyte of zeroes compresses to almost nothing, which is the shape of
     // the attack: small on the wire, large on the disk.
     let mut staged = staged(&store, &archive("package/bin/opencode", &[0u8; 1024]));
-    artifact_directory(root.path());
-    let directory = artifact_relative();
-    let destination = directory.join("opencode");
+    unpack_directories(&store, &release);
+    let mut written = Vec::new();
 
     let failure = store
-        .unpack(&release, &mut staged, &destination, &directory, 512)
+        .unpack(&agent(), &release, &mut staged, 512, &mut written)
         .expect_err("an entry past the bound");
 
     assert!(
         matches!(failure, StoreFailure::MalformedArchive(_)),
         "{failure:?}"
     );
+    assert!(written.is_empty(), "a refused entry was renamed into place");
     assert!(
         !installed_path(root.path()).exists(),
         "an entry past the bound was published anyway"
     );
+}
+
+#[test]
+fn the_bound_is_spent_across_every_file_a_release_installs() {
+    // A per-file bound is no bound at all on a pin naming a hundred of them:
+    // each one would be allowed the whole budget. The first two entries here
+    // fit under 512 on their own and do not fit together.
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = package("1.0.0");
+    let mut staged = staged(
+        &store,
+        &tarball(&[
+            ("package/vendor/bin/codex", &[0u8; 300]),
+            ("package/vendor/codex-path/rg", &[0u8; 300]),
+            ("package/package.json", b"{}"),
+        ]),
+    );
+    unpack_directories(&store, &release);
+    let mut written = Vec::new();
+
+    let failure = store
+        .unpack(&agent(), &release, &mut staged, 512, &mut written)
+        .expect_err("two entries that do not fit the budget together");
+
+    assert!(
+        matches!(failure, StoreFailure::MalformedArchive(_)),
+        "{failure:?}"
+    );
+    // The first entry did fit, so it was written — and the caller is told, so
+    // that the rollback takes it back out. That is the whole reason `written`
+    // is an out-parameter.
+    assert_eq!(written.len(), 1, "the entry that fitted was not reported");
+    let _ = root;
 }
 
 #[test]
@@ -792,14 +932,14 @@ fn an_archive_exactly_at_the_bound_is_unpacked() {
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let mut staged = staged(&store, &archive("package/bin/opencode", &[0u8; 512]));
-    artifact_directory(root.path());
-    let directory = artifact_relative();
-    let destination = directory.join("opencode");
+    unpack_directories(&store, &release);
+    let mut written = Vec::new();
 
     assert_eq!(
-        store.unpack(&release, &mut staged, &destination, &directory, 512),
-        Ok(true)
+        store.unpack(&agent(), &release, &mut staged, 512, &mut written),
+        Ok(())
     );
+    assert_eq!(written, vec![installed_relative()]);
     assert_eq!(
         std::fs::metadata(installed_path(root.path()))
             .expect("reading the published runtime")
@@ -1398,7 +1538,7 @@ fn an_entry_that_cannot_be_written_out_is_this_machines_doing() {
     let failure = expand(
         &mut b"the runtime".as_slice(),
         &mut readable,
-        &release("1.18.31", "package/bin/opencode"),
+        &ArchivePath::parse("package/bin/opencode").expect("contained path"),
     )
     .expect_err("a staging file that cannot be written");
 
@@ -1843,8 +1983,9 @@ fn a_pin_that_corrects_itself_about_an_archive_reinstalls_nothing() {
         ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
         ReleaseRequirements::new(Some(Libc::Musl), true),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(ARCHIVE_BYTES).expect("usable archive size"),
         ArchiveDigest::parse(&"a".repeat(64)).expect("usable digest"),
-        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        one_program("package/bin/opencode"),
     )
     .expect("a release whose requirements fit its platform");
 
@@ -1880,8 +2021,9 @@ fn what_a_build_needs_is_written_down_even_though_reuse_does_not_read_it() {
         ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
         ReleaseRequirements::new(Some(Libc::Musl), true),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(ARCHIVE_BYTES).expect("usable archive size"),
         ArchiveDigest::parse(&"a".repeat(64)).expect("usable digest"),
-        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        one_program("package/bin/opencode"),
     )
     .expect("a release whose requirements fit its platform");
     publish(
@@ -1901,7 +2043,10 @@ fn what_a_build_needs_is_written_down_even_though_reuse_does_not_read_it() {
     assert_eq!(written["libc"], "musl");
     assert_eq!(written["requires_avx2"], true);
     assert_eq!(written["digest"], "a".repeat(64));
-    assert_eq!(written["executable"], "package/bin/opencode");
+    assert_eq!(
+        written["files"],
+        serde_json::json!([{ "path": "package/bin/opencode", "role": "launch" }])
+    );
 }
 
 // Unix only, because it is the platform where a file can be replaced or

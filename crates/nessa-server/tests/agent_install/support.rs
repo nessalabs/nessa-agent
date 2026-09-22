@@ -10,8 +10,9 @@ use crate::agent_install::application::{
     ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, HostPlatform, Libc, PinnedRelease,
-    ReleasePlatform, ReleaseRequirements, ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform, Libc,
+    PinnedRelease, ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
+    ReleaseVersion,
 };
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
@@ -84,10 +85,27 @@ pub(crate) fn release_needing(
         platform.clone(),
         requirements,
         ArchiveUrl::parse("https://example.invalid/runtime.tgz").expect("test url is fetchable"),
+        ArchiveSize::parse(ARCHIVE_BYTES).expect("test archive size is usable"),
         ArchiveDigest::parse(digest).expect("test digest is usable"),
-        ArchivePath::parse("package/bin/opencode").expect("test path is contained"),
+        installs("package/bin/opencode"),
     )
     .expect("a release whose requirements fit its platform")
+}
+
+/// How long the archive these tests pin says it is.
+///
+/// Generous next to the handful of bytes a fake source actually serves: the
+/// bound exists to stop an endless body, and a test that wanted to reach it
+/// passes its own number rather than shrinking this one for everybody.
+pub(crate) const ARCHIVE_BYTES: u64 = 4096;
+
+/// Contents holding one program at `path` and nothing else.
+pub(crate) fn installs(path: &str) -> ReleaseContents {
+    ReleaseContents::new(vec![ReleaseFile::new(
+        ArchivePath::parse(path).expect("test path is contained"),
+        FileRole::Launch,
+    )])
+    .expect("one program is a release")
 }
 
 /// The platform these tests pretend to run on, so that a result never depends
@@ -110,6 +128,9 @@ pub(crate) fn host_of(platform: &ReleasePlatform, libc: Option<Libc>, avx2: bool
 #[derive(Debug, Default)]
 pub(crate) struct Downloads {
     pub(crate) urls: Vec<String>,
+    /// The bound each fetch was given, so a test can assert it is the pinned
+    /// length rather than something the adapter chose.
+    pub(crate) bounds: Vec<u64>,
 }
 
 /// A source that writes a fixed body, or fails, and remembers being asked.
@@ -139,15 +160,24 @@ impl FakeSource {
     pub(crate) fn requested(&self) -> Vec<String> {
         self.calls.lock().expect("fake source lock").urls.clone()
     }
+
+    /// The bound every fetch was held to, in order.
+    pub(crate) fn bounded_by(&self) -> Vec<u64> {
+        self.calls.lock().expect("fake source lock").bounds.clone()
+    }
 }
 
 impl ArchiveSource for FakeSource {
-    fn download(&self, url: &str, staged: &mut StagedArchive) -> Result<(), SourceFailure> {
-        self.calls
-            .lock()
-            .expect("fake source lock")
-            .urls
-            .push(url.to_owned());
+    fn download(
+        &self,
+        url: &str,
+        at_most: u64,
+        staged: &mut StagedArchive,
+    ) -> Result<(), SourceFailure> {
+        let mut calls = self.calls.lock().expect("fake source lock");
+        calls.urls.push(url.to_owned());
+        calls.bounds.push(at_most);
+        drop(calls);
         let body = self.body.clone()?;
         staged
             .file_mut()

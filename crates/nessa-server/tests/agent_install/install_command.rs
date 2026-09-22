@@ -4,9 +4,9 @@ use std::path::Path;
 
 use crate::agent_install::application::{InstalledRuntime, StoreFailure};
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinnedRelease, ReleaseVersion,
+    ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, PinnedRelease, ReleaseVersion,
 };
-use crate::agent_install_test_support::temporary_root;
+use crate::agent_install_test_support::{installs, temporary_root};
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -28,8 +28,9 @@ fn rejection() -> ArchiveRejected {
         ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
         ReleaseRequirements::default(),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(46_009_615).expect("usable archive size"),
         digest('a'),
-        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        installs("package/bin/opencode"),
     )
     .expect("a release whose requirements fit its platform")
     .accept(&digest('b'))
@@ -549,8 +550,9 @@ fn build(libc: Option<Libc>, avx2: bool, digest_byte: char) -> PinnedRelease {
         ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
         ReleaseRequirements::new(libc, avx2),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(46_009_615).expect("usable archive size"),
         digest(digest_byte),
-        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        installs("package/bin/opencode"),
     )
     .expect("a release whose requirements fit its platform")
 }

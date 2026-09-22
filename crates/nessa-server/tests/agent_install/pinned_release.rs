@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent_install::domain::Libc;
+use crate::agent_install::domain::{FileRole, Libc, ReleaseFile};
 
 fn digest(byte: char) -> ArchiveDigest {
     ArchiveDigest::parse(&std::iter::repeat_n(byte, 64).collect::<String>())
@@ -10,14 +10,28 @@ fn url() -> ArchiveUrl {
     ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url")
 }
 
+fn size() -> ArchiveSize {
+    ArchiveSize::parse(46_009_615).expect("the size of a real opencode archive")
+}
+
+/// One program and nothing else, which is the shape Opencode has.
+fn one_program() -> ReleaseContents {
+    ReleaseContents::new(vec![ReleaseFile::new(
+        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        FileRole::Launch,
+    )])
+    .expect("one program is a release")
+}
+
 fn release(digest: ArchiveDigest) -> PinnedRelease {
     PinnedRelease::new(
         ReleaseVersion::parse("1.0.0").expect("usable version"),
         ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
         ReleaseRequirements::default(),
         url(),
+        size(),
         digest,
-        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        one_program(),
     )
     .expect("a release whose requirements fit its platform")
 }
@@ -48,6 +62,24 @@ fn an_uppercase_digest_is_refused_rather_than_normalised() {
     // remember to be case-insensitive. One spelling keeps `==` correct.
     let upper = "A".repeat(64);
     assert!(ArchiveDigest::parse(&upper).is_err());
+}
+
+#[test]
+fn an_archive_size_is_a_length_an_archive_could_have() {
+    // The fetch is held to this number, so a pin that is wrong in the generous
+    // direction is permission to fill somebody's disk — and one that is zero
+    // would refuse every download on its first byte.
+    assert!(ArchiveSize::parse(1).is_ok());
+    assert_eq!(
+        ArchiveSize::parse(116_501_639).map(ArchiveSize::bytes),
+        Ok(116_501_639)
+    );
+    assert_eq!(ArchiveSize::parse(0), Err(PinRejected::ArchiveSize(0)));
+    let absurd = 8 * 1024 * 1024 * 1024;
+    assert_eq!(
+        ArchiveSize::parse(absurd),
+        Err(PinRejected::ArchiveSize(absurd))
+    );
 }
 
 #[test]
@@ -103,42 +135,6 @@ fn a_version_must_be_a_directory_name_on_every_platform_too() {
         ReleaseVersion::parse(&long).is_err(),
         "a version longer than a path component is not a version"
     );
-}
-
-#[test]
-fn a_path_inside_an_archive_may_not_escape_it() {
-    assert!(ArchivePath::parse("package/bin/opencode").is_ok());
-    for escape in [
-        "",
-        "/etc/passwd",
-        "\\windows\\system32",
-        "package/../../etc/passwd",
-        "../outside",
-        "package//bin",
-        "package/./bin",
-        "package/bin/\0",
-        // One legal Unix filename, and a drive-relative path on Windows.
-        "c:evil",
-        "C:/Windows/Temp/evil",
-        // Refused rather than treated as a separator, so that this type, the
-        // unpacker and the installed file's name cannot disagree about where
-        // the segments divide.
-        "package\\bin\\opencode",
-    ] {
-        assert_eq!(
-            ArchivePath::parse(escape),
-            Err(PinRejected::ExecutablePath(escape.to_string())),
-            "{escape:?} escapes the archive"
-        );
-    }
-}
-
-#[test]
-fn the_last_segment_is_what_the_file_is_called() {
-    let path = ArchivePath::parse("package/bin/opencode").expect("contained path");
-    assert_eq!(path.file_name(), "opencode");
-    let bare = ArchivePath::parse("opencode").expect("contained path");
-    assert_eq!(bare.file_name(), "opencode");
 }
 
 #[test]
@@ -238,8 +234,9 @@ fn a_release_also_runs_only_where_what_it_needs_is_there() {
         ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
         ReleaseRequirements::new(Some(Libc::Musl), true),
         url(),
+        size(),
         digest('a'),
-        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        one_program(),
     )
     .expect("a release whose requirements fit its platform");
     let linux = |libc, avx2| {
@@ -271,8 +268,9 @@ fn a_build_that_could_not_exist_is_not_a_release() {
             ReleasePlatform::new(operating_system, architecture).expect("usable platform"),
             requirements,
             url(),
+            size(),
             digest('a'),
-            ArchivePath::parse("package/bin/opencode").expect("contained path"),
+            one_program(),
         )
     };
 

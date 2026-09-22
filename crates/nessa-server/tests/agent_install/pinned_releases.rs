@@ -266,7 +266,7 @@ fn every_pin_names_opencodes_own_executable() {
     for release in releases_for(&opencode()).expect("the pinned releases parse") {
         let package = package_named_by(release.archive_url().as_str());
         assert_eq!(
-            release.executable().as_str(),
+            release.launch().as_str(),
             OPENCODE_EXECUTABLE,
             "{package} pins an entry that is not opencode's executable"
         );
