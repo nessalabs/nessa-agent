@@ -13,6 +13,99 @@
 //! not that Opencode sends them.
 use super::support::*;
 use crate::domain::agent_execution::tools::ToolContent;
+use crate::infrastructure::model_metadata_json::load_catalog;
+use std::{fs::File, path::PathBuf, process::Command};
+
+fn run_live_opencode_harness(mode: &str, arguments: &[PathBuf]) {
+    let binary = std::env::var_os("NESSA_PINNED_OPENCODE_BINARY")
+        .expect("set NESSA_PINNED_OPENCODE_BINARY to an audited 1.18.31 executable");
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/infrastructure/acp/contracts/fixtures/opencode_live_boundary.py");
+    let output = Command::new("python3")
+        .arg(fixture)
+        .arg(mode)
+        .arg(binary)
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "live Opencode {mode} harness failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// This is opt-in because obtaining the audited binary belongs to the installer
+/// boundary. The harness itself never downloads or modifies that executable.
+#[test]
+#[ignore = "requires NESSA_PINNED_OPENCODE_BINARY from the audited installer"]
+fn pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks() {
+    run_live_opencode_harness("boundary", &[]);
+}
+
+/// The production launch disables remote model refresh, so this compares the
+/// shipped catalogue with the pinned binary's embedded, credentialed options.
+#[test]
+#[ignore = "requires NESSA_PINNED_OPENCODE_BINARY from the audited installer"]
+fn shipped_opencode_models_remain_in_the_pinned_catalogue() {
+    let catalogue = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/models.json");
+    for (model, auth_tier) in [
+        ("opencode/big-pickle", "public"),
+        ("opencode/nemotron-3-ultra-free", "public"),
+        ("opencode/mimo-v2.5-free", "opencode-api"),
+    ] {
+        run_live_opencode_harness(
+            "catalogue",
+            &[catalogue.clone(), model.into(), auth_tier.into()],
+        );
+    }
+}
+
+/// Unlike the raw-process marker harness, this drives the compiled binding's
+/// launch environment, process scope, startup ordering, and restoration path.
+#[tokio::test]
+#[ignore = "requires NESSA_PINNED_OPENCODE_BINARY from the audited installer"]
+async fn compiled_binding_opens_and_restores_with_the_pinned_binary() {
+    let _process_slot = process_test_slot().await;
+    let binary = PathBuf::from(
+        std::env::var_os("NESSA_PINNED_OPENCODE_BINARY")
+            .expect("set NESSA_PINNED_OPENCODE_BINARY to an audited 1.18.31 executable"),
+    );
+    let (_root, mut config, _) = opencode_configuration("unused-by-live-binary", 16);
+    config.executable = binary;
+    config.arguments = vec!["acp".into()];
+    config.launch_timeout = Duration::from_secs(30);
+    config.startup_timeout = Duration::from_secs(15);
+    let catalog = load_catalog(
+        File::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/models.json")).unwrap(),
+    )
+    .unwrap();
+    let model = catalog.select("opencode", "opencode/big-pickle").unwrap();
+    let binding = OpencodeAcpProvider::new(
+        config,
+        model,
+        TokenLimits::new(128_000, 32_000).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+
+    let opened = binding.open(None).await.unwrap();
+    let session_id = opened.session.id().clone();
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    let restored = binding.open(Some(session_id.clone())).await.unwrap();
+    assert_eq!(restored.session.id(), &session_id);
+    restored
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+}
 
 #[tokio::test]
 async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime() {
@@ -116,6 +209,18 @@ async fn opencode_reporting_its_configuration_while_it_is_being_configured_is_no
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_opencode_binding("startup-update-configuring", 16);
     assert!(binding.open(None).await.is_ok());
+}
+
+#[tokio::test]
+async fn only_a_correlated_advisory_update_may_race_the_session_response() {
+    for mode in [
+        "wrong-session-startup-update",
+        "execution-output-before-session-response",
+    ] {
+        let _process_slot = process_test_slot().await;
+        let (_root, binding) = test_opencode_binding(mode, 16);
+        assert!(binding.open(None).await.is_err(), "{mode} was admitted");
+    }
 }
 
 /// Opencode opens every session in `build` and offers no way to start in the
@@ -510,6 +615,208 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
     assert_gone(&root, "pid");
 }
 
+#[tokio::test]
+async fn opencode_close_cancels_the_exact_pending_review_and_audits_its_caller() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "cancelled-review").await;
+    let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
+        panic!("expected permission")
+    };
+
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Cancelled);
+    let cancellations = audit.records.lock().unwrap();
+    assert_eq!(cancellations.len(), 1);
+    assert_eq!(cancellations[0].session_id(), opened.session.id());
+    assert_eq!(cancellations[0].request().id(), &id);
+    assert_eq!(cancellations[0].input(), &input);
+    assert_eq!(
+        cancellations[0].request().state(),
+        PermissionStateView::Cancelled {
+            reason: &PermissionCancellationReason::session_closed()
+        }
+    );
+    assert_eq!(
+        cancellations[0].origin(),
+        &CancellationOrigin::Client(close_action())
+    );
+    drop(cancellations);
+    assert_eq!(audit.closures.lock().unwrap().len(), 1);
+    assert_eq!(audit.finishes.lock().unwrap().len(), 1);
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn opencode_permission_cancellation_audit_failure_is_visible_after_cleanup() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..Default::default()
+    });
+    let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit);
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "cancelled-review").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::PermissionRequested { .. }
+    ));
+
+    assert_eq!(
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result(),
+        Err(AgentError::AuditFailure)
+    );
+    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn opencode_execution_deadline_retains_runtime_cause_and_correlation() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_opencode_binding_with_audit("stall", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "deadline").await;
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("running"))
+    );
+    assert_eq!(running.await.unwrap(), Err(AgentError::Deadline));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    let closures = audit.closures.lock().unwrap();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(
+        closures[0].closure().execution_id().unwrap().as_str(),
+        "deadline"
+    );
+    assert_eq!(
+        closures[0].closure().reason(),
+        &PermissionCancellationReason::deadline_exceeded()
+    );
+    assert_eq!(closures[0].origin(), &CancellationOrigin::Runtime);
+    drop(closures);
+    let finishes = audit.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].execution_id().as_str(), "deadline");
+    assert_eq!(
+        finishes[0].result(),
+        &Err(PermissionCancellationReason::deadline_exceeded())
+    );
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn opencode_permission_answer_survives_the_execution_callers_loss() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "lost-caller").await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected permission")
+    };
+    let allow = options
+        .choices()
+        .iter()
+        .find(|option| option.decision().effect() == PermissionEffect::Allow)
+        .unwrap()
+        .id()
+        .clone();
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+
+    opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: attribution(),
+            execution_id: ExecutionId::new("lost-caller").unwrap(),
+            id,
+            option_id: allow,
+        })
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap();
+    wait_for_file(&root, "permission-outcome").await;
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    let answers = audit.answers.lock().unwrap();
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(answers[1].delivery(), &PermissionAnswerDelivery::Written);
+    drop(answers);
+    let finishes = audit.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].execution_id().as_str(), "lost-caller");
+    assert_eq!(finishes[0].result(), &Ok(ExecutionOutcome::Completed));
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn opencode_process_exit_mid_turn_retains_failed_execution_audit() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_opencode_binding_with_audit("process-exit", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "process-exit").await;
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("running"))
+    );
+    assert!(matches!(
+        running.await.unwrap(),
+        Err(AgentError::Transport(_))
+    ));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    let closures = audit.closures.lock().unwrap();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(
+        closures[0].closure().execution_id().unwrap().as_str(),
+        "process-exit"
+    );
+    assert_eq!(
+        closures[0].closure().reason(),
+        &PermissionCancellationReason::execution_failed()
+    );
+    assert_eq!(closures[0].origin(), &CancellationOrigin::Runtime);
+    drop(closures);
+    let finishes = audit.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].execution_id().as_str(), "process-exit");
+    assert_eq!(
+        finishes[0].result(),
+        &Err(PermissionCancellationReason::execution_failed())
+    );
+    assert_gone(&root, "pid");
+}
+
 /// Opencode volunteers its command list the instant `session/new` is answered,
 /// before Nessa has configured anything, and the session has to survive it.
 ///
@@ -522,7 +829,7 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
 #[tokio::test]
 async fn the_command_list_opencode_volunteers_at_startup_does_not_stop_the_session() {
     let _process_slot = process_test_slot().await;
-    let (root, binding) = test_opencode_binding("echo", 16);
+    let (root, binding) = test_opencode_binding("startup-update-before-session-response", 16);
     let mut opened = binding.open(None).await.unwrap();
     // Configuration still completed underneath it: the session is prompted and
     // answers, rather than merely having opened.

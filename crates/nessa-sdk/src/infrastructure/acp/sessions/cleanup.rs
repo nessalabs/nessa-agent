@@ -72,7 +72,11 @@ impl Drop for ProcessCleanup {
             loop {
                 match scope.cleanup(grace, kill_timeout).await {
                     Ok(_) => break,
-                    Err(error) => tracing::warn!(%error, "retaining abandoned ACP process until cleanup is confirmed"),
+                    Err(error) => tracing::warn!(
+                        %error,
+                        retained_directory = ?scope.retained_directory_path(),
+                        "retaining abandoned ACP process until cleanup is confirmed"
+                    ),
                 }
                 sleep(backoff).await;
                 backoff = backoff.saturating_mul(2).min(Duration::from_secs(5));

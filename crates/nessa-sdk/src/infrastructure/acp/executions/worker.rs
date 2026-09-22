@@ -142,6 +142,9 @@ struct Worker<P> {
     agent_accepts_images: bool,
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
+    /// One session identity claimed by advisory updates racing session startup.
+    /// Advisory payloads are not retained and conflicting identities fail startup.
+    startup_advisory_session: Option<ExecutionSessionId>,
     /// The review this worker answered without registering one — a refusal.
     ///
     /// The dispatcher answers any request whose handler failed and which it
@@ -211,6 +214,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         agent_accepts_images: false,
         operation_capabilities,
         permissions: HashMap::new(),
+        startup_advisory_session: None,
         declined: None,
         shutdown_deadline: None,
         configured: false,
@@ -613,18 +617,17 @@ impl<P: AcpProfile> Worker<P> {
                         "permission request requires an RPC identifier",
                     ));
                 } else if method == "session/update" {
-                    let execution = execution.as_deref_mut().ok_or_else(|| {
-                        json_rpc::protocol("session update before startup context admission")
-                    })?;
-                    // Startup configuration cannot hide drift that the live
-                    // update path rejects. This also checks session correlation
-                    // and refuses execution output before a prompt is active.
-                    self.update(
-                        execution,
-                        message
-                            .params
-                            .ok_or_else(|| json_rpc::protocol("missing session update params"))?,
-                    )?;
+                    let params = message
+                        .params
+                        .ok_or_else(|| json_rpc::protocol("missing session update params"))?;
+                    if let Some(execution) = execution.as_deref_mut() {
+                        // Startup configuration cannot hide drift that the live
+                        // update path rejects. This also checks session correlation
+                        // and refuses execution output before a prompt is active.
+                        self.update(execution, params)?;
+                    } else {
+                        self.accept_startup_advisory(&params)?;
+                    }
                 }
                 continue;
             }
@@ -708,6 +711,15 @@ impl<P: AcpProfile> Worker<P> {
         // Retain the known context before later configuration can fail. Teardown
         // must audit its closure even when startup never publishes ready.
         let execution = execution.insert(ExecutionController::new(id));
+        if self
+            .startup_advisory_session
+            .take()
+            .is_some_and(|claimed| &claimed != execution.id())
+        {
+            return Err(json_rpc::protocol(
+                "startup advisory belongs to another session",
+            ));
+        }
         // Resume identifies its target in the request. ACP does not require
         // repeating that identity in the response; reject a conflicting extension
         // without losing the local closure evidence for the requested context.
@@ -1526,6 +1538,29 @@ impl<P: AcpProfile> Worker<P> {
         if fields::identifier(params, "sessionId")? != execution.id().as_str() {
             return Err(json_rpc::protocol("message belongs to another session"));
         }
+        Ok(())
+    }
+    fn accept_startup_advisory(&mut self, params: &Value) -> Result<(), AgentError> {
+        let session = ExecutionSessionId::new(fields::identifier(params, "sessionId")?)
+            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        let update = params
+            .get("update")
+            .ok_or_else(|| json_rpc::protocol("missing session update"))?;
+        if fields::string(update, "sessionUpdate")? != "available_commands_update" {
+            return Err(json_rpc::protocol(
+                "non-advisory session update before startup context admission",
+            ));
+        }
+        if self
+            .startup_advisory_session
+            .as_ref()
+            .is_some_and(|claimed| claimed != &session)
+        {
+            return Err(json_rpc::protocol(
+                "conflicting session identities in startup advisories",
+            ));
+        }
+        self.startup_advisory_session = Some(session);
         Ok(())
     }
     fn update(
