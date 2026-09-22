@@ -55,13 +55,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, DragDropEvent, Emitter, Manager};
+use tauri::{AppHandle, DragDropEvent, Emitter};
 
+use super::batch::Batch;
 use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
 use super::dragged::{DragBoard, DraggedContent, DraggedText};
 use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
-use super::readiness::{next_batch, Announce, Readiness, Telling, LONGEST_READY_WAIT};
+use super::readiness::{Announce, Gesture, Readiness, Telling, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
 use super::tickets::AttachmentTickets;
 
@@ -94,7 +95,10 @@ pub struct Dropped {
     /// Which drop this is. The panel was told the same name when the gesture
     /// landed, and binds the two together rather than guessing from whichever
     /// tab happens to be open now.
-    pub batch: String,
+    ///
+    /// A [`Batch`] rather than a `String` so that no answer below can be built
+    /// without one; see [`super::batch`] for why that is a type's job here.
+    pub batch: Batch,
     /// Files, in the order the operating system gave them, each with a ticket.
     pub files: Vec<ChosenFile>,
     /// What the drag carried when it named no files, in the three flavours
@@ -107,36 +111,44 @@ pub struct Dropped {
 
 /// Every way a drop can answer, each of which has to name the drop it is.
 ///
-/// No `Default` and no `From<FileNotAttached>`: both let a `Dropped` be built
-/// with `..` and an empty batch, and two of the five answers were built that
-/// way — every folder-walk refusal and the stalled filesystem, which are the
+/// Two of the five once shipped an empty name, both built with
+/// `..Default::default()` through a `From<FileNotAttached>` that had none to
+/// give — the folder walk's refusals and the stalled filesystem, which are the
 /// slowest paths and so the ones most likely to outlive the tab they started
-/// on. The panel resolved an empty batch by falling back to whatever was open,
-/// which is the guess the batch exists to remove. A refusal cannot be
-/// constructed here without saying whose it is.
+/// on. The panel resolves an unknown name by falling back to whatever is open,
+/// which is the guess the name exists to remove.
+///
+/// Dropping `Default` and `From` was a speed bump rather than enforcement: the
+/// fields are public, so a struct literal with `String::new()` still compiled.
+/// What enforces it is [`Batch`] — private field, minted in one place — so a
+/// sixth answer added below must be *handed* a name it cannot write down.
+///
+/// Handing it the *wrong* name is not something a type can catch, and
+/// `every_answer_a_drop_gives_names_the_drop_it_is` is the check for that. The
+/// two are doing different jobs.
 impl Dropped {
     /// A drag that carried no files: whatever was on the pasteboard.
-    fn carrying(batch: &str, text: DraggedText) -> Self {
+    fn carrying(batch: &Batch, text: DraggedText) -> Self {
         Self {
-            batch: batch.to_string(),
+            batch: batch.clone(),
             files: Vec::new(),
             text,
             refused: None,
         }
     }
     /// A drag of files, all of them described.
-    fn attaching(batch: &str, files: Vec<ChosenFile>) -> Self {
+    fn attaching(batch: &Batch, files: Vec<ChosenFile>) -> Self {
         Self {
-            batch: batch.to_string(),
+            batch: batch.clone(),
             files,
             text: DraggedText::default(),
             refused: None,
         }
     }
     /// A drop refused whole, and why.
-    fn refusing(batch: &str, refused: FileNotAttached) -> Self {
+    fn refusing(batch: &Batch, refused: FileNotAttached) -> Self {
         Self {
-            batch: batch.to_string(),
+            batch: batch.clone(),
             files: Vec::new(),
             text: DraggedText::default(),
             refused: Some(refused),
@@ -227,7 +239,7 @@ pub(super) async fn dropped(
     with: Describing,
     dragged: &dyn DraggedContent,
     announce: &dyn Announce,
-    batch: &str,
+    batch: &Batch,
 ) -> Dropped {
     let Describing {
         files,
@@ -310,6 +322,21 @@ pub(super) fn board_after(event: &DragDropEvent, board: &DragBoard) {
     }
 }
 
+/// Whether this event begins an attach the panel has to bind to a draft.
+///
+/// Only a drop that names paths. A drag of text names none, and what becomes of
+/// it — a paste into the composer — goes to the focused composer rather than to
+/// a named draft, so it never looks a name up. Announcing one anyway spent one
+/// of the sixty-four names the panel remembers on a gesture that could not use
+/// it, and a window that is only dropped text would evict real ones.
+///
+/// Its own function for the reason `board_after` is: it is a rule, it lived
+/// inside a function that needs a window, and a rule nothing can test is how
+/// the late board clear survived a whole review.
+pub(super) fn begins_an_attach(event: &DragDropEvent) -> bool {
+    matches!(event, DragDropEvent::Drop { paths, .. } if !paths.is_empty())
+}
+
 pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
     let Some(deps) = crate::composition::resolve(app) else {
         return;
@@ -330,13 +357,15 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
         DragDropEvent::Enter { .. } => over(true),
         DragDropEvent::Leave => over(false),
         DragDropEvent::Drop { paths, .. } => {
-            let batch = next_batch();
+            let batch = Batch::next();
             // The batch reaches the panel *now*, at the gesture, so it can bind
             // this drop to the draft it landed on. The answer below can be
             // three quarters of a minute later, by which time the open tab may
             // be a different one — and binding then put the tile over a draft
             // the file was never going to join.
-            Telling(app).began(&batch);
+            if begins_an_attach(event) {
+                Telling(app).began(&batch, Gesture::Dropped);
+            }
             over(false);
             let app = app.clone();
             let paths = paths.clone();
@@ -372,9 +401,17 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
                 if answer.files.is_empty() && answer.refused.is_none() && answer.text.is_empty() {
                     return;
                 }
-                if let Some(panel) = app.get_webview_window(crate::panel::MAIN_WINDOW) {
-                    let _ = panel.emit(DROPPED_EVENT, answer);
-                }
+                // `emit_to`, not `emit`. `Emitter::emit` walks every listener
+                // in the app with no target filter, and the
+                // `get_webview_window` this used to sit behind proved only that
+                // the panel existed — it filtered nothing. The `emit_to` fix
+                // went in for the readiness events and stopped here, which left
+                // it on the one payload where it matters most: every
+                // `ChosenFile` in this carries an absolute path and a live
+                // one-shot ticket, and during first-run setup there is a second
+                // real window to receive them. Same app and same bundle, so
+                // this is depth rather than a hole — and it is one identifier.
+                let _ = app.emit_to(crate::panel::MAIN_WINDOW, DROPPED_EVENT, answer);
             });
         }
         _ => {}
@@ -443,12 +480,22 @@ mod tests {
     }
 
     fn drop_of(of: &[&str], files: Arc<FakeFiles>, dragged: &dyn DraggedContent) -> Dropped {
+        named_drop_of(&Batch::next(), of, files, dragged)
+    }
+
+    /// The same, for the test that checks which drop an answer says it is.
+    fn named_drop_of(
+        batch: &Batch,
+        of: &[&str],
+        files: Arc<FakeFiles>,
+        dragged: &dyn DraggedContent,
+    ) -> Dropped {
         tauri::async_runtime::block_on(dropped(
             paths(of),
             describing(files, PATIENT),
             dragged,
             &Untold,
-            "batch",
+            batch,
         ))
     }
 
@@ -474,11 +521,13 @@ mod tests {
             .collect();
         let huge: Vec<&str> = huge.iter().map(String::as_str).collect();
 
+        let batch = Batch::next();
         let answers = [
             // Files described.
             (
                 "files",
-                drop_of(
+                named_drop_of(
+                    &batch,
                     &["/Users/dev/a.swift"],
                     Arc::new(FakeFiles::holding(64)),
                     &Carrying::nothing(),
@@ -487,7 +536,8 @@ mod tests {
             // A drag carrying no files at all: whatever was on the pasteboard.
             (
                 "text",
-                drop_of(
+                named_drop_of(
+                    &batch,
                     &[],
                     Arc::new(FakeFiles::holding(64)),
                     &Carrying(DraggedText {
@@ -499,7 +549,8 @@ mod tests {
             // The folder walk refusing.
             (
                 "folder",
-                drop_of(
+                named_drop_of(
+                    &batch,
                     &["/Users/dev/many"],
                     Arc::new(FakeFiles::holding(8).tree(
                         &[("/Users/dev/many", &huge)],
@@ -519,13 +570,14 @@ mod tests {
                     ),
                     &Carrying::nothing(),
                     &Untold,
-                    "batch",
+                    &batch,
                 )),
             ),
             // One file refusing, which refuses the selection.
             (
                 "described",
-                drop_of(
+                named_drop_of(
+                    &batch,
                     &["/Users/dev/gone.md"],
                     Arc::new(FakeFiles::refusing(ErrorKind::NotFound)),
                     &Carrying::nothing(),
@@ -534,7 +586,7 @@ mod tests {
         ];
 
         for (which, answer) in answers {
-            assert_eq!(answer.batch, "batch", "{which}: {answer:?}");
+            assert_eq!(answer.batch, batch, "{which}: {answer:?}");
         }
     }
 
@@ -709,7 +761,7 @@ mod tests {
             ),
             &Carrying::nothing(),
             &Untold,
-            "batch",
+            &Batch::next(),
         ));
 
         let refused = dropped.refused.expect("a mount that is not answering");
@@ -736,6 +788,23 @@ mod tests {
             dropped.refused.map(|refused| refused.reason),
             Some(NotAttached::NotARegularFile)
         );
+    }
+
+    /// Only a gesture that can use a name is given one.
+    ///
+    /// The panel remembers sixty-four, and nothing removes one when an attach
+    /// ends. A drag of text pastes into the composer and never looks a name up,
+    /// so naming it spent a slot on a gesture that could not use it — and
+    /// somebody dragging selected text around would evict the names of real
+    /// attachments still in flight.
+    #[test]
+    fn only_a_drop_that_names_files_begins_an_attach() {
+        assert!(begins_an_attach(&dropping(&["/Users/dev/a.pdf"])));
+        // Dragged text, which is a drop with no paths at all.
+        assert!(!begins_an_attach(&dropping(&[])));
+        // And the two events that are not drops at all.
+        assert!(!begins_an_attach(&entering()));
+        assert!(!begins_an_attach(&DragDropEvent::Leave));
     }
 
     /// The rule a late clear broke, and which nothing could see.
@@ -830,20 +899,25 @@ mod tests {
     /// attaching nothing at all.
     #[test]
     fn a_drop_crosses_the_seam_with_the_names_the_panel_reads() {
-        let dropped = Dropped {
-            batch: "b3".to_string(),
-            files: Vec::new(),
-            text: DraggedText {
+        let batch = Batch::next();
+        let dropped = Dropped::carrying(
+            &batch,
+            DraggedText {
                 plain: "prose".to_string(),
                 uri_list: "https://example.com/".to_string(),
                 html: "<p>prose</p>".to_string(),
             },
-            refused: None,
-        };
+        );
 
+        // The name is minted rather than written down — there is no way to
+        // write one down — so it is interpolated here. It still has to cross as
+        // a bare string: the panel splits `"{batch}:{index}"` on `:`, and a
+        // name wrapped in an object would match nothing.
         assert_eq!(
             serde_json::to_string(&dropped).expect("a drop serializes"),
-            r#"{"batch":"b3","files":[],"text":{"plain":"prose","uriList":"https://example.com/","html":"<p>prose</p>"},"refused":null}"#
+            format!(
+                r#"{{"batch":"{batch}","files":[],"text":{{"plain":"prose","uriList":"https://example.com/","html":"<p>prose</p>"}},"refused":null}}"#
+            )
         );
     }
 }

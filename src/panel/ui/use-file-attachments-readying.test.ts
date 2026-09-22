@@ -58,7 +58,7 @@ let said: (file: News) => void
  * whatever tab is open when a test calls this is the tab the gesture happened
  * in.
  */
-let began: (batch: string) => void
+let began: (batch: string, gesture: "picked" | "dropped") => void
 /**
  * Speak as the host about one file.
  *
@@ -90,10 +90,14 @@ beforeEach(async () => {
     return Promise.resolve(() => {})
   })
   onAttachmentBatch.mockReset()
-  onAttachmentBatch.mockImplementation((handler: (batch: string) => void) => {
-    began = handler
-    return Promise.resolve(() => {})
-  })
+  onAttachmentBatch.mockImplementation(
+    (handler: (batch: string, gesture: "picked" | "dropped") => void) => {
+      began = handler
+      return Promise.resolve(() => {})
+    },
+  )
+  chooseAttachmentFiles.mockReset()
+  chooseAttachmentFiles.mockResolvedValue([])
   container = document.createElement("div")
   document.body.append(container)
   store = makeStore(
@@ -196,7 +200,7 @@ it("leaves the tile with the conversation the gesture landed on, not the one on 
   // moment the panel can bind it, since the file itself is up to forty-five
   // seconds away.
   const first = chat.active.id
-  await act(async () => began("b2"))
+  await act(async () => began("b2", "dropped"))
 
   // Another tab opens *before* the host has said anything at all. Reading the
   // open tab when the news finally comes would put the tile, and the block on
@@ -249,7 +253,7 @@ it("binds a picker selection the same way, because a `+` can be slow too", async
   // announced forty seconds after the first — long after somebody has moved
   // on. The gesture is what binds it, not the announcement.
   const first = chat.active.id
-  await act(async () => began("p4"))
+  await act(async () => began("p4", "picked"))
   await act(async () => say({ id: "p4:0", name: "one.pdf", readying: true }))
 
   await act(async () => {
@@ -283,9 +287,9 @@ it("remembers a bounded number of gestures, so a long session does not grow one"
   // refusal, or in a conversation that has since closed — so the map is a
   // window rather than a set of cleanup paths a fourth outcome could escape.
   const first = chat.active.id
-  await act(async () => began("old"))
+  await act(async () => began("old", "dropped"))
   await act(async () => {
-    for (let n = 0; n < 64; n += 1) began(`b${n}`)
+    for (let n = 0; n < 64; n += 1) began(`b${n}`, "dropped")
   })
   await act(async () => {
     store.dispatch(openConversation())
@@ -321,4 +325,78 @@ it("stops listening when the panel goes, so a late answer reaches nothing", asyn
       }),
     )
   })
+})
+
+it("binds a picker selection to the press, not to the tab when the picker closes", async () => {
+  // These were two reads of the same fact at different moments — the files at
+  // the press, the tile when the host spoke — and they agreed only while
+  // nothing could change between them. What guaranteed that was the picker
+  // being modal, which is rfd's presentation choice rather than a promise to
+  // us, and rfd presents it as a window-modal sheet.
+  //
+  // So the tab is changed *while the picker is open*, for real: the picker's
+  // promise is held until the end, and the change and the host's word are each
+  // their own step, so the panel's own view of the open tab has moved on by the
+  // time the name arrives. Reading it there is what this rules out.
+  const pressed = chat.active.id
+  let close: (files: unknown[]) => void = () => {}
+  chooseAttachmentFiles.mockImplementation(
+    () => new Promise((resolve) => (close = resolve)),
+  )
+  // Started outside `act`, deliberately: it has to still be running across the
+  // steps below, which a nested `act` cannot express.
+  const picking = hook.chooseFiles()
+
+  await act(async () => {
+    store.dispatch(openConversation())
+  })
+  expect(chat.active.id).not.toBe(pressed)
+
+  // The host names the selection as the picker closes.
+  await act(async () => began("p9", "picked"))
+  await act(async () => say({ id: "p9:0", name: "report.pdf", readying: true }))
+
+  expect(hook.isPending(pressed)).toBe(true)
+  expect(hook.isPending(chat.active.id)).toBe(false)
+
+  await act(async () => {
+    close([])
+    await picking
+  })
+})
+
+it("binds a drop that lands while a picker is open to the tab it landed on", async () => {
+  // The gesture the host reports is what decides, so a drop is never captured
+  // by a pick that happens to be in flight. Without that, holding the press
+  // would have swapped one wrong-draft bug for another.
+  //
+  // The pick is held genuinely open — the picker's promise is not resolved
+  // until the end — so the drop lands inside the window where `chooseFiles` is
+  // still holding the draft it was pressed in.
+  const pressed = chat.active.id
+  let close: (files: unknown[]) => void = () => {}
+  chooseAttachmentFiles.mockImplementation(
+    () => new Promise((resolve) => (close = resolve)),
+  )
+  // Started outside `act`, and deliberately: it must still be running while
+  // the two `act` blocks below happen, which a nested `act` cannot express.
+  const picking = hook.chooseFiles()
+
+  // A tab opens and something is dropped on it, both while the picker is up.
+  await act(async () => {
+    store.dispatch(openConversation())
+  })
+  const landed = chat.active.id
+  expect(landed).not.toBe(pressed)
+  await act(async () => began("d3", "dropped"))
+  await act(async () => say({ id: "d3:0", name: "dragged.pdf", readying: true }))
+
+  expect(hook.isPending(landed)).toBe(true)
+  expect(hook.isPending(pressed)).toBe(false)
+
+  await act(async () => {
+    close([])
+    await picking
+  })
+  expect(chooseAttachmentFiles).toHaveBeenCalled()
 })

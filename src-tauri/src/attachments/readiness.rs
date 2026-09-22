@@ -68,11 +68,13 @@
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+use super::batch::Batch;
 
 // Apple's, whole. Everything above and below this line is about *whether* a
 // file is readable and who might fix it, which every platform has; the module
@@ -208,7 +210,7 @@ pub trait Announce: Send + Sync {
     /// placeholders, switch tabs during the first one's fetch, and the second
     /// file's tile landed on the wrong draft and blocked *its* send while the
     /// file itself went to the right one.
-    fn began(&self, batch: &str);
+    fn began(&self, batch: &Batch, gesture: Gesture);
     /// This file is being made ready. `id` identifies this waiting, `name` is
     /// what to put on the tile.
     fn readying(&self, id: &str, name: &str);
@@ -216,21 +218,23 @@ pub trait Announce: Send + Sync {
     fn settled(&self, id: &str);
 }
 
-/// One attach, named.
+/// Which gesture an attach began with.
 ///
-/// Every `readying` identity is built from it, and the drop that starts it
-/// carries it too, so the panel can bind the whole batch to the conversation
-/// the gesture landed on. Without that the panel had to guess from whichever
-/// tab was open when the host spoke, which is up to forty-five seconds later
-/// — long enough to be a different tab, and it was: the tile appeared over a
-/// draft the file was never going to join, and blocked *its* send.
-///
-/// A counter rather than a random token: it only has to be unique within the
-/// run of one host talking to one page, and a number that cannot repeat is
-/// easier to read in a log than a token that merely should not.
-pub(super) fn next_batch() -> String {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    format!("b{}", NEXT.fetch_add(1, Ordering::Relaxed))
+/// The panel needs it because the two gestures know their draft at different
+/// moments. A drop *is* the moment — the host says so as it lands, and whatever
+/// tab is open then is the one it landed on. A `+` selection was begun by the
+/// page itself, which captured the draft when the button was pressed and has
+/// held it ever since; the host's word arrives when the picker closes, and the
+/// page should answer with what it already knows rather than reading the tab
+/// again. Saying which gesture it was is the only thing the host knows and the
+/// page does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Gesture {
+    /// The person pressed `+` and the picker has just answered.
+    Picked,
+    /// Something was dropped on the panel.
+    Dropped,
 }
 
 /// The panel's own event name for a file that needs a moment.
@@ -243,8 +247,11 @@ pub(super) const BATCH_EVENT: &str = "nessa://attachment-batch";
 pub(super) struct Telling<'a>(pub &'a AppHandle);
 
 impl Announce for Telling<'_> {
-    fn began(&self, batch: &str) {
-        self.tell(BATCH_EVENT, serde_json::json!({ "batch": batch }));
+    fn began(&self, batch: &Batch, gesture: Gesture) {
+        self.tell(
+            BATCH_EVENT,
+            serde_json::json!({ "batch": batch, "gesture": gesture }),
+        );
     }
     fn readying(&self, id: &str, name: &str) {
         self.say(id, name, true);
@@ -282,7 +289,7 @@ pub struct Untold;
 
 #[cfg(test)]
 impl Announce for Untold {
-    fn began(&self, _batch: &str) {}
+    fn began(&self, _batch: &Batch, _gesture: Gesture) {}
     fn readying(&self, _id: &str, _name: &str) {}
     fn settled(&self, _id: &str) {}
 }

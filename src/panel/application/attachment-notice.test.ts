@@ -502,21 +502,50 @@ describe("why something was not attached", () => {
   })
 
   it("gives every refusal a title, a line, and no invented action", () => {
-    const every: AttachmentRefusal[] = [
-      { reason: "reading-files" },
-      { reason: "reading-folder" },
-      { reason: "sending-while-reading" },
-      { reason: "too-many-files" },
-      { reason: "file-too-large", files: [{ name: "x.mp4", type: "video/mp4" }] },
-      { reason: "draft-too-large" },
-      { reason: "window-budget", maxMiB: 256, draftsHoldFiles: false },
-      { reason: "empty-folder" },
-      { reason: "folder-too-large" },
-      { reason: "unreadable-folder" },
-      { reason: "unreadable-files" },
-      { reason: "unreadable-image-url" },
-    ]
-    for (const refusal of every) {
+    /**
+     * One sample per reason, and the type says so.
+     *
+     * A hand-written array was a list that had to be remembered, and it was
+     * not: it had drifted to twelve of twenty-two, so `images-not-supported`,
+     * `picker-unavailable`, every `file-*` refusal and the `conversation-closed`
+     * added last round were all outside it. That is precisely the "closed by
+     * listing the cases" pattern ADR 0013 says this feature is done with.
+     *
+     * A total `Record` keyed on the union's own discriminant is not a list: a
+     * reason added to `AttachmentRefusal` without a sample here is a type
+     * error, and a sample whose `reason` does not match its key is one too.
+     */
+    const every: {
+      [K in AttachmentRefusal["reason"]]: Extract<AttachmentRefusal, { reason: K }>
+    } = {
+      "reading-files": { reason: "reading-files" },
+      "reading-folder": { reason: "reading-folder" },
+      "sending-while-reading": { reason: "sending-while-reading" },
+      "too-many-files": { reason: "too-many-files" },
+      "file-too-large": {
+        reason: "file-too-large",
+        files: [{ name: "x.mp4", type: "video/mp4" }],
+      },
+      "draft-too-large": { reason: "draft-too-large" },
+      "window-budget": { reason: "window-budget", maxMiB: 256, draftsHoldFiles: false },
+      "file-not-ready-yet": { reason: "file-not-ready-yet", name: "amica.pdf" },
+      "file-not-readable": { reason: "file-not-readable", name: "amica.pdf" },
+      "images-not-supported": { reason: "images-not-supported" },
+      "conversation-closed": { reason: "conversation-closed" },
+      "empty-folder": { reason: "empty-folder" },
+      "folder-too-large": { reason: "folder-too-large" },
+      "unreadable-folder": { reason: "unreadable-folder" },
+      "unreadable-files": { reason: "unreadable-files" },
+      "unreadable-image-url": { reason: "unreadable-image-url" },
+      "picker-unavailable": { reason: "picker-unavailable" },
+      "file-not-nameable": { reason: "file-not-nameable", name: "rep?rt.pdf" },
+      "file-unreadable": { reason: "file-unreadable", name: "a.png" },
+      "file-not-linkable": { reason: "file-not-linkable", name: "report.pdf" },
+      "file-not-a-file": { reason: "file-not-a-file", name: "pipe" },
+      "file-unresponsive": { reason: "file-unresponsive", name: "on-a-mount.pdf" },
+      "file-must-be-chosen-again": { reason: "file-must-be-chosen-again" },
+    }
+    for (const refusal of Object.values(every) as AttachmentRefusal[]) {
       const notice = refusalNotice(refusal, true)
       expect(notice.kind, refusal.reason).toBe("refusal")
       expect(notice.title.length, refusal.reason).toBeGreaterThan(0)

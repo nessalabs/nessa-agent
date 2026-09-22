@@ -26,11 +26,12 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+use super::batch::Batch;
 use super::content_type::ContentTypes;
 use super::files::{answered_within, ChosenFiles, Kind, OnDisk, Stored, LONGEST_LOOK_WAIT};
 use super::picker::{FilePicker, Picked};
 use super::readiness::{
-    next_batch, Announce, Readied, Readiness, Telling, LONGEST_READY_WAIT, READY_POLL,
+    Announce, Gesture, Readied, Readiness, Telling, LONGEST_READY_WAIT, READY_POLL,
 };
 use super::refusal::{named, FileNotAttached, NotAttached};
 use super::tickets::{AttachmentTickets, NoTicket};
@@ -150,7 +151,7 @@ pub(super) async fn chosen_attachments(
     tickets: Arc<dyn AttachmentTickets>,
     readiness: Arc<Readiness>,
     announce: &dyn Announce,
-    batch: &str,
+    batch: &Batch,
     wait: Duration,
     ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
@@ -164,7 +165,7 @@ pub(super) async fn chosen_attachments(
     // cancelled selection leaves the panel nothing to remember, and said at
     // all because the tab can change during the fetch that follows — the
     // picker is modal, so it cannot change before this line.
-    announce.began(batch);
+    announce.began(batch, Gesture::Picked);
 
     describe_each(
         paths, files, types, tickets, readiness, announce, batch, wait, ready_wait,
@@ -207,7 +208,7 @@ pub(super) async fn describe_each(
     tickets: Arc<dyn AttachmentTickets>,
     readiness: Arc<Readiness>,
     announce: &dyn Announce,
-    batch: &str,
+    batch: &Batch,
     wait: Duration,
     ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
@@ -317,7 +318,7 @@ pub async fn choose_attachment_files(
         deps.tickets.clone(),
         deps.readiness.clone(),
         &Telling(&app),
-        &next_batch(),
+        &Batch::next(),
         LONGEST_LOOK_WAIT,
         LONGEST_READY_WAIT,
     )
@@ -358,8 +359,8 @@ mod tests {
     }
 
     impl Announce for Recording {
-        fn began(&self, batch: &str) {
-            self.push("began", batch);
+        fn began(&self, batch: &Batch, gesture: Gesture) {
+            self.push("began", &format!("{batch} {gesture:?}"));
         }
         fn readying(&self, id: &str, name: &str) {
             self.push("readying", &format!("{id} {name}"));
@@ -425,7 +426,7 @@ mod tests {
             tickets,
             nothing_to_ready(),
             &Untold,
-            "batch",
+            &Batch::next(),
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -448,7 +449,7 @@ mod tests {
             tickets,
             staged_with(handler),
             &Untold,
-            "batch",
+            &Batch::next(),
             PATIENT,
             // Short, because every outcome here is staged rather than waited
             // for; the seam owns the deadline's own test.
@@ -709,6 +710,7 @@ mod tests {
             Readied::Refused("not ours".to_string()),
         ] {
             let told = Recording::default();
+            let batch = Batch::next();
             let _ = tauri::async_runtime::block_on(chosen_attachments(
                 &FakePicker(Picked::Files(vec![PathBuf::from(
                     "/Users/dev/iCloud/amica-document 2.pdf",
@@ -718,7 +720,7 @@ mod tests {
                 Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
                 staged(answer.clone()),
                 &told,
-                "b7",
+                &batch,
                 PATIENT,
                 Duration::from_millis(50),
             ));
@@ -731,12 +733,12 @@ mod tests {
             assert_eq!(
                 told.said(),
                 vec![
-                    ("began".to_string(), "b7".to_string()),
+                    ("began".to_string(), format!("{batch} Picked")),
                     (
                         "readying".to_string(),
-                        "b7:0 amica-document 2.pdf".to_string()
+                        format!("{batch}:0 amica-document 2.pdf")
                     ),
-                    ("settled".to_string(), "b7:0".to_string()),
+                    ("settled".to_string(), format!("{batch}:0")),
                 ],
                 "{answer:?}"
             );
@@ -750,6 +752,7 @@ mod tests {
     #[test]
     fn an_ordinary_file_names_its_batch_and_nothing_else() {
         let told = Recording::default();
+        let batch = Batch::next();
         let attached = tauri::async_runtime::block_on(chosen_attachments(
             &FakePicker(Picked::Files(vec![PathBuf::from("/Users/dev/notes.md")])),
             Arc::new(FakeFiles::holding(12)),
@@ -757,7 +760,7 @@ mod tests {
             Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
             nothing_to_ready(),
             &told,
-            "batch",
+            &batch,
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -766,7 +769,7 @@ mod tests {
         assert_eq!(attached.len(), 1);
         assert_eq!(
             told.said(),
-            vec![("began".to_string(), "batch".to_string())]
+            vec![("began".to_string(), format!("{batch} Picked"))]
         );
     }
 
@@ -790,7 +793,7 @@ mod tests {
                 Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
                 nothing_to_ready(),
                 &told,
-                "batch",
+                &Batch::next(),
                 PATIENT,
                 Duration::from_millis(50),
             ));
@@ -817,7 +820,7 @@ mod tests {
             Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
             Arc::new(Readiness::new(vec![asked.clone()])),
             &Untold,
-            "batch",
+            &Batch::next(),
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -1055,7 +1058,7 @@ mod tests {
             Arc::new(FakeTickets::refusing(Redeemed::Unknown)),
             nothing_to_ready(),
             &Untold,
-            "batch",
+            &Batch::next(),
             Duration::from_millis(50),
             Duration::from_millis(50),
         ))

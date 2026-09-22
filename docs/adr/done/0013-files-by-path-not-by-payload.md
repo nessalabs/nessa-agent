@@ -363,7 +363,7 @@ refused with a sentence naming the route that works.
 
 ## How this was built, and what it says about the size
 
-Seven adversarial reviews, and each found blocking defects in a *different* area:
+Eight adversarial reviews, and each found blocking defects in a *different* area:
 the audit's evidence, then the session journals and the published units, then
 classification and a host hang, then which draft a slow attach belongs to, and
 finally a race inside local storage's own publish — a record was linked into
@@ -382,14 +382,27 @@ an empty one. Each edge reproduced the original bug exactly. The lesson is not
 constructible absent: `Dropped` lost its `Default` and its `From`, and every
 answer now goes through a constructor that demands the name.
 
-Three of those reviews also made the same *kind* of comment about the fixes
+The eighth found no wrong-draft bug — the first round that did not — and instead
+found three places where a comment claimed more than the code did: an `emit_to`
+fix applied to two call sites out of three, a test asserting no bytes were read
+on the one branch that never reads any, and "a sixth answer is a compile error"
+of a struct whose fields were all public. None of the three was a wrong answer
+reaching a person; all three were a future reader being told a guarantee held.
+That is its own failure mode, and the fix for each was to make the claim true
+rather than to soften it: `emit_to` everywhere, the draft checked before the
+read, and the name given a private-field type that cannot be written down.
+
+Four of those reviews also made the same *kind* of comment about the fixes
 rather than the code: a defect closed by listing the cases that trip it will be
 reopened by the next case nobody listed. The markdown-metacharacter rule was
 rewritten twice before it was replaced by encoding the two strings the adapter
 interpolates; the publish was fixed by removing the moment rather than by
-tolerating a read that fails during it; the batch was fixed by making an
-unnamed answer impossible to build rather than by finding the sites that built
-one. All three are the same move, and it is the one worth keeping.
+tolerating a read that fails during it; the batch was fixed by making an unnamed
+answer impossible to build rather than by finding the sites that built one; and
+the hand-written list of every refusal, which had drifted to twelve of
+twenty-two, became a total `Record` keyed on the union so that a reason without
+a sample is a type error. All four are the same move, and it is the one worth
+keeping.
 
 What kept churning, and what did not, falls along clean lines, so the work is
 being split into three changes that land in order. This record's decision covers

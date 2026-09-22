@@ -430,12 +430,11 @@ export async function onAttachmentDragging(
 }
 
 /**
- * Be told that an attach has begun, and what it is called.
+ * Be told that an attach has begun, what it is called, and which gesture it was.
  *
- * Said at the gesture — the drop, or the moment the picker's answer comes back
- * — and before the host has looked at anything. It is the page's only chance
- * to bind that attach to the conversation it belongs to: the files themselves
- * can be three quarters of a minute later, by which time the open tab may be a
+ * Said before the host has looked at anything. It is the page's only chance to
+ * bind that attach to the conversation it belongs to: the files themselves can
+ * be three quarters of a minute later, by which time the open tab may be a
  * different one, and binding then put the tile and the attach over a draft the
  * files were never going to join.
  *
@@ -443,14 +442,25 @@ export async function onAttachmentDragging(
  * a `+` selection of two placeholders therefore put its second tile on
  * whichever tab was open when the second file finished — blocking that draft's
  * send for a file that had gone somewhere else entirely.
+ *
+ * `gesture` is here because the two know their draft at different moments, and
+ * this is the only part of that the host knows and the page does not. A drop
+ * *is* the moment: the host says so as it lands, so the open tab is the tab it
+ * landed on. A `"picked"` selection was begun by the page, which captured the
+ * draft when `+` was pressed and has held it ever since; this arrives when the
+ * picker closes, and the page answers with what it already knows rather than
+ * reading the tab a second time. Two reads of the same fact agree only while
+ * nothing can change between them, and that was resting on the picker being
+ * modal — which is rfd's presentation choice, not ours.
  */
 export async function onAttachmentBatch(
-  handler: (batch: string) => void,
+  handler: (batch: string, gesture: "picked" | "dropped") => void,
 ): Promise<() => void> {
   if (!inTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<{ batch: string }>(HOST_EVENTS.attachmentBatch, ({ payload }) =>
-    handler(payload.batch),
+  return listen<{ batch: string; gesture: "picked" | "dropped" }>(
+    HOST_EVENTS.attachmentBatch,
+    ({ payload }) => handler(payload.batch, payload.gesture),
   )
 }
 

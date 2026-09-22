@@ -478,36 +478,73 @@ it("still falls back to the extension when the platform has no answer", async ()
   expect(readAttachmentBytes).not.toHaveBeenCalledWith("k-pdf")
 })
 
+/**
+ * A draft closed while its selection was still being described.
+ *
+ * Both file types, because the two take different routes to the same sentence:
+ * a path never reads a byte, an image reads them all first. An earlier version
+ * of this test used a PDF alone and claimed "the bytes were never spent" — true
+ * of the path it happened to pick and false of the branch beside it.
+ */
+const chosenFile = (name: string, mimeType: string) => ({
+  path: `/Users/ada/${name}`,
+  name,
+  size: 4,
+  mimeType,
+  ticket: `k${ticketCount++}`,
+})
+
 it("says so when the draft a slow selection was for has been closed", async () => {
   // A placeholder can be forty-five seconds behind the gesture, and a tab can
-  // be closed in forty-five seconds. The files arrive perfectly well and there
-  // is nothing left to put them on.
+  // be closed in forty-five seconds.
+  for (const file of [
+    chosenFile("report.pdf", "application/pdf"),
+    chosenFile("shot.png", "image/png"),
+  ]) {
+    readAttachmentBytes.mockClear()
+    const going = chat.active.id
+    await act(async () => {
+      store.dispatch(closeConversation(going))
+    })
+    expect(chat.active.id).not.toBe(going)
+
+    await act(async () => {
+      await hook.addChosenFiles([file], going)
+    })
+
+    // Said where the person is looking, because the conversation it is about
+    // is gone and saying it there would be saying it to nobody. Said at all
+    // because the alternative is the silence this module refuses everywhere
+    // else: files chosen, none attached, and not a word about any of them. It
+    // used to return here without one.
+    expect(hook.refusal, file.name).toEqual({ reason: "conversation-closed" })
+    expect(draftFiles(), file.name).toHaveLength(0)
+    // And the draft was checked before the read rather than after it, so the
+    // image's bytes were never fetched either.
+    expect(readAttachmentBytes, file.name).not.toHaveBeenCalled()
+
+    await act(async () => {
+      store.dispatch(openConversation())
+    })
+  }
+})
+
+it("says the same thing when the draft goes while its images are being read", async () => {
+  // The other half, and the one the early check cannot cover: closing happens
+  // *during* the read. Those bytes are spent and thrown away — there is no
+  // version of this where they are not, short of cancelling a read in flight —
+  // so the promise is the sentence, not the saving.
   const going = chat.active.id
-  const chosen = [
-    {
-      path: "/Users/ada/report.pdf",
-      name: "report.pdf",
-      size: 4,
-      mimeType: "application/pdf",
-      ticket: `k${ticketCount++}`,
-    },
-  ]
-  await act(async () => {
+  readAttachmentBytes.mockImplementation(async () => {
     store.dispatch(closeConversation(going))
+    return new ArrayBuffer(4)
   })
-  expect(chat.active.id).not.toBe(going)
 
   await act(async () => {
-    await hook.addChosenFiles(chosen, going)
+    await hook.addChosenFiles([chosenFile("shot.png", "image/png")], going)
   })
 
-  // Said where the person is looking, because the conversation it is about is
-  // gone and saying it there would be saying it to nobody. Said at all because
-  // the alternative is the silence this module refuses everywhere else: three
-  // files chosen, none attached, and not a word about any of them. It used to
-  // return here without one.
+  expect(readAttachmentBytes).toHaveBeenCalledTimes(1)
   expect(hook.refusal).toEqual({ reason: "conversation-closed" })
   expect(draftFiles()).toHaveLength(0)
-  // And the bytes were never spent: the draft was gone before the upload.
-  expect(readAttachmentBytes).not.toHaveBeenCalled()
 })

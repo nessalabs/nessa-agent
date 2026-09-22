@@ -691,17 +691,32 @@ instead of by the page, and a `dragging` event tells the panel when to draw the
 drop target.
 
 Both gestures name themselves, through `Announce::began` — a drop when it lands,
-a `+` selection the moment the picker's answer comes back — and the panel binds
-that name to the conversation showing at the time. Everything afterwards is
-routed by the name: the files, the tile that holds the draft's send, and the
-refusal. The batch exists because an attach can be three quarters of a minute
-behind its gesture, and by then the open tab is no evidence of anything. Only the
-drop announced itself for a while, so a `+` selection of two placeholders put its
+a `+` selection the moment the picker's answer comes back — and that name is a
+`Batch`: a private-field newtype minted in `attachments/batch.rs` and nowhere
+else, so no answer can be built without one. Dropping `Default` alone had been a
+speed bump, since a struct literal with `String::new()` still compiled.
+
+What the name routes differs by gesture, and the difference is not a gap.
+A **drop** is entirely the host's: the host names it, and the name travels back
+on the `Dropped` that carries the files, the refusal, or the dragged text — so
+the panel routes all three by it. A **`+`** was begun by the page, which captured
+the draft when the button was pressed and passes it straight to `addChosenFiles`;
+the name is what the *tile* needs, because that is drawn by the host mid-call
+and has nothing else to go on. Both come from one capture either way: for a pick,
+`began` says `gesture: "picked"` and the panel answers with the draft it is
+already holding rather than reading the open tab a second time. Two reads of one
+fact agreed only while nothing could change between them, and what guaranteed
+that was the picker being modal — rfd's presentation choice, not a promise.
+
+The name exists because an attach can be three quarters of a minute behind its
+gesture, and by then the open tab is no evidence of anything. Only the drop
+announced itself for a while, so a `+` selection of two placeholders put its
 second tile on whichever tab was open when the second file finished; and the
 refusal branch read the open tab even for a drop that had a name, so a folder
 refused late took a tile off one draft and told a different one about a file it
-had never seen. Neither guesses now, and a `Dropped` cannot be constructed
-without its name.
+had never seen. Neither guesses now. A drag of text is deliberately not named:
+it pastes into the focused composer and never looks a name up, and naming it
+spent one of the sixty-four the panel remembers.
 
 `attachments/readiness.rs` is the seam for a file that is not readable yet. A
 file iCloud is keeping answers a `stat` with a real name, type and length and

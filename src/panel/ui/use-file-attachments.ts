@@ -100,6 +100,14 @@ export function useFileAttachments(
    * while the draft the file was actually joining showed nothing at all.
    */
   const batches = React.useRef(new Map<string, string>())
+  /**
+   * The draft a `+` was pressed in, while its picker is open.
+   *
+   * Null the rest of the time, and a drop never reads it — the host says which
+   * gesture a name belongs to, so a drop landing during a pick still binds to
+   * the tab it landed on.
+   */
+  const picking = React.useRef<string | null>(null)
   const download = React.useRef<AbortController | null>(null)
   const busyRef = React.useRef(false)
   const pendingConversation = React.useRef<string | null>(null)
@@ -157,15 +165,23 @@ export function useFileAttachments(
     // The gesture's own moment, for both gestures. Everything after it can be
     // three quarters of a minute later, and the open tab is no longer evidence
     // of anything by then.
-    const batch = onAttachmentBatch((named) => {
+    const batch = onAttachmentBatch((named, gesture) => {
       if (!live) return
+      // A `+` selection was begun here, and `chooseFiles` has been holding the
+      // draft it was begun on ever since; the host's word arrives when the
+      // picker closes. Answering with the press is one source of truth for the
+      // files *and* the tile — reading the tab again was a second, and the two
+      // agreed only while nothing could change between the press and the close.
+      // What guaranteed that was the picker being modal, which is rfd's
+      // presentation choice and not a promise to us.
+      const began = gesture === "picked" ? picking.current : null
       // Bounded: the oldest are dropped once there are more than a window's
       // worth of gestures in flight, because nothing removes an entry when an
       // attach finishes and a long session would otherwise keep one string
       // pair per drop and per `+` for as long as the window lives. Insertion
       // order is age here — the host's counter never reuses a name.
       const held = batches.current
-      held.set(named, activeId.current)
+      held.set(named, began ?? activeId.current)
       for (const oldest of held.keys()) {
         if (held.size <= MOST_REMEMBERED_BATCHES) break
         held.delete(oldest)
@@ -268,13 +284,18 @@ export function useFileAttachments(
       (conversation) => conversation.id === targetId,
     )
     // The draft these were for is gone — closed during a fetch that can take
-    // three quarters of a minute. There is nothing to attach them to, and
-    // saying so on the conversation that no longer exists would be saying it
-    // to nobody, so it is said where the person is looking.
+    // three quarters of a minute, or during the read that follows it. There is
+    // nothing to attach them to, and saying so on the conversation that no
+    // longer exists would be saying it to nobody, so it is said where the
+    // person is looking.
     //
     // It is said at all because the alternative is the silence this module
     // refuses everywhere else: a person who chose five files and got none has
     // been told nothing about any of them. This used to `return` here.
+    //
+    // This is the authority, and `addChosenFiles` only short-circuits ahead of
+    // it: every route into a draft passes here, including the ones that never
+    // read a byte.
     if (!target) {
       refuse({ reason: "conversation-closed" }, activeId.current)
       return
@@ -367,12 +388,18 @@ export function useFileAttachments(
    */
   async function chooseFiles() {
     const targetId = chat.active.id
+    // Held for the host's word, which comes when the picker closes and carries
+    // no conversation of its own. One capture answers both the files below and
+    // the tile the host draws in between.
+    picking.current = targetId
     let chosen
     try {
       chosen = await chooseAttachmentFiles()
     } catch (error) {
       refuse(pickerRefusal(error), targetId)
       return
+    } finally {
+      picking.current = null
     }
     if (chosen === null) {
       inputRef.current?.click()
@@ -380,6 +407,10 @@ export function useFileAttachments(
     }
     await addChosenFiles(chosen, targetId)
   }
+
+  /** Whether a conversation is still open to attach to. */
+  const stillOpen = (conversationId: string) =>
+    conversationsRef.current.some((conversation) => conversation.id === conversationId)
 
   /**
    * Attach what the picker chose: read the images, point at everything else.
@@ -395,6 +426,16 @@ export function useFileAttachments(
     if (!chosen.length) return
     if (busyRef.current) {
       refuse({ reason: "reading-files" }, targetId)
+      return
+    }
+    // Checked before the read as well as inside `attach`, which is what makes
+    // the common case cheap: a selection can be forty-five seconds behind its
+    // gesture, and a draft closed in that time has nothing to read images for.
+    // It is a short-circuit, not the authority — a conversation closed *during*
+    // the read still reaches `attach`, and the bytes for that one are spent and
+    // thrown away. Both end in the same sentence.
+    if (!stillOpen(targetId)) {
+      refuse({ reason: "conversation-closed" }, activeId.current)
       return
     }
     // The platform's own answer first, the extension table only as the

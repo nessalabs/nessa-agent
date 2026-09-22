@@ -50,11 +50,15 @@
 //!
 //! An attach can finish three quarters of a minute after the gesture that
 //! started it, and by then the open tab is no evidence of which draft it
-//! belongs to. So each gesture is named — `readiness::next_batch` mints it and
+//! belongs to. So each gesture is named — [`batch::Batch::next`] mints it and
 //! [`readiness::Announce::began`] says it, a drop when it lands and a `+`
 //! selection the moment the picker's answer comes back — and everything
 //! afterwards carries that name: each waiting file's identity, and the
 //! `Dropped` the panel is finally handed.
+//!
+//! The name is a type with a private field, minted in one place, so no answer
+//! can be built without one. See [`batch`] for what that does and does not
+//! guarantee.
 //!
 //! Both, and they are worth saying together, because for a while only the drop
 //! said it. A `+` selection of two placeholders describes them one after
@@ -62,6 +66,16 @@
 //! and its tile landed on a draft the file was never going to join and blocked
 //! *that* draft's send. It was the same defect the drop had already been fixed
 //! for, living on the other gesture.
+//!
+//! What the name routes differs by gesture, and the difference is not a gap. A
+//! drop is entirely the host's, so the name travels back on the [`Dropped`] and
+//! the panel routes the files, the refusal and the dragged text by it. A `+`
+//! was begun by the page, which captured its draft at the press and uses that
+//! for the files; the name is what the *tile* needs, since that is drawn
+//! mid-call and has nothing else. [`readiness::Gesture`] is how the panel tells
+//! the two apart, so both end up answering from one capture.
+//!
+//! A drag of text is not named at all — see [`dropping::begins_an_attach`].
 //!
 //! # Ports, and why each is its own
 //!
@@ -184,6 +198,7 @@
 //! grants the webview nothing new, exactly as it grants it nothing for
 //! `install_update`.
 
+mod batch;
 mod choosing;
 mod content_type;
 #[cfg(test)]
