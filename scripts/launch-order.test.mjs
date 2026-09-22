@@ -36,48 +36,72 @@ test(
   },
 )
 
-test(
-  "desktop dev forwards Tauri arguments through its real pnpm subprocess",
-  { skip: process.platform === "win32" },
-  (context) => {
-    const directory = mkdtempSync(join(tmpdir(), "nessa-desktop-dev-"))
-    context.after(() => rmSync(directory, { recursive: true, force: true }))
-    const events = join(directory, "events")
-    const pnpm = join(directory, "pnpm")
-    writeFileSync(pnpm, `#!/bin/sh\nprintf '%s\\n' "$@" > "$NESSA_TEST_EVENTS"\n`)
-    chmodSync(pnpm, 0o755)
+test("desktop dev forwards literal Tauri arguments through the Node pnpm entry", (context) => {
+  const directory = mkdtempSync(join(tmpdir(), "nessa-desktop-dev-"))
+  context.after(() => rmSync(directory, { recursive: true, force: true }))
+  const events = join(directory, "events")
+  const pnpm = join(directory, "pnpm.mjs")
+  writeFileSync(
+    pnpm,
+    `import { writeFileSync } from "node:fs"
+writeFileSync(process.env.NESSA_TEST_EVENTS, JSON.stringify({
+  args: process.argv.slice(2),
+  hostStage: process.env.NESSA_STAGE,
+  uiStage: process.env.VITE_NESSA_STAGE,
+}))
+`,
+  )
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        resolve("scripts/desktop/dev.mjs"),
-        "--help",
-        "--config",
-        "alternate.json",
-        "--release",
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${directory}:${process.env.PATH}`,
-          NESSA_TEST_EVENTS: events,
-        },
+  const result = spawnSync(
+    process.execPath,
+    [
+      resolve("scripts/desktop/dev.mjs"),
+      "--help",
+      "--config",
+      "alternate config.json",
+      "--release",
+      "$(literal)",
+      "one&two",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        npm_execpath: pnpm,
+        NESSA_TEST_EVENTS: events,
       },
-    )
+    },
+  )
 
-    assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(readFileSync(events, "utf8").trim().split("\n"), [
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(readFileSync(events, "utf8")), {
+    args: [
       "exec",
       "tauri",
       "dev",
       "--help",
       "--config",
-      "alternate.json",
+      "alternate config.json",
       "--release",
-    ])
-  },
-)
+      "$(literal)",
+      "one&two",
+    ],
+    hostStage: "dev",
+    uiStage: "dev",
+  })
+})
+
+test("desktop dev explains how to supply its Node pnpm entry", () => {
+  const environment = { ...process.env }
+  delete environment.npm_execpath
+  const result = spawnSync(process.execPath, [resolve("scripts/desktop/dev.mjs")], {
+    encoding: "utf8",
+    env: environment,
+  })
+
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /through `pnpm app`/)
+})
 
 test(
   "start waits for successful preflight before it starts the gateway",

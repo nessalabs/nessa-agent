@@ -3,9 +3,13 @@ import { desktopStageEnvironment, resolveDesktopStage } from "./stage.mjs"
 
 try {
   const stage = resolveDesktopStage({ environment: process.env, fallback: "dev" })
+  const packageManager = process.env.npm_execpath
+  if (!packageManager) {
+    throw new Error("Run this desktop command through `pnpm app`")
+  }
   const result = spawnSync(
-    process.platform === "win32" ? "pnpm.cmd" : "pnpm",
-    ["exec", "tauri", "dev", ...process.argv.slice(2)],
+    process.execPath,
+    [packageManager, "exec", "tauri", "dev", ...process.argv.slice(2)],
     {
       env: desktopStageEnvironment(process.env, stage),
       stdio: "inherit",

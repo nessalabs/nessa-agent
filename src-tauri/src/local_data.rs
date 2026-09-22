@@ -5,7 +5,11 @@
 //! The stage is embedded by the build; a runtime override can only confirm it,
 //! never silently move a bundle into another namespace.
 
-use std::path::PathBuf;
+use std::{
+    error::Error,
+    fmt::{Display, Formatter, Result as FormatResult},
+    path::PathBuf,
+};
 
 use tauri::{AppHandle, Manager};
 
@@ -20,8 +24,8 @@ pub struct StageMismatch {
     runtime: String,
 }
 
-impl std::fmt::Display for StageMismatch {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StageMismatch {
+    fn fmt(&self, out: &mut Formatter<'_>) -> FormatResult {
         write!(
             out,
             "desktop startup refused: bundle stage {:?}, runtime NESSA_STAGE {:?}",
@@ -30,7 +34,7 @@ impl std::fmt::Display for StageMismatch {
     }
 }
 
-impl std::error::Error for StageMismatch {}
+impl Error for StageMismatch {}
 
 /// Directory under which `settings.json`, `shortcuts.json`, and later stores live.
 pub fn config_root(app: &AppHandle, stage: &str) -> Option<PathBuf> {

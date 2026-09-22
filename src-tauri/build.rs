@@ -2,6 +2,7 @@ mod build_stage;
 
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
+use serde_json::Value;
 use tauri_utils::{config::parse::read_from, platform::Target};
 
 fn main() {
@@ -12,7 +13,7 @@ fn main() {
 
     let ports = fs::read_to_string("../protocol/defaults/gateway-ports.json")
         .expect("gateway port table must be readable");
-    let document: serde_json::Value =
+    let document: Value =
         serde_json::from_str(&ports).expect("gateway port table must be valid JSON");
     let known = document["stages"]
         .as_object()
@@ -46,7 +47,7 @@ fn verify_frontend_stage(known: &BTreeSet<String>, bundle: &str) {
             record.display()
         )
     });
-    let document: serde_json::Value = serde_json::from_str(&source).unwrap_or_else(|error| {
+    let document: Value = serde_json::from_str(&source).unwrap_or_else(|error| {
         panic!(
             "frontend build stage record at {} is invalid: {error}",
             record.display()

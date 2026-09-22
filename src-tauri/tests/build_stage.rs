@@ -3,10 +3,10 @@ mod build_stage;
 
 use std::collections::BTreeSet;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 fn known_stages() -> BTreeSet<String> {
-    let document: serde_json::Value =
+    let document: Value =
         serde_json::from_str(include_str!("../../protocol/defaults/gateway-ports.json"))
             .expect("the real gateway port table must parse");
     document["stages"]
