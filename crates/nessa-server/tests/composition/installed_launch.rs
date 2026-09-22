@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::*;
-use crate::agent_install::application::{RuntimeStore, StagedArchive, StoreFailure};
+use crate::agent_install::application::{
+    Publication, PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
+};
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
 };
@@ -51,7 +53,7 @@ impl RuntimeStore for Answers {
         _agent: &AgentName,
         _release: &PinnedRelease,
         _staged: &mut StagedArchive,
-    ) -> Result<PathBuf, StoreFailure> {
+    ) -> Result<Publication, PublishFailure> {
         unreachable!("launch resolution does not publish runtimes")
     }
 

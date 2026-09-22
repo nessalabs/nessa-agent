@@ -60,9 +60,10 @@ fn publish_runtime(data: &Path, release: &PinnedRelease) -> PathBuf {
         .file_mut()
         .write_all(&runtime_archive(release))
         .expect("write runtime archive");
-    store
+    let publication = store
         .publish(&agent, release, &mut staged)
-        .expect("publish runtime")
+        .expect("publish runtime");
+    publication.executable().to_owned()
 }
 
 /// A bundle holding every file `configure` requires, including one harness per

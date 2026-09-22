@@ -281,6 +281,7 @@ fn a_release_for_another_platform_is_refused_before_anything_is_fetched() {
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform()),
         &elsewhere,
+        &request(),
     )
     .expect_err("a release for another platform is refused");
 
