@@ -20,11 +20,13 @@ mod audit;
 mod cancellation;
 pub use answer::{
     PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture, PermissionAnswerResult,
-    PermissionSelectionState,
+    PermissionSelectionState, QuestionAnswer,
 };
 pub use approval::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference,
     PermissionResolution,
 };
-pub use audit::{PermissionAnswerDelivery, PermissionAnswerRecord, ReviewDeclineRecord};
+pub use audit::{
+    PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, ReviewDeclineRecord,
+};
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};

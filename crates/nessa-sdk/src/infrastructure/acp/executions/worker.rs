@@ -2,6 +2,7 @@ use super::super::{
     fields,
     permissions::wire as permission_wire,
     profile::AcpProfile,
+    questions::wire as question_wire,
     sessions::{
         binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
@@ -26,7 +27,7 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::permissions::{
     CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
     PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
-    PermissionSelectionState, ReviewDeclineRecord,
+    PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, ReviewDeclineRecord,
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -43,6 +44,9 @@ use crate::domain::agent_execution::permissions::{
     ReviewDecline, ReviewDeclineReason,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
+use crate::domain::agent_execution::questions::{
+    AcceptedAnswer, AgentQuestion, QuestionId, QuestionResponse,
+};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::{
@@ -151,6 +155,12 @@ struct Worker<P> {
     /// answered twice, and answering one request twice is its own protocol
     /// fault.
     ///
+    /// Questions the agent is waiting on, by the identity an answer names.
+    ///
+    /// Held beside the wire request because answering one means writing a
+    /// response to it, and beside what was asked because an answer is only an
+    /// answer if it chooses what that question offered.
+    questions: HashMap<QuestionId, (RpcId, AgentQuestion)>,
     /// One request at a time is all this has to remember, because the
     /// dispatcher takes it as soon as that request's handler returns. A
     /// provider that reuses one identifier for two requests is already outside
@@ -211,6 +221,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         agent_accepts_images: false,
         operation_capabilities,
         permissions: HashMap::new(),
+        questions: HashMap::new(),
         declined: None,
         shutdown_deadline: None,
         configured: false,
@@ -660,8 +671,16 @@ impl<P: AcpProfile> Worker<P> {
         } else {
             AgentStartupContext::New
         };
+        // Questions are advertised only where the profile says its agent can be
+        // answered: advertising to one that cannot leaves the model holding a
+        // tool whose every use this binding would have to refuse.
+        let mut client_capabilities =
+            json!({"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false});
+        if self.profile.supports_questions() {
+            client_capabilities["elicitation"] = json!({"form":true});
+        }
         let init = self.rpc("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"nessa-sdk","version":env!("CARGO_PKG_VERSION")},
-            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), spawn_deadline, None)
+            "clientCapabilities":client_capabilities}), spawn_deadline, None)
             .await
             .map_err(|error| startup_deadline(error, AgentStartupPhase::Initialize, context))?;
         // The child has answered, so it is running and scanned. Start the
@@ -883,7 +902,9 @@ impl<P: AcpProfile> Worker<P> {
         let mut failure = None;
         while let Some(command) = self.commands.recv().await {
             match command {
-                command @ (Command::Answer(..) | Command::CancelPermission(..)) => {
+                command @ (Command::Answer(..)
+                | Command::CancelPermission(..)
+                | Command::AnswerQuestion(..)) => {
                     if let Err(error) = self.command(execution, command).await {
                         // Still attempt later admitted decisions and their audit
                         // evidence; each audit/write already has a deadline.
@@ -1027,6 +1048,9 @@ impl<P: AcpProfile> Worker<P> {
             }
             Command::Answer(answer, reply) => {
                 self.answer_permission(execution, answer, reply).await
+            }
+            Command::AnswerQuestion(answer, reply) => {
+                self.answer_question(execution, answer, reply).await
             }
         }
     }
@@ -1376,6 +1400,19 @@ impl<P: AcpProfile> Worker<P> {
                             .await;
                     }
                     result?;
+                } else if method == "elicitation/create" {
+                    // A question the agent is waiting on. Like a review it is
+                    // answered, never ignored: a request this client leaves
+                    // open is a turn that never ends.
+                    let result = self
+                        .question(execution, id.clone(), params, response_deadline)
+                        .await;
+                    if result.is_err() && !self.questions.values().any(|(held, _)| *held == id) {
+                        let _ = self
+                            .send_before(question_wire::cancelled(&id), response_deadline)
+                            .await;
+                    }
+                    result?;
                 } else {
                     self.send_before(json_rpc::unsupported(&id), response_deadline)
                         .await?;
@@ -1384,6 +1421,8 @@ impl<P: AcpProfile> Worker<P> {
                 return Err(json_rpc::protocol(
                     "permission request requires an RPC identifier",
                 ));
+            } else if method == "elicitation/create" {
+                return Err(json_rpc::protocol("question requires an RPC identifier"));
             } else if method == "session/update" {
                 self.update(execution, params)?;
             } else if method == "$/cancel_request" {
@@ -1797,6 +1836,151 @@ impl<P: AcpProfile> Worker<P> {
             }
         }
     }
+    /// Take one question the agent is asking, and show it to whoever can answer.
+    ///
+    /// The ask is held here until it is answered: the agent is waiting on this
+    /// request, so the wire identity is kept beside what was asked, and the
+    /// answer is checked against it rather than against whatever is open.
+    async fn question(
+        &mut self,
+        execution: &mut ExecutionController,
+        wire_id: RpcId,
+        params: Value,
+        response_deadline: Option<Instant>,
+    ) -> Result<(), AgentError> {
+        self.check_session(execution, &params)?;
+        // Nothing to ask if this is over, or if there is no execution to
+        // correlate the ask with. The agent is told so rather than left waiting.
+        if self.closing || self.active.is_none() {
+            return self
+                .send_before(question_wire::cancelled(&wire_id), response_deadline)
+                .await;
+        }
+        if self.questions.len() >= 32 || self.questions.values().any(|(id, _)| *id == wire_id) {
+            return Err(json_rpc::protocol("question limit or duplicate ID"));
+        }
+        let question = match question_wire::question(&params) {
+            Ok(question) => question,
+            // A question this binding cannot put to anybody is answered rather
+            // than left hanging, and the execution goes on — the same rule a
+            // refused review follows.
+            Err(_) => {
+                return self
+                    .send_before(question_wire::cancelled(&wire_id), response_deadline)
+                    .await
+            }
+        };
+        let id = QuestionId::new(wire_id.text())
+            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        let target = &self
+            .active
+            .as_ref()
+            .expect("validated active prompt")
+            .execution_id;
+        let event = execution.ask_question(target, id.clone(), question.clone())?;
+        self.questions.insert(id, (wire_id, question));
+        self.emit(event)
+    }
+
+    /// Answer one question, and tell the agent what it was answered with.
+    ///
+    /// A choice that the question did not offer is refused here rather than
+    /// sent: the agent acts on what comes back, so what comes back is what it
+    /// asked for. Evidence keeps the local decision apart from the write, as an
+    /// answered review does.
+    async fn answer_question(
+        &mut self,
+        execution: &ExecutionController,
+        answer: QuestionAnswer,
+        reply: oneshot::Sender<ProviderOperationResult<()>>,
+    ) -> Result<(), AgentError> {
+        let Some((wire_id, asked)) = self.questions.get(&answer.id).cloned() else {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::InvalidInput("no question is waiting for this answer".into()),
+                ProviderSessionState::Usable,
+            )));
+            return Ok(());
+        };
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|active| active.execution_id != answer.execution_id)
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::InvalidInput(
+                    "the answered question belongs to another execution".into(),
+                ),
+                ProviderSessionState::Usable,
+            )));
+            return Ok(());
+        }
+        let response = match answer.choices {
+            Some(choices) => match AcceptedAnswer::new(&asked, choices) {
+                Ok(accepted) => QuestionResponse::Answered(accepted),
+                Err(error) => {
+                    let _ = reply.send(Err(ProviderOperationFailure::new(
+                        AgentError::InvalidInput(error.to_string()),
+                        ProviderSessionState::Usable,
+                    )));
+                    return Ok(());
+                }
+            },
+            None => QuestionResponse::Declined,
+        };
+        self.questions.remove(&answer.id);
+
+        let session_id = execution.id().clone();
+        let record = |delivery| {
+            ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::new(
+                session_id.clone(),
+                answer.execution_id.clone(),
+                answer.id.clone(),
+                response.clone(),
+                delivery,
+            ))
+        };
+        let decided = self
+            .record_audit(record(PermissionAnswerDelivery::Selected))
+            .await;
+        let written = match &response {
+            QuestionResponse::Answered(accepted) => {
+                let chosen = accepted
+                    .choices()
+                    .iter()
+                    .map(|choice| {
+                        (
+                            choice.key().to_owned(),
+                            choice.values().map(str::to_owned).collect::<Vec<_>>(),
+                            choice.own_words().map(str::to_owned),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                question_wire::accepted(&wire_id, &chosen)
+            }
+            QuestionResponse::Declined => question_wire::declined(&wire_id),
+        };
+        let delivery = self.send(written).await;
+        let observed = match &delivery {
+            Ok(()) => PermissionAnswerDelivery::Written,
+            Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+        };
+        let recorded = self.record_audit(record(observed)).await;
+        let outcome = match (decided.and(recorded), delivery.clone()) {
+            (Ok(()), delivery) => delivery,
+            (Err(audit), Ok(())) => Err(audit),
+            (Err(_), Err(delivery_error)) => {
+                Err(AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                    delivery_error: Box::new(delivery_error),
+                    cleanup_error: None,
+                })
+            }
+        };
+        let _ = reply.send(outcome.clone().map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        }));
+        outcome
+    }
+
     async fn record_audit(&mut self, record: ExecutionAuditRecord) -> Result<(), AgentError> {
         let result = catch_worker_panic(async {
             // The trait call itself may panic before returning its future.
@@ -1901,6 +2085,13 @@ impl<P: AcpProfile> Worker<P> {
         for wire_id in permissions.into_values() {
             self.send(permission_wire::permission_cancel(&wire_id))
                 .await?;
+        }
+        // A question nobody will answer is cancelled for the same reason a
+        // pending review is: the agent is waiting on this request, and leaving
+        // it unanswered leaves it waiting forever.
+        let questions = std::mem::take(&mut self.questions);
+        for (wire_id, _) in questions.into_values() {
+            self.send(question_wire::cancelled(&wire_id)).await?;
         }
         Ok(())
     }

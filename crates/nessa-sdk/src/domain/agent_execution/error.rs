@@ -73,6 +73,14 @@ pub enum ExecutionError {
     DuplicatePermissionOption,
     /// The offer policy contains a repeated effect/scope decision.
     DuplicatePermissionDecision,
+    /// Two questions in one ask share a key, so an answer to either could not be
+    /// correlated back to the question that wanted it.
+    DuplicateQuestionKey,
+    /// An answer names a question the agent did not ask in this ask.
+    UnaskedQuestion,
+    /// An answer chooses something the question did not offer, or supplies
+    /// prose where the question invited none.
+    UnofferedAnswer,
     /// The selected option was not offered by this request.
     UnknownPermissionOption,
 }

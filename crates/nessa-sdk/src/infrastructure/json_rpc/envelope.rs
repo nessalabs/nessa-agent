@@ -13,6 +13,13 @@ pub(crate) enum RpcId {
     Text(String),
 }
 impl RpcId {
+    /// The identity as text, for correlating work this client holds against it.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Number(id) => id.to_string(),
+            Self::Text(id) => id.clone(),
+        }
+    }
     pub fn value(&self) -> Value {
         match self {
             Self::Number(id) => json!(id),

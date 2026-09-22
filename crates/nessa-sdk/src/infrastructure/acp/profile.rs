@@ -13,6 +13,16 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     fn supports_steering(&self, _initialize: &Value) -> bool {
         false
     }
+    /// Whether this agent may put its own questions to a person.
+    ///
+    /// Declared rather than assumed: an agent is only offered the tool that
+    /// asks once this binding says it can answer, so a profile that has not
+    /// been verified against a real form elicitation leaves it off and its
+    /// agent simply never asks. What a host does with the answer is the same
+    /// everywhere; what differs is whether the question can arrive at all.
+    fn supports_questions(&self) -> bool {
+        false
+    }
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError>;
     fn new_session_params(&self, config: &AcpConfig, capabilities: &EffectiveCapabilities)
         -> Value;

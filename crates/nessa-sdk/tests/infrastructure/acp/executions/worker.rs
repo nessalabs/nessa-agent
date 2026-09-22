@@ -84,6 +84,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             agent_accepts_images: false,
             operation_capabilities,
             permissions: HashMap::new(),
+            questions: HashMap::new(),
             declined: None,
             shutdown_deadline: None,
             configured: true,

@@ -4,7 +4,8 @@
 //! ```text
 //! sessions --> executions
 //!    |-----> tools --> executions
-//!    `-----> permissions --> tools + executions
+//!    |-----> permissions --> tools + executions
+//!    `-----> questions --> executions
 //! prompts (independent instruction values)
 //! ```
 //!
@@ -14,6 +15,7 @@ mod error;
 pub mod executions;
 pub mod permissions;
 pub mod prompts;
+pub mod questions;
 pub mod sessions;
 pub mod tools;
 pub use error::ExecutionError;

@@ -11,6 +11,7 @@ use crate::application::agent_execution::permissions::{
     PermissionResolution,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
+use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
 use crate::domain::agent_execution::{
     executions::*,
     permissions::*,
@@ -117,9 +118,28 @@ impl ExecutionController {
         self.observe_tool(execution, update.clone())?;
         self.event(execution, ExecutionUpdate::Tool(update))
     }
+    /// Emit one question the agent is asking, correlated to `execution`.
+    ///
+    /// Not a review, so nothing is admitted to the session aggregate: an ask
+    /// authorises nothing and holds no lifetime there. What it does share with
+    /// a review is its retention budget, which is checked before the event is
+    /// built rather than after.
+    pub fn ask_question(
+        &mut self,
+        execution: &ExecutionId,
+        id: QuestionId,
+        question: AgentQuestion,
+    ) -> Result<ExecutionEvent, AgentError> {
+        let event = ExecutionEvent::new(
+            execution.clone(),
+            ExecutionUpdate::QuestionAsked { id, question },
+        );
+        event.validate_payload_size()?;
+        Ok(event)
+    }
     /// Admits review `id` for the observed `tool`, retaining its exact `input` and
-    /// Supply the captured `execution` ID; a stale or inactive target returns an error.
     /// offered `options` until resolution. Produces the correlated review event.
+    /// Supply the captured `execution` ID; a stale or inactive target returns an error.
     /// Rejects stale/duplicate identity, missing execution, or retention limits
     /// before admitting the review. Performs no provider response or audit I/O.
     pub fn request_permission(

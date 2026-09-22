@@ -13,6 +13,7 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, MessageChunk},
     permissions::{PermissionId, PermissionOptions, PermissionRequest},
+    questions::{AgentQuestion, QuestionId},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservation},
 };
 
@@ -76,6 +77,17 @@ impl ExecutionEvent {
                 )?;
                 Ok(())
             }
+            // An ask is bounded by its own construction — every text and both
+            // collections — so what is left to check is the identity beside it.
+            ExecutionUpdate::QuestionAsked { id, question } => {
+                validate_observation_id(id.as_str())?;
+                ExecutionController::validate_tool_payload(
+                    question
+                        .payload_bytes()
+                        .saturating_add(self.execution_id.as_str().len())
+                        .saturating_add(id.as_str().len()),
+                )
+            }
         }
     }
 
@@ -124,6 +136,9 @@ impl ExecutionEvent {
                     .saturating_add(record.input().name.capacity())
                     .saturating_add(record.input().arguments_json.capacity())
                     .saturating_add(actor)
+            }
+            ExecutionUpdate::QuestionAsked { id, question } => {
+                id.as_str().len().saturating_add(question.payload_bytes())
             }
         };
         size_of::<Self>()
@@ -182,5 +197,15 @@ pub enum ExecutionUpdate {
         input: ToolReviewInput,
         /// Validated choices offered for this request; no authority is granted by display.
         options: PermissionOptions,
+    },
+    /// A question the agent put to a person, waiting on an answer.
+    ///
+    /// Not a review: nothing is being authorised, and an answer is the agent's
+    /// own input rather than permission to act.
+    QuestionAsked {
+        /// Ask identity, scoped to this execution, that an answer names.
+        id: QuestionId,
+        /// What was asked and what will be accepted as an answer.
+        question: AgentQuestion,
     },
 }

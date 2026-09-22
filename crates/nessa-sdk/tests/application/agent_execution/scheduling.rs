@@ -140,6 +140,14 @@ impl ProviderSessionBackend for GatedBackend {
                 .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))
         })
     }
+    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("this fixture asks nothing".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     fn answer_permission(
         &self,
         _: PermissionAnswer,
