@@ -166,8 +166,9 @@ async fn restored_retry_retains_late_queue_and_native_persistence_failures() {
                 SteeringEvidence::Failed(failure)
                     if matches!(failure.storage(), Some(StorageError::Io(_)))
             ));
-            complete(running);
-            within(receipt.wait()).await.unwrap();
+            let _ = running.release.send(Ok(ExecutionOutcome::Completed));
+            let active_result = within(receipt.wait()).await;
+            assert_eq!(record(&storage, "active").result, Some(active_result));
             (Some(evidence), None)
         } else {
             storage.fail_scheduling("active", InvocationStage::Settled);

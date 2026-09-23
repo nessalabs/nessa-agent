@@ -1330,6 +1330,7 @@ impl Agent {
             .await?;
         // WorkStatus persistence can be overtaken by close or provider settlement.
         // Revalidate the captured target before handing anything to the adapter.
+        let mut activated = false;
         let outcome = if !self.inner.lifecycle.accepts_queued()
             || close_notice.has_changed().unwrap_or(true)
         {
@@ -1340,11 +1341,20 @@ impl Agent {
             match &target {
                 Some(target) => {
                     work_owner.as_ref().expect("steering owner").activate()?;
+                    activated = true;
                     self.deliver_native_steering(target.clone(), input.clone())
                         .await
                 }
                 None => Ok(SteeringOutcome::PromptRequired),
             }
+        };
+        let outcome = match outcome {
+            Ok(SteeringOutcome::PromptRequired) if activated => work_owner
+                .as_ref()
+                .expect("steering owner")
+                .defer()
+                .map(|()| SteeringOutcome::PromptRequired),
+            outcome => outcome,
         };
         let id = input.execution_id.clone();
         let delivery = match outcome {

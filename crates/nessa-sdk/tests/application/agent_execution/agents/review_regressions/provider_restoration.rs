@@ -63,7 +63,13 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         release_active.send(()).unwrap();
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         backend.preparing.notified().await;
-        assert_permissions_fenced(&agent, &backend, calls, AgentError::StalePermission).await;
+        assert_permissions_fenced(
+            &agent,
+            &backend,
+            calls,
+            AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
+        )
+        .await;
         *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
         release_prepare.send(()).unwrap();
         assert_eq!(following.wait().await, Ok(ExecutionOutcome::Completed));
@@ -160,13 +166,7 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
             assert_eq!(invoke_control(&agent, source).await, Err(expected.clone()));
             let calls = backend.controls.load(Ordering::SeqCst);
             let admission_error = AgentError::AuditFailure;
-            assert_permissions_fenced(
-                &agent,
-                &backend,
-                calls,
-                AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
-            )
-            .await;
+            assert_permissions_fenced(&agent, &backend, calls, AgentError::AuditFailure).await;
             // A later successful physical-cleanup report from the already-running
             // execution must not acknowledge the control's earlier failed audit.
             if later_success_report {

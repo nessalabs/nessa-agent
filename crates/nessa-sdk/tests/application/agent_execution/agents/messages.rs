@@ -131,14 +131,8 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                 "operation {operation}"
             );
             assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
-            if operation == 0 {
-                assert_eq!(storage.0.lock().unwrap().writes, writes);
-                assert!(storage.snapshot().invocations.is_empty());
-            } else {
-                let snapshot = storage.snapshot();
-                assert_eq!(snapshot.invocations.len(), 1);
-                assert_eq!(snapshot.invocations[0].result, Some(result));
-            }
+            assert_eq!(storage.0.lock().unwrap().writes, writes);
+            assert!(storage.snapshot().invocations.is_empty());
             agent.close(actor()).await.unwrap();
         }
     }
@@ -379,12 +373,14 @@ async fn provider_advertisements_cannot_enable_missing_application_integrations(
 }
 
 /// Submit `input` every way an Agent accepts input and require the same
-/// outcome each time. A refusal must have saved and sent nothing.
+/// outcome each time, distinguishing application refusal from a durably admitted
+/// input that only the opened provider can reject.
 async fn every_entry(
     agent_answer: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
     input: &ExecutionRequest,
     expected: Result<ExecutionOutcome, AgentError>,
+    refusal_is_durably_admitted: bool,
 ) {
     for operation in 0..4 {
         let storage = MemoryStorage::default();
@@ -398,13 +394,13 @@ async fn every_entry(
         let executions = provider.executions.load(Ordering::SeqCst);
         if expected.is_err() {
             assert_eq!(executions, 0, "operation {operation}");
-            if operation == 0 {
-                assert_eq!(storage.0.lock().unwrap().writes, writes);
-                assert!(storage.snapshot().invocations.is_empty());
-            } else {
+            if refusal_is_durably_admitted {
                 let snapshot = storage.snapshot();
                 assert_eq!(snapshot.invocations.len(), 1);
                 assert_eq!(snapshot.invocations[0].result, Some(result));
+            } else {
+                assert_eq!(storage.0.lock().unwrap().writes, writes);
+                assert!(storage.snapshot().invocations.is_empty());
             }
         } else {
             assert_eq!(executions, 1, "operation {operation}");
@@ -421,7 +417,7 @@ fn with_images(id: &str, images: Vec<ImageReference>) -> ExecutionRequest {
 }
 
 #[tokio::test]
-async fn an_agent_known_to_take_no_images_is_a_typed_refusal_before_every_admission_save() {
+async fn an_agent_image_refusal_is_retained_without_provider_execution() {
     let input = with_images("image", vec![image(ImageMediaType::Png, 6)]);
     every_entry(
         AGENT_TAKES_NO_IMAGES,
@@ -430,6 +426,7 @@ async fn an_agent_known_to_take_no_images_is_a_typed_refusal_before_every_admiss
         Err(AgentError::ImageInputRefused(
             ImageInputRefusal::AgentDoesNotAccept,
         )),
+        true,
     )
     .await;
     // The same agent still takes text: only the images were the problem.
@@ -438,6 +435,7 @@ async fn an_agent_known_to_take_no_images_is_a_typed_refusal_before_every_admiss
         None,
         &request("text"),
         Ok(ExecutionOutcome::Completed),
+        false,
     )
     .await;
 }
@@ -448,7 +446,7 @@ async fn an_agent_whose_answer_is_not_known_is_not_refused_at_admission() {
     // answers for itself at dispatch. An agent that said yes is admitted too.
     let input = with_images("image", vec![image(ImageMediaType::Png, 6)]);
     for answer in [AGENT_NOT_YET_KNOWN, AGENT_TAKES_IMAGES] {
-        every_entry(answer, None, &input, Ok(ExecutionOutcome::Completed)).await;
+        every_entry(answer, None, &input, Ok(ExecutionOutcome::Completed), false).await;
     }
 }
 
@@ -473,13 +471,14 @@ async fn an_image_outside_the_models_limits_is_a_typed_refusal_before_every_admi
             None,
             &with_images("image", images),
             Err(AgentError::ImageInputRefused(refusal)),
+            false,
         )
         .await;
     }
 }
 
 #[tokio::test]
-async fn what_the_backend_could_never_deliver_is_refused_before_every_admission_save() {
+async fn backend_refusal_is_retained_without_provider_execution() {
     let refusal = AgentError::MessageTooLarge {
         encoded_bytes: 9000,
         max_bytes: 8192,
@@ -493,6 +492,7 @@ async fn what_the_backend_could_never_deliver_is_refused_before_every_admission_
             Some(refusal.clone()),
             &input,
             Err(refusal.clone()),
+            true,
         )
         .await;
     }

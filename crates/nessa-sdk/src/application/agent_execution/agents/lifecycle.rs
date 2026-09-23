@@ -198,6 +198,9 @@ impl WorkPermit {
     pub(super) fn activate(&self) -> Result<(), AgentError> {
         self.owner.activate_waiting(self)
     }
+    pub(super) fn defer(&self) -> Result<(), AgentError> {
+        self.owner.defer_active(self)
+    }
     pub(super) fn mark_execution_started(&self) {
         let mut state = self.owner.state.lock().expect("session lifecycle");
         state
@@ -839,6 +842,22 @@ impl SessionLifecycle {
         work.work_generation = work_generation;
         work.phase = WorkPhase::Active;
         *permit.binding.lock().expect("work binding") = (work_generation, provider_generation);
+        Ok(())
+    }
+    fn defer_active(&self, permit: &WorkPermit) -> Result<(), AgentError> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        let (work_generation, provider_generation) = permit.generations();
+        if state.work_generation != work_generation
+            || state.provider_generation != provider_generation
+            || !matches!(state.work_status, WorkStatus::Open)
+        {
+            return Err(AgentError::Closed);
+        }
+        let work = state.work.get_mut(&permit.id).ok_or(AgentError::Closed)?;
+        if !matches!(work.phase, WorkPhase::Active) || work.cancellation.borrow().is_some() {
+            return Err(AgentError::Closed);
+        }
+        work.phase = WorkPhase::Waiting;
         Ok(())
     }
     pub(super) fn attached_provider(

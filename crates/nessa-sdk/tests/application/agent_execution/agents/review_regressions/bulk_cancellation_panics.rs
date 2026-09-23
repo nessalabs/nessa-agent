@@ -183,7 +183,8 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                 first_result
             );
             // The confirmed cleanup was finalized even though close returned the
-            // storage failure; a new generation can accept work immediately.
+            // storage failure; caller-authorized reattachment opens a new generation.
+            reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 agent
                     .enqueue(input("recovered"), actor())

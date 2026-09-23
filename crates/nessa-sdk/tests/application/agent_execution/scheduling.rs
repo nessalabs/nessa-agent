@@ -709,6 +709,38 @@ async fn scheduling_close_interrupts_stalled_native_steering_and_retains_caller_
 }
 
 #[tokio::test]
+async fn scheduling_close_wins_when_stalled_native_steering_returns_prompt_required() {
+    let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::PromptRequired)).await;
+    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let _running = started(&mut calls, "active").await;
+    let (release, wait) = oneshot::channel();
+    *provider.steering_wait.lock().unwrap() = Some(wait);
+    let steering_agent = agent.clone();
+    let steering =
+        tokio::spawn(async move { steering_agent.steer(request("stalled"), actor()).await });
+    within(provider.steering_started.notified()).await;
+    let closing_agent = agent.clone();
+    let closing = tokio::spawn(async move { closing_agent.close(close_action()).await });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    release.send(()).unwrap();
+    assert!(matches!(
+        within(steering).await.unwrap(),
+        Err(AgentError::Closed)
+    ));
+    within(closing).await.unwrap().unwrap();
+    assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Cancelled));
+    let saved = record(&storage, "stalled");
+    assert_eq!(saved.result, Some(Err(AgentError::Closed)));
+    let event = saved.scheduling.last().unwrap();
+    assert_eq!(event.stage, InvocationStage::Cancelled);
+    assert_eq!(event.cause, SchedulingCause::SessionClosed);
+    assert_eq!(event.actor, Some(close_action()));
+    assert!(calls.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn scheduling_withdraws_ordinary_and_priority_work_once_with_verified_attribution() {
     let (agent, storage, _, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
     let active = agent.enqueue(request("active"), actor()).await.unwrap();
