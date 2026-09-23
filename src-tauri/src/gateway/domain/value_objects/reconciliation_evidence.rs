@@ -314,6 +314,10 @@ impl ReconciliationRequestRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationAttemptRecord {
     correlation: ReconciliationCorrelation,
+    #[expect(
+        dead_code,
+        reason = "origin evidence participates in record equality and audit meaning"
+    )]
     origin: ReconciliationRequestRecord,
 }
 
@@ -340,18 +344,15 @@ impl ReconciliationAttemptRecord {
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         &self.correlation
     }
-    #[expect(
-        dead_code,
-        reason = "origin evidence is retained for equality and audit review"
-    )]
-    pub fn origin(&self) -> &ReconciliationRequestRecord {
-        &self.origin
-    }
 }
 
 /// Validated intent whose prior incarnation, when known, belongs to its service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationIntentRecord {
+    #[expect(
+        dead_code,
+        reason = "attempt evidence participates in record equality and audit meaning"
+    )]
     attempt: ReconciliationAttemptRecord,
     target: ReconciliationTarget,
     before: Option<ReconciliationIncarnation>,
@@ -378,13 +379,6 @@ impl ReconciliationIntentRecord {
             target,
             before,
         })
-    }
-    #[expect(
-        dead_code,
-        reason = "attempt evidence is retained for equality and audit review"
-    )]
-    pub fn attempt(&self) -> &ReconciliationAttemptRecord {
-        &self.attempt
     }
     pub fn target(&self) -> &ReconciliationTarget {
         &self.target
@@ -497,6 +491,10 @@ pub enum ReconciliationOutcomeDisposition {
 /// Validated agreement between an admitted intent and its physical result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationOutcomeRecord {
+    #[expect(
+        dead_code,
+        reason = "intent evidence participates in record equality and audit meaning"
+    )]
     intent: ReconciliationIntentRecord,
     history: ReconciliationHistory,
     disposition: ReconciliationOutcomeDisposition,
@@ -567,13 +565,6 @@ impl ReconciliationOutcomeRecord {
             history,
             disposition,
         }
-    }
-    #[expect(
-        dead_code,
-        reason = "intent evidence is retained for equality and audit review"
-    )]
-    pub fn intent(&self) -> &ReconciliationIntentRecord {
-        &self.intent
     }
     pub fn history(&self) -> &ReconciliationHistory {
         &self.history

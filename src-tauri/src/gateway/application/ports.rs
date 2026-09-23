@@ -326,6 +326,10 @@ pub enum GatewayReconciliationEffect {
 /// Final audit record for one admitted attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayReconciliationOutcome {
+    #[expect(
+        dead_code,
+        reason = "the validated record stays attached to the application outcome"
+    )]
     record: ReconciliationOutcomeRecord,
     intent: GatewayReconciliationIntent,
     effect: GatewayReconciliationEffect,
@@ -404,14 +408,6 @@ impl GatewayReconciliationOutcome {
 
     pub fn effect(&self) -> &GatewayReconciliationEffect {
         &self.effect
-    }
-
-    #[expect(
-        dead_code,
-        reason = "the validated record stays attached to the application outcome for audit review"
-    )]
-    pub fn record(&self) -> &ReconciliationOutcomeRecord {
-        &self.record
     }
 }
 
