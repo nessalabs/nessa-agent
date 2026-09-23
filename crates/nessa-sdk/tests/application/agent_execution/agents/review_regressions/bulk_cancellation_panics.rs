@@ -130,8 +130,8 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                 first_result,
                 Err(AgentError::StorageAfterExecution {
                     error: StorageError::Io(_),
-                    execution_result,
-                }) if *execution_result == Err(AgentError::Closed)
+                    ref execution_result,
+                }) if **execution_result == Err(AgentError::Closed)
             ));
             assert_eq!(
                 timeout(Duration::from_secs(2), priority.wait())

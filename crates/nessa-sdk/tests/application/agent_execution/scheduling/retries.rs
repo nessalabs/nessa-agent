@@ -185,7 +185,10 @@ async fn restored_retry_retains_late_queue_and_native_persistence_failures() {
         if native {
             let restored_evidence = match restored.steer(request("correction"), actor()).await {
                 Ok(SteeringDelivery::Injected { evidence, .. }) => evidence,
-                result => panic!("restored native receipt was not retained: {result:?}"),
+                Ok(SteeringDelivery::Queued(_)) => {
+                    panic!("restored native receipt became queued")
+                }
+                Err(error) => panic!("restored native receipt failed: {error:?}"),
             };
             assert_eq!(Some(restored_evidence), native_evidence);
             assert_eq!(provider.steered.lock().unwrap().len(), 1);
