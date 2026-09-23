@@ -20,7 +20,10 @@ use crate::domain::agent_execution::{
 };
 use crate::infrastructure::acp::executions::event_queue::EventReceiver;
 use crate::infrastructure::session_storage::InMemoryStorage;
-use std::sync::{atomic::AtomicBool, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Mutex,
+};
 
 struct PolicyProfile {
     inner: TestAcpProfile,
@@ -32,7 +35,9 @@ struct PolicyProfile {
     )>,
 }
 
-async fn assert_worker_projection_survives_reload(projection: FinalizedExecutionProjection) {
+async fn worker_projection_after_reload(
+    projection: FinalizedExecutionProjection,
+) -> ExecutionReport {
     let report = ExecutionReport::finalized_provider(
         None,
         ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
@@ -63,10 +68,12 @@ async fn assert_worker_projection_survives_reload(projection: FinalizedExecution
     let storage = InMemoryStorage::new();
     let lease = storage.open(session_id).await.unwrap();
     lease.save(snapshot).await.unwrap();
-    assert_eq!(
-        lease.load().await.unwrap().unwrap().invocations[0].provider_report,
-        Some(report)
-    );
+    let restored = lease.load().await.unwrap().unwrap().invocations[0]
+        .provider_report
+        .clone()
+        .expect("stored worker projection");
+    assert_eq!(restored, report);
+    restored
 }
 impl AcpProfile for PolicyProfile {
     fn validate_initialize(&self, value: &Value) -> Result<(), AgentError> {
@@ -260,18 +267,15 @@ enum Dispatch {
     Steering,
 }
 
-struct AcceptingDeclineAudit;
-impl ExecutionAudit for AcceptingDeclineAudit {
-    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
-    }
+struct SwitchingAudit {
+    reject: AtomicBool,
+    calls: AtomicU64,
 }
-
-struct SwitchingAudit(AtomicBool);
 impl ExecutionAudit for SwitchingAudit {
     fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
-            if self.0.load(Ordering::SeqCst) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.reject.load(Ordering::SeqCst) {
                 Err(AgentError::AuditFailure)
             } else {
                 Ok(())
@@ -282,62 +286,115 @@ impl ExecutionAudit for SwitchingAudit {
 
 #[tokio::test]
 async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
-    let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
-    worker.audit = Arc::new(AcceptingDeclineAudit);
-    let execution_id = ExecutionId::new("active").unwrap();
-    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
-    execution.begin_execution(execution_id.clone()).unwrap();
-    let (reply, _result) = oneshot::channel();
-    worker.active = Some(ActiveExecution {
-        id: 7,
-        execution_id: execution_id.clone(),
-        reply,
-        deadline: None,
-    });
-    let observation = ReviewDeclineObservation::selected(
-        ReviewDeclineId::new("1").unwrap(),
-        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
-    );
-    for _ in 0..15 {
-        worker
-            .events
-            .try_send(ExecutionEvent::new(
-                execution_id.clone(),
-                ExecutionUpdate::ReviewDeclined(observation.clone()),
-            ))
-            .unwrap();
-    }
-    let failure = match worker
-        .decline_review(
-            &execution,
-            RpcId::Number(4),
-            &json!({"toolCall":{"name":"Read"}}),
-            ReviewDeclineReason::UnreadableRequest,
-            None,
-        )
-        .await
-    {
-        Err(failure) => failure,
-        Ok(()) => panic!("full final notice queue must fail"),
-    };
-    assert_eq!(failure.error(), &AgentError::Backpressure);
-    assert!(worker
-        .settlement_facts
-        .coverage_has_operation(failure.coverage()));
-    worker
-        .scope
-        .cleanup(Duration::ZERO, Duration::from_secs(2))
-        .await
-        .unwrap();
-    let projection =
-        std::mem::replace(&mut worker.settlement_facts, SettlementFacts::new()).finalize();
-    assert_eq!(
-        projection.components(),
-        &[FinalizedFailureComponent::Operation(
+    for reject_audit in [false, true] {
+        let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
+        let audit = Arc::new(SwitchingAudit {
+            reject: AtomicBool::new(reject_audit),
+            calls: AtomicU64::new(0),
+        });
+        worker.audit = audit.clone();
+        let execution_id = ExecutionId::new("active").unwrap();
+        let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+        execution.begin_execution(execution_id.clone()).unwrap();
+        let (reply, _result) = oneshot::channel();
+        worker.active = Some(ActiveExecution {
+            id: 7,
+            execution_id: execution_id.clone(),
+            reply,
+            deadline: None,
+        });
+        let observation = ReviewDeclineObservation::selected(
+            ReviewDeclineId::new("1").unwrap(),
+            ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+        );
+        for _ in 0..15 {
+            worker
+                .events
+                .try_send(ExecutionEvent::new(
+                    execution_id.clone(),
+                    ExecutionUpdate::ReviewDeclined(observation.clone()),
+                ))
+                .unwrap();
+        }
+        let failure = match worker
+            .decline_review(
+                &execution,
+                RpcId::Number(4),
+                &json!({"toolCall":{"name":"Read"}}),
+                ReviewDeclineReason::UnreadableRequest,
+                None,
+            )
+            .await
+        {
+            Err(failure) => failure,
+            Ok(()) => panic!("full final notice queue must fail"),
+        };
+        assert_eq!(audit.calls.load(Ordering::SeqCst), 2);
+        let expected_failure = if reject_audit {
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(AgentError::MultipleOperationFailures {
+                    first_error: Box::new(AgentError::AuditFailure),
+                    subsequent_error: Box::new(AgentError::AuditFailure),
+                }),
+                subsequent_error: Box::new(AgentError::Backpressure),
+            }
+        } else {
             AgentError::Backpressure
-        )]
-    );
-    assert_worker_projection_survives_reload(projection).await;
+        };
+        assert_eq!(failure.error(), &expected_failure);
+        assert!(worker
+            .settlement_facts
+            .coverage_has_operation(failure.coverage()));
+        assert_eq!(failure.coverage().len(), if reject_audit { 3 } else { 1 });
+        worker
+            .scope
+            .cleanup(Duration::ZERO, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let projection =
+            std::mem::replace(&mut worker.settlement_facts, SettlementFacts::new()).finalize();
+        let expected_components = if reject_audit {
+            vec![
+                FinalizedFailureComponent::Audit,
+                FinalizedFailureComponent::Audit,
+                FinalizedFailureComponent::Operation(AgentError::Backpressure),
+            ]
+        } else {
+            vec![FinalizedFailureComponent::Operation(
+                AgentError::Backpressure,
+            )]
+        };
+        assert_eq!(projection.components(), expected_components);
+        let restored = worker_projection_after_reload(projection).await;
+        let ProviderSessionState::CleanupReported(cleanup) = restored.session_state() else {
+            panic!("finalized worker report exposes cleanup facts")
+        };
+        assert!(cleanup.is_confirmed());
+        assert_eq!(
+            cleanup.audit(),
+            &if reject_audit {
+                Err(AgentError::MultipleOperationFailures {
+                    first_error: Box::new(AgentError::AuditFailure),
+                    subsequent_error: Box::new(AgentError::AuditFailure),
+                })
+            } else {
+                Ok(())
+            }
+        );
+        assert_eq!(cleanup.operation_failure(), Some(&AgentError::Backpressure));
+        let expected_consumer = if reject_audit {
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(AgentError::AuditFailure),
+                subsequent_error: Box::new(AgentError::MultipleOperationFailures {
+                    first_error: Box::new(AgentError::AuditFailure),
+                    subsequent_error: Box::new(AgentError::Backpressure),
+                }),
+            }
+        } else {
+            AgentError::Backpressure
+        };
+        assert_eq!(restored.into_result(), Err(expected_consumer));
+    }
 }
 
 #[tokio::test]
@@ -345,7 +402,10 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
     let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
     let (events, _observations) = EventQueueBudget::new().channel(2 * MAX_RETAINED_CATEGORY_FACTS);
     worker.events = events;
-    let audit = Arc::new(SwitchingAudit(AtomicBool::new(false)));
+    let audit = Arc::new(SwitchingAudit {
+        reject: AtomicBool::new(false),
+        calls: AtomicU64::new(0),
+    });
     worker.audit = audit.clone();
     let mut controller =
         ExecutionController::new(ExecutionSessionId::new("audit-context").unwrap());
@@ -412,7 +472,7 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
         .next()
         .filter(|record| matches!(record, ExecutionAuditRecord::Finished(_)))
         .expect("finishing the closed execution emits its terminal record");
-    audit.0.store(true, Ordering::SeqCst);
+    audit.reject.store(true, Ordering::SeqCst);
     assert!(worker.record_cancellations(cancellations).await.is_err());
     let failure = match worker
         .record_audit(finished, AuditEffectPhase::Lifecycle)
@@ -421,6 +481,10 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
         Err(failure) => failure,
         Ok(()) => panic!("late finished audit must retain sink rejection"),
     };
+    assert_eq!(
+        audit.calls.load(Ordering::SeqCst),
+        MAX_RETAINED_CATEGORY_FACTS as u64 + 1
+    );
     assert_eq!(failure.error(), &AgentError::AuditFailure);
     assert!(!worker
         .settlement_facts
@@ -448,7 +512,7 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
         component,
         FinalizedFailureComponent::Operation(_) | FinalizedFailureComponent::OperationOverflow
     )));
-    assert_worker_projection_survives_reload(projection).await;
+    let _restored = worker_projection_after_reload(projection).await;
 }
 
 #[tokio::test]
