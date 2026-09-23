@@ -22,7 +22,7 @@ pub enum ResourceCleanup {
 pub struct CleanupReport {
     resources: ResourceCleanup,
     audit: Result<(), AgentError>,
-    operation_failure: Option<AgentError>,
+    operation_failure: Option<Box<AgentError>>,
     completion_failure: Option<Box<AgentError>>,
 }
 impl CleanupReport {
@@ -63,24 +63,24 @@ impl CleanupReport {
     /// Replace physical evidence after retry, retaining the original audit result.
     pub fn with_resources(self, resources: ResourceCleanup) -> Self {
         Self::new(resources, self.audit)
-            .with_operation_failure(self.operation_failure)
+            .with_operation_failure(self.operation_failure.map(|error| *error))
             .with_completion_failure(self.completion_failure.map(|error| *error))
     }
     /// Replace audit acknowledgement while preserving physical cleanup and the
     /// initiating operation diagnostic.
     pub fn with_audit(self, audit: Result<(), AgentError>) -> Self {
         Self::new(self.resources, audit)
-            .with_operation_failure(self.operation_failure)
+            .with_operation_failure(self.operation_failure.map(|error| *error))
             .with_completion_failure(self.completion_failure.map(|error| *error))
     }
     /// Preserve the initiating operation diagnostic alongside cleanup and audit.
     pub fn with_operation_failure(mut self, failure: Option<AgentError>) -> Self {
-        self.operation_failure = failure.map(AgentError::bounded);
+        self.operation_failure = failure.map(|error| Box::new(error.bounded()));
         self
     }
     /// Initiating operation failure, separate from this cleanup attempt.
     pub fn operation_failure(&self) -> Option<&AgentError> {
-        self.operation_failure.as_ref()
+        self.operation_failure.as_deref()
     }
     /// Failure while supervising completion of this cleanup attempt.
     ///
@@ -136,7 +136,7 @@ impl CleanupReport {
         };
         Err(match operation_failure {
             Some(operation_error) => AgentError::OperationAndCleanupFailure {
-                operation_error: Box::new(operation_error),
+                operation_error,
                 cleanup_error: Box::new(cleanup),
             },
             None => cleanup,
@@ -281,7 +281,7 @@ impl ExecutionReport {
     pub fn into_result(self) -> Result<ExecutionOutcome, AgentError> {
         let (cleanup_failure, cleanup_primary) = match self.session_state {
             ProviderSessionState::CleanupReported(report) => {
-                let primary = report.operation_failure.clone();
+                let primary = report.operation_failure().cloned();
                 (report.into_result().err(), primary)
             }
             _ => (None, None),
