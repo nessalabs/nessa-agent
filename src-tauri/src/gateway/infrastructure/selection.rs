@@ -1,20 +1,22 @@
 use super::super::application::{
     GatewayHost, GatewayReconciliationAudit, GatewayReconciliationIds, LoginShellPath,
 };
-use super::login_shell::LoginShell;
+#[cfg(target_os = "macos")]
+use super::macos::{FileReconciliationAudit, LaunchctlDisabledServiceStatus, Launchd};
+#[cfg(not(target_os = "macos"))]
+use super::unsupported::{Unsupported, UnsupportedAudit};
+use super::{login_shell::LoginShell, reconciliation_ids::RandomReconciliationIds};
 use std::{path::PathBuf, sync::Arc};
 
 /// Selects the native gateway adapter for the current build target.
 pub fn current() -> Arc<dyn GatewayHost> {
     #[cfg(target_os = "macos")]
     {
-        Arc::new(super::macos::Launchd::new(Arc::new(
-            super::macos::LaunchctlDisabledServiceStatus,
-        )))
+        Arc::new(Launchd::new(Arc::new(LaunchctlDisabledServiceStatus)))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Arc::new(super::unsupported::Unsupported)
+        Arc::new(Unsupported)
     }
 }
 
@@ -29,17 +31,17 @@ pub fn login_shell_path() -> Arc<dyn LoginShellPath> {
 }
 
 pub fn reconciliation_ids() -> Arc<dyn GatewayReconciliationIds> {
-    Arc::new(super::reconciliation_ids::RandomReconciliationIds)
+    Arc::new(RandomReconciliationIds)
 }
 
 pub fn reconciliation_audit(config_root: Option<PathBuf>) -> Arc<dyn GatewayReconciliationAudit> {
     #[cfg(target_os = "macos")]
     {
-        Arc::new(super::macos::FileReconciliationAudit::new(config_root))
+        Arc::new(FileReconciliationAudit::new(config_root))
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = config_root;
-        Arc::new(super::unsupported::UnsupportedAudit)
+        Arc::new(UnsupportedAudit)
     }
 }

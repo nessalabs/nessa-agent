@@ -1880,11 +1880,33 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
 }
 
 #[derive(Default)]
-struct RecordingEvents(Mutex<Vec<GatewayStartup>>);
+struct RecordingEvents {
+    observations: Mutex<Vec<GatewayStartup>>,
+    changed: Condvar,
+}
+
+impl RecordingEvents {
+    fn wait_for(&self, expected: usize) -> Vec<GatewayStartup> {
+        let (observations, timeout) = self
+            .changed
+            .wait_timeout_while(
+                self.observations.lock().unwrap(),
+                Duration::from_secs(2),
+                |observations| observations.len() < expected,
+            )
+            .unwrap();
+        assert!(
+            observations.len() >= expected && !timeout.timed_out(),
+            "startup events did not reach the caller-owned port"
+        );
+        observations.clone()
+    }
+}
 
 impl GatewayStartupEvents for RecordingEvents {
     fn publish(&self, startup: &GatewayStartup) {
-        self.0.lock().unwrap().push(startup.clone());
+        self.observations.lock().unwrap().push(startup.clone());
+        self.changed.notify_all();
     }
 }
 
@@ -1939,9 +1961,7 @@ fn a_later_credential_load_retries_failed_startup_with_revisioned_events() {
     assert_eq!(ready.phase(), &GatewayStartupPhase::Ready);
 
     let mut revisions = events
-        .0
-        .lock()
-        .unwrap()
+        .wait_for(3)
         .iter()
         .map(GatewayStartup::revision)
         .collect::<Vec<_>>();
@@ -2005,7 +2025,8 @@ fn a_changed_identity_advances_ready_even_if_native_progress_was_missed() {
     assert!(host.registrations.lock().unwrap().is_empty());
     gateway.stop_agents().unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["replacement"]);
-    let observations = events.0.lock().unwrap().clone();
+    let mut observations = events.wait_for(2);
+    observations.sort_by_key(GatewayStartup::revision);
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].phase(), &GatewayStartupPhase::Ready);
     assert_eq!(observations[0].revision(), 1);
@@ -2058,7 +2079,8 @@ fn native_restart_progress_transitions_ready_through_starting() {
     tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
     tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
 
-    let observations = events.0.lock().unwrap().clone();
+    let mut observations = events.wait_for(3);
+    observations.sort_by_key(GatewayStartup::revision);
     assert_eq!(observations.len(), 3);
     assert_eq!(observations[0].phase(), &GatewayStartupPhase::Ready);
     assert_eq!(observations[1].phase(), &GatewayStartupPhase::Starting);
@@ -2070,6 +2092,64 @@ fn native_restart_progress_transitions_ready_through_starting() {
             .collect::<Vec<_>>(),
         [1, 2, 3]
     );
+}
+
+#[test]
+fn receipt_settlement_does_not_wait_for_startup_event_delivery() {
+    struct BlockingEvents {
+        entered: Mutex<Option<mpsc::Sender<GatewayStartup>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl GatewayStartupEvents for BlockingEvents {
+        fn publish(&self, startup: &GatewayStartup) {
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                entered.send(startup.clone()).unwrap();
+            }
+            self.release.lock().unwrap().recv().unwrap();
+        }
+    }
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let events = Arc::new(BlockingEvents {
+        entered: Mutex::new(Some(entered_tx)),
+        release: Mutex::new(release_rx),
+    });
+    let gateway = Arc::new(Gateway::bootstrap(
+        Arc::new(FakeHost {
+            registration: Ok(reconciled("settled")),
+            stop_result: Ok(()),
+            calls: Mutex::new(vec![]),
+        }),
+        login_shell("/usr/bin"),
+        events,
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    ));
+    let (result_tx, result_rx) = mpsc::channel();
+    let caller = {
+        let gateway = gateway.clone();
+        thread::spawn(move || {
+            result_tx
+                .send(tauri::async_runtime::block_on(
+                    gateway.wait_ready(BundledSurface::Main),
+                ))
+                .unwrap();
+        })
+    };
+
+    let delivered = entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(delivered.phase(), &GatewayStartupPhase::Ready);
+    assert_eq!(delivered.revision(), 1);
+    result_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receipt did not settle while event delivery was blocked")
+        .unwrap();
+    release_tx.send(()).unwrap();
+    caller.join().unwrap();
 }
 
 #[test]
@@ -2306,12 +2386,13 @@ fn caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_re
         release: Mutex::new(release_rx),
         registrations: Mutex::new(0),
     });
+    let audit = Arc::new(RecordingAudit::default());
     let gateway = Arc::new(Gateway::bootstrap(
         host.clone(),
         login_shell("/usr/bin"),
         testing::discard_startup_events(),
         testing::sequential_reconciliation_ids(),
-        testing::discard_reconciliation_audit(),
+        audit.clone(),
         "/runtime".into(),
         "ci".into(),
     ));
@@ -2334,6 +2415,11 @@ fn caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_re
         let gateway = gateway.clone();
         tauri::async_runtime::spawn(async move { gateway.wait_ready(BundledSurface::Main).await })
     };
+    if !audit.wait_for_joined(1) {
+        joined.abort();
+        let _ = release_tx.send(());
+        panic!("follower did not join the installed receipt before its owner settled");
+    }
     release_tx.send(()).unwrap();
     tauri::async_runtime::block_on(joined).unwrap().unwrap();
 
