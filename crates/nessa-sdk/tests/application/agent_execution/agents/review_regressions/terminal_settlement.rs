@@ -77,6 +77,9 @@ async fn terminal_observation_with_failed_settlement_cleans_up_and_preserves_bot
                     ));
                     backend.fail_close.store(false, Ordering::SeqCst);
                     agent.close(actor()).await.unwrap();
+                    reattach_after_explicit_close(&agent).await;
+                } else {
+                    recover_after_automatic_stop(&agent).await;
                 }
                 *backend.execution_error.lock().unwrap() = None;
                 backend.suppress_terminal.store(false, Ordering::SeqCst);

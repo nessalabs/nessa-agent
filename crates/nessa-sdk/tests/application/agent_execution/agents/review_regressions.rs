@@ -386,6 +386,7 @@ async fn uncertain_cleanup_blocks_admission_until_explicit_close_succeeds() {
     assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
     backend.fail_close.store(false, Ordering::SeqCst);
     agent.close(close_action()).await.unwrap();
+    reattach_after_explicit_close(&agent).await;
     assert_eq!(
         agent
             .enqueue(input("safe"), close_action())
@@ -727,6 +728,7 @@ async fn failure_cleanup_closes_admission_before_awaiting_provider_shutdown() {
     ));
     assert_eq!(backend.steers.load(Ordering::SeqCst), 0);
     assert_eq!(storage.snapshot().invocations.len(), 1);
+    recover_after_automatic_stop(&agent).await;
     agent.invoke(input("after-cleanup"), actor()).await.unwrap();
 }
 

@@ -990,7 +990,6 @@ impl Agent {
 
     async fn shutdown_after_failure(&self, request: SessionCloseRequest) -> CleanupReport {
         let attempt = self.start_shutdown(request);
-        let _scheduler = self.inner.scheduler.lock().await;
         self.inner.lifecycle.complete_stop(&attempt).await
     }
 

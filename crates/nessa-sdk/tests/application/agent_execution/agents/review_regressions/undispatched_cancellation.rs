@@ -237,6 +237,17 @@ async fn previous_cleanup_cannot_cancel_a_new_input_rejected_by_its_hook() {
             invoke_control(&agent, ProviderControl::Answer).await,
             Err(AgentError::StalePermission)
         );
+        if audit_failed {
+            assert_eq!(
+                agent.invoke(input("hook-rejection"), actor()).await,
+                Err(AgentError::AuditFailure)
+            );
+            assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
+            assert!(storage.snapshot().invocations.is_empty());
+            assert_eq!(agent.close(actor()).await, Err(AgentError::AuditFailure));
+            continue;
+        }
+        recover_after_automatic_stop(&agent).await;
         agent.add_invocation_hook(Arc::new(RejectBeforeDispatch));
         assert!(matches!(
             agent.invoke(input("hook-rejection"), actor()).await,
@@ -248,12 +259,7 @@ async fn previous_cleanup_cannot_cancel_a_new_input_rejected_by_its_hook() {
             "historical cleanup did not stop this input"
         );
         assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
-        let result = agent.close(actor()).await;
-        if audit_failed {
-            assert_eq!(result, Err(AgentError::AuditFailure));
-        } else {
-            result.unwrap();
-        }
+        agent.close(actor()).await.unwrap();
     }
 }
 
