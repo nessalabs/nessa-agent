@@ -317,7 +317,28 @@ fn restored_recovery_rejects_both_confirmation_state_contradictions() {
         } else {
             stored["transition"]["facts"]["failures"]["confirmation"] = serde_json::Value::Null;
         }
-        std::fs::write(&record_path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let decoded: StoredRecord = serde_json::from_value(stored.clone()).unwrap();
+        let fixture_failure = decoded.restore_transition().unwrap_err();
+        let expected = if confirmed {
+            "confirmed recovery cannot contain a confirmation failure"
+        } else {
+            "unconfirmed recovery requires a confirmation failure"
+        };
+        assert!(fixture_failure.detail().contains(expected));
+        let encoded = serde_json::to_vec(&stored).unwrap();
+        let retained =
+            PrivateDirectory::open_beneath(root.path(), std::path::Path::new("audit")).unwrap();
+        let mut file = retained
+            .open_file(
+                std::ffi::OsStr::new("00000000000000000003.json"),
+                OpenMode::ReadWrite,
+            )
+            .unwrap();
+        file.set_len(0).unwrap();
+        file.rewind().unwrap();
+        file.write_all(&encoded).unwrap();
+        file.sync_all().unwrap();
+        retained.sync().unwrap();
         let (_, next) = InstallAttempt::start(
             agent(),
             target(),
@@ -326,11 +347,7 @@ fn restored_recovery_rejects_both_confirmation_state_contradictions() {
 
         let failure = audit.record(next).unwrap_err();
         assert_eq!(failure.stage(), AuditFailureStage::ReadJournal);
-        assert!(failure.detail().contains(if confirmed {
-            "confirmed recovery cannot contain a confirmation failure"
-        } else {
-            "unconfirmed recovery requires a confirmation failure"
-        }));
+        assert!(failure.detail().contains(expected));
     }
 }
 
@@ -487,11 +504,18 @@ fn oversized_record_is_refused_by_the_bounded_reader_before_decode() {
     let root = temporary_root();
     let directory = root.path().join("audit");
     let audit = audit_at(root.path());
-    std::fs::write(
-        directory.join("00000000000000000001.json"),
-        vec![b' '; MAX_AUDIT_RECORD_BYTES + 1],
-    )
-    .unwrap();
+    let retained =
+        PrivateDirectory::open_beneath(root.path(), std::path::Path::new("audit")).unwrap();
+    let mut file = retained
+        .open_file(
+            std::ffi::OsStr::new("00000000000000000001.json"),
+            OpenMode::CreateNew,
+        )
+        .unwrap();
+    file.write_all(&vec![b' '; MAX_AUDIT_RECORD_BYTES + 1])
+        .unwrap();
+    file.sync_all().unwrap();
+    retained.sync().unwrap();
     let (_, started) = InstallAttempt::start(agent(), target(), request());
 
     let failure = audit.record(started).unwrap_err();
