@@ -71,6 +71,12 @@ enum AuditPanic {
 struct PanickingAudit(AuditPanic);
 struct QueuePanickingAudit(AuditPanic);
 struct QueueSettlementRejectingAudit;
+struct AutomaticCloseAudit {
+    starting_entered: Notify,
+    starting_release: Mutex<Option<oneshot::Receiver<()>>>,
+    closed_entered: Notify,
+    closed_release: Mutex<Option<oneshot::Receiver<()>>>,
+}
 struct PanickingAuditFuture(AuditPanic);
 impl ExecutionAudit for PanickingAudit {
     fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -102,6 +108,36 @@ impl ExecutionAudit for QueueSettlementRejectingAudit {
         })
     }
 }
+impl ExecutionAudit for AutomaticCloseAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            match record {
+                ExecutionAuditRecord::Attachment(record)
+                    if record.after() == AttachmentAuditStage::Starting =>
+                {
+                    self.starting_entered.notify_one();
+                    let release = self.starting_release.lock().unwrap().take();
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                    Ok(())
+                }
+                ExecutionAuditRecord::Attachment(record)
+                    if record.cause() == AttachmentAuditCause::Closed =>
+                {
+                    self.closed_entered.notify_one();
+                    let release = self.closed_release.lock().unwrap().take();
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                    Err(AgentError::AuditFailure)
+                }
+                ExecutionAuditRecord::QueueAdmitted(_) => Err(AgentError::AuditFailure),
+                _ => Ok(()),
+            }
+        })
+    }
+}
 
 #[derive(Clone, Copy)]
 enum OpenPanic {
@@ -111,6 +147,13 @@ enum OpenPanic {
 }
 struct PanickingProvider(OpenPanic);
 struct NoResourcesProvider;
+struct GatedFailedOpenProvider {
+    cleanup: Arc<GatedFailedOpenCleanup>,
+}
+struct GatedFailedOpenCleanup {
+    entered: Notify,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+}
 struct GatedOpenProvider {
     inner: Arc<TestProvider>,
     entered: Notify,
@@ -170,6 +213,34 @@ impl AgentProvider for NoResourcesProvider {
     }
     fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
         Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+    }
+}
+impl ProviderCleanup for GatedFailedOpenCleanup {
+    fn retry_cleanup(&self) -> CleanupFuture<'_> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                let _ = release.await;
+            }
+            CleanupReport::confirmed(CloseOutcome { forced: false })
+        })
+    }
+}
+impl AgentProvider for GatedFailedOpenProvider {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("gated-failed-open", "fixture", "test").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        Box::pin(async move {
+            Err(ProviderOpenError::with_cleanup(
+                AgentError::Closed,
+                self.cleanup.clone(),
+            ))
+        })
     }
 }
 impl AgentProvider for GatedOpenProvider {
@@ -343,7 +414,7 @@ impl Drop for PanickingAuditFuture {
 }
 
 async fn prepared(
-    provider: Arc<TestProvider>,
+    provider: Arc<dyn AgentProvider>,
     storage: &MemoryStorage,
     audit: Arc<dyn ExecutionAudit>,
 ) -> Agent {
@@ -428,6 +499,46 @@ async fn initial_open_failure_settles_every_owned_queue_receipt() {
             .expect("second receipt settled"),
         Err(AgentError::Closed)
     );
+    for result in [
+        agent
+            .enqueue(request("after-failed-attachment"), actor())
+            .await,
+        agent
+            .enqueue_steering(request("steering-after-failed-attachment"), actor())
+            .await,
+    ] {
+        assert!(matches!(
+            result,
+            Err(AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
+                _
+            )))
+        ));
+    }
+    let snapshot = storage.snapshot();
+    for record in &snapshot.invocations {
+        assert_eq!(record.result, Some(Err(AgentError::Closed)));
+        assert_eq!(
+            record.scheduling.last().unwrap().stage,
+            InvocationStage::Settled
+        );
+    }
+    assert!(snapshot.queue_history.iter().any(|record| matches!(
+        &record.mutation,
+        QueueMutation::Removed { id, .. } if id.as_str() == "first-before-failure"
+    )));
+    drop(agent);
+    let restored = Agent::prepare(
+        Arc::new(NoResourcesProvider),
+        storage.manager().await,
+        Arc::new(AcceptingAudit),
+    )
+    .await
+    .unwrap();
+    let retry = restored
+        .enqueue(request("first-before-failure"), actor())
+        .await
+        .unwrap();
+    assert_eq!(retry.wait().await, Err(AgentError::Closed));
 }
 
 #[tokio::test]
@@ -468,6 +579,48 @@ async fn initial_open_failure_settles_all_receipts_despite_audit_and_storage_fai
             AgentError::MultipleOperationFailures { .. } | AgentError::StorageAfterExecution { .. }
         ));
     }
+}
+
+#[tokio::test]
+async fn failed_attachment_refuses_new_work_while_cleanup_is_still_running() {
+    let storage = MemoryStorage::default();
+    let (release, waiting) = oneshot::channel();
+    let cleanup = Arc::new(GatedFailedOpenCleanup {
+        entered: Notify::new(),
+        release: Mutex::new(Some(waiting)),
+    });
+    let agent = prepared(
+        Arc::new(GatedFailedOpenProvider {
+            cleanup: cleanup.clone(),
+        }),
+        &storage,
+        Arc::new(AcceptingAudit),
+    )
+    .await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    cleanup.entered.notified().await;
+
+    assert!(matches!(
+        agent
+            .enqueue(request("during-failed-cleanup"), actor())
+            .await,
+        Err(AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
+            _
+        )))
+    ));
+    assert!(matches!(
+        agent
+            .enqueue_steering(request("steering-during-failed-cleanup"), actor())
+            .await,
+        Err(AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
+            _
+        )))
+    ));
+    release.send(()).unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
 }
 
 #[tokio::test]
@@ -785,12 +938,10 @@ async fn attachment_authorization_cannot_be_consumed_by_an_identical_other_agent
         Arc::new(AcceptingAudit),
     )
     .await;
-    let second = prepared(
-        TestProvider::new(),
-        &second_storage,
-        Arc::new(AcceptingAudit),
-    )
-    .await;
+    let second_audit = Arc::new(AttachmentAuditProbe::default());
+    let (release, waiting) = oneshot::channel();
+    *second_audit.release.lock().unwrap() = Some(waiting);
+    let second = prepared(TestProvider::new(), &second_storage, second_audit.clone()).await;
     let first_authorization = first
         .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
         .unwrap();
@@ -802,6 +953,7 @@ async fn attachment_authorization_cannot_be_consumed_by_an_identical_other_agent
         first.start_attachment(second_authorization),
         Err(AgentError::AttachmentAuthorizationStale)
     ));
+    second_audit.entered.notified().await;
     assert_eq!(first.attachment_status().phase(), AttachmentPhase::Waiting);
     first
         .start_attachment(first_authorization)
@@ -813,6 +965,12 @@ async fn attachment_authorization_cannot_be_consumed_by_an_identical_other_agent
         second.authorize_attachment(AttachmentRequest::CallerRequested(actor())),
         Err(AgentError::AttachmentAuthorizationStale)
     ));
+    release.send(()).unwrap();
+    second_audit.completed.notified().await;
+    let replacement = second
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    drop(replacement);
 }
 
 #[tokio::test]
@@ -895,6 +1053,49 @@ async fn rejecting_starting_close_audit_blocks_close_and_retains_the_failed_gene
     let failed = agent.attachment_status().evidence_failure().unwrap();
     assert_eq!(failed.generation(), 0);
     assert_eq!(failed.code(), AttachmentFailureCode::Audit);
+}
+
+#[tokio::test]
+async fn automatic_stop_waits_for_and_retains_rejected_starting_close_audit() {
+    let storage = MemoryStorage::default();
+    let (start_release, start_waiting) = oneshot::channel();
+    let (close_release, close_waiting) = oneshot::channel();
+    let audit = Arc::new(AutomaticCloseAudit {
+        starting_entered: Notify::new(),
+        starting_release: Mutex::new(Some(start_waiting)),
+        closed_entered: Notify::new(),
+        closed_release: Mutex::new(Some(close_waiting)),
+    });
+    let agent = prepared(TestProvider::new(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.starting_entered.notified().await;
+    let admission = agent
+        .enqueue(request("automatic-close-audit"), actor())
+        .await
+        .unwrap();
+    audit.closed_entered.notified().await;
+    assert!(agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .is_err());
+
+    close_release.send(()).unwrap();
+    start_release.send(()).unwrap();
+    assert!(admission.wait().await.is_err());
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    tokio::task::yield_now().await;
+    assert!(agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .is_err());
+    assert_eq!(
+        agent
+            .attachment_status()
+            .evidence_failure()
+            .map(AttachmentFailure::code),
+        Some(AttachmentFailureCode::Audit)
+    );
 }
 
 #[tokio::test]
@@ -1104,7 +1305,8 @@ async fn provider_context_save_panics_fail_durably_and_cleanup_provider() {
         .await
         .unwrap();
         let provider = TestProvider::new();
-        let agent = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit))
+        let audit = Arc::new(AttachmentAuditProbe::default());
+        let agent = Agent::prepare(provider.clone(), manager, audit.clone())
             .await
             .unwrap();
         *failures.lock().unwrap() = Some(failure);
@@ -1123,6 +1325,16 @@ async fn provider_context_save_panics_fail_durably_and_cleanup_provider() {
             agent.attachment_status().phase(),
             AttachmentPhase::Failed(AttachmentFailureCode::Storage)
         ));
+        let retry = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        agent.start_attachment(retry).unwrap().wait().await.unwrap();
+        assert_eq!(provider.calls.opens.lock().unwrap().len(), 2);
+        assert!(provider.calls.opens.lock().unwrap()[1].is_some());
+        assert!(audit.records.lock().unwrap().iter().any(|record| {
+            record.cause() == AttachmentAuditCause::Started(AttachmentCause::Reopen)
+        }));
+        agent.close(close_action()).await.unwrap();
     }
 }
 

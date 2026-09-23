@@ -506,6 +506,16 @@ impl SessionManager {
             .find(|record| &record.request.execution_id == id)
             .cloned()
     }
+    /// Whether current observed evidence names a provider context, including a
+    /// publication write whose acknowledgement failed.
+    pub(crate) async fn has_observed_provider_context(&self) -> bool {
+        self.evidence
+            .lock()
+            .await
+            .observed
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.provider_context.recorded().is_some())
+    }
     /// Check the complete reviewed subject before acknowledging adapter evidence.
     /// Permission observations are saved before publication, so absent retained
     /// evidence cannot authorize an otherwise well-formed provider receipt.
@@ -689,8 +699,12 @@ impl SessionManager {
     pub(crate) async fn retain_submission_acknowledgement(
         &self,
         index: usize,
-        acknowledgement: SubmissionAcknowledgement,
+        mut acknowledgement: SubmissionAcknowledgement,
     ) -> Result<(), StorageError> {
+        if let SubmissionAcknowledgement::Failed { audit, storage } = &mut acknowledgement {
+            *audit = audit.take().map(AgentError::bounded);
+            *storage = storage.take().map(StorageError::bounded);
+        }
         let mut evidence = self.evidence.lock().await;
         let record = evidence
             .observed
@@ -744,6 +758,34 @@ impl SessionManager {
         if let Some(mutation) = mutation {
             Self::append_queue_mutation(snapshot, mutation, actor)?;
         }
+        self.save_observed(&mut evidence).await
+    }
+    /// Atomically retain a failed queued receipt, its terminal scheduling edge,
+    /// and actual queue removal. The completed result is present before the
+    /// domain validates the terminal scheduling checkpoint.
+    pub(crate) async fn settle_failed_queue(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+        mutation: QueueMutation,
+        result: Result<ExecutionOutcome, AgentError>,
+    ) -> Result<(), StorageError> {
+        let result = result.map_err(AgentError::bounded);
+        let mut evidence = self.evidence.lock().await;
+        let mut next = evidence
+            .observed
+            .as_ref()
+            .ok_or_else(|| StorageError::Corrupt("queue settlement has no session".into()))?
+            .clone();
+        let record = next.invocations.get_mut(index).ok_or_else(|| {
+            StorageError::Corrupt("queue settlement has no submitted invocation".into())
+        })?;
+        record.local_outcome = result.as_ref().ok().copied();
+        record.result = Some(result);
+        record.scheduling.push(event);
+        super::validation::invocation_history(record)?;
+        Self::append_queue_mutation(&mut next, mutation, None)?;
+        evidence.observed = Some(next);
         self.save_observed(&mut evidence).await
     }
     /// Scope output authority to the owning observation loop, including unwind.

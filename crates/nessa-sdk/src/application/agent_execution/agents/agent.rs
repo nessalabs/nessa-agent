@@ -256,10 +256,12 @@ impl Agent {
                     }
                     _ => AttachmentFailureCode::Provider,
                 };
+                let recorded_context = agent.inner.manager.has_observed_provider_context().await;
                 let transitioned = lifecycle.fail_attachment(
                     start.generation,
                     code,
                     result.as_ref().expect_err("attachment failed").clone(),
+                    recorded_context,
                 );
                 if transitioned {
                     // Initial attachment has no runner available to own queued
@@ -983,9 +985,8 @@ impl Agent {
 
     async fn shutdown_after_failure(&self, request: SessionCloseRequest) -> CleanupReport {
         let attempt = self.start_shutdown(request);
-        let cleanup = attempt.clone().wait().await;
         let _scheduler = self.inner.scheduler.lock().await;
-        self.inner.lifecycle.finalize_stop(&attempt, &cleanup).await
+        self.inner.lifecycle.complete_stop(&attempt).await
     }
 
     /// Resolve the identified pending review using its offered option and verified

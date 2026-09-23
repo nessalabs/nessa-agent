@@ -1,7 +1,9 @@
 //! Decode-pass read counts distinguish early bounds from post-allocation validation.
 use super::{read, Loaded};
-use crate::application::agent_execution::agents::ProviderDiagnostic;
-use crate::application::agent_execution::sessions::{SessionSnapshot, StorageError};
+use crate::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
+use crate::application::agent_execution::sessions::{
+    SessionSnapshot, StorageError, SubmissionAcknowledgement,
+};
 use crate::domain::agent_execution::{
     prompts::{LinkedFile, UserMessage},
     sessions::SessionId,
@@ -524,6 +526,34 @@ fn a_journal_written_before_files_reads_as_a_message_that_named_none() {
     metadata.remove("user_images");
     assert!(matches!(
         load(encoded(&gutted)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+}
+
+#[test]
+fn acknowledgement_audit_uses_direct_optional_error_shape_and_preflight_bounds() {
+    let mut valid = record();
+    valid["invocations"][0]["metadata"]["acknowledgement"] = json!({
+        "Failed": { "audit": "AuditFailure", "storage": null }
+    });
+    let restored = load(encoded(&valid)).0.unwrap().snapshot.unwrap();
+    assert!(matches!(
+        restored.invocations[0].acknowledgement,
+        SubmissionAcknowledgement::Failed {
+            audit: Some(AgentError::AuditFailure),
+            storage: None
+        }
+    ));
+
+    let mut oversized = record();
+    oversized["invocations"][0]["metadata"]["acknowledgement"] = json!({
+        "Failed": {
+            "audit": { "Protocol": "x".repeat(1024 * 1024) },
+            "storage": null
+        }
+    });
+    assert!(matches!(
+        load(encoded(&oversized)).0,
         Err(StorageError::Corrupt(_))
     ));
 }

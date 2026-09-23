@@ -280,7 +280,10 @@ impl Agent {
         storage: Option<StorageError>,
         panic_diagnostic: &'static str,
     ) -> Option<AdmissionEvidenceFailure> {
-        let mut failure = AdmissionEvidenceFailure::new(audit, storage);
+        let mut failure = AdmissionEvidenceFailure::new(
+            audit.map(AgentError::bounded),
+            storage.map(StorageError::bounded),
+        );
         let acknowledgement = match &failure {
             Some(failure) => SubmissionAcknowledgement::Failed {
                 audit: failure.audit.clone(),
@@ -823,12 +826,7 @@ impl Agent {
         drop(scheduler);
         let agent = self.clone();
         tokio::spawn(async move {
-            let cleanup = attempt.clone().wait().await;
-            let _ = agent
-                .inner
-                .lifecycle
-                .finalize_stop(&attempt, &cleanup)
-                .await;
+            let _ = agent.inner.lifecycle.complete_stop(&attempt).await;
         });
         Ok(admission)
     }
@@ -1153,8 +1151,7 @@ impl Agent {
         } else {
             SchedulingCause::RunnerStopped
         };
-        let cleanup = attempt.clone().wait().await;
-        let cleanup = self.inner.lifecycle.finalize_stop(&attempt, &cleanup).await;
+        let cleanup = self.inner.lifecycle.complete_stop(&attempt).await;
         let error = AgentError::Protocol("scheduling task panicked".into());
         let error = match cleanup.into_result() {
             Ok(_) => error,
@@ -1408,12 +1405,7 @@ impl Agent {
                         .await;
                     let agent = self.clone();
                     tokio::spawn(async move {
-                        let cleanup = attempt.clone().wait().await;
-                        let _ = agent
-                            .inner
-                            .lifecycle
-                            .finalize_stop(&attempt, &cleanup)
-                            .await;
+                        let _ = agent.inner.lifecycle.complete_stop(&attempt).await;
                     });
                 }
                 Ok(SteeringDelivery::Injected { target, evidence })
@@ -1504,12 +1496,7 @@ impl Agent {
                     }
                     let agent = self.clone();
                     tokio::spawn(async move {
-                        let cleanup = attempt.clone().wait().await;
-                        let _ = agent
-                            .inner
-                            .lifecycle
-                            .finalize_stop(&attempt, &cleanup)
-                            .await;
+                        let _ = agent.inner.lifecycle.complete_stop(&attempt).await;
                     });
                 }
                 Ok(SteeringDelivery::Queued(admission))
@@ -1655,8 +1642,7 @@ impl Agent {
         let Some(attempt) = self.inner.lifecycle.start_control_cleanup(&admission) else {
             return outcome;
         };
-        let cleanup = attempt.clone().wait().await;
-        let cleanup = self.inner.lifecycle.finalize_stop(&attempt, &cleanup).await;
+        let cleanup = self.inner.lifecycle.complete_stop(&attempt).await;
         match cleanup.into_result() {
             Ok(_) => outcome,
             Err(cleanup_error) => Err(AgentError::OperationAndCleanupFailure {
@@ -1789,11 +1775,11 @@ impl Agent {
                     None => aggregate,
                 });
             }
-            let scheduling = self
+            let settlement = self
                 .catch_scheduling_panic(async {
                     self.inner
                         .manager
-                        .record_scheduling_with_queue(
+                        .settle_failed_queue(
                             pending.index,
                             event(
                                 pending.kind,
@@ -1803,10 +1789,11 @@ impl Agent {
                                 SchedulingCause::DispatchFailed,
                                 None,
                             ),
-                            Some(QueueMutation::Removed {
+                            QueueMutation::Removed {
                                 id: id.clone(),
                                 cause: QueueRemovalCause::RunnerStopped,
-                            }),
+                            },
+                            result.clone(),
                         )
                         .await
                 })
@@ -1816,20 +1803,7 @@ impl Agent {
                         "failed queue settlement persistence panicked".into(),
                     ))
                 });
-            let finished = self
-                .catch_scheduling_panic(async {
-                    self.inner
-                        .manager
-                        .finish(pending.index, result.clone())
-                        .await
-                })
-                .await
-                .unwrap_or_else(|()| {
-                    Err(StorageError::Io(
-                        "failed queue result persistence panicked".into(),
-                    ))
-                });
-            for error in [scheduling.err(), finished.err()].into_iter().flatten() {
+            for error in settlement.err() {
                 let aggregate = AgentError::Storage(error.clone());
                 aggregate_failure = Some(match aggregate_failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
@@ -2068,34 +2042,13 @@ impl Agent {
                 }
                 _ => (SchedulingCause::RunnerStopped, None),
             };
-            let (mut scheduler, cleanup, attachment_evidence) = tokio::join!(
-                agent.inner.scheduler.lock(),
-                attempt.clone().wait(),
-                agent.inner.lifecycle.wait_for_attachment_evidence(),
-            );
+            let mut scheduler = agent.inner.scheduler.lock().await;
             let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
             drop(scheduler);
             let _invocation = agent.inner.invocation.lock().await;
             agent.inner.manager.await_admission_writes().await;
             agent.inner.lifecycle.wait_for_work().await;
-            let cleanup = match attachment_evidence {
-                Ok(()) => cleanup,
-                Err(error) => {
-                    let audit = match cleanup.audit() {
-                        Ok(()) => error,
-                        Err(first_error) => AgentError::MultipleOperationFailures {
-                            first_error: Box::new(first_error.clone()),
-                            subsequent_error: Box::new(error),
-                        },
-                    };
-                    cleanup.with_audit(Err(audit))
-                }
-            };
-            let cleanup = agent
-                .inner
-                .lifecycle
-                .finalize_stop(&attempt, &cleanup)
-                .await;
+            let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
             let cleanup = cleanup.into_result();
             let result = match saved {
                 Ok(()) => cleanup,

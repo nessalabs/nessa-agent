@@ -5,9 +5,20 @@ use crate::agent_warm_up::application::{
 };
 use crate::conversation_test_support::{AcceptingAudit, Provider, ProviderFactory, TestClock};
 use nessa_sdk::application::agent_execution::agents::{
-    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+    AgentError, AgentFuture, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
 };
-use nessa_sdk::application::agent_execution::providers::SessionCloseRequest;
+use nessa_sdk::application::agent_execution::executions::{
+    AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord,
+};
+use nessa_sdk::application::agent_execution::providers::{
+    AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
+    ProviderOpenError, ProviderOpenFuture, SessionCloseRequest,
+};
+use nessa_sdk::application::agent_execution::sessions::{
+    ProviderContext, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture,
+};
+use nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -78,14 +89,20 @@ struct Fixture {
     audit: Arc<RecordingAudit>,
 }
 fn fixture() -> Fixture {
+    fixture_with(Arc::new(AcceptingAudit), Arc::new(InMemoryStorage::new()))
+}
+fn fixture_with(
+    execution_audit: Arc<dyn ExecutionAudit>,
+    storage: Arc<dyn SessionStorage>,
+) -> Fixture {
     let provider = Arc::new(ProviderFactory::default());
     let records = Arc::new(MemoryRecords::default());
     let audit = Arc::new(RecordingAudit::default());
     Fixture {
         warm_up: AgentWarmUp::new(
             Arc::new(Provider::new(provider.clone())),
-            Arc::new(AcceptingAudit),
-            Arc::new(InMemoryStorage::new()),
+            execution_audit,
+            storage,
             records.clone(),
             audit.clone(),
             Arc::new(TestClock),
@@ -94,6 +111,112 @@ fn fixture() -> Fixture {
         provider,
         records,
         audit,
+    }
+}
+
+struct RejectPublishedAudit;
+impl ExecutionAudit for RejectPublishedAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(
+                record,
+                ExecutionAuditRecord::Attachment(record)
+                    if record.after() == AttachmentAuditStage::ContextPublished
+            ) {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+struct FailPublicationStorage {
+    inner: InMemoryStorage,
+    failed: AtomicBool,
+}
+
+struct OpenFailureProvider {
+    inner: Provider,
+    cleanup: Arc<OpenFailureCleanup>,
+}
+struct OpenNoResourcesProvider(Provider);
+struct OpenFailureCleanup {
+    calls: AtomicUsize,
+}
+impl ProviderCleanup for OpenFailureCleanup {
+    fn retry_cleanup(&self) -> CleanupFuture<'_> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            CleanupReport::unconfirmed(AgentError::Transport("cleanup retained".into()))
+        })
+    }
+}
+impl AgentProvider for OpenFailureProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.inner.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.inner.capabilities()
+    }
+    fn open(
+        &self,
+        _restore: Option<nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId>,
+    ) -> ProviderOpenFuture<'_> {
+        Box::pin(async move {
+            Err(ProviderOpenError::with_cleanup(
+                AgentError::Protocol("provider open failed".into()),
+                self.cleanup.clone(),
+            ))
+        })
+    }
+}
+impl AgentProvider for OpenNoResourcesProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.0.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.0.capabilities()
+    }
+    fn open(
+        &self,
+        _restore: Option<nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId>,
+    ) -> ProviderOpenFuture<'_> {
+        Box::pin(async {
+            Err(ProviderOpenError::no_resources(AgentError::Protocol(
+                "provider open failed".into(),
+            )))
+        })
+    }
+}
+struct FailPublicationLease {
+    inner: Box<dyn SessionStorageLease>,
+    failed: Arc<AtomicBool>,
+}
+impl SessionStorage for FailPublicationStorage {
+    fn open(
+        &self,
+        id: nessa_sdk::domain::agent_execution::sessions::SessionId,
+    ) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(FailPublicationLease {
+                inner: self.inner.open(id).await?,
+                failed: Arc::new(AtomicBool::new(self.failed.load(Ordering::SeqCst))),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+impl SessionStorageLease for FailPublicationLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.inner.load()
+    }
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        if matches!(snapshot.provider_context, ProviderContext::Recorded(_))
+            && !self.failed.swap(true, Ordering::SeqCst)
+        {
+            return Box::pin(async { Err(StorageError::Io("publication rejected".into())) });
+        }
+        self.inner.save(snapshot)
     }
 }
 
@@ -192,6 +315,133 @@ async fn a_failed_audit_prevents_a_completion_record_and_leaves_the_runtime_cold
     assert_eq!(fixture.audit.records.lock().unwrap().len(), 1);
     // Unrecorded evidence must not leave behind a record claiming success.
     assert!(fixture.records.completed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn confirmed_physical_cleanup_stays_distinct_from_attachment_audit_failure() {
+    let fixture = fixture_with(
+        Arc::new(RejectPublishedAudit),
+        Arc::new(InMemoryStorage::new()),
+    );
+    fixture.warm_up.wait_until_settled().await;
+
+    assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
+    assert!(fixture.records.completed.lock().unwrap().is_empty());
+    let records = fixture.audit.records.lock().unwrap();
+    let failure = records[0].failure.as_ref().unwrap();
+    assert_eq!(failure.error, AgentError::AuditFailure);
+    assert!(!failure.cleanup_unconfirmed);
+}
+
+#[tokio::test]
+async fn publication_failure_cleans_physical_resources_without_claiming_completion() {
+    let fixture = fixture_with(
+        Arc::new(AcceptingAudit),
+        Arc::new(FailPublicationStorage {
+            inner: InMemoryStorage::new(),
+            failed: AtomicBool::new(false),
+        }),
+    );
+    fixture.warm_up.wait_until_settled().await;
+
+    assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
+    assert!(fixture.records.completed.lock().unwrap().is_empty());
+    let records = fixture.audit.records.lock().unwrap();
+    let failure = records[0].failure.as_ref().unwrap();
+    assert!(matches!(
+        &failure.error,
+        AgentError::StorageInitialization { .. }
+    ));
+    assert!(!failure.cleanup_unconfirmed);
+}
+
+#[tokio::test]
+async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
+    let provider = Arc::new(ProviderFactory::default());
+    let cleanup = Arc::new(OpenFailureCleanup {
+        calls: AtomicUsize::new(0),
+    });
+    let records = Arc::new(MemoryRecords::default());
+    let audit = Arc::new(RecordingAudit::default());
+    let warm_up = AgentWarmUp::new(
+        Arc::new(OpenFailureProvider {
+            inner: Provider::new(provider),
+            cleanup: cleanup.clone(),
+        }),
+        Arc::new(AcceptingAudit),
+        Arc::new(InMemoryStorage::new()),
+        records.clone(),
+        audit.clone(),
+        Arc::new(TestClock),
+        runtime(),
+    );
+    warm_up.wait_until_settled().await;
+
+    assert_eq!(cleanup.calls.load(Ordering::SeqCst), 1);
+    assert!(records.completed.lock().unwrap().is_empty());
+    let audit = audit.records.lock().unwrap();
+    let failure = audit[0].failure.as_ref().unwrap();
+    assert_eq!(
+        failure.error,
+        AgentError::Protocol("provider open failed".into())
+    );
+    assert!(failure.cleanup_unconfirmed);
+}
+
+#[tokio::test]
+async fn provider_open_failure_without_resources_reports_confirmed_absence() {
+    let provider = Arc::new(ProviderFactory::default());
+    let records = Arc::new(MemoryRecords::default());
+    let audit = Arc::new(RecordingAudit::default());
+    let warm_up = AgentWarmUp::new(
+        Arc::new(OpenNoResourcesProvider(Provider::new(provider))),
+        Arc::new(AcceptingAudit),
+        Arc::new(InMemoryStorage::new()),
+        records.clone(),
+        audit.clone(),
+        Arc::new(TestClock),
+        runtime(),
+    );
+    warm_up.wait_until_settled().await;
+
+    assert!(records.completed.lock().unwrap().is_empty());
+    let audit = audit.records.lock().unwrap();
+    let failure = audit[0].failure.as_ref().unwrap();
+    assert_eq!(
+        failure.error,
+        AgentError::Protocol("provider open failed".into())
+    );
+    assert!(!failure.cleanup_unconfirmed);
+}
+
+#[tokio::test]
+async fn storage_and_audit_failures_report_unconfirmed_physical_cleanup_independently() {
+    for audit_failure in [false, true] {
+        let execution_audit: Arc<dyn ExecutionAudit> = if audit_failure {
+            Arc::new(RejectPublishedAudit)
+        } else {
+            Arc::new(AcceptingAudit)
+        };
+        let storage: Arc<dyn SessionStorage> = if audit_failure {
+            Arc::new(InMemoryStorage::new())
+        } else {
+            Arc::new(FailPublicationStorage {
+                inner: InMemoryStorage::new(),
+                failed: AtomicBool::new(false),
+            })
+        };
+        let fixture = fixture_with(execution_audit, storage);
+        *fixture.provider.close_failure.lock().unwrap() =
+            Some(AgentError::Transport("cleanup retained".into()));
+        fixture.warm_up.wait_until_settled().await;
+
+        assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
+        assert!(fixture.records.completed.lock().unwrap().is_empty());
+        let audit = fixture.audit.records.lock().unwrap();
+        assert!(audit[0].failure.as_ref().unwrap().cleanup_unconfirmed);
+    }
 }
 
 #[tokio::test]

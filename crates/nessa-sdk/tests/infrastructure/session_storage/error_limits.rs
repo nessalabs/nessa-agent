@@ -35,6 +35,51 @@ async fn oversized_and_deep_errors_cannot_enter_storage_or_custom_restoration() 
 }
 
 #[tokio::test]
+async fn acknowledgement_errors_are_bounded_before_custom_storage_clone() {
+    let root = tempfile::tempdir().unwrap();
+    private::create_directory(&root.path().join("private")).unwrap();
+    let stores: Vec<Arc<dyn SessionStorage>> = vec![
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+    ];
+    let mut deep = AgentError::Deadline;
+    for _ in 0..40 {
+        deep = AgentError::OperationAndCleanupFailure {
+            operation_error: Box::new(deep),
+            cleanup_error: Box::new(AgentError::AuditFailure),
+        };
+    }
+    let mut spare = String::with_capacity(1024 * 1024);
+    spare.push_str("small diagnostic");
+    let acknowledgements = [
+        SubmissionAcknowledgement::Failed {
+            audit: Some(AgentError::Protocol("x".repeat(1024 * 1024))),
+            storage: None,
+        },
+        SubmissionAcknowledgement::Failed {
+            audit: Some(deep),
+            storage: None,
+        },
+        SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: Some(StorageError::Io(spare)),
+        },
+    ];
+    for acknowledgement in acknowledgements {
+        let mut value = snapshot("acknowledgement-error-limits");
+        value.invocations[0].acknowledgement = acknowledgement;
+        for storage in &stores {
+            let lease = storage.open(value.id.clone()).await.unwrap();
+            assert!(matches!(
+                lease.save(value.clone()).await,
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+        assert_custom_retention_admission(value, false).await;
+    }
+}
+
+#[tokio::test]
 async fn bounded_diagnostic_summary_round_trips_without_claiming_missing_details() {
     let root = tempfile::tempdir().unwrap();
     private::create_directory(&root.path().join("private")).unwrap();

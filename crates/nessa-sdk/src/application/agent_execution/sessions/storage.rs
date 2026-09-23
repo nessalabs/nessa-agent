@@ -278,6 +278,15 @@ impl SessionSnapshot {
 }
 
 impl StorageError {
+    pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
+        let capacity = match self {
+            Self::Io(value) | Self::Corrupt(value) => value.capacity(),
+            Self::Busy | Self::IdentityMismatch => 0,
+        };
+        (capacity <= 4096)
+            .then_some(())
+            .ok_or_else(|| Self::Corrupt("stored acknowledgement diagnostic exceeds limit".into()))
+    }
     /// Compact external diagnostics before an SDK error wrapper or clone retains them.
     pub(crate) fn bounded(self) -> Self {
         fn text(mut value: String) -> String {

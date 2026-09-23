@@ -254,6 +254,14 @@ pub(super) fn invocation_history(
             "failed submission acknowledgement has no failed boundary",
         ));
     }
+    if let SubmissionAcknowledgement::Failed { audit, storage } = &invocation.acknowledgement {
+        if let Some(error) = audit {
+            error.validate_retained_size()?;
+        }
+        if let Some(error) = storage {
+            error.validate_retained_size()?;
+        }
+    }
     let mut history = InvocationHistory::new(
         invocation.request.execution_id.clone(),
         invocation.submission,

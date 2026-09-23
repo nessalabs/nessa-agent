@@ -642,6 +642,7 @@ impl SessionLifecycle {
         generation: u64,
         code: AttachmentFailureCode,
         error: AgentError,
+        recorded_context: bool,
     ) -> bool {
         let mut state = self.state.lock().expect("session lifecycle");
         if state.attachment_generation == generation
@@ -654,7 +655,7 @@ impl SessionLifecycle {
             let (recorded, cause) = match &state.attachment {
                 AttachmentState::Starting {
                     recorded, cause, ..
-                } => (*recorded, *cause),
+                } => (*recorded || recorded_context, *cause),
                 AttachmentState::Attached { cause, .. } => (true, *cause),
                 _ => unreachable!("matching starting attachment"),
             };
@@ -738,6 +739,11 @@ impl SessionLifecycle {
         control: bool,
     ) -> Result<WorkPermit, AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
+        if matches!(phase, WorkPhase::Waiting)
+            && matches!(state.attachment, AttachmentState::Failed { .. })
+        {
+            return Err(AgentError::AttachmentUnavailable(Self::phase(&state)));
+        }
         // Stated as what is accepted and then negated once, rather than as two
         // negations joined: an open session takes work, and a closing one still
         // takes the waiting kind for as long as it accepts it.
@@ -1262,11 +1268,7 @@ impl SessionLifecycle {
     }
     /// Called only after queue cancellation and evidence settlement have completed.
     /// Work permits delay reopening until every previously admitted owner retires.
-    pub(super) async fn finalize_stop(
-        &self,
-        ticket: &CloseAttempt,
-        report: &CleanupReport,
-    ) -> CleanupReport {
+    async fn finalize_stop(&self, ticket: &CloseAttempt, report: &CleanupReport) -> CleanupReport {
         let _transition = self.resource_transition.lock().await;
         let mut state = self.state.lock().expect("session lifecycle");
         let current = matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop) if stop.ticket.id == ticket.id);
@@ -1317,6 +1319,26 @@ impl SessionLifecycle {
         }
         self.maybe_reopen(&mut state);
         report
+    }
+    /// Join physical cleanup and attachment audit ownership, then publish one
+    /// common stop result. Every explicit and automatic stop uses this boundary.
+    pub(super) async fn complete_stop(&self, ticket: &CloseAttempt) -> CleanupReport {
+        let (cleanup, attachment_evidence) =
+            tokio::join!(ticket.clone().wait(), self.wait_for_attachment_evidence());
+        let cleanup = match attachment_evidence {
+            Ok(()) => cleanup,
+            Err(error) => {
+                let audit = match cleanup.audit() {
+                    Ok(()) => error,
+                    Err(first_error) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(first_error.clone()),
+                        subsequent_error: Box::new(error),
+                    },
+                };
+                cleanup.with_audit(Err(audit))
+            }
+        };
+        self.finalize_stop(ticket, &cleanup).await
     }
     pub(super) fn accepts_queued(&self) -> bool {
         let state = self.state.lock().unwrap();
