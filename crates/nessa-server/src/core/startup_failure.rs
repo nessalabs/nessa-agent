@@ -177,7 +177,10 @@ mod tests {
     fn the_record_carries_the_reason_the_exit_code_could_not() {
         let stage = Stage::new();
         let managed = stage.managed(GENERATION);
-        let record = written(&RunError::Registry(LocalStoreError::Corrupt), &managed);
+        let record = written(
+            &RunError::registry(LocalStoreError::Corrupt, None),
+            &managed,
+        );
         assert_eq!(record["reason"], "credentialRegistryInvalid");
         assert_eq!(record["exitCode"], 28);
         assert_eq!(record["serviceGeneration"], GENERATION);
@@ -197,7 +200,10 @@ mod tests {
     fn a_later_failure_replaces_the_earlier_one_and_serving_forgets_it() {
         let stage = Stage::new();
         let managed = stage.managed(GENERATION);
-        written(&RunError::Registry(LocalStoreError::Corrupt), &managed);
+        written(
+            &RunError::registry(LocalStoreError::Corrupt, None),
+            &managed,
+        );
         let record = written(
             &RunError::Environment(crate::env::EnvironmentError::Empty {
                 variable: crate::env::HOST,
@@ -219,7 +225,7 @@ mod tests {
     fn only_the_generation_a_record_names_may_forget_it() {
         let stage = Stage::new();
         let ours = stage.managed(GENERATION);
-        written(&RunError::Registry(LocalStoreError::Corrupt), &ours);
+        written(&RunError::registry(LocalStoreError::Corrupt, None), &ours);
         let before = std::fs::read(path(ours.logs())).expect("record");
 
         forget(&stage.managed(OTHER));
@@ -241,7 +247,10 @@ mod tests {
     fn writing_the_record_leaves_no_temporary_behind() {
         let stage = Stage::new();
         let managed = stage.managed(GENERATION);
-        written(&RunError::Registry(LocalStoreError::Corrupt), &managed);
+        written(
+            &RunError::registry(LocalStoreError::Corrupt, None),
+            &managed,
+        );
         let names: Vec<_> = std::fs::read_dir(managed.logs())
             .expect("directory")
             .map(|entry| entry.expect("entry").file_name())
@@ -265,6 +274,10 @@ mod tests {
         // under it, on any machine, without permissions or a full disk.
         std::fs::write(stage.0.path().join("logs"), b"not a directory").expect("obstruction");
         let managed = stage.managed(GENERATION);
-        assert!(record(&RunError::Registry(LocalStoreError::Corrupt), &managed).is_err());
+        assert!(record(
+            &RunError::registry(LocalStoreError::Corrupt, None),
+            &managed
+        )
+        .is_err());
     }
 }
