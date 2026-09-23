@@ -502,7 +502,6 @@ fn temporary_near_misses_and_non_regular_matching_names_are_refused() {
 #[test]
 fn oversized_record_is_refused_by_the_bounded_reader_before_decode() {
     let root = temporary_root();
-    let directory = root.path().join("audit");
     let audit = audit_at(root.path());
     let retained =
         PrivateDirectory::open_beneath(root.path(), std::path::Path::new("audit")).unwrap();
