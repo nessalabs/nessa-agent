@@ -300,7 +300,10 @@ async fn after_hooks_receive_original_admission_lifecycle_and_audit_failures() {
         AgentError::AuditFailure,
         AgentError::AuditAndCleanupFailure,
         AgentError::CleanupUncertain,
-        AgentError::Provider { code: 12 },
+        AgentError::Provider {
+            code: 12,
+            diagnostic: None,
+        },
     ] {
         let calls = Calls::default();
         let mut failed = hook(0, &calls);

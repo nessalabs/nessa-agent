@@ -1,4 +1,5 @@
 //! Select allocation budgets from storage field roles, without replacing schema validation.
+use crate::application::agent_execution::agents::ProviderDiagnostic;
 use crate::application::agent_execution::executions::{
     limits::{MAX_MESSAGE_CHUNK_BYTES, MAX_RETAINED_OUTPUT_EVENTS},
     ExecutionRequest,
@@ -50,6 +51,7 @@ pub(super) enum Shape {
     Generic,
     Result,
     Error,
+    ProviderError,
     ErrorBody(bool),
     Hooks,
     Hook,
@@ -98,6 +100,8 @@ impl Shape {
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),
             (Review, "options") => Options,
             (Error, "BeforeInvocationHook") => Generic,
+            (Error, "Provider") => ProviderError,
+            (ProviderError, "diagnostic") => Text(ProviderDiagnostic::MAX_BYTES),
             (Error, "ImageInputMediaType") => Text(MEDIA_TYPE_BYTES),
             (
                 Error,
@@ -132,6 +136,7 @@ impl Shape {
         match self {
             Image => matches!(key, "digest" | "media_type" | "size"),
             FileLink => key == "path",
+            ProviderError => matches!(key, "code" | "diagnostic"),
             _ => true,
         }
     }

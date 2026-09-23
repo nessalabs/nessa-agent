@@ -8,7 +8,10 @@ async fn native_error_queue_policy_uses_provider_state_and_preserves_saved_recei
         AgentError::Unsupported("steering rejected".into()),
         AgentError::InvalidInput("steering rejected".into()),
         AgentError::Busy,
-        AgentError::Provider { code: -32077 },
+        AgentError::Provider {
+            code: -32077,
+            diagnostic: None,
+        },
         AgentError::Protocol("steering rejected".into()),
     ] {
         for provider_state in [

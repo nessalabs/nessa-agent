@@ -54,7 +54,10 @@ async fn fails_closed_on_invalid_configuration() {
                 "resume-wrong-id" => {
                     AgentError::Protocol("provider resumed a different session".into())
                 }
-                _ => AgentError::Provider { code: -32042 },
+                _ => AgentError::Provider {
+                    code: -32042,
+                    diagnostic: Some(ProviderDiagnostic::new("configuration failed")),
+                },
             };
             assert_eq!(error.cause(), &expected, "{mode}, restored={restored}");
             assert!(error.cleanup().is_none());

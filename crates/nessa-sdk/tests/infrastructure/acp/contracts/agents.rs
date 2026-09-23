@@ -541,7 +541,10 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
             agent
                 .invoke(prompt(&format!("failed-restore-{index}")), close_action())
                 .await,
-            Err(AgentError::Provider { code: -32000 }),
+            Err(AgentError::Provider {
+                code: -32000,
+                diagnostic: Some(ProviderDiagnostic::new("restore failed")),
+            }),
             "restoration {index} must reach the provider rather than exhaust the reader queue"
         );
     }

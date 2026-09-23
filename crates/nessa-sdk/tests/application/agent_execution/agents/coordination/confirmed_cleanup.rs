@@ -185,8 +185,14 @@ async fn repeated_confirmation_keeps_distinct_failures_without_growing_history()
     for audit in [false, true] {
         let agent = agent().await;
         let admission = agent.accept_control().unwrap();
-        let first_error = AgentError::Provider { code: -32041 };
-        let second_error = AgentError::Provider { code: -32042 };
+        let first_error = AgentError::Provider {
+            code: -32041,
+            diagnostic: None,
+        };
+        let second_error = AgentError::Provider {
+            code: -32042,
+            diagnostic: None,
+        };
         let first = if audit {
             CleanupReport::new(
                 ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
