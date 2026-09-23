@@ -282,6 +282,29 @@ fn a_domain_invalid_record_cannot_open_a_health_connection() {
     );
 }
 
+#[test]
+fn a_record_without_an_explicit_port_is_refused_before_health() {
+    let temporary = tempfile::tempdir().unwrap();
+    let logs = private_logs(&temporary);
+    nessa_local_storage::create_directory(&logs).unwrap();
+    let mut file = nessa_local_storage::open(
+        &logs.join(ENDPOINT_FILE),
+        nessa_local_storage::OpenMode::CreateNew,
+    )
+    .unwrap();
+    write!(
+        file,
+        "{{\"webSocketUrl\":\"ws://127.0.0.1\",\"endpointInstance\":\"3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd\",\"processId\":909}}"
+    )
+    .unwrap();
+    drop(file);
+
+    let error = DiscoverGatewayEndpoint::new(&discovery(&logs))
+        .execute()
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
 #[cfg(unix)]
 #[test]
 fn an_intermediate_symlink_cannot_redirect_endpoint_read_or_publication() {

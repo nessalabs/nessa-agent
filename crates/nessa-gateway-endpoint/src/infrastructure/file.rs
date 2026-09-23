@@ -177,7 +177,7 @@ fn advertisement_address(endpoint: &GatewayEndpoint) -> io::Result<SocketAddr> {
         Host::Ipv6(value) => IpAddr::V6(value),
         Host::Domain(_) => return Err(invalid_record()),
     };
-    let port = url.port().ok_or_else(invalid_record)?;
+    let port = url.port_or_known_default().ok_or_else(invalid_record)?;
     Ok(SocketAddr::new(ip, port))
 }
 
@@ -278,4 +278,31 @@ fn parse_health(bytes: &[u8]) -> Option<HealthIdentity> {
         runtime_instance: values.remove("x-nessa-runtime-instance"),
         runtime_process_id: values.remove("x-nessa-process-id"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn endpoint(web_socket_url: &str) -> GatewayEndpoint {
+        GatewayEndpoint::new(
+            web_socket_url.to_owned(),
+            EndpointIdentity::new("7a653268-43fc-4e76-a4d3-df749cc629b1".into(), 123).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn advertisement_address_projects_validated_default_and_custom_ports() {
+        for (url, expected) in [
+            ("ws://127.0.0.1:80", "127.0.0.1:80"),
+            ("ws://[::1]:80", "[::1]:80"),
+            ("ws://127.0.0.1:9137", "127.0.0.1:9137"),
+        ] {
+            assert_eq!(
+                advertisement_address(&endpoint(url)).unwrap(),
+                expected.parse::<SocketAddr>().unwrap()
+            );
+        }
+    }
 }

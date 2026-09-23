@@ -73,6 +73,33 @@ describe("local gateway endpoint discovery", () => {
     )
   })
 
+  it.each([
+    ["ws://127.0.0.1:80", "http://127.0.0.1/health"],
+    ["ws://[::1]:80", "http://[::1]/health"],
+  ])(
+    "accepts an explicit default port and checks its effective health address: %s",
+    async (webSocketUrl, healthUrl) => {
+      const publication = { ...record, webSocketUrl }
+      const { endpoint, request } = source(JSON.stringify(publication))
+
+      await expect(endpoint.load({ stage: "prod" })).resolves.toBe(webSocketUrl)
+      expect(request).toHaveBeenCalledWith(healthUrl, expect.any(AbortSignal))
+    },
+  )
+
+  it.each(["ws://127.0.0.1", "ws://[::1]"])(
+    "refuses an implicit default port before health: %s",
+    async (webSocketUrl) => {
+      const publication = { ...record, webSocketUrl }
+      const { endpoint, request } = source(JSON.stringify(publication))
+
+      await expect(endpoint.load({ stage: "prod" })).rejects.toBeInstanceOf(
+        NessaEndpointDiscoveryError,
+      )
+      expect(request).not.toHaveBeenCalled()
+    },
+  )
+
   it("accepts a standalone publication without inventing managed runtime identity", async () => {
     const standalone = {
       webSocketUrl: "ws://[::1]:8129",
