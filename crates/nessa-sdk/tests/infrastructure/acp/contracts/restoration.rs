@@ -162,7 +162,13 @@ async fn restore_failures_never_create_a_replacement_conversation() {
         let result = opened.session.execute(prompt("later")).await.into_result();
         match mode {
             "resume-unsupported" => assert!(matches!(result, Err(AgentError::Unsupported(_)))),
-            "resume-failure" => assert_eq!(result, Err(AgentError::Provider { code: -32000 })),
+            "resume-failure" => assert_eq!(
+                result,
+                Err(AgentError::Provider {
+                    code: -32000,
+                    diagnostic: Some(ProviderDiagnostic::new("restore failed")),
+                })
+            ),
             _ => assert!(matches!(result, Err(AgentError::Protocol(_)))),
         }
         assert_eq!(opened.session.id(), &id);
@@ -398,7 +404,12 @@ async fn restoration_drains_old_evidence_without_replaying_its_reported_failure(
             .execute(prompt("old-input"))
             .await
             .into_result(),
-        Err(AgentError::Provider { code: -32000 })
+        Err(AgentError::Provider {
+            code: -32000,
+            diagnostic: Some(ProviderDiagnostic::new(
+                "provider plan does not allow this request",
+            )),
+        })
     );
     // Leave the old reader untouched. Restoration retains its output with its
     // original identity, while the prior failure already belongs to old-input.

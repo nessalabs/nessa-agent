@@ -1,5 +1,5 @@
 use crate::application::agent_execution::agents::{
-    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, ProviderDiagnostic,
 };
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::{
@@ -8,7 +8,21 @@ use crate::application::agent_execution::providers::{
 use crate::application::agent_execution::sessions::storage::StorageError;
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use crate::domain::common::value_objects::ImageMediaType;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+
+pub(super) struct SavedProviderDiagnostic(ProviderDiagnostic);
+impl Serialize for SavedProviderDiagnostic {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for SavedProviderDiagnostic {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ProviderDiagnostic::restore(String::deserialize(deserializer)?)
+            .map(Self)
+            .map_err(de::Error::custom)
+    }
+}
 /// An image encoding as saved: a closed set, so an unknown one is a corrupt
 /// record at decoding rather than a string to interpret afterwards.
 #[derive(Serialize, Deserialize)]
@@ -187,6 +201,7 @@ pub(super) enum SavedError {
     },
     Provider {
         code: i64,
+        diagnostic: Option<SavedProviderDiagnostic>,
     },
     BeforeInvocationHook(Hook),
     AfterInvocationHooks {
@@ -354,7 +369,10 @@ impl From<SavedError> for AgentError {
                 delivery_error: Box::new((*delivery_error).into()),
                 cleanup_error: cleanup_error.map(|error| Box::new((*error).into())),
             },
-            SavedError::Provider { code } => Self::Provider { code },
+            SavedError::Provider { code, diagnostic } => Self::Provider {
+                code,
+                diagnostic: diagnostic.map(|value| value.0),
+            },
             SavedError::BeforeInvocationHook(value) => Self::BeforeInvocationHook(value.into()),
             SavedError::AfterInvocationHooks {
                 failures,
@@ -461,7 +479,10 @@ impl From<AgentError> for SavedError {
                 delivery_error: Box::new((*delivery_error).into()),
                 cleanup_error: cleanup_error.map(|error| Box::new((*error).into())),
             },
-            AgentError::Provider { code } => Self::Provider { code },
+            AgentError::Provider { code, diagnostic } => Self::Provider {
+                code,
+                diagnostic: diagnostic.map(SavedProviderDiagnostic),
+            },
             AgentError::BeforeInvocationHook(value) => Self::BeforeInvocationHook(value.into()),
             AgentError::AfterInvocationHooks {
                 failures,
