@@ -10,7 +10,9 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionOutcome, InvocationKind, SubmissionMode},
+    executions::{
+        ExecutionOutcome, InvocationKind, InvocationStage, SchedulingCause, SubmissionMode,
+    },
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
@@ -42,6 +44,23 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 "after":admission_stage(record.after()),
                 "cause":match record.cause() { AdmissionAuditCause::Submitted => "submitted" },
                 "actor":actor(record.actor()),
+            })
+        }
+        ExecutionAuditRecord::QueueSettled(record) => {
+            json!({
+                "kind":"queue_settled",
+                "sessionId":record.session_id().as_str(),
+                "executionId":record.execution_id().as_str(),
+                "target":record.target().map(|id| id.as_str()),
+                "mode":submission_mode(record.mode()),
+                "before":record.before().map(invocation_stage),
+                "after":invocation_stage(record.after()),
+                "cause":scheduling_cause(record.cause()),
+                "submittedBy":actor(record.submitted_by()),
+                "origin":record.initiated_by().map_or_else(
+                    || json!({"kind":"runtime"}),
+                    |initiator| json!({"kind":"client","actor":actor(initiator)}),
+                ),
             })
         }
         ExecutionAuditRecord::SteeringAcknowledged(record) => {
@@ -128,6 +147,28 @@ fn admission_stage(stage: AdmissionAuditStage) -> &'static str {
     match stage {
         AdmissionAuditStage::Unowned => "unowned",
         AdmissionAuditStage::Owned => "owned",
+    }
+}
+fn invocation_stage(stage: InvocationStage) -> &'static str {
+    match stage {
+        InvocationStage::Queued => "queued",
+        InvocationStage::Running => "running",
+        InvocationStage::Injected => "injected",
+        InvocationStage::Settled => "settled",
+        InvocationStage::Cancelled => "cancelled",
+    }
+}
+fn scheduling_cause(cause: SchedulingCause) -> &'static str {
+    match cause {
+        SchedulingCause::Submitted => "submitted",
+        SchedulingCause::Dispatched => "dispatched",
+        SchedulingCause::DispatchFailed => "dispatch_failed",
+        SchedulingCause::SteeringInjected => "steering_injected",
+        SchedulingCause::ExecutionSettled => "execution_settled",
+        SchedulingCause::ExecutionFailed => "execution_failed",
+        SchedulingCause::SessionClosed => "session_closed",
+        SchedulingCause::RunnerStopped => "runner_stopped",
+        SchedulingCause::Withdrawn => "withdrawn",
     }
 }
 fn steering_stage(stage: SteeringAuditStage) -> &'static str {

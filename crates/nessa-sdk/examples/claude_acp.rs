@@ -84,6 +84,9 @@ impl ExecutionAudit for TracingExecutionAudit {
                 ExecutionAuditRecord::QueueAdmitted(record) => {
                     tracing::info!(session = record.session_id().as_str(), execution = record.execution_id().as_str(), mode = ?record.mode(), "Queue admission owned");
                 }
+                ExecutionAuditRecord::QueueSettled(record) => {
+                    tracing::info!(session = record.session_id().as_str(), execution = record.execution_id().as_str(), mode = ?record.mode(), cause = ?record.cause(), "Queued input settled before dispatch");
+                }
                 ExecutionAuditRecord::SteeringAcknowledged(record) => {
                     tracing::info!(
                         session = record.session_id().as_str(),

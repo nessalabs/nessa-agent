@@ -59,6 +59,7 @@ pub use reports::{
     ProviderObservationFuture, ProviderOperationFailure, ProviderOperationFuture,
     ProviderOperationResult, ProviderSessionState, ResourceCleanup,
 };
+pub(crate) use session::validate_configured_input;
 pub use session::ProviderSession;
 
 pub use steering::SteeringOutcome;

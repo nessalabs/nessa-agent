@@ -15,7 +15,7 @@ use std::{
 
 async fn restore_attachment(agent: &Agent, prior: &WorkPermit) {
     agent.inner.lifecycle.record_provider_state(
-        prior.work_generation(),
+        prior,
         &ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
             forced: false,
         })),

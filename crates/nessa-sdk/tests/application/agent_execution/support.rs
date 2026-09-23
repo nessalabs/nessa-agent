@@ -299,6 +299,7 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             }
                             ExecutionAuditRecord::Attachment(_)
                             | ExecutionAuditRecord::QueueAdmitted(_)
+                            | ExecutionAuditRecord::QueueSettled(_)
                             | ExecutionAuditRecord::SteeringAcknowledged(_) => {}
                             ExecutionAuditRecord::ReviewDeclined(_) => {
                                 panic!("close cannot decline a review")

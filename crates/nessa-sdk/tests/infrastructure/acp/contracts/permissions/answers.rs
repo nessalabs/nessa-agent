@@ -77,6 +77,7 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::QueueReordered(_) => None,
             ExecutionAuditRecord::Attachment(_)
             | ExecutionAuditRecord::QueueAdmitted(_)
+            | ExecutionAuditRecord::QueueSettled(_)
             | ExecutionAuditRecord::SteeringAcknowledged(_) => {
                 panic!("provider answer audit emitted SDK admission evidence")
             }

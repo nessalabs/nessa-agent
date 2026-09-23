@@ -43,6 +43,14 @@ pub(super) async fn attached_agent(
     Ok(agent)
 }
 
+pub(super) async fn attach_agent(
+    agent: &Agent,
+    request: AttachmentRequest,
+) -> Result<(), AgentError> {
+    let authorization = agent.authorize_attachment(request)?;
+    agent.start_attachment(authorization)?.wait().await
+}
+
 #[derive(Default)]
 pub(super) struct RecordingAudit {
     pub(super) records: Mutex<Vec<PermissionCancellation>>,
@@ -79,6 +87,7 @@ impl ExecutionAudit for RecordingAudit {
                 }
                 ExecutionAuditRecord::Attachment(_)
                 | ExecutionAuditRecord::QueueAdmitted(_)
+                | ExecutionAuditRecord::QueueSettled(_)
                 | ExecutionAuditRecord::SteeringAcknowledged(_) => {}
                 ExecutionAuditRecord::ReviewDeclined(record) => {
                     self.declines.lock().unwrap().push(record)

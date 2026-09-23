@@ -6,7 +6,10 @@ use crate::application::agent_execution::permissions::{
     ActionContext, CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
     ReviewDeclineRecord,
 };
-use crate::domain::agent_execution::executions::{ExecutionId, QueueOrderChange, SubmissionMode};
+use crate::domain::agent_execution::executions::{
+    ExecutionId, InvocationKind, InvocationStage, QueueOrderChange, SchedulingCause,
+    SchedulingInitiator, SchedulingTransition, SchedulingTransitionError, SubmissionMode,
+};
 use crate::domain::agent_execution::sessions::{
     AttachmentCause, ExecutionFinish, SessionClosure, SessionId,
 };
@@ -103,6 +106,133 @@ pub enum AdmissionAuditStage {
 pub enum AdmissionAuditCause {
     /// A verified caller submitted the input through the selected delivery mode.
     Submitted,
+}
+
+/// Evidence that an admitted queued input settled before provider dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueSettlementRecord {
+    session_id: SessionId,
+    execution_id: ExecutionId,
+    transition: SchedulingTransition,
+    submitted_by: ActionContext,
+    initiated_by: Option<ActionContext>,
+}
+impl QueueSettlementRecord {
+    /// Describe automatic attachment failure for one caller-attributed queued input.
+    /// `session_id` is the local owner and `execution_id` is the stable queued input.
+    /// `kind` and `target` must identify ordinary queued work without a target, or
+    /// boundary steering with its correlated target. `actor` is the original
+    /// verified submitter and is not represented as the initiator of this automatic failure.
+    ///
+    /// # Errors
+    /// Returns [`SchedulingTransitionError`] when `kind` and `target` contradict.
+    pub fn automatic_attachment_failed(
+        session_id: SessionId,
+        execution_id: ExecutionId,
+        kind: InvocationKind,
+        target: Option<ExecutionId>,
+        actor: ActionContext,
+    ) -> Result<Self, SchedulingTransitionError> {
+        let transition = SchedulingTransition::new(
+            kind,
+            target,
+            Some(InvocationStage::Queued),
+            InvocationStage::Settled,
+            SchedulingCause::DispatchFailed,
+            SchedulingInitiator::Automatic,
+        )?;
+        Ok(Self {
+            session_id,
+            execution_id,
+            transition,
+            submitted_by: actor,
+            initiated_by: None,
+        })
+    }
+    /// Describe cancellation of caller-attributed queued input.
+    /// `session_id` is the local owner, `execution_id` is the stable queued input,
+    /// and `submitted_by` is its original verified caller. `kind` and `target`
+    /// retain its admitted delivery intent.
+    /// `cause` must be `SessionClosed` with a verified `initiated_by` caller, or
+    /// `RunnerStopped` without one. The domain transition rejects contradictory
+    /// stage, target, cause, and initiator combinations.
+    ///
+    /// # Errors
+    /// Returns [`SchedulingTransitionError`] when any supplied fact contradicts
+    /// the legal queued cancellation transition.
+    pub fn cancelled(
+        session_id: SessionId,
+        execution_id: ExecutionId,
+        kind: InvocationKind,
+        target: Option<ExecutionId>,
+        cause: SchedulingCause,
+        submitted_by: ActionContext,
+        initiated_by: Option<ActionContext>,
+    ) -> Result<Self, SchedulingTransitionError> {
+        let initiator = if initiated_by.is_some() {
+            SchedulingInitiator::Caller
+        } else {
+            SchedulingInitiator::Automatic
+        };
+        let transition = SchedulingTransition::new(
+            kind,
+            target,
+            Some(InvocationStage::Queued),
+            InvocationStage::Cancelled,
+            cause,
+            initiator,
+        )?;
+        Ok(Self {
+            session_id,
+            execution_id,
+            transition,
+            submitted_by,
+            initiated_by,
+        })
+    }
+    /// Local session that owned the queued input.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+    /// Stable identity of the queued input.
+    pub fn execution_id(&self) -> &ExecutionId {
+        &self.execution_id
+    }
+    /// Active execution targeted by boundary steering, when applicable.
+    pub fn target(&self) -> Option<&ExecutionId> {
+        self.transition.target()
+    }
+    /// Delivery mode retained at admission.
+    pub fn mode(&self) -> SubmissionMode {
+        match self.transition.kind() {
+            InvocationKind::Queued => SubmissionMode::Queued,
+            InvocationKind::Steering => SubmissionMode::BoundarySteering,
+        }
+    }
+    /// Original verified caller, distinct from the automatic settlement cause.
+    pub fn submitted_by(&self) -> &ActionContext {
+        &self.submitted_by
+    }
+    /// Verified caller that caused this transition, absent for automatic causes.
+    pub fn initiated_by(&self) -> Option<&ActionContext> {
+        self.initiated_by.as_ref()
+    }
+    /// Stage before the local transition.
+    pub fn before(&self) -> Option<InvocationStage> {
+        self.transition.before()
+    }
+    /// Stage after the local transition.
+    pub fn after(&self) -> InvocationStage {
+        self.transition.stage()
+    }
+    /// Exact lifecycle cause of settlement or cancellation.
+    pub fn cause(&self) -> SchedulingCause {
+        self.transition.cause()
+    }
+    /// Initiator classification, kept separate from original submitter attribution.
+    pub fn initiator(&self) -> SchedulingInitiator {
+        self.transition.initiator()
+    }
 }
 
 /// Audited delivery stage for native steering.
@@ -323,6 +453,8 @@ pub enum ExecutionAuditRecord {
     Attachment(AttachmentAuditRecord),
     /// Caller-attributed transfer of one input into SDK-owned scheduling.
     QueueAdmitted(QueueAdmissionRecord),
+    /// Pre-dispatch settlement or cancellation of caller-attributed queued input.
+    QueueSettled(QueueSettlementRecord),
     /// Provider acknowledgement of native steering delivery.
     SteeringAcknowledged(SteeringAcknowledgementRecord),
     /// Caller-attributed order selected and acknowledged before local application.

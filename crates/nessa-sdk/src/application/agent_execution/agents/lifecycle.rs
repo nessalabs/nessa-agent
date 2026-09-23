@@ -13,7 +13,8 @@ use crate::application::agent_execution::{
     },
     permissions::ActionContext,
     providers::{
-        CleanupReport, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
+        CleanupReport, OperationCapabilities, ProviderOperationFailure, ProviderSessionState,
+        SessionCloseRequest,
     },
     sessions::{
         attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
@@ -94,6 +95,8 @@ struct Cleanup {
 #[derive(Clone, Copy)]
 enum WorkPhase {
     Waiting,
+    // Automatic attachment failure owns final settlement for this queued input.
+    Settling,
     Active,
     // The execute future was entered; provider dispatch may still be rejected.
     Executing,
@@ -174,8 +177,7 @@ pub(super) struct SessionLifecycle {
 pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
     id: u64,
-    work_generation: WorkGeneration,
-    provider_generation: ProviderGeneration,
+    binding: Mutex<(WorkGeneration, ProviderGeneration)>,
     stop: watch::Receiver<()>,
     cancellation: watch::Receiver<Option<InvocationCancellationEvent>>,
 }
@@ -186,6 +188,12 @@ pub(super) struct AttachmentStart {
     pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
 }
 impl WorkPermit {
+    fn provider_generation_value(&self) -> ProviderGeneration {
+        self.binding.lock().expect("work binding").1
+    }
+    fn generations(&self) -> (WorkGeneration, ProviderGeneration) {
+        *self.binding.lock().expect("work binding")
+    }
     pub(super) fn activate(&self) -> Result<(), AgentError> {
         self.owner.activate_waiting(self)
     }
@@ -206,12 +214,13 @@ impl WorkPermit {
     }
     #[cfg(test)]
     pub(super) fn work_generation(&self) -> WorkGeneration {
-        self.work_generation
+        self.binding.lock().expect("work binding").0
     }
     pub(super) fn control_origin(&self) -> ControlOrigin {
+        let (work_generation, provider_generation) = self.generations();
         ControlOrigin {
-            work_generation: self.work_generation,
-            provider_generation: self.provider_generation,
+            work_generation,
+            provider_generation,
         }
     }
     pub(super) fn cancellation(&self) -> Option<InvocationCancellationEvent> {
@@ -302,15 +311,13 @@ impl SessionLifecycle {
             AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
         }
     }
-    pub(super) fn operation_capabilities(
-        &self,
-    ) -> crate::application::agent_execution::providers::OperationCapabilities {
+    pub(super) fn operation_capabilities(&self) -> OperationCapabilities {
         let state = self.state.lock().expect("session lifecycle");
         match &state.attachment {
             AttachmentState::Attached { provider, .. } if state.provider_ready => {
                 provider.session.operation_capabilities()
             }
-            _ => crate::application::agent_execution::providers::OperationCapabilities::default(),
+            _ => OperationCapabilities::default(),
         }
     }
     pub(super) fn authorize_attachment(
@@ -410,6 +417,10 @@ impl SessionLifecycle {
             actor: authorization.actor.clone(),
             result: result.clone(),
         };
+        // Starting a replacement establishes its resource generation before
+        // provider I/O begins, so a delayed control from the retired attachment
+        // cannot report cleanup against the replacement while it is opening.
+        state.provider_generation.0 += 1;
         state.attachment = AttachmentState::Starting {
             generation: start.generation,
             cause: start.cause,
@@ -694,6 +705,28 @@ impl SessionLifecycle {
     pub(super) fn accept_control(self: &Arc<Self>) -> Result<WorkPermit, AgentError> {
         self.accept_work_kind(WorkPhase::Active, true)
     }
+    pub(super) fn claim_waiting_failure(
+        &self,
+        permits: &[&WorkPermit],
+    ) -> Vec<Option<InvocationCancellationEvent>> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        permits
+            .iter()
+            .map(|permit| {
+                let work = state
+                    .work
+                    .get_mut(&permit.id)
+                    .expect("owned queued work permit");
+                if let Some(cancellation) = work.cancellation.borrow().clone() {
+                    Some(cancellation)
+                } else {
+                    assert!(matches!(work.phase, WorkPhase::Waiting));
+                    work.phase = WorkPhase::Settling;
+                    None
+                }
+            })
+            .collect()
+    }
     fn accept_work_kind(
         self: &Arc<Self>,
         phase: WorkPhase,
@@ -759,17 +792,14 @@ impl SessionLifecycle {
         Ok(WorkPermit {
             owner: self.clone(),
             id,
-            work_generation,
-            provider_generation: state.provider_generation,
+            binding: Mutex::new((work_generation, state.provider_generation)),
             stop: self.stop.subscribe(),
             cancellation: cancellation_notice,
         })
     }
     fn activate_waiting(&self, permit: &WorkPermit) -> Result<(), AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
-        if state.work_generation != permit.work_generation
-            || state.provider_generation != permit.provider_generation
-            || !matches!(state.work_status, WorkStatus::Open)
+        if !matches!(state.work_status, WorkStatus::Open)
             || !state.provider_ready
             || !matches!(state.attachment, AttachmentState::Attached { .. })
         {
@@ -786,8 +816,15 @@ impl SessionLifecycle {
                 AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
             }));
         }
+        let work_generation = state.work_generation;
+        let provider_generation = state.provider_generation;
         let work = state.work.get_mut(&permit.id).ok_or(AgentError::Closed)?;
+        if !matches!(work.phase, WorkPhase::Waiting) || work.cancellation.borrow().is_some() {
+            return Err(AgentError::Closed);
+        }
+        work.work_generation = work_generation;
         work.phase = WorkPhase::Active;
+        *permit.binding.lock().expect("work binding") = (work_generation, provider_generation);
         Ok(())
     }
     pub(super) fn attached_provider(
@@ -795,8 +832,9 @@ impl SessionLifecycle {
         permit: &WorkPermit,
     ) -> Result<AttachedProvider, AgentError> {
         let state = self.state.lock().expect("session lifecycle");
-        if state.work_generation != permit.work_generation
-            || state.provider_generation != permit.provider_generation
+        let (work_generation, provider_generation) = permit.generations();
+        if state.work_generation != work_generation
+            || state.provider_generation != provider_generation
         {
             return Err(AgentError::Closed);
         }
@@ -860,14 +898,17 @@ impl SessionLifecycle {
     }
     pub(super) fn record_provider_state(
         &self,
-        work_generation: WorkGeneration,
+        permit: &WorkPermit,
         provider_state: &ProviderSessionState,
     ) {
         if matches!(provider_state, ProviderSessionState::Usable) {
             return;
         }
         let mut state = self.state.lock().expect("session lifecycle");
-        self.apply_provider_state(&mut state, work_generation, provider_state);
+        let (work_generation, provider_generation) = permit.generations();
+        if state.provider_generation == provider_generation {
+            self.apply_provider_state(&mut state, work_generation, provider_state);
+        }
     }
     // Control receipts can arrive after restoration. Return their result, but
     // apply resource effects only to the attachment that admitted the control.
@@ -886,10 +927,11 @@ impl SessionLifecycle {
         provider_state: &ProviderSessionState,
     ) {
         let reported = matches!(provider_state, ProviderSessionState::CleanupReported(_));
-        if state.provider_generation == permit.provider_generation
-            && (state.work_generation == permit.work_generation || reported)
+        let (work_generation, provider_generation) = permit.generations();
+        if state.provider_generation == provider_generation
+            && (state.work_generation == work_generation || reported)
         {
-            self.apply_provider_state(state, permit.work_generation, provider_state);
+            self.apply_provider_state(state, work_generation, provider_state);
         }
     }
     pub(super) fn start_control_cleanup(
@@ -897,7 +939,7 @@ impl SessionLifecycle {
         permit: &WorkPermit,
     ) -> Option<CloseAttempt> {
         let mut state = self.state.lock().expect("session lifecycle");
-        if state.provider_generation != permit.provider_generation {
+        if state.provider_generation != permit.provider_generation_value() {
             return None;
         }
         // Applying this control's failure may already have stopped its work
@@ -919,6 +961,11 @@ impl SessionLifecycle {
                 // execution reports are serialized with provider restoration.
                 state.active = None;
                 state.provider_ready = false;
+                if matches!(state.attachment, AttachmentState::Attached { .. }) {
+                    state.attachment_generation += 1;
+                    state.attachment = AttachmentState::Absent { recorded: true };
+                    state.automatic_recovery_ready = true;
+                }
                 self.notify_stop(
                     state,
                     &SessionCloseRequest::ExecutionFailed,
@@ -984,7 +1031,8 @@ impl SessionLifecycle {
             actor,
         };
         for work in state.work.values_mut() {
-            if (include_waiting || !matches!(work.phase, WorkPhase::Waiting))
+            if !matches!(work.phase, WorkPhase::Settling)
+                && (include_waiting || !matches!(work.phase, WorkPhase::Waiting))
                 && work.cancellation.borrow().is_none()
             {
                 work.cancellation.send_replace(Some(cancellation.clone()));
@@ -1305,8 +1353,9 @@ impl SessionLifecycle {
             .await
             .map_err(ProviderOperationFailure::into_error)?;
         let mut state = self.state.lock().expect("session lifecycle");
-        if state.work_generation != permit.work_generation
-            || state.provider_generation != permit.provider_generation
+        let (work_generation, provider_generation) = permit.generations();
+        if state.work_generation != work_generation
+            || state.provider_generation != provider_generation
             || !matches!(state.work_status, WorkStatus::Open)
             || state.cleanup.is_some()
         {
@@ -1360,8 +1409,9 @@ impl SessionLifecycle {
         started: &mut bool,
     ) -> Poll<Result<T, ProviderOperationFailure>> {
         let mut state = self.state.lock().expect("session lifecycle");
-        let stopped = state.work_generation != permit.work_generation
-            || state.provider_generation != permit.provider_generation
+        let (work_generation, provider_generation) = permit.generations();
+        let stopped = state.work_generation != work_generation
+            || state.provider_generation != provider_generation
             || (!preparation && !state.provider_ready)
             || !matches!(state.work_status, WorkStatus::Open);
         // Never start provider work after its admission closes. Once started,

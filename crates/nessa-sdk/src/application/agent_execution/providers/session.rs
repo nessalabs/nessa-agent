@@ -97,37 +97,9 @@ impl ProviderSession {
     /// restored agent takes no images. A closed context keeps its last
     /// negotiation, because the same agent is what a restoration would start.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
-        input.validate_message_size()?;
-        // Require what the message actually holds. An image sent to a text-only
-        // binding is refused here, before acceptance, and never dropped.
         let images = input.user_message.images();
-        let mut requirements = Vec::with_capacity(2);
-        if input.user_message.text().is_some() {
-            requirements.push(CapabilityRequirement::Input(Modality::Text));
-        }
+        validate_configured_input(&self.capabilities, input)?;
         if !images.is_empty() {
-            requirements.push(CapabilityRequirement::Input(Modality::Image));
-        }
-        self.capabilities
-            .validate(
-                &requirements,
-                input.estimated_input_tokens,
-                input.reserved_output_tokens,
-            )
-            .map_err(offered_image_input_or)?;
-        if !images.is_empty() {
-            // Image input is offered exactly when its limits are recorded, so
-            // the modality check above has already refused a model without them.
-            // Answering the same refusal rather than asserting keeps that one
-            // fact one typed error wherever the two are ever read apart.
-            let Some(limits) = self.capabilities.image_input() else {
-                return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
-            };
-            for image in images {
-                limits
-                    .check(image.media_type(), image.size())
-                    .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
-            }
             let agent = self.operation_capabilities();
             if agent.negotiated() && !agent.image_input() {
                 return Err(AgentError::ImageInputRefused(
@@ -227,6 +199,39 @@ impl ProviderSession {
     pub(crate) fn shutdown(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         self.backend.close(request)
     }
+}
+
+pub(crate) fn validate_configured_input(
+    capabilities: &EffectiveCapabilities,
+    input: &ExecutionRequest,
+) -> Result<(), AgentError> {
+    input.validate_message_size()?;
+    let images = input.user_message.images();
+    let mut requirements = Vec::with_capacity(2);
+    if input.user_message.text().is_some() {
+        requirements.push(CapabilityRequirement::Input(Modality::Text));
+    }
+    if !images.is_empty() {
+        requirements.push(CapabilityRequirement::Input(Modality::Image));
+    }
+    capabilities
+        .validate(
+            &requirements,
+            input.estimated_input_tokens,
+            input.reserved_output_tokens,
+        )
+        .map_err(offered_image_input_or)?;
+    if !images.is_empty() {
+        let Some(limits) = capabilities.image_input() else {
+            return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
+        };
+        for image in images {
+            limits
+                .check(image.media_type(), image.size())
+                .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
+        }
+    }
+    Ok(())
 }
 
 /// One unmet requirement as the caller's typed answer: an image the attachment

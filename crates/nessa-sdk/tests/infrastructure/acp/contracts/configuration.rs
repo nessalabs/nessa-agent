@@ -591,16 +591,16 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
         .expect("attached provider context")
         .clone();
     agent.close(close_action()).await.unwrap();
-    let invoking = tokio::spawn({
-        let agent = agent.clone();
-        async move { agent.invoke(prompt("restore"), close_action()).await }
-    });
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    let restoring = agent.start_attachment(authorization).unwrap();
     wait_for_file(&root, "configuration-wait").await;
     timeout(Duration::from_secs(3), agent.close(close_action()))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(invoking.await.unwrap(), Err(AgentError::Closed));
+    assert_eq!(restoring.wait().await, Err(AgentError::Closed));
     agent.close(close_action()).await.unwrap();
     {
         let records = audit.closures.lock().unwrap();

@@ -55,6 +55,9 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     let before = agent.session_manager().snapshot().await.unwrap();
     let provider_id = before.provider_context;
     agent.close(close_action()).await.unwrap();
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
     assert_eq!(
         agent.invoke(prompt("third"), close_action()).await,
         Ok(ExecutionOutcome::Completed)
@@ -215,6 +218,9 @@ async fn idle_generation_failure_is_reported_before_restoration_can_send_a_promp
             .len(),
         0
     );
+    attach_agent(&agent, AttachmentRequest::AutomaticRecovery)
+        .await
+        .unwrap();
     assert_eq!(
         agent
             .invoke(prompt("safe-after-observed-failure"), close_action())
@@ -440,6 +446,9 @@ async fn dropping_agent_retains_reader_and_lease_until_handles_dropped_cleanup()
         let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
         if resume_first {
             agent.close(close_action()).await.unwrap();
+            attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+                .await
+                .unwrap();
             assert_eq!(
                 agent
                     .invoke(prompt("resumed-before-drop"), close_action())
@@ -538,9 +547,7 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     // therefore release their reserved slots without relying on a reader poll.
     for index in 0..24 {
         assert_eq!(
-            agent
-                .invoke(prompt(&format!("failed-restore-{index}")), close_action())
-                .await,
+            attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()),).await,
             Err(AgentError::Provider {
                 code: -32000,
                 diagnostic: Some(ProviderDiagnostic::new("restore failed")),
@@ -549,6 +556,9 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
         );
     }
     std::fs::write(root.path().join("resume-healthy"), "ready").unwrap();
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
     assert_eq!(
         agent.invoke(prompt("after-recovery"), close_action()).await,
         Ok(ExecutionOutcome::Completed)

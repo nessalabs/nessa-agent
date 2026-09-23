@@ -2,7 +2,7 @@ use super::*;
 use nessa_sdk::application::agent_execution::{
     executions::{
         AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage, ExecutionController,
-        QueueAdmissionRecord, QueueOrderRecord, SessionClosureRecord,
+        QueueAdmissionRecord, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
         SteeringAcknowledgementRecord,
     },
     permissions::{
@@ -12,7 +12,10 @@ use nessa_sdk::application::agent_execution::{
     tools::ToolReviewInput,
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange, SubmissionMode},
+    executions::{
+        ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange, SchedulingCause,
+        SubmissionMode,
+    },
     sessions::{AttachmentCause, ExecutionSession, ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::agent_execution::{
@@ -80,6 +83,91 @@ fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
     assert_eq!(steering["after"], "injected");
     assert_eq!(steering["cause"], "provider_acknowledged");
     assert_eq!(steering["actor"]["requestId"], "action");
+}
+#[test]
+fn audit_maps_automatic_queue_settlement_separately_from_the_input_caller() {
+    for (kind, target) in [
+        (InvocationKind::Queued, None),
+        (
+            InvocationKind::Steering,
+            Some(ExecutionId::new("active").unwrap()),
+        ),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QueueSettled(
+            QueueSettlementRecord::automatic_attachment_failed(
+                SessionId::new("session").unwrap(),
+                ExecutionId::new("waiting").unwrap(),
+                kind,
+                target.clone(),
+                actor(),
+            )
+            .unwrap(),
+        ));
+        assert_eq!(value["kind"], "queue_settled");
+        assert_eq!(value["sessionId"], "session");
+        assert_eq!(value["executionId"], "waiting");
+        assert_eq!(
+            value["target"],
+            json!(target.as_ref().map(|id| id.as_str()))
+        );
+        assert_eq!(
+            value["mode"],
+            if target.is_some() {
+                "boundary_steering"
+            } else {
+                "queued"
+            }
+        );
+        assert_eq!(value["before"], "queued");
+        assert_eq!(value["after"], "settled");
+        assert_eq!(value["cause"], "dispatch_failed");
+        assert_eq!(value["origin"], json!({"kind":"runtime"}));
+        assert_eq!(value["submittedBy"]["principalId"], actor().principal_id());
+        assert_eq!(value["submittedBy"]["surfaceId"], actor().surface_id());
+        assert_eq!(value["submittedBy"]["requestId"], "action");
+        assert!(value.get("actor").is_none());
+    }
+}
+#[test]
+fn audit_maps_queue_cancellation_with_its_own_initiator() {
+    let closer = ActionContext::new("closer", "closing-surface", "close-request").unwrap();
+    for (cause, initiator) in [
+        (SchedulingCause::SessionClosed, Some(closer.clone())),
+        (SchedulingCause::RunnerStopped, None),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QueueSettled(
+            QueueSettlementRecord::cancelled(
+                SessionId::new("session").unwrap(),
+                ExecutionId::new("waiting").unwrap(),
+                InvocationKind::Queued,
+                None,
+                cause,
+                actor(),
+                initiator.clone(),
+            )
+            .unwrap(),
+        ));
+        assert_eq!(value["before"], "queued");
+        assert_eq!(value["after"], "cancelled");
+        assert_eq!(value["submittedBy"]["requestId"], "action");
+        if initiator.is_some() {
+            assert_eq!(value["cause"], "session_closed");
+            assert_eq!(
+                value["origin"],
+                json!({
+                    "kind":"client",
+                    "actor":{
+                        "principalId":"closer",
+                        "surfaceId":"closing-surface",
+                        "requestId":"close-request",
+                    },
+                })
+            );
+        } else {
+            assert_eq!(value["cause"], "runner_stopped");
+            assert_eq!(value["origin"], json!({"kind":"runtime"}));
+        }
+    }
 }
 #[test]
 fn audit_maps_complete_queue_transition_with_priority_and_actor() {

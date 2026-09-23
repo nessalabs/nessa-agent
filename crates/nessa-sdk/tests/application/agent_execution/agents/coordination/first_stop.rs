@@ -15,7 +15,7 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         // A native operation reports completed physical cleanup. Its active work
         // stops now; the previously admitted waiting input remains eligible.
         agent.inner.lifecycle.record_provider_state(
-            native.work_generation(),
+            &native,
             &ProviderSessionState::CleanupReported(report.clone()),
         );
         let automatic = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);

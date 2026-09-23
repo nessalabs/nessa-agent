@@ -24,9 +24,9 @@ use crate::application::agent_execution::permissions::{
     PermissionCancellation, PermissionCancellationRequest, PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream, ExecutionReportSource,
-    ObservationFailure, ObservationFailureCause, OperationCapabilities, ProviderExecutionReply,
-    ProviderSessionState, SessionCloseRequest,
+    validate_configured_input, AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream,
+    ExecutionReportSource, ObservationFailure, ObservationFailureCause, OperationCapabilities,
+    ProviderExecutionReply, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
     ProviderContext, SessionManager, StorageError,
@@ -367,6 +367,7 @@ impl Agent {
         actor: ActionContext,
     ) -> AgentFuture<'_, ExecutionOutcome> {
         Box::pin(async move {
+            validate_configured_input(&self.inner.capabilities, &input)?;
             let invocation = self
                 .inner
                 .invocation
@@ -399,7 +400,16 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let id = input.execution_id.clone();
-        let observation_events = self.inner.lifecycle.attached_provider(work)?.events;
+        // Close can retire the attachment after this invocation has acquired its
+        // work permit. Keep panic recovery's observation owner when it is still
+        // available, but never let that optional drain bypass persistence of the
+        // already accepted input.
+        let observation_events = self
+            .inner
+            .lifecycle
+            .attached_provider(work)
+            .ok()
+            .map(|attached| attached.events);
         let _observations = self.inner.manager.observe_invocation(&id);
         let mut execution = Box::pin(self.execute_invocation(input, actor, saved_index, work));
         let outcome = poll_fn(|context| {
@@ -427,6 +437,19 @@ impl Agent {
             // A storage panic can interrupt observation after the provider queued
             // its terminal event. Consume ready evidence while this invocation
             // still owns it; never let that buffer spill into the next run.
+            let Some(observation_events) = observation_events else {
+                if let Err(error) = cleanup.into_result() {
+                    failure = AgentError::OperationAndCleanupFailure {
+                        operation_error: Box::new(failure),
+                        cleanup_error: Box::new(error),
+                    };
+                }
+                return self
+                    .inner
+                    .manager
+                    .retain_invocation_failure(&id, failure)
+                    .await;
+            };
             let mut draining = Box::pin(self.drain_ready_observations(&observation_events));
             let drained = poll_fn(|context| {
                 match catch_unwind(AssertUnwindSafe(|| draining.as_mut().poll(context))) {
@@ -533,6 +556,38 @@ impl Agent {
         Ok(())
     }
 
+    async fn settle_undispatched_invocation(
+        &self,
+        index: usize,
+        saved_index: Option<usize>,
+        work: &WorkPermit,
+        mut error: AgentError,
+    ) -> Result<ExecutionOutcome, AgentError> {
+        if let Err(storage) = self
+            .record_undispatched_stop(index, saved_index, work)
+            .await
+        {
+            error = AgentError::StorageAfterExecution {
+                error: storage,
+                execution_result: Box::new(Err(error)),
+            }
+            .bounded();
+        }
+        let result = Err(error);
+        let result = match self.inner.manager.finish(index, result.clone()).await {
+            Ok(()) => result,
+            Err(error) => Err(AgentError::StorageAfterExecution {
+                error,
+                execution_result: Box::new(result),
+            }),
+        };
+        if saved_index.is_none() {
+            self.inner.manager.settle_submission(index, result).await
+        } else {
+            result
+        }
+    }
+
     pub(super) async fn execute_invocation(
         &self,
         input: ExecutionRequest,
@@ -541,16 +596,30 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let mut stop_notice = work.stop_notice();
-        let attached = self.inner.lifecycle.attached_provider(work)?;
-        attached.session.validate(&input)?;
+        // Configured model admission ran before the work permit was acquired.
+        // Once admitted, retain the input before any live attachment or adapter
+        // check that a concurrent close can invalidate.
+        let index = match saved_index {
+            Some(index) => index,
+            None => self.inner.manager.begin(input.clone(), actor).await?,
+        };
+        let attached = match self.inner.lifecycle.attached_provider(work) {
+            Ok(attached) => attached,
+            Err(error) => {
+                return self
+                    .settle_undispatched_invocation(index, saved_index, work, error)
+                    .await;
+            }
+        };
+        if let Err(error) = attached.session.validate(&input) {
+            return self
+                .settle_undispatched_invocation(index, saved_index, work, error)
+                .await;
+        }
         let hooks = InvocationHooks::new(self.inner.hooks.read().expect("hook registry").clone());
         let context = InvocationContext {
             session_id: attached.session.id(),
             request: &input,
-        };
-        let index = match saved_index {
-            Some(index) => index,
-            None => self.inner.manager.begin(input.clone(), actor).await?,
         };
         if let Err(mut error) = hooks.before(&context) {
             if let Err(storage) = self
@@ -665,7 +734,7 @@ impl Agent {
                         let cancellation = (settlement.source() == ExecutionReportSource::LocalCancellation)
                             .then(|| work.cancellation()).flatten();
                         if settlement.source() == ExecutionReportSource::LocalCancellation && cancellation.is_none() {
-                            self.inner.lifecycle.record_provider_state(work_generation, settlement.session_state());
+                            self.inner.lifecycle.record_provider_state(work, settlement.session_state());
                             let error = AgentError::Protocol("local cancellation report has no invocation stop".into());
                             let (failure, _) = self.stop_after_observation_failure(error.clone(), ObservationFailureCause::ExecutionFailed).await;
                             observation_failure = Some(failure);
@@ -673,7 +742,7 @@ impl Agent {
                             ended = true;
                             continue;
                         }
-                        self.inner.lifecycle.record_provider_state(work_generation, settlement.session_state());
+                        self.inner.lifecycle.record_provider_state(work, settlement.session_state());
                         provider_result = settlement.provider_result().cloned();
                         if let ProviderSessionState::CleanupReported(cleanup) = settlement.session_state() {
                             stop_after_ready_settlement |= !cleanup.is_confirmed();

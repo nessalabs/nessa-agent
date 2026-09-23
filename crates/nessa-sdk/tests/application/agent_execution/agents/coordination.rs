@@ -254,6 +254,17 @@ async fn agent_with_backend() -> (Agent, Arc<Backend>) {
         .unwrap();
     (agent, backend)
 }
+async fn reattach(agent: &Agent) {
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+}
 fn actor() -> ActionContext {
     ActionContext::new("caller", "surface", "close").unwrap()
 }
@@ -286,6 +297,7 @@ async fn uncertain_control_result_closes_admission_before_returning_to_its_calle
         "uncertainty must latch inside the fenced result poll"
     );
     agent.close(actor()).await.unwrap();
+    reattach(&agent).await;
     assert_eq!(
         agent.invoke(input(), actor()).await,
         Ok(ExecutionOutcome::Completed)
@@ -304,6 +316,7 @@ async fn old_control_supervisor_failure_cannot_close_a_recovered_attachment() {
     // The old admission ticket must not acquire authority over this new lifecycle.
     agent.inner.lifecycle.block(old_epoch);
     assert!(!agent.inner.lifecycle.is_closed());
+    reattach(&agent).await;
     assert_eq!(
         agent.invoke(input(), actor()).await,
         Ok(ExecutionOutcome::Completed)
@@ -530,11 +543,10 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
     for explicit_first in [false, true] {
         let (agent, backend) = agent_with_backend().await;
         let work = agent.inner.lifecycle.accept_work().unwrap();
-        let generation = work.work_generation();
         agent
             .inner
             .lifecycle
-            .record_provider_state(generation, &ProviderSessionState::CleanupRequired);
+            .record_provider_state(&work, &ProviderSessionState::CleanupRequired);
         let (started, waiting) = oneshot::channel();
         let (release, gate) = oneshot::channel();
         *backend.cleanup_started.lock().unwrap() = Some(started);
@@ -573,6 +585,7 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
         assert!(first.wait().await.is_confirmed());
         drop(work);
         assert!(!agent.inner.lifecycle.is_closed());
+        reattach(&agent).await;
         assert_eq!(
             agent.invoke(input(), actor()).await,
             Ok(ExecutionOutcome::Completed)
@@ -601,6 +614,7 @@ async fn local_failure_during_automatic_cleanup_requires_explicit_recovery() {
         Err(AgentError::Closed)
     ));
     agent.close(actor()).await.unwrap();
+    reattach(&agent).await;
     assert_eq!(
         agent.invoke(input(), actor()).await,
         Ok(ExecutionOutcome::Completed)
