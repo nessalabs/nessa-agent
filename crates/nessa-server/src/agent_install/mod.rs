@@ -10,7 +10,7 @@
 //! is left is the part that was always true — telling somebody to go and
 //! install something before they can use this is the thing this context exists
 //! to avoid — and that applies to every agent equally. See
-//! `docs/adr/todo/0014-fetch-agent-runtimes.md`.
+//! `docs/adr/todo/173-fetch-agent-runtimes.md`.
 //!
 //! A release is not always one file, and that is the other thing this context
 //! learned late. Opencode's archive holds one program and nothing the program

@@ -19,12 +19,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { cargoTargetDirectory } from "./cargo-target.mjs"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 const directory = mkdtempSync(join(tmpdir(), "nessa-install-e2e-"))
 const binary = join(
-  root,
-  process.platform === "win32" ? "target/debug/nessa.exe" : "target/debug/nessa",
+  cargoTargetDirectory(root),
+  "debug",
+  process.platform === "win32" ? "nessa.exe" : "nessa",
 )
 const env = {
   ...process.env,

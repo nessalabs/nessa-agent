@@ -29,6 +29,9 @@ pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     verify_file(&file)?;
     Ok(file)
 }
+pub fn open_temporary(path: &Path) -> io::Result<File> {
+    open(path, OpenMode::CreateNew)
+}
 pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<File> {
     let (parent, leaf) = open_parent_beneath(root, relative)?;
     let mut flags = libc::O_CLOEXEC | libc::O_NOFOLLOW;
@@ -46,6 +49,9 @@ pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<
     let file = unsafe { File::from_raw_fd(descriptor) };
     verify_file(&file)?;
     Ok(file)
+}
+pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> {
+    open_beneath(root, relative, OpenMode::CreateNew)
 }
 pub fn verify_file(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;
@@ -154,6 +160,10 @@ pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
     unlink_beneath(root, relative, 0)
 }
 
+pub fn remove_reserved_beneath(_: &File, root: &Path, relative: &Path) -> io::Result<()> {
+    remove_file_beneath(root, relative)
+}
+
 /// Remove an empty directory named relative to an already-private root.
 ///
 /// The counterpart of [`remove_file_beneath`], and empty for the same reason
@@ -252,6 +262,49 @@ pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
                     "the filesystem holding {} cannot publish a file without replacing one; \
                      local data has to live on a volume that can, not a network or FUSE mount",
                     to.display()
+                ),
+            )
+        } else {
+            error
+        });
+    }
+    Ok(())
+}
+
+pub fn publish_new_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    let (from_parent, from_leaf) = open_parent_beneath(root, from)?;
+    let (to_parent, to_leaf) = open_parent_beneath(root, to)?;
+    #[cfg(target_vendor = "apple")]
+    let renamed = unsafe {
+        libc::renameatx_np(
+            from_parent.as_raw_fd(),
+            from_leaf.as_ptr(),
+            to_parent.as_raw_fd(),
+            to_leaf.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let renamed = unsafe {
+        libc::renameat2(
+            from_parent.as_raw_fd(),
+            from_leaf.as_ptr(),
+            to_parent.as_raw_fd(),
+            to_leaf.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed != 0 {
+        let error = io::Error::last_os_error();
+        let unsupported = error.raw_os_error().is_some_and(|code| {
+            code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+        });
+        return Err(if unsupported {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the filesystem holding {} cannot publish a file without replacing one; local data has to live on a volume that can, not a network or FUSE mount",
+                    root.join(to).display()
                 ),
             )
         } else {

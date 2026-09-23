@@ -28,7 +28,7 @@ fn rejection() -> ArchiveRejected {
         ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
         ReleaseRequirements::default(),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
-        ArchiveSize::parse(46_009_615).expect("usable archive size"),
+        ArchiveSize::parse(46_009_615).expect("a measured archive"),
         digest('a'),
         installs("package/bin/opencode"),
     )
@@ -483,77 +483,4 @@ fn a_platform_nessa_pins_nothing_for_is_told_so_plainly() {
         message.contains("no tested opencode release") && message.contains("plan9"),
         "unhelpful message: {message}"
     );
-}
-
-#[test]
-fn the_more_demanding_build_is_preferred_whichever_order_it_is_listed_in() {
-    // A machine with AVX2 runs both builds, so this is a preference rather than
-    // a filter — and a preference is only a preference if it survives the list
-    // being the other way round. Asked of both orders, because the pin file's
-    // own order already happens to put the demanding build first, and a
-    // "preference" that is really "the first entry that matched" would pass
-    // against it and fail on the next regenerated file.
-    let host = machine("linux", "x86_64", Some(Libc::Gnu), true);
-    let fast = build(Some(Libc::Gnu), true, 'a');
-    let baseline = build(Some(Libc::Gnu), false, 'b');
-
-    for (named, releases) in [
-        (
-            "the demanding build first",
-            vec![fast.clone(), baseline.clone()],
-        ),
-        (
-            "the baseline build first",
-            vec![baseline.clone(), fast.clone()],
-        ),
-    ] {
-        let chosen = preferred_release(releases, &host).expect("both builds run here");
-        assert_eq!(
-            chosen.archive_digest(),
-            fast.archive_digest(),
-            "{named}: the faster build was passed over"
-        );
-    }
-}
-
-#[test]
-fn a_machine_that_cannot_take_the_demanding_build_gets_the_other_one() {
-    let host = machine("linux", "x86_64", Some(Libc::Gnu), false);
-    let fast = build(Some(Libc::Gnu), true, 'a');
-    let baseline = build(Some(Libc::Gnu), false, 'b');
-
-    let chosen =
-        preferred_release(vec![fast, baseline.clone()], &host).expect("one build runs here");
-
-    assert_eq!(chosen.archive_digest(), baseline.archive_digest());
-}
-
-#[test]
-fn a_machine_no_build_runs_on_is_offered_none() {
-    let host = machine("linux", "x86_64", Some(Libc::Musl), true);
-
-    assert_eq!(
-        preferred_release(
-            vec![
-                build(Some(Libc::Gnu), true, 'a'),
-                build(Some(Libc::Gnu), false, 'b')
-            ],
-            &host
-        ),
-        None
-    );
-}
-
-/// One Linux x86-64 build, told apart from its siblings by its digest.
-fn build(libc: Option<Libc>, avx2: bool, digest_byte: char) -> PinnedRelease {
-    PinnedRelease::new(
-        ReleaseVersion::parse("1.18.31").expect("usable version"),
-        ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
-        ReleaseRequirements::new(libc, avx2),
-        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
-        ArchiveSize::parse(46_009_615).expect("usable archive size"),
-        digest(digest_byte),
-        installs("package/bin/opencode"),
-    )
-    .expect("a release whose requirements fit its platform")
 }

@@ -54,7 +54,10 @@ async fn fails_closed_on_invalid_configuration() {
                 "resume-wrong-id" => {
                     AgentError::Protocol("provider resumed a different session".into())
                 }
-                _ => AgentError::Provider { code: -32042 },
+                _ => AgentError::Provider {
+                    code: -32042,
+                    diagnostic: Some(ProviderDiagnostic::new("configuration failed")),
+                },
             };
             assert_eq!(error.cause(), &expected, "{mode}, restored={restored}");
             assert!(error.cleanup().is_none());
@@ -644,11 +647,11 @@ async fn startup_notifications_share_live_configuration_and_correlation_validati
         ),
         (
             "startup-update-before-initialize",
-            "session update before startup context admission",
+            "non-advisory session update before startup context admission",
         ),
         (
             "startup-update-before-session",
-            "session update before startup context admission",
+            "non-advisory session update before startup context admission",
         ),
     ] {
         for restored in [false, true] {

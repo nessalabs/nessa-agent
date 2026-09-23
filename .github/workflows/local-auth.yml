@@ -136,7 +136,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Check portable Rust dependency graphs
+        run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       - run: cargo fmt --all -- --check
+      # This pure shared domain is small enough to report denied warnings
+      # before its tests without paying a second workspace compile.
+      - run: cargo clippy -p nessa-agent-credentials --all-targets -- -D warnings
+      - run: cargo test -p nessa-agent-credentials
       # Test before lint, here and in the matrix below, and it is worth saying
       # why because the intuitive order is the other one. Reporting a
       # `-D warnings` failure first would be better if it were free, and it is
@@ -150,12 +156,6 @@ jobs:
       - run: cargo test -p nessa-images
       - run: cargo clippy -p nessa-images --all-targets -- -D warnings
       - run: node scripts/check-architecture.mjs
-      # The repository's own scripts had tests that nothing ran: a developer
-      # setup script and a one-time data migration, both of which change a
-      # user's files. Here rather than in the matrix job because they are
-      # plain Node with no dependency to install, and their Unix-only cases
-      # guard themselves rather than being skipped on a whole runner.
-      - run: node --test scripts/*.test.mjs
       # The official client and protocol checks do not require the desktop UI's
       # separate repository. Install only their tooling in an isolated harness.
       - name: Prepare gateway contract harness
@@ -246,6 +246,10 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      # `frontend:check` owns the repository's top-level script tests. Two of
+      # them execute the public launch recipes, so install their real command
+      # boundary here before the aggregate runs.
+      - uses: taiki-e/install-action@just
       - run: pnpm frontend:check
   local-auth:
     needs: changes

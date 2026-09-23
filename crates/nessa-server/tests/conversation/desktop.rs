@@ -1,4 +1,69 @@
 use super::*;
+#[cfg(unix)]
+use std::io::Write;
+
+#[cfg(unix)]
+use crate::agent_install::{
+    application::RuntimeStore,
+    domain::{preferred_release, AgentName, PinnedRelease},
+    infrastructure::releases_for,
+};
+
+fn opencode_runtime(model: &str) -> AgentRuntime {
+    AgentRuntime {
+        command: PathBuf::from("/unverified/opencode"),
+        args: vec!["old-argument".into()],
+        model: model.into(),
+        tools_enabled: false,
+        context_tokens: 72_000,
+        output_tokens: 3072,
+    }
+}
+
+#[cfg(unix)]
+fn opencode_release() -> (AgentName, PinnedRelease) {
+    let agent = AgentName::parse(AgentId::Opencode.name()).expect("known agent name");
+    let releases = releases_for(&agent).expect("compiled release pins parse");
+    let release = preferred_release(releases, &host_platform())
+        .expect("Unix desktop test hosts have a pinned OpenCode release");
+    (agent, release)
+}
+
+#[cfg(unix)]
+fn runtime_archive(release: &PinnedRelease) -> Vec<u8> {
+    let body = b"test OpenCode runtime";
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::fast(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(0o755);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, release.launch().as_str(), body.as_slice())
+        .expect("append runtime to archive");
+    builder
+        .into_inner()
+        .expect("finish tar archive")
+        .finish()
+        .expect("finish gzip archive")
+}
+
+#[cfg(unix)]
+fn publish_runtime(data: &Path, release: &PinnedRelease) -> PathBuf {
+    let (agent, _) = opencode_release();
+    let store = ManagedRuntimes::new(data.join("agents"));
+    let mut staged = store.stage(&agent).expect("stage runtime archive");
+    staged
+        .file_mut()
+        .write_all(&runtime_archive(release))
+        .expect("write runtime archive");
+    store
+        .publish(&agent, release, &mut staged)
+        .expect("publish runtime")
+}
 
 /// A bundle holding every file `configure` requires, including one harness per
 /// agent Nessa *bundles*: an installed app that shipped without one of those is
@@ -240,123 +305,172 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
     assert!(agents.selected().is_err());
 }
 
-/// What an agent Nessa installs rather than ships gets out of `configure`.
-///
-/// The bundled agents above are written from paths this build already knows.
-/// Opencode is only knowable by asking the store what is on the disk now, and
-/// these are the three answers that matters: nothing installed, something
-/// installed, and something that *was* installed but is no longer the artifact
-/// the current pin names.
-mod installed_agents {
-    use super::*;
+#[test]
+fn removing_an_unverified_selected_runtime_falls_back_to_the_bundled_default() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/big-pickle"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
 
-    /// The agent the desktop does not bundle, whichever one that is.
-    fn unbundled() -> Option<AgentId> {
-        AgentId::ALL
-            .iter()
-            .copied()
-            .find(|agent| bundled_launch(*agent).is_none())
-    }
+    configure(&mut settings, &bundle, &data).unwrap();
 
-    #[test]
-    fn an_agent_nobody_installed_is_left_unconfigured() {
-        let Some(agent) = unbundled() else { return };
-        let root = tempfile::tempdir().unwrap();
-        let bundle = root.path().join("Nessa.app/runtime");
-        bundled_runtime(&bundle);
-        let data = root.path().join("data");
-        nessa_local_storage::create_directory(&data).unwrap();
-        let mut settings = RuntimeConfig::default();
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
 
-        configure(&mut settings, &bundle, &data).unwrap();
+#[test]
+fn an_unverified_selected_agent_without_a_runtime_entry_still_falls_back() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let agents = settings.agents.as_mut().unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    agents.selected = Some(AgentId::Opencode.name().into());
 
-        let agents = settings.agents.as_ref().unwrap();
-        assert!(
-            !agents.runtimes.contains_key(agent.name()),
-            "an agent with no installed runtime must not be offered: the picker \
-             would say it was ready and every conversation on it would fail"
-        );
-    }
+    configure(&mut settings, &bundle, &data).unwrap();
 
-    #[test]
-    fn removing_the_selected_agent_leaves_a_gateway_that_still_starts() {
-        // The consequence the removal test above does not reach. `selected` is
-        // settled before anything knows what is installed, and
-        // `AgentsConfig::selected` refuses a choice with no entry under
-        // `runtimes` — so taking the entry out from under it is a gateway that
-        // does not start, not an agent that is missing.
-        //
-        // Two people meet this: one who wrote a runtime by hand and chose it,
-        // and everybody who selected the agent on the release that moves its
-        // pin. Both would open the app to nothing.
-        let Some(agent) = unbundled() else { return };
-        let root = tempfile::tempdir().unwrap();
-        let bundle = root.path().join("Nessa.app/runtime");
-        bundled_runtime(&bundle);
-        let data = root.path().join("data");
-        nessa_local_storage::create_directory(&data).unwrap();
-        let mut settings = RuntimeConfig::default();
-        configure(&mut settings, &bundle, &data).unwrap();
-        let agents = settings.agents.as_mut().unwrap();
-        agents.runtimes.insert(
-            agent.name().into(),
-            AgentRuntime {
-                command: PathBuf::from("/an/older/build/installed/this"),
-                args: vec!["acp".into()],
-                model: "opencode/big-pickle".into(),
-                tools_enabled: true,
-                context_tokens: 100_000,
-                output_tokens: 4096,
-            },
-        );
-        agents.selected = Some(agent.name().into());
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
 
-        configure(&mut settings, &bundle, &data).unwrap();
+#[cfg(unix)]
+#[test]
+fn a_verified_current_install_becomes_the_exact_desktop_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let (agent, release) = opencode_release();
+    let releases = releases_for(&agent).expect("compiled release pins parse");
+    let other = releases
+        .into_iter()
+        .find(|candidate| {
+            candidate.version() != release.version()
+                || candidate.archive_digest() != release.archive_digest()
+                || candidate.launch() != release.launch()
+        })
+        .expect("OpenCode pins more than one artifact");
+    let other_path = publish_runtime(&data, &other);
+    let selected_path = publish_runtime(&data, &release);
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/minimax-m3"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
 
-        let agents = settings.agents.as_ref().unwrap();
-        assert!(
-            !agents.runtimes.contains_key(agent.name()),
-            "the runtime this build does not pin is still taken out"
-        );
-        agents
-            .selected()
-            .expect("a gateway that starts, on an agent that can actually run");
-    }
+    configure(&mut settings, &bundle, &data).unwrap();
 
-    #[test]
-    fn a_runtime_this_build_no_longer_pins_is_removed_rather_than_left() {
-        // The half that is easy to forget. A launch written by an earlier build
-        // keeps working after the pin moves, because superseded artifacts are
-        // left on the disk — so a stale entry is not a broken one, it is a
-        // quietly wrong one: the agent Nessa tested replaced by an agent it
-        // never saw, with nothing on screen saying so.
-        let Some(agent) = unbundled() else { return };
-        let root = tempfile::tempdir().unwrap();
-        let bundle = root.path().join("Nessa.app/runtime");
-        bundled_runtime(&bundle);
-        let data = root.path().join("data");
-        nessa_local_storage::create_directory(&data).unwrap();
-        let mut settings = RuntimeConfig::default();
-        configure(&mut settings, &bundle, &data).unwrap();
-        let agents = settings.agents.as_mut().unwrap();
-        agents.runtimes.insert(
-            agent.name().into(),
-            AgentRuntime {
-                command: PathBuf::from("/somewhere/an/older/build/installed"),
-                args: vec!["acp".into()],
-                model: "opencode/big-pickle".into(),
-                tools_enabled: true,
-                context_tokens: 100_000,
-                output_tokens: 4096,
-            },
-        );
+    let agents = settings.agents.unwrap();
+    let configured = agents.runtime(AgentId::Opencode).unwrap();
+    assert_eq!(configured.command, selected_path);
+    assert_ne!(configured.command, other_path);
+    assert_eq!(configured.args, ["acp"]);
+    assert_eq!(configured.model, "opencode/minimax-m3");
+    assert!(!configured.tools_enabled);
+    assert_eq!(configured.context_tokens, 72_000);
+    assert_eq!(configured.output_tokens, 3072);
+    assert_eq!(agents.selected().unwrap(), AgentId::Opencode);
+}
 
-        configure(&mut settings, &bundle, &data).unwrap();
+#[cfg(unix)]
+#[test]
+fn a_stale_current_install_is_not_injected() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let (_, release) = opencode_release();
+    let published = publish_runtime(&data, &release);
+    std::fs::remove_file(&published).expect("remove installed executable");
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/minimax-m3"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
 
-        let agents = settings.agents.as_ref().unwrap();
-        assert!(
-            !agents.runtimes.contains_key(agent.name()),
-            "a runtime the current pin does not describe must be taken back out"
-        );
-    }
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_install_record_for_another_pin_is_not_injected() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let (agent, preferred) = opencode_release();
+    let mismatch = releases_for(&agent)
+        .expect("compiled release pins parse")
+        .into_iter()
+        .find(|candidate| {
+            candidate.version() != preferred.version()
+                || candidate.archive_digest() != preferred.archive_digest()
+                || candidate.launch() != preferred.launch()
+        })
+        .expect("OpenCode pins more than one artifact");
+    let mismatched_path = publish_runtime(&data, &mismatch);
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/minimax-m3"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    assert!(mismatched_path.is_file());
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
+
+#[test]
+fn an_unreadable_optional_store_does_not_take_down_bundled_agents() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    // A file where the managed-runtime directory belongs makes every store
+    // query fail without relying on host permission enforcement.
+    std::fs::write(data.join("agents"), b"not a directory").unwrap();
+    let mut settings = RuntimeConfig::default();
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Claude).is_some());
+    assert!(agents.runtime(AgentId::Codex).is_some());
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
 }

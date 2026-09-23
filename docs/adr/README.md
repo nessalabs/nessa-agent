@@ -62,7 +62,8 @@ this table. None of it changes implementation or approval status.
 | 3 | [0009 — Event-stream integration](todo/0009-reusable-event-stream-crate.md) | Integrate and verify the existing library for durable records, replay, and restart recovery |
 | 4 | [0011 — Shared conversations and collaboration](todo/0011-nessa-session-protocol-and-authorities.md) | Multiple-surface attachment, authorized transcript replay, and collaboration inboxes |
 | 5 | [0012 — Harnesses and optional tools](todo/0012-agent-harnesses-and-optional-tools.md) | Optional MCP/CLI interfaces while preserving external harness behavior |
-| 6 | [0014 — Fetch every agent runtime](todo/0014-fetch-agent-runtimes.md) | Pin and fetch Claude's and Codex's native binaries the way Opencode's already are, resolve a runtime already on the machine within a supported range, and record what each install did |
+| 6 | [0014 — Nessa-owned policy hooks](todo/0014-nessa-owned-policy-hooks.md) | Proposed hook enforcement, context disclosure, capability degradation and attributed policy stops |
+| 7 | [173 — Fetch every agent runtime](todo/173-fetch-agent-runtimes.md) | Pin and fetch Claude's and Codex's native binaries the way Opencode's already are, resolve a runtime already on the machine within a supported range, and record what each install did |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides

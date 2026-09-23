@@ -2607,6 +2607,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-agent-credentials"
+version = "0.1.0"
+
+[[package]]
 name = "nessa-app"
 version = "0.1.0"
 dependencies = [
@@ -2614,6 +2618,7 @@ dependencies = [
  "block2",
  "getrandom 0.3.4",
  "gtk",
+ "json-patch",
  "libc",
  "minisign-verify",
  "nessa-local-storage",
@@ -2629,6 +2634,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-updater",
+ "tauri-utils",
  "tokio",
  "webkit2gtk",
  "window-vibrancy",
@@ -2718,17 +2724,22 @@ name = "nessa-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "image",
  "libc",
+ "nessa-agent-credentials",
  "nessa-auth",
  "nessa-images",
  "nessa-local-storage",
  "nessa-sdk",
  "reqwest",
  "rustls",
+ "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2",

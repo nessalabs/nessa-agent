@@ -17,6 +17,7 @@ mod root;
 pub use root::CompositionRoot;
 
 mod auth_command;
+mod credential_registry;
 mod install_command;
 mod installed_launch;
 mod local_auth;

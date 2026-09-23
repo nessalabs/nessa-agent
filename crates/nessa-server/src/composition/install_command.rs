@@ -93,7 +93,7 @@ fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError>
 /// not yet what it should be: `nessa install-agent claude` fetches and verifies
 /// a runtime that nothing launches, because the desktop still starts Claude and
 /// Codex from the bundle. The install is real and the launch has not moved yet.
-/// See `docs/adr/todo/0014-fetch-agent-runtimes.md`.
+/// See `docs/adr/todo/173-fetch-agent-runtimes.md`.
 fn pinned(agent: &AgentName, host: &HostPlatform) -> Result<PinnedRelease, RunError> {
     let releases = releases_for(agent).map_err(|error| RunError::Agent(error.to_string()))?;
     if releases.is_empty() {

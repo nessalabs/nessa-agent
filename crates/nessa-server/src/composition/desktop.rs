@@ -3,7 +3,7 @@
 //! The credentials this app needs are created by
 //! [`super::provisioning::ensure_local_credentials`], which the developer loop
 //! asks for by the same name; nothing here provisions separately.
-use super::installed_launch::{installed_arguments, installed_launch};
+use super::installed_launch::{installed_arguments, installed_launch, InstalledLaunch};
 use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
@@ -33,11 +33,8 @@ const DEFAULT_AGENT: AgentId = AgentId::Claude;
 /// meant to be fetched onto the machine that wants it instead, which is why
 /// this says nothing about where it lives.
 ///
-/// `None` here still means the desktop does not ship it, and that is now the
-/// whole of what it means. The launch comes from
-/// [`super::installed_launch::installed_launch`] instead, which asks the
-/// runtime store at every start what is actually installed — so an agent
-/// somebody fetched is configured, and one they have not is not offered.
+/// `None` means only that the desktop does not ship the agent. Composition
+/// resolves a managed launch separately from the installed-runtime store.
 pub(super) fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
         AgentId::Claude => Some((
@@ -61,14 +58,18 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
-        // Unreachable from here today: this is read for bundled agents, and
-        // Opencode is not one. Named rather than wildcarded so that a new agent
-        // has to say what it starts on, and a real name rather than a
-        // placeholder: the shipped catalog serves it, and
-        // `opencode_builds_against_the_catalog_nessa_ships` holds the two
-        // together. Spelled the way Opencode spells it, slash and all, because
-        // the binding sends this string back as the session's `model` option.
         AgentId::Opencode => "opencode/big-pickle",
+    }
+}
+
+fn managed_runtime(agent: AgentId, command: PathBuf) -> AgentRuntime {
+    AgentRuntime {
+        command,
+        args: installed_arguments(agent),
+        model: default_model(agent).into(),
+        tools_enabled: true,
+        context_tokens: 100_000,
+        output_tokens: 4096,
     }
 }
 
@@ -84,9 +85,9 @@ pub(super) fn configure(
     let mcp = bundle.join("nessa-mcp");
     // Only the agents this desktop ships. A bundle checked for files it was
     // never meant to contain would refuse to start, so an agent with no bundled
-    // launch is skipped here rather than looked for. Skipped is all it is: no
-    // launch is written for it anywhere else yet either, so an unbundled agent
-    // stays unconfigured and the picker says exactly that.
+    // launch is skipped here rather than looked for. The installed-runtime
+    // store below independently decides whether that agent has a verified
+    // launch on this host.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
         .filter_map(|agent| {
@@ -160,75 +161,35 @@ pub(super) fn configure(
                 output_tokens: 4096,
             });
     }
-    // Agents Nessa installs rather than ships, asked about at every start.
-    //
-    // The bundled loop above writes a launch this build already knows. These
-    // are only knowable by asking what is on the disk now: somebody can install
-    // Opencode while the app is closed, and a new build can pin a version the
-    // installed one is not. `installed_launch` answers from the store's own
-    // record and says "not installed" for anything that is not exactly the
-    // artifact the current pin names.
-    //
-    // The `None` arm removes rather than leaves. A launch written by a previous
-    // build keeps working after the pin moves — superseded artifacts stay where
-    // they are — so leaving one behind would offer an agent whose executable
-    // this build never tested, and say it was ready.
     let store = ManagedRuntimes::new(data.join("agents"));
     let host = host_platform();
     for agent in AgentId::ALL.iter().copied() {
         if bundled_launch(agent).is_some() {
             continue;
         }
-        let launch = installed_launch(agent, &host, &store).map_err(unusable_runtime)?;
-        match launch {
-            Some(command) => {
+        let resolution = installed_launch(agent, &host, &store).map_err(unusable_runtime)?;
+        match resolution {
+            InstalledLaunch::Ready(command) => {
                 let args = installed_arguments(agent);
                 agents
                     .runtimes
                     .entry(agent.name().into())
-                    // As above: the launch is ours to keep current, the model
-                    // and its budgets are the user's.
                     .and_modify(|runtime| {
                         runtime.command = command.clone();
                         runtime.args = args.clone();
                     })
-                    .or_insert_with(|| AgentRuntime {
-                        command,
-                        args,
-                        model: default_model(agent).into(),
-                        tools_enabled: true,
-                        context_tokens: 100_000,
-                        output_tokens: 4096,
-                    });
+                    .or_insert_with(|| managed_runtime(agent, command));
             }
-            None => {
-                // Taking the runtime out can take the selected agent with it,
-                // and that is a gateway that does not start rather than an
-                // agent that is missing: `AgentsConfig::selected` refuses a
-                // choice with no entry under `runtimes`, and composition
-                // settled `selected` sixty lines above this, before anything
-                // knew what was installed.
-                //
-                // Reachable two ways. Somebody who wrote a runtime by hand and
-                // chose it — which was the documented way to run Opencode —
-                // and anybody at all on the release that moves its pin, since
-                // the version they installed stops being the one named. Both
-                // of them would have opened the app to nothing starting.
-                //
-                // So the choice falls back to an agent that can actually run,
-                // and to none when nothing can. An unbuildable agent that is
-                // merely configured is already tolerated; it is only the
-                // selected one that is fatal.
-                if agents.runtimes.remove(agent.name()).is_some()
-                    && agents.selected.as_deref() == Some(agent.name())
-                {
-                    agents.selected = agents
-                        .runtimes
-                        .keys()
-                        .find(|name| name.as_str() == DEFAULT_AGENT.name())
-                        .or_else(|| agents.runtimes.keys().next())
-                        .cloned();
-                }
+            InstalledLaunch::Unknown(failure) => {
+                tracing::warn!(
+                    agent = agent.name(),
+                    %failure,
+                    "the optional installed runtime could not be verified"
+                );
+                remove_unverified_runtime(agents, agent);
+            }
+            InstalledLaunch::Missing | InstalledLaunch::UnsupportedHost => {
+                remove_unverified_runtime(agents, agent);
             }
         }
     }
@@ -247,6 +208,22 @@ pub(super) fn configure(
             ],
         });
     Ok(())
+}
+
+/// Remove a launch the current store did not verify without leaving an invalid
+/// selected/runtime pair behind.
+fn remove_unverified_runtime(agents: &mut AgentsConfig, agent: AgentId) {
+    let was_selected = agents.selected.as_deref() == Some(agent.name());
+    agents.runtimes.remove(agent.name());
+    if was_selected {
+        // The complete bundled-runtime check above proves this entry exists.
+        // Naming it directly keeps fallback deterministic even if HashMap
+        // iteration order changes.
+        agents.selected = agents
+            .runtimes
+            .contains_key(DEFAULT_AGENT.name())
+            .then(|| DEFAULT_AGENT.name().to_owned());
+    }
 }
 fn failure(error: impl std::fmt::Display) -> RunError {
     RunError::Agent(error.to_string())

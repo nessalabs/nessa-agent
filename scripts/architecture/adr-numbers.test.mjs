@@ -10,7 +10,7 @@ const adr = join(dirname(fileURLToPath(import.meta.url)), "../../docs/adr")
 
 test("the leading digits are the number, however many there are", () => {
   // The old era, padded to four.
-  assert.equal(adrNumber("0014-fetch-agent-runtimes.md"), "0014")
+  assert.equal(adrNumber("0014-nessa-owned-policy-hooks.md"), "0014")
   // The new one: the number of the issue that proposed it, as issues spell it.
   assert.equal(adrNumber("142-some-decision.md"), "142")
   assert.equal(adrNumber("README.md"), null)
@@ -22,7 +22,7 @@ test("padding is spelling, not identity", () => {
   // second while another holds the first is the clash this exists to catch —
   // not two records that merely look different in a directory listing.
   const clashes = duplicateAdrNumbers([
-    ["done", ["0014-fetch-agent-runtimes.md"]],
+    ["done", ["0014-nessa-owned-policy-hooks.md"]],
     ["todo", ["14-something-else.md"]],
   ])
 
@@ -35,7 +35,7 @@ test("an issue-numbered record does not collide with the old block", () => {
   // written before the rule stop at 0014, so the ranges cannot meet.
   const clashes = duplicateAdrNumbers([
     ["done", ["0013-files-by-path-not-by-payload.md"]],
-    ["todo", ["0014-fetch-agent-runtimes.md", "142-a-later-decision.md"]],
+    ["todo", ["0014-nessa-owned-policy-hooks.md", "173-a-later-decision.md"]],
   ])
 
   assert.deepEqual(clashes, [])

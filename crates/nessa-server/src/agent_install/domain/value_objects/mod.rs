@@ -18,7 +18,7 @@ mod release_contents;
 pub use agent_name::{AgentName, NotAnAgentName};
 pub use host_platform::{HostPlatform, Libc, ReleaseRequirements};
 pub use pinned_release::{
-    preferred_release, ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, PinRejected,
-    PinnedRelease, ReleasePlatform, ReleaseVersion,
+    ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, PinRejected, PinnedRelease,
+    ReleasePlatform, ReleaseVersion,
 };
 pub use release_contents::{ArchivePath, FileRole, ReleaseContents, ReleaseFile};

@@ -13,7 +13,10 @@ async fn native_delivery_failure_without_prior_stop_keeps_dispatch_failure() {
     timeout(Duration::from_secs(2), backend.executing.notified())
         .await
         .unwrap();
-    let error = AgentError::Provider { code: -32077 };
+    let error = AgentError::Provider {
+        code: -32077,
+        diagnostic: None,
+    };
     *backend.control_error.lock().unwrap() = Some(error.clone());
     let steering = tokio::spawn({
         let agent = agent.clone();

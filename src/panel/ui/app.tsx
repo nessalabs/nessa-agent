@@ -584,7 +584,7 @@ export function App({
                 array makes React leak one subtree per render instead of
                 reusing it. The composer filled with queue chips, each frozen
                 at the count it was born with, none removed when the queue
-                drained. See src/panel/ui/composer-keys.test.tsx. */}
+                drained. See src/panel/ui/composer-keys.test.ts. */}
             <ConversationQueue
               key={`queue:${chat.active.id}`}
               conversation={chat.active}

@@ -143,23 +143,11 @@ fn load_stage(source: &impl EnvSource) -> Result<Stage, EnvironmentError> {
     }
 }
 
-/// The stage a process belongs to when nothing says.
+/// The stage used when no caller names one explicitly.
 ///
-/// The build profile, which is the same rule the desktop host already applies
-/// in `src-tauri/src/local_data.rs`. It has to be: the stage picks the data
-/// root, and two halves of one product defaulting differently means they name
-/// different directories on the same machine and neither can tell.
-///
-/// That is not hypothetical. The packaged app registers its gateway with
-/// `NESSA_STAGE=prod`, so a person who runs `nessa install-agent opencode` in a
-/// terminal against a release build was installing into `~/.nessa/dev/agents`
-/// while the app read the production root — the install succeeded, reported
-/// where it went, and the app never saw it. Every offline command has the same
-/// shape: a token minted for `dev` is not a token the running gateway honours.
-///
-/// A debug build still means `dev`, so nothing about working in this repository
-/// changes. Inside the bundle the variable is always set explicitly, so this
-/// answers only for somebody at a shell — and there `prod` is what they mean.
+/// Desktop release builds register the product gateway in `prod`, so offline
+/// commands from the same release build must resolve the same data root. Debug
+/// builds keep the development default used by the repository workflow.
 fn default_stage() -> Stage {
     if cfg!(debug_assertions) {
         Stage::Dev
@@ -224,29 +212,23 @@ mod tests {
     #[test]
     fn dev_stage_defaults_when_env_unset() {
         let config = Environment::load(&MockEnv::new()).expect("defaults");
-        assert_eq!(config.stage, Stage::Dev);
-        assert_eq!(config.bind_host, "127.0.0.1");
-        assert_eq!(config.port, 7421);
-        assert_eq!(config.version, VERSION);
-    }
-
-    #[test]
-    fn an_unset_stage_is_the_profile_this_binary_was_built_as() {
-        // The test above is this one seen from a debug build, which is the only
-        // way the suite normally runs. Written so that `cargo test --release`
-        // states the other half rather than contradicting it: a release binary
-        // at a shell belongs to `prod`, because that is the stage the packaged
-        // app registers its gateway under, and an install or a token that lands
-        // anywhere else is invisible to the app that asked for it.
         let expected = if cfg!(debug_assertions) {
             Stage::Dev
         } else {
             Stage::Prod
         };
-        assert_eq!(
-            Environment::load(&MockEnv::new()).expect("defaults").stage,
-            expected
-        );
+        assert_eq!(config.stage, expected);
+        assert_eq!(config.bind_host, "127.0.0.1");
+        assert_eq!(config.port, stage_port(expected));
+        assert_eq!(config.version, VERSION);
+    }
+
+    #[test]
+    fn explicit_stage_overrides_the_build_profile_default() {
+        for (value, expected) in [("dev", Stage::Dev), ("prod", Stage::Prod)] {
+            let config = Environment::load(&MockEnv::new().set(STAGE, value)).expect("stage");
+            assert_eq!(config.stage, expected);
+        }
     }
 
     #[test]
