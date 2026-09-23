@@ -1,7 +1,9 @@
 use super::*;
 use crate::browser_session::{
     application::{invalidation_reason, ReadBrowserSession},
-    domain::value_objects::{RemovalReason, FUTURE_TOLERANCE_SECONDS, IDLE_SECONDS},
+    domain::value_objects::{
+        BrowserSessionOrigin, RemovalReason, FUTURE_TOLERANCE_SECONDS, IDLE_SECONDS,
+    },
 };
 use nessa_auth::{
     application::{
@@ -61,7 +63,10 @@ fn reopen_bounded(path: &std::path::Path, bound: u64) -> Result<PersistentSessio
 fn credential_id() -> CredentialId {
     CredentialId::new("credential").unwrap()
 }
-async fn session(expires_at: Option<u64>) -> BrowserSession {
+fn session_origin(value: &str) -> BrowserSessionOrigin {
+    BrowserSessionOrigin::new(value.to_owned()).unwrap()
+}
+async fn session(expires_at: Option<u64>) -> BrowserSessionState {
     let principal = PrincipalId::new("person").unwrap();
     let organization = OrganizationId::new("org").unwrap();
     let audience = AudienceId::new("gateway").unwrap();
@@ -99,9 +104,9 @@ async fn session(expires_at: Option<u64>) -> BrowserSession {
     )
     .await
     .unwrap();
-    BrowserSession::new(
+    BrowserSessionState::new(
         authenticated.context().credential_id().clone(),
-        "https://127.0.0.1:1443".into(),
+        session_origin("https://127.0.0.1:1443"),
         100,
     )
     .unwrap()
@@ -315,7 +320,12 @@ async fn abandoned_replacement_restores_the_exact_prior_state_removed_by_insert(
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 3_701).unwrap(),
+            BrowserSessionState::new(
+                credential_id(),
+                session_origin("https://127.0.0.1:1443"),
+                3_701,
+            )
+            .unwrap(),
             Some(prior_id.clone()),
             3_701,
         )
@@ -350,9 +360,9 @@ async fn abandoned_replacement_is_reclaimed_after_its_prior_expires() {
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(
+            BrowserSessionState::new(
                 credential_id(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 replaced_at,
             )
             .unwrap(),
@@ -402,9 +412,9 @@ async fn abandoned_replacement_restores_a_prior_active_for_one_more_second() {
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(
+            BrowserSessionState::new(
                 credential_id(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 replaced_at,
             )
             .unwrap(),
@@ -437,7 +447,12 @@ async fn abandoned_replacement_leaves_a_prior_id_a_later_login_now_owns() {
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            BrowserSessionState::new(
+                credential_id(),
+                session_origin("https://127.0.0.1:1443"),
+                101,
+            )
+            .unwrap(),
             Some(prior_id.clone()),
             101,
         )
@@ -445,8 +460,12 @@ async fn abandoned_replacement_leaves_a_prior_id_a_later_login_now_owns() {
         .unwrap()
         .expect("active prior was replaced");
     // The freed ID is taken again before the abandoned login is reclaimed.
-    let competing =
-        BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 102).unwrap();
+    let competing = BrowserSessionState::new(
+        credential_id(),
+        session_origin("https://127.0.0.1:1443"),
+        102,
+    )
+    .unwrap();
     store
         .insert(prior_id.clone(), competing.clone(), None, 102)
         .await
@@ -476,7 +495,12 @@ async fn abandoned_replacement_must_still_restore_a_prior_that_can_be_restored()
     store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            BrowserSessionState::new(
+                credential_id(),
+                session_origin("https://127.0.0.1:1443"),
+                101,
+            )
+            .unwrap(),
             Some(prior_id.clone()),
             101,
         )
@@ -509,7 +533,12 @@ async fn replay_rejects_dropping_a_prior_that_was_still_restorable() {
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            BrowserSessionState::new(
+                credential_id(),
+                session_origin("https://127.0.0.1:1443"),
+                101,
+            )
+            .unwrap(),
             Some(prior_id),
             101,
         )
@@ -558,9 +587,9 @@ async fn replay_accepts_dropping_a_prior_that_had_expired_by_the_record() {
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(
+            BrowserSessionState::new(
                 credential_id(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 replaced_at,
             )
             .unwrap(),
@@ -593,15 +622,24 @@ async fn abandoned_replacement_rejects_a_fabricated_same_origin_prior() {
     let replaced = store
         .insert(
             replacement_id.clone(),
-            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            BrowserSessionState::new(
+                credential_id(),
+                session_origin("https://127.0.0.1:1443"),
+                101,
+            )
+            .unwrap(),
             Some(prior_id.clone()),
             101,
         )
         .await
         .unwrap()
         .unwrap();
-    let fabricated =
-        BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap();
+    let fabricated = BrowserSessionState::new(
+        credential_id(),
+        session_origin("https://127.0.0.1:1443"),
+        101,
+    )
+    .unwrap();
 
     assert_eq!(
         store
@@ -640,7 +678,12 @@ async fn replay_rejects_restoration_that_does_not_match_the_replaced_prior() {
         let replaced = store
             .insert(
                 replacement_id.clone(),
-                BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+                BrowserSessionState::new(
+                    credential_id(),
+                    session_origin("https://127.0.0.1:1443"),
+                    101,
+                )
+                .unwrap(),
                 Some("4".repeat(64)),
                 101,
             )
@@ -691,7 +734,12 @@ async fn replay_rejects_replacing_a_session_with_the_same_id() {
     store
         .insert(
             "5".repeat(64),
-            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            BrowserSessionState::new(
+                credential_id(),
+                session_origin("https://127.0.0.1:1443"),
+                101,
+            )
+            .unwrap(),
             Some(prior_id.clone()),
             101,
         )
@@ -975,9 +1023,127 @@ async fn blocked_journal_work_does_not_block_the_async_runtime() {
     assert!(blocked.await.unwrap().unwrap().is_none());
 }
 
-fn origin_session(now: u64) -> BrowserSession {
-    BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), now).unwrap()
+fn origin_session(now: u64) -> BrowserSessionState {
+    BrowserSessionState::new(
+        credential_id(),
+        session_origin("https://127.0.0.1:1443"),
+        now,
+    )
+    .unwrap()
 }
+
+#[tokio::test]
+async fn structurally_valid_historical_origin_replays_without_current_trust() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("historical-origin.jsonl");
+    let id = "9".repeat(64);
+    let exact_origin = "https://Historical.Example:443";
+    let store = reopen(&path).unwrap();
+    store
+        .insert(
+            id.clone(),
+            BrowserSessionState::new(credential_id(), session_origin(exact_origin), 100).unwrap(),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    store
+        .renew(id.clone(), 3_701, credential_id())
+        .await
+        .unwrap();
+    drop(store);
+
+    let reopened = reopen(&path).unwrap();
+    assert_eq!(
+        reopened.get(id.clone()).await.unwrap().unwrap().origin(),
+        exact_origin
+    );
+    drop(reopened);
+    let record = last_record(&path);
+    assert_eq!(
+        record.changes[0].before.as_ref().unwrap().origin,
+        exact_origin
+    );
+    assert_eq!(
+        record.changes[0].after.as_ref().unwrap().origin,
+        exact_origin
+    );
+    let replacement_id = "a".repeat(64);
+    let store = reopen(&path).unwrap();
+    let prior = store
+        .insert(
+            replacement_id.clone(),
+            BrowserSessionState::new(credential_id(), session_origin(exact_origin), 3_702).unwrap(),
+            Some(id.clone()),
+            3_702,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    drop(store);
+
+    let store = reopen(&path).unwrap();
+    store
+        .abandon_login(replacement_id.clone(), Some(prior), 3_703)
+        .await
+        .unwrap();
+    drop(store);
+
+    let reopened = reopen(&path).unwrap();
+    assert_eq!(
+        reopened.get(id).await.unwrap().unwrap().origin(),
+        exact_origin
+    );
+    assert!(reopened.get(replacement_id).await.unwrap().is_none());
+    drop(reopened);
+    let record = last_record(&path);
+    assert_eq!(record.changes[0].reason, Reason::AbandonedLogin);
+    assert_eq!(
+        record.changes[0].before.as_ref().unwrap().origin,
+        exact_origin
+    );
+    assert_eq!(
+        record.changes[1].reason,
+        Reason::RestoredAfterAbandonedLogin
+    );
+    assert_eq!(
+        record.changes[1].after.as_ref().unwrap().origin,
+        exact_origin
+    );
+}
+
+#[tokio::test]
+async fn structurally_invalid_stored_origin_fails_replay_mapping() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, invalid) in [
+        "https://127.0.0.1:1443/path",
+        "https://@example.com",
+        "https://:@example.com",
+        "https://example.com\\",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = directory
+            .path()
+            .join(format!("invalid-origin-{index}.jsonl"));
+        let store = reopen(&path).unwrap();
+        store
+            .insert("8".repeat(64), origin_session(100), None, 100)
+            .await
+            .unwrap();
+        drop(store);
+
+        let mut record: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
+        record["changes"][0]["after"]["origin"] = serde_json::Value::String(invalid.to_owned());
+        std::fs::write(&path, format!("{record}\n")).unwrap();
+
+        assert!(reopen(&path).is_err(), "replayed invalid origin {invalid}");
+    }
+}
+
 fn last_record(path: &std::path::Path) -> StoredRecord {
     serde_json::from_str(
         std::fs::read_to_string(path)
