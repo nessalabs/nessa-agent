@@ -110,7 +110,7 @@ struct Backend {
     cleanup_started: StateMutex<Option<oneshot::Sender<()>>>,
     cleanup_finished: StateMutex<Option<oneshot::Sender<()>>>,
 }
-struct ExhaustedEvents;
+struct IdleEvents;
 impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
@@ -156,7 +156,7 @@ impl AgentProvider for Provider {
                     self.0.clone(),
                     capabilities,
                 ),
-                events: Box::new(ExhaustedEvents),
+                events: Box::new(IdleEvents),
             })
         })
     }
@@ -255,9 +255,9 @@ impl ProviderSessionBackend for Backend {
         })
     }
 }
-impl ExecutionEventStream for ExhaustedEvents {
+impl ExecutionEventStream for IdleEvents {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
-        Box::pin(async { Ok(None) })
+        Box::pin(std::future::pending())
     }
 }
 async fn agent() -> Agent {

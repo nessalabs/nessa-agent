@@ -205,7 +205,7 @@ async fn failed_attachment_settlement_panics_do_not_discard_the_queue_tail() {
         .unwrap();
     mutation.lock().unwrap().replace(QueueMutation::Removed {
         id: first_id,
-        cause: QueueRemovalCause::RunnerStopped,
+        cause: QueueRemovalCause::DispatchFailed,
     });
     let failure = AgentError::Protocol("automatic attachment failed".into());
     let mut scheduler = agent.inner.scheduler.lock().await;

@@ -5,7 +5,7 @@ use crate::{
         hooks::{BeforeInvocation, InvocationContext},
         sessions::{
             SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-            StorageFuture,
+            StorageFuture, SubmissionAcknowledgement,
         },
     },
     domain::agent_execution::sessions::SessionId,
@@ -706,7 +706,8 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     // More local rejections than the former 16-generation reader queue capacity.
     // Escapes make the encoded frame oversized even though raw input is smaller.
-    // Admission measures the encoded message, so nothing is accepted or sent.
+    // The SDK owns each invocation before adapter validation, then retains the
+    // local refusal without sending it to the provider.
     for index in 0..24 {
         let request = ExecutionRequest {
             user_message: UserMessage::text_only(PromptText::new("\u{0}".repeat(2048)).unwrap()),
@@ -735,11 +736,31 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
         Ok(ExecutionOutcome::Completed)
     );
     let snapshot = agent.session_manager().snapshot().await.unwrap();
-    // Refused before acceptance: none of the oversized messages was saved.
-    assert_eq!(snapshot.invocations.len(), 1);
+    assert_eq!(snapshot.invocations.len(), 25);
+    for (index, invocation) in snapshot.invocations[..24].iter().enumerate() {
+        assert_eq!(
+            invocation.request.execution_id.as_str(),
+            format!("oversized-{index}")
+        );
+        assert!(matches!(
+            &invocation.result,
+            Some(Err(AgentError::MessageTooLarge {
+                max_bytes: 8192,
+                ..
+            }))
+        ));
+        assert_eq!(
+            &invocation.acknowledgement,
+            &SubmissionAcknowledgement::Acknowledged
+        );
+    }
     assert_eq!(
-        snapshot.invocations[0].request.execution_id.as_str(),
+        snapshot.invocations[24].request.execution_id.as_str(),
         "valid-after-rejections"
+    );
+    assert_eq!(
+        snapshot.invocations[24].result,
+        Some(Ok(ExecutionOutcome::Completed))
     );
     let launches: Vec<u32> =
         serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();

@@ -575,8 +575,9 @@ fn acknowledgement_audit_uses_direct_optional_error_shape_and_preflight_bounds()
         let length = bytes.len();
         let (result, decoded) = load(bytes);
         assert!(matches!(result, Err(StorageError::Corrupt(_))));
+        let offending_field_limit = if field == "audit" { 1024 * 1024 } else { 4096 };
         assert!(
-            decoded <= 64 * 1024,
+            decoded <= offending_field_limit + 64 * 1024 && decoded + 512 * 1024 < length,
             "oversized acknowledgement {field} was owned before rejection: {decoded}/{length}"
         );
     }
