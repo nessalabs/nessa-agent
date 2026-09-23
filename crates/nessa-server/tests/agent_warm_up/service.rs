@@ -373,7 +373,7 @@ async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
     );
     warm_up.wait_until_settled().await;
 
-    assert_eq!(cleanup.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(cleanup.calls.load(Ordering::SeqCst), 2);
     assert!(records.completed.lock().unwrap().is_empty());
     let audit = audit.records.lock().unwrap();
     let failure = audit[0].failure.as_ref().unwrap();

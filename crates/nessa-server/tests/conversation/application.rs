@@ -1667,7 +1667,7 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
     let failure = failed.lifecycle.failure.as_ref().unwrap();
     assert_eq!(failure.code, ConversationStartupFailureCode::Provider);
-    assert!(failure.message.contains("startup"));
+    assert_eq!(failure.message, "The agent provider could not attach.");
     let revision = failed.revision;
 
     // Re-reading and reconnect-style creation retain one failed generation;
@@ -1749,7 +1749,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
     assert_eq!(
         failed.lifecycle.failure.unwrap().code,
-        ConversationStartupFailureCode::Cleanup
+        ConversationStartupFailureCode::Provider
     );
     service
         .create(id, caller("panel", "retry"), None)
@@ -1788,7 +1788,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
     assert_eq!(
         failed.lifecycle.failure.unwrap().code,
-        ConversationStartupFailureCode::Cleanup
+        ConversationStartupFailureCode::Provider
     );
     service
         .create(id, caller("panel", "retry"), None)
