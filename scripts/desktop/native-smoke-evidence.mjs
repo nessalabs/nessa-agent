@@ -180,9 +180,9 @@ export function decodeWebdriverScreenshot(value) {
   const maximumEncoded = Math.ceil(nativeSmokeEvidenceLimits.screenshotBytes / 3) * 4
   if (value.length > maximumEncoded)
     throw new Error("WebDriver screenshot exceeded its byte budget")
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))
-    throw new Error("WebDriver screenshot was not valid base64")
   const screenshot = Buffer.from(value, "base64")
+  if (screenshot.toString("base64") !== value)
+    throw new Error("WebDriver screenshot was not canonical base64")
   if (!validPng(screenshot)) throw new Error("WebDriver screenshot was not a bounded PNG")
   return screenshot
 }

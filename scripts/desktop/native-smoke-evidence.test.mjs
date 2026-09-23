@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
+import { deflateSync } from "node:zlib"
 
 import {
   decodeWebdriverScreenshot,
@@ -15,6 +16,58 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 )
+
+const crcTable = Array.from({ length: 256 }, (_, value) => {
+  let crc = value
+  for (let bit = 0; bit < 8; bit += 1)
+    crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1
+  return crc >>> 0
+})
+
+function crc32(value) {
+  let crc = 0xffffffff
+  for (const byte of value) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8)
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(name, payload) {
+  const type = Buffer.from(name)
+  const chunk = Buffer.alloc(12 + payload.length)
+  chunk.writeUInt32BE(payload.length, 0)
+  type.copy(chunk, 4)
+  payload.copy(chunk, 8)
+  chunk.writeUInt32BE(crc32(Buffer.concat([type, payload])), 8 + payload.length)
+  return chunk
+}
+
+function nearLimitPng() {
+  const width = 1300
+  const height = 1300
+  const scanlines = Buffer.alloc(height * (1 + width * 3))
+  let state = 0x5eed1234
+  let offset = 0
+  for (let row = 0; row < height; row += 1) {
+    scanlines[offset] = 0
+    offset += 1
+    for (let column = 0; column < width * 3; column += 1) {
+      state ^= state << 13
+      state ^= state >>> 17
+      state ^= state << 5
+      scanlines[offset] = state & 0xff
+      offset += 1
+    }
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header.set([8, 2, 0, 0, 0], 8)
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", deflateSync(scanlines)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ])
+}
 
 test("failure retention writes only the selected bounded evidence", () => {
   const root = mkdtempSync(join(tmpdir(), "nessa-native-evidence-"))
@@ -149,6 +202,7 @@ test("invalid and oversized screenshots leave no partial evidence directory", ()
   const root = mkdtempSync(join(tmpdir(), "nessa-native-evidence-png-"))
   try {
     assert.throws(() => decodeWebdriverScreenshot("not-base64"), /base64/)
+    assert.throws(() => decodeWebdriverScreenshot("AAAA!!!!"), /canonical base64/)
     assert.throws(
       () =>
         retainNativeSmokeFailure(root, "invalid", {
@@ -174,4 +228,12 @@ test("invalid and oversized screenshots leave no partial evidence directory", ()
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("a valid near-limit PNG is decoded with bounded linear validation", () => {
+  const screenshot = nearLimitPng()
+
+  assert.ok(screenshot.length > 5_000_000)
+  assert.ok(screenshot.length < nativeSmokeEvidenceLimits.screenshotBytes)
+  assert.deepEqual(decodeWebdriverScreenshot(screenshot.toString("base64")), screenshot)
 })
