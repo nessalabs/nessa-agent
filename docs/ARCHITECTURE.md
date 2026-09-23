@@ -53,7 +53,7 @@ opinion rather than the product's.
 | `platform/linux/` | WebKit DMA-BUF prep, `xdg-open` for links, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
-**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just release fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
+**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just release [stage]` / `just release [stage] fast`. The desktop launch tooling resolves one stage for Vite and the host, and packaged frontend assets record that stage for the Rust build to verify before embedding them. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
 
 **React shell** (`src/`) — everything that is on screen.
 
@@ -362,6 +362,14 @@ provider adapters remain separate features. Existing design proposals do not rep
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
+
+**Local agent credential values** (`crates/nessa-agent-credentials`) — pure
+shared domain, no binary or effects. The gateway adapter constructs its
+validated private credential and stage/instance namespace through a
+caller-owned read port. The canonical keychain names
+are infrastructure data in `protocol/defaults/agent-credentials.json`; provider
+environment mapping stays in the gateway adapter. See the
+[crate guide](../crates/nessa-agent-credentials/README.md).
 
 ## Gateway authorization
 

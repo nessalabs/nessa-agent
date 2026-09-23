@@ -272,6 +272,14 @@ below, and reports a sink failure beside the primary fault.
 Server composition supplies whether the open came from gateway startup,
 automatic provisioning, or an explicit local command.
 
+`crates/nessa-agent-credentials` is the smaller pure domain consumed by the
+gateway credential-source adapter and available to later credential consumers. It owns
+the immutable validated credential text, API-key/OAuth meaning, the explicit
+Claude/OpenCode credential identity, and the durable stage/instance namespace.
+It owns no keychain, environment, provider, serialization, or filesystem code;
+the gateway keeps those effects behind its own application port. See the
+[crate map](../crates/nessa-agent-credentials/README.md).
+
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
@@ -381,6 +389,7 @@ independently of whether that turn contains text.
 
 ### Packaged gateway lifecycle
 
+- `scripts/desktop/stage.mjs` resolves one named stage for the Tauri command and its Vite child. Vite records the stage beside the assets it builds; `src-tauri/build.rs` resolves Tauri's effective base, platform, and `TAURI_CONFIG` layers and reads that record from the `build.frontendDist` Tauri will embed. It refuses a frontend whose stage differs from the host bundle stage, and the host accepts only an equal runtime `NESSA_STAGE` override.
 - `scripts/desktop/prepare.mjs` enables managed runtime preparation only on macOS.
   `runtime-layout.mjs` owns the executable names used by assembly, signing, and
   bundle verification. `prepare-runtime.mjs` owns the shared native-target check,
@@ -606,8 +615,10 @@ paths remain current until the coordinated TODO updates all consumers.
 ## Browser sessions
 
 `crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`
-coordinates an opaque credential binding and its asynchronous storage port, `domain/value_objects/`
-owns the rolling idle lifetime used to validate every stored session, and `adapters/`
+coordinates current-origin admission and its asynchronous storage port,
+`domain/value_objects/` owns immutable authoritative session state, the exact
+structurally validated HTTP(S) origin, and the rolling idle lifetime used to
+validate every stored session, and `adapters/`
 implements the bounded session journal with filesystem work on the blocking pool
 (and memory test adapter), and `entrypoint/http.rs` translates cookies and requests.
 Tests under `tests/browser_session/` cover lifetime, persistence, and HTTP boundaries. Its module map
@@ -649,6 +660,15 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 `tests/agents/` split domain rules, application orchestration, the shared
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
+
+The same context defines `AgentCredentialSource`; its local adapter can read
+standalone Claude environment credentials before the Nessa keychain while
+preserving API-key versus OAuth meaning. Its values and stage/instance account namespace come from
+`nessa-agent-credentials`; `protocol/defaults/agent-credentials.json` is the one
+infrastructure mapping for the Security.framework service and the Claude and
+OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
+can read an injected source on a blocking worker for each process open. Neither
+adapter puts the source value in configuration, plist, arguments, or logs.
 
 ## Attachments
 
