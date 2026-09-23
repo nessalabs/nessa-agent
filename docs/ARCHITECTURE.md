@@ -366,6 +366,14 @@ Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
+**Local agent credential values** (`crates/nessa-agent-credentials`) — pure
+shared domain, no binary or effects. The gateway adapter constructs its
+validated private credential and stage/instance namespace through a
+caller-owned read port. The canonical keychain names
+are infrastructure data in `protocol/defaults/agent-credentials.json`; provider
+environment mapping stays in the gateway adapter. See the
+[crate guide](../crates/nessa-agent-credentials/README.md).
+
 ## Gateway authorization
 
 The running gateway mounts one authenticated product flow on `/session`. Each request checks current credential validity and membership;
