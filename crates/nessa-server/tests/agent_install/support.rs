@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc::Sender, Mutex};
 
 use crate::agent_install::application::{
-    ArchiveSource, AuditFailure, InstallAudit, Publication, PublicationChange,
+    ArchiveSource, AuditFailure, AuditFailureStage, InstallAudit, Publication, PublicationChange,
     PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
     SourceFailure, StagedArchive, StoreFailure,
 };
@@ -96,7 +96,15 @@ impl RecordingAudit {
     pub(crate) fn failing_on(kind: InstallTransitionKind, detail: &str) -> Self {
         Self {
             records: Mutex::new(Vec::new()),
-            failure: Some((Some(kind), AuditFailure(detail.to_owned()))),
+            failure: Some((
+                Some(kind),
+                AuditFailure::new(
+                    AuditFailureStage::AcknowledgeRecord,
+                    detail.to_owned(),
+                    None,
+                    None,
+                ),
+            )),
         }
     }
 

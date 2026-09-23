@@ -1,5 +1,7 @@
 use super::*;
-use crate::agent_install::application::{PublicationCleanupFailure, RollbackChange};
+use crate::agent_install::application::{
+    AuditFailureStage, PublicationCleanupFailure, RollbackChange,
+};
 use crate::agent_install::domain::{
     InstallTransitionKind, Libc, RecoveryState, ReleasePlatform, ReleaseRequirements,
     RollbackState, RuntimeArtifact,
@@ -24,7 +26,12 @@ impl InstallAudit for BlockingAudit {
             self.entered.send(()).unwrap();
             self.release.lock().unwrap().recv().unwrap();
             if self.fail {
-                return Err(AuditFailure("sink refused".into()));
+                return Err(AuditFailure::new(
+                    AuditFailureStage::AcknowledgeRecord,
+                    "sink refused".into(),
+                    None,
+                    None,
+                ));
             }
         }
         Ok(())
@@ -855,13 +862,13 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
     let InstallFailure::Audit {
         operation: Some(audited_operation),
         runtime_state,
-        failure: AuditFailure(audit_detail),
+        failure: audit_failure,
     } = failure
     else {
         panic!("incomplete recovery and audit failure were not retained");
     };
     assert_eq!(runtime_state, RuntimeStateEvidence::Unconfirmed);
-    assert_eq!(audit_detail, "sink refused");
+    assert_eq!(audit_failure.detail(), "sink refused");
     assert_eq!(
         *audited_operation,
         InstallFailure::Recovery {

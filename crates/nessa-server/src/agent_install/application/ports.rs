@@ -80,13 +80,120 @@ impl fmt::Display for StoreFailure {
 
 impl std::error::Error for StoreFailure {}
 
-/// The durable audit sink did not acknowledge install evidence.
+/// The application-level checkpoint at which durable audit acknowledgement failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditFailureStage {
+    /// The private journal authority could not be initialized.
+    Initialize,
+    /// The stable journal lock could not be acquired.
+    AcquireLock,
+    /// The retained directory or stable lock no longer had its original identity.
+    VerifyAuthority,
+    /// Existing durable records could not be enumerated or validated.
+    ReadJournal,
+    /// The next record could not be encoded or written to its reservation.
+    WriteRecord,
+    /// The reserved record could not be renamed to its immutable destination.
+    PublishRecord,
+    /// Publication occurred, but its durability or identity could not be acknowledged.
+    AcknowledgeRecord,
+}
+
+/// Logical identity of an audit record whose destination rename occurred.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditFailure(pub String);
+pub struct PublishedAuditRecord {
+    record_id: String,
+    sequence: u64,
+    destination: String,
+}
+
+impl PublishedAuditRecord {
+    /// Describe the logical record that reached its immutable destination.
+    pub fn new(record_id: String, sequence: u64, destination: String) -> Self {
+        Self {
+            record_id,
+            sequence,
+            destination,
+        }
+    }
+
+    /// Return the adapter-owned identity written into the record.
+    pub fn record_id(&self) -> &str {
+        &self.record_id
+    }
+
+    /// Return the durable sequence written into the record and its filename.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Return the immutable single-component destination name.
+    pub fn destination(&self) -> &str {
+        &self.destination
+    }
+}
+
+/// The durable audit sink did not acknowledge install evidence.
+///
+/// A destination rename, the primary failure, and reservation cleanup are
+/// independent facts. Keeping them separate prevents a caller from blindly
+/// retrying a sequence that may already exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditFailure {
+    stage: AuditFailureStage,
+    detail: String,
+    published: Option<PublishedAuditRecord>,
+    cleanup: Option<String>,
+}
+
+impl AuditFailure {
+    /// Build a failure while preserving any publication and cleanup evidence.
+    pub fn new(
+        stage: AuditFailureStage,
+        detail: String,
+        published: Option<PublishedAuditRecord>,
+        cleanup: Option<String>,
+    ) -> Self {
+        Self {
+            stage,
+            detail,
+            published,
+            cleanup,
+        }
+    }
+
+    /// Return the application checkpoint that failed.
+    pub fn stage(&self) -> AuditFailureStage {
+        self.stage
+    }
+
+    /// Return the primary failure detail.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Return the logical record when its destination rename already occurred.
+    pub fn published(&self) -> Option<&PublishedAuditRecord> {
+        self.published.as_ref()
+    }
+
+    /// Return an independent reservation-cleanup failure.
+    pub fn cleanup(&self) -> Option<&str> {
+        self.cleanup.as_deref()
+    }
+}
 
 impl fmt::Display for AuditFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        write!(
+            formatter,
+            "audit failed at {:?}: {}",
+            self.stage, self.detail
+        )?;
+        if let Some(cleanup) = &self.cleanup {
+            write!(formatter, "; reservation cleanup also failed: {cleanup}")?;
+        }
+        Ok(())
     }
 }
 
