@@ -23,5 +23,6 @@ mod sessions;
 mod shutdown;
 mod steering;
 mod support;
+mod tools;
 
 mod agents;

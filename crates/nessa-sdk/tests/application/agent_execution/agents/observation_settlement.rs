@@ -218,13 +218,19 @@ async fn duplicate_terminal_retains_settlement_after_confirmed_or_audit_only_cle
             CleanupReport::confirmed(CloseOutcome { forced: false }),
             cleaned_with_error(AgentError::AuditFailure),
             cleaned_with_error(AgentError::OperationAndCleanupFailure {
-                operation_error: Box::new(AgentError::Provider { code: -32044 }),
+                operation_error: Box::new(AgentError::Provider {
+                    code: -32044,
+                    diagnostic: None,
+                }),
                 cleanup_error: Box::new(AgentError::AuditFailure),
             }),
         ] {
             for outcome in [
                 Ok(ExecutionOutcome::Completed),
-                Err(AgentError::Provider { code: -32042 }),
+                Err(AgentError::Provider {
+                    code: -32042,
+                    diagnostic: None,
+                }),
             ] {
                 assert_settlement_after_invalid_observation(
                     queued,
@@ -246,7 +252,10 @@ async fn uncertain_cleanup_captures_ready_settlement_without_waiting_for_unavail
             assert_settlement_after_invalid_observation(
                 queued,
                 CleanupReport::unconfirmed(AgentError::CleanupUncertain),
-                Err(AgentError::Provider { code: -32043 }),
+                Err(AgentError::Provider {
+                    code: -32043,
+                    diagnostic: None,
+                }),
                 ready,
                 None,
             )
@@ -261,7 +270,10 @@ async fn reader_deadline_retains_audit_failure_and_delayed_provider_settlement()
         assert_settlement_after_invalid_observation(
             queued,
             cleaned_with_error(AgentError::AuditFailure),
-            Err(AgentError::Provider { code: -32045 }),
+            Err(AgentError::Provider {
+                code: -32045,
+                diagnostic: None,
+            }),
             true,
             Some(ObservationFailure::new(
                 AgentError::Deadline,
