@@ -86,6 +86,42 @@ fn publication_returns_the_open_destination_for_identity_acknowledgement() {
 }
 
 #[test]
+fn dropping_a_published_handle_keeps_the_destination() {
+    let (_temporary, _root, directory) = fixture();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"published").unwrap();
+    let published = reservation.publish_new(OsStr::new("sequence-1")).unwrap();
+
+    drop(published);
+
+    let mut bytes = Vec::new();
+    directory
+        .open_file(OsStr::new("sequence-1"), OpenMode::Read)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"published");
+}
+
+#[test]
+fn named_identity_rejects_a_multiply_linked_witness() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "record", b"one file");
+    let witness = directory
+        .open_file(OsStr::new("record"), OpenMode::ReadWrite)
+        .unwrap();
+    std::fs::hard_link(root.join("records/record"), root.join("records/alias")).unwrap();
+
+    assert_eq!(
+        directory
+            .named_file_is(OsStr::new("record"), &witness)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+}
+
+#[test]
 fn parallel_enumerations_have_independent_cursors() {
     let (_temporary, _root, directory) = fixture();
     write_named(&directory, "a", b"a");
@@ -238,12 +274,14 @@ fn changed_reservation_name_refuses_cleanup_and_reports_it_separately() {
 
     let failure = reservation.publish_new(OsStr::new("record")).unwrap_err();
 
+    let (stage, source, published, cleanup) = failure.into_parts();
+    assert_eq!(stage, PrivatePublicationStage::ValidateReservation);
+    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(published.is_none());
     assert_eq!(
-        failure.stage(),
-        PrivatePublicationStage::ValidateReservation
+        cleanup.expect("cleanup failure remains independent").kind(),
+        std::io::ErrorKind::PermissionDenied
     );
-    assert!(failure.published().is_none());
-    assert!(failure.cleanup_error().is_some());
     assert_eq!(std::fs::read(changed).unwrap(), b"retained");
 }
 
@@ -256,6 +294,9 @@ fn replacing_a_named_lock_is_detected_by_open_file_identity() {
         .open_file(OsStr::new("lock"), OpenMode::ReadWrite)
         .unwrap();
     std::fs::remove_file(root.join("records/lock")).unwrap();
+    assert!(!directory
+        .named_file_is(OsStr::new("lock"), &original)
+        .unwrap());
     write_named(&directory, "lock", b"replacement");
 
     assert!(!directory
@@ -281,12 +322,34 @@ fn acquisition_rejects_an_intermediate_symbolic_link() {
 
 #[cfg(unix)]
 #[test]
-fn enumeration_preserves_native_names_and_no_follow_types() {
-    use std::os::unix::ffi::OsStringExt;
+fn file_open_refuses_a_symbolic_link_leaf() {
     use std::os::unix::fs::symlink;
 
     let (_temporary, root, directory) = fixture();
-    let native = OsString::from_vec(vec![b'n', 0x80]);
+    write_named(&directory, "target", b"outside the requested name");
+    symlink("target", root.join("records/link")).unwrap();
+
+    assert!(directory
+        .open_file(OsStr::new("link"), OpenMode::Read)
+        .is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn enumeration_preserves_native_names_and_no_follow_types() {
+    use std::os::unix::fs::symlink;
+
+    let (_temporary, root, directory) = fixture();
+    #[cfg(target_os = "linux")]
+    let native = {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(vec![b'n', 0x80])
+    };
+    // macOS accepts Unicode native names but rejects arbitrary byte strings.
+    // Spell the decomposed normalization explicitly so enumeration is compared
+    // with the exact native representation supplied to the filesystem.
+    #[cfg(target_vendor = "apple")]
+    let native = OsString::from("native-e\u{301}");
     directory.open_file(&native, OpenMode::CreateNew).unwrap();
     create_directory(&root.join("records/child")).unwrap();
     symlink("child", root.join("records/link")).unwrap();
@@ -325,6 +388,35 @@ fn retained_windows_file_handle_prevents_named_lock_replacement() {
 
 #[cfg(windows)]
 #[test]
+fn windows_reservation_identity_publish_reopen_and_cleanup_share_one_file() {
+    let (_temporary, root, directory) = fixture();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"published").unwrap();
+    let reservation_name = reservation.name().to_owned();
+    assert!(directory
+        .named_file_is(&reservation_name, reservation.as_file())
+        .unwrap());
+
+    let published = reservation.publish_new(OsStr::new("record")).unwrap();
+    assert!(!root.join("records").join(reservation_name).exists());
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    let mut reopened = directory
+        .open_file(OsStr::new("record"), OpenMode::Read)
+        .unwrap();
+    let mut bytes = Vec::new();
+    reopened.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"published");
+
+    drop(reopened);
+    drop(published);
+    std::fs::remove_file(root.join("records/record")).unwrap();
+    assert!(names(&directory).is_empty());
+}
+
+#[cfg(windows)]
+#[test]
 fn acquisition_rejects_an_intermediate_reparse_point() {
     use std::os::windows::fs::symlink_dir;
 
@@ -337,4 +429,18 @@ fn acquisition_rejects_an_intermediate_reparse_point() {
 
     assert!(PrivateDirectory::open_beneath(&root, Path::new("linked/records")).is_err());
     assert!(!outside.join("records").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn file_open_refuses_a_reparse_point_leaf() {
+    use std::os::windows::fs::symlink_file;
+
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "target", b"outside the requested name");
+    symlink_file("target", root.join("records/link")).unwrap();
+
+    assert!(directory
+        .open_file(OsStr::new("link"), OpenMode::Read)
+        .is_err());
 }

@@ -19,7 +19,7 @@ write-through moves after file flush; Unix callers sync the containing directory
 | `src/lib.rs` | Crate documentation, module declarations, and the existing path-based private-storage API. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
 | `src/unix/retained_directory.rs` | Retained directory descriptors, independent `openat(".")` enumeration cursors, identity checks, exclusive rename, cleanup, and directory sync. |
-| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, handle enumeration and identity, `FileRenameInfo` publication, and handle disposition cleanup. |
+| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` publication, and handle disposition cleanup. |
 | `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
 
 `PrivateDirectory` is acquired once beneath a trusted absolute root. Every file
@@ -44,13 +44,15 @@ excludes same-UID mutation in the residual check/effect interval. Without that
 cooperation, a mutation precisely inside the final name-check/rename or
 name-check/unlink interval is outside this API's guarantee. Windows retains the
 real directory chain without `FILE_SHARE_DELETE`, so directory replacement is
-prevented while the authority lives. `PrivateDirectory::sync` syncs the retained
-directory on Unix. On Windows it only revalidates binding: Windows has no directory
-fsync equivalent, and success does not claim directory-entry durability or survival
-of arbitrary power loss. Retained Windows publication uses `FileRenameInfo` through
-the reservation handle and flushes that file before and after rename; it does not
-claim that `MoveFileExW(MOVEFILE_WRITE_THROUGH)` supplies a directory-fsync
-equivalent.
+prevented while the authority lives. Mutation-capable file handles use the same
+name-pinning policy; transient identity probes and read-only opens share deletion
+so they can inspect a reservation or destination while its publication handle
+remains open. `PrivateDirectory::sync` syncs the retained directory on Unix. On
+Windows it only revalidates binding: Windows has no directory fsync equivalent,
+and success does not claim directory-entry durability or survival of arbitrary
+power loss. Retained Windows publication uses `FileRenameInfo` through the
+reservation handle and flushes that file before and after rename; it does not claim
+that `MoveFileExW(MOVEFILE_WRITE_THROUGH)` supplies a directory-fsync equivalent.
 
 Run `cargo test -p nessa-local-storage` and
 `cargo clippy -p nessa-local-storage --all-targets -- -D warnings` on each supported

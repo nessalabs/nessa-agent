@@ -5,7 +5,10 @@
 //! descriptor; cooperating callers hold their stable lock across the residual
 //! leaf identity check and effect.
 
-use super::{open_child_directory, open_root, relative_components, verify_directory_file};
+use super::{
+    open_child_directory, open_root, relative_components, verify_directory_file,
+    verify_identity_candidate,
+};
 use crate::{
     retained_directory::{PrivateDirectoryEntry, PrivateFileIdentity, PrivateFileType},
     unsafe_file, verify_file, OpenMode,
@@ -113,7 +116,7 @@ impl RetainedDirectory {
     }
 
     pub fn named_file_is(&self, name: &OsStr, file: &File) -> io::Result<bool> {
-        verify_file(file)?;
+        verify_identity_candidate(file)?;
         let name = component(name)?;
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         let result = unsafe {

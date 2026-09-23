@@ -58,15 +58,28 @@ pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> 
     open_beneath(root, relative, OpenMode::CreateNew)
 }
 pub fn verify_file(file: &File) -> io::Result<()> {
+    if private_regular_file_metadata(file)?.nlink() != 1 {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
+fn verify_identity_candidate(file: &File) -> io::Result<()> {
+    // An already-open identity witness may have no name after unlink;
+    // multiple names remain unsafe because they defeat name ownership.
+    if private_regular_file_metadata(file)?.nlink() > 1 {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
+fn private_regular_file_metadata(file: &File) -> io::Result<fs::Metadata> {
     let metadata = file.metadata()?;
     if !metadata.is_file()
-        || metadata.nlink() != 1
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o077 != 0
     {
         return Err(unsafe_file());
     }
-    Ok(())
+    Ok(metadata)
 }
 pub fn verify_directory(path: &Path) -> io::Result<()> {
     let directory = OpenOptions::new()

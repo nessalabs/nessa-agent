@@ -1,8 +1,10 @@
 //! Windows retained-directory authority built from top-down Win32 handles.
 //!
-//! Directory and file handles omit `FILE_SHARE_DELETE`, pinning their objects
-//! for the authority's lifetime. Publication uses `FileRenameInfo` relative to
-//! the retained directory and never claims a directory-fsync guarantee.
+//! Directory and mutation-capable file handles omit `FILE_SHARE_DELETE`,
+//! pinning their names. Read-only handles and transient identity probes share
+//! deletion so they can coexist with a publication handle; they acquire no
+//! naming authority. Publication uses `FileRenameInfo` relative to the retained
+//! directory and never claims a directory-fsync guarantee.
 
 use super::{check, information, verify_acl, wide, User};
 use crate::{
@@ -86,8 +88,9 @@ impl RetainedDirectory {
     }
 
     pub fn named_file_is(&self, name: &OsStr, file: &File) -> io::Result<bool> {
+        verify_file(file)?;
         let path = self.path(name)?;
-        let named = match open_existing(&path, FILE_READ_ATTRIBUTES | READ_CONTROL, false) {
+        let named = match open_identity_probe(&path, FILE_READ_ATTRIBUTES | READ_CONTROL) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error),
@@ -297,11 +300,32 @@ fn open_directory(path: &Path, access: u32) -> io::Result<File> {
 }
 
 fn open_existing(path: &Path, access: u32, directory: bool) -> io::Result<File> {
+    open_existing_with_sharing(path, access, directory, FILE_SHARE_READ | FILE_SHARE_WRITE)
+}
+
+fn open_identity_probe(path: &Path, access: u32) -> io::Result<File> {
+    // A reservation requests DELETE so it can rename and clean up by handle.
+    // This short-lived probe must share that access; it acquires no mutation
+    // authority and closes as soon as the two identities are compared.
+    open_existing_with_sharing(
+        path,
+        access,
+        false,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    )
+}
+
+fn open_existing_with_sharing(
+    path: &Path,
+    access: u32,
+    directory: bool,
+    sharing: u32,
+) -> io::Result<File> {
     unsafe {
         let handle = CreateFileW(
             wide(path)?.as_ptr(),
             access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            sharing,
             null(),
             OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT
@@ -339,10 +363,20 @@ fn open_named(path: PathBuf, mode: OpenMode, additional_access: u32) -> io::Resu
         OpenMode::CreateNew => CREATE_NEW,
     };
     unsafe {
+        // Read handles can coexist with the still-open publication handle,
+        // which retains DELETE across rename. Mutation-capable handles omit
+        // delete sharing and continue to pin stable lock names.
+        let sharing = FILE_SHARE_READ
+            | FILE_SHARE_WRITE
+            | if matches!(mode, OpenMode::Read | OpenMode::ReadNonblocking) {
+                FILE_SHARE_DELETE
+            } else {
+                0
+            };
         let handle = CreateFileW(
             wide(&path)?.as_ptr(),
             access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            sharing,
             &attributes,
             disposition,
             FILE_FLAG_OPEN_REPARSE_POINT,

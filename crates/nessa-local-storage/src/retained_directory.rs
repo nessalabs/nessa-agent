@@ -157,6 +157,7 @@ pub struct PrivateFileIdentity {
 }
 
 impl PrivateFileIdentity {
+    #[cfg(any(unix, test))]
     pub(crate) fn from_u64s(volume: u64, file: u64) -> Self {
         let mut bytes = [0; 16];
         bytes[..8].copy_from_slice(&file.to_ne_bytes());
@@ -497,33 +498,81 @@ pub(crate) fn validate_name(name: &OsStr) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn post_rename_sync_failure_retains_published_handle_without_cleanup_claim() {
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum AcknowledgementCheckpoint {
+        Flush,
+        ValidateDestination,
+        VerifyBinding,
+        SyncDirectory,
+        VerifySyncedBinding,
+    }
+
+    fn injected(
+        checkpoint: AcknowledgementCheckpoint,
+        failing: AcknowledgementCheckpoint,
+    ) -> io::Result<()> {
+        if checkpoint == failing {
+            Err(io::Error::other("injected acknowledgement failure"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn published_fixture() -> PublishedPrivateFile {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("published");
         std::fs::write(&path, b"published bytes").unwrap();
-        let file = File::open(path).unwrap();
-        let published = PublishedPrivateFile {
+        PublishedPrivateFile {
             name: OsString::from("record"),
             identity: PrivateFileIdentity::from_u64s(1, 2),
-            file,
-        };
+            file: File::open(path).unwrap(),
+        }
+    }
 
-        let failure = acknowledge_publication(
-            published,
-            |_| Ok(()),
-            |_| Ok(()),
-            || Ok(()),
-            || Err(io::Error::other("injected directory sync failure")),
-            || panic!("the binding after a failed sync must not be claimed"),
-        )
-        .unwrap_err();
+    #[test]
+    fn every_post_rename_failure_retains_name_identity_and_open_handle_without_cleanup() {
+        for (checkpoint, expected_stage) in [
+            (
+                AcknowledgementCheckpoint::Flush,
+                PrivatePublicationStage::FlushAfterRename,
+            ),
+            (
+                AcknowledgementCheckpoint::ValidateDestination,
+                PrivatePublicationStage::ValidatePublishedDestination,
+            ),
+            (
+                AcknowledgementCheckpoint::VerifyBinding,
+                PrivatePublicationStage::VerifyPublishedBinding,
+            ),
+            (
+                AcknowledgementCheckpoint::SyncDirectory,
+                PrivatePublicationStage::SyncDirectory,
+            ),
+            (
+                AcknowledgementCheckpoint::VerifySyncedBinding,
+                PrivatePublicationStage::VerifyPublishedBinding,
+            ),
+        ] {
+            let failure = acknowledge_publication(
+                published_fixture(),
+                |_| injected(AcknowledgementCheckpoint::Flush, checkpoint),
+                |_| injected(AcknowledgementCheckpoint::ValidateDestination, checkpoint),
+                || injected(AcknowledgementCheckpoint::VerifyBinding, checkpoint),
+                || injected(AcknowledgementCheckpoint::SyncDirectory, checkpoint),
+                || injected(AcknowledgementCheckpoint::VerifySyncedBinding, checkpoint),
+            )
+            .unwrap_err();
 
-        assert_eq!(failure.stage(), PrivatePublicationStage::SyncDirectory);
-        assert!(failure.cleanup_error().is_none());
-        let published = failure.published().expect("rename fact is retained");
-        assert_eq!(published.name(), OsStr::new("record"));
-        assert_eq!(published.identity(), PrivateFileIdentity::from_u64s(1, 2));
-        assert!(published.as_file().metadata().unwrap().is_file());
+            assert_eq!(failure.stage(), expected_stage);
+            assert_eq!(
+                failure.source_error().to_string(),
+                "injected acknowledgement failure"
+            );
+            assert!(failure.cleanup_error().is_none());
+            let published = failure.published().expect("rename fact is retained");
+            assert_eq!(published.name(), OsStr::new("record"));
+            assert_eq!(published.identity(), PrivateFileIdentity::from_u64s(1, 2));
+            assert!(published.as_file().metadata().unwrap().is_file());
+        }
     }
 }
