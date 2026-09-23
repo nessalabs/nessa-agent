@@ -89,10 +89,11 @@ pub(super) fn product_state(
                 .ok_or_else(|| setup_error("invalid data root"))?,
         )?;
     }
-    let store = Arc::new(
-        LocalCredentialStore::open_with_config(directory, "credentials.v1.json", settings.registry)
-            .map_err(RunError::Registry)?,
-    );
+    let store = Arc::new(super::credential_registry::open(
+        directory,
+        settings.registry,
+        super::credential_registry::RegistryOpenContext::GatewayStartup,
+    )?);
     let identity = store.identity().map_err(|_| {
         RunError::Authentication(
             "initialize local access with `nessa auth init --local --owner-token-file <new-path>`"
