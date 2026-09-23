@@ -4,8 +4,8 @@ use crate::browser_session::{
     entrypoint,
 };
 use crate::browser_session::{
-    application::{BrowserSession, BrowserSessionVerifier, SessionStore},
-    domain::value_objects::RemovalReason,
+    application::{BrowserSessionVerifier, SessionStore},
+    domain::value_objects::{BrowserSessionOrigin, BrowserSessionState, RemovalReason},
 };
 use axum::{
     extract::State,
@@ -13,6 +13,7 @@ use axum::{
     Json,
 };
 use nessa_auth::application::ports::{SessionEvidence, SessionVerifier};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, Semaphore};
 
 fn headers() -> HeaderMap {
@@ -20,6 +21,9 @@ fn headers() -> HeaderMap {
     value.insert(header::ORIGIN, "https://127.0.0.1:1443".parse().unwrap());
     value.insert("x-nessa-browser", "1".parse().unwrap());
     value
+}
+fn session_origin(value: &str) -> BrowserSessionOrigin {
+    BrowserSessionOrigin::new(value.to_owned()).unwrap()
 }
 fn with_cookie(value: &str) -> HeaderMap {
     let mut headers = headers();
@@ -30,10 +34,7 @@ fn with_cookie(value: &str) -> HeaderMap {
     headers
 }
 
-fn set_browser_sessions(
-    state: &mut ProductRouteState,
-    store: Arc<dyn SessionStore>,
-) {
+fn set_browser_sessions(state: &mut ProductRouteState, store: Arc<dyn SessionStore>) {
     state.browser_sessions = Some(store);
 }
 
@@ -51,9 +52,9 @@ async fn browser_session_verifier_rejects_forged_missing_foreign_and_expired_pro
     store
         .insert(
             id.clone(),
-            BrowserSession::new(
+            BrowserSessionState::new(
                 credential_id.clone(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 100,
             )
             .unwrap(),
@@ -109,6 +110,45 @@ async fn browser_session_verifier_rejects_forged_missing_foreign_and_expired_pro
         Err(AccessError::InvalidCredential)
     ));
     assert!(store.get(id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn current_verifier_cannot_reauthorize_replayed_untrusted_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("historical-origin.jsonl");
+    let id = "d".repeat(64);
+    let store = PersistentSessions::open(&path, 100).unwrap();
+    store
+        .insert(
+            id.clone(),
+            BrowserSessionState::new(
+                CredentialId::new("credential").unwrap(),
+                session_origin("https://historical.example"),
+                100,
+            )
+            .unwrap(),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    drop(store);
+
+    let store = PersistentSessions::open(&path, 100).unwrap();
+    let evidence = SessionEvidence::new(id.as_bytes().to_vec()).unwrap();
+    let verifier = BrowserSessionVerifier {
+        store: &store,
+        expected_origin: "https://historical.example",
+        now: 100,
+    };
+
+    assert!(matches!(
+        verifier
+            .verify_session(&evidence, &AudienceId::new("gateway").unwrap())
+            .await,
+        Err(AccessError::InvalidCredential)
+    ));
+    assert!(store.get(id).await.unwrap().is_some());
 }
 
 #[tokio::test]
@@ -261,12 +301,20 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     let (state, _) = fixture(MembershipRole::Admin);
     let credential_id = authenticate(&state).await.context().credential_id().clone();
     let id = "8".repeat(64);
-    let store = PersistentSessions::open(&sessions_path, 100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS).unwrap();
+    let store = PersistentSessions::open(
+        &sessions_path,
+        100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS,
+    )
+    .unwrap();
     store
         .insert(
             id.clone(),
-            BrowserSession::new(credential_id.clone(), "https://127.0.0.1:1443".into(), 100)
-                .unwrap(),
+            BrowserSessionState::new(
+                credential_id.clone(),
+                session_origin("https://127.0.0.1:1443"),
+                100,
+            )
+            .unwrap(),
             None,
             100,
         )
@@ -274,7 +322,11 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
         .unwrap();
     drop(store);
 
-    let store = PersistentSessions::open(&sessions_path, 100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS).unwrap();
+    let store = PersistentSessions::open(
+        &sessions_path,
+        100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS,
+    )
+    .unwrap();
     let restored = store.get(id.clone()).await.unwrap().unwrap();
     assert_eq!(restored.credential_id(), &credential_id);
     let evidence = SessionEvidence::new(id.as_bytes().to_vec()).unwrap();
@@ -303,12 +355,22 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     .unwrap();
     let stored = &record["changes"][0]["after"];
     assert_eq!(stored.as_object().unwrap().len(), 5);
-    for copied in ["principal_id", "organization_id", "membership_id", "audience_id", "auth_revision"] {
+    for copied in [
+        "principal_id",
+        "organization_id",
+        "membership_id",
+        "audience_id",
+        "auth_revision",
+    ] {
         assert!(stored.get(copied).is_none());
     }
     record["changes"][0]["after"]["credential_id"] = json!(" credential");
     std::fs::write(&sessions_path, format!("{record}\n")).unwrap();
-    assert!(PersistentSessions::open(&sessions_path, 100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS).is_err());
+    assert!(PersistentSessions::open(
+        &sessions_path,
+        100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS
+    )
+    .is_err());
 }
 
 #[tokio::test]
@@ -320,9 +382,9 @@ async fn concurrent_renewals_return_the_authoritative_current_session() {
     store
         .insert(
             id.clone(),
-            BrowserSession::new(
+            BrowserSessionState::new(
                 credential_id.clone(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 100,
             )
             .unwrap(),
@@ -372,6 +434,44 @@ async fn browser_rejects_csrf_http_and_invalid_credentials() {
             .status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn websocket_rejects_disallowed_origin_before_reading_session_store() {
+    let (state, _) = fixture(MembershipRole::Admin);
+    let store = Arc::new(ReadCountingStore(AtomicU64::new(0)));
+    let state = state.with_browser_sessions(store.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, crate::server::entrypoint::http::router(state))
+            .await
+            .unwrap();
+    });
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "GET /browser/session HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\nOrigin: https://historical.example\r\nCookie: __Host-nessa-session={}\r\n\r\n",
+        "a".repeat(64)
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = [0_u8; 512];
+    let count = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        stream.read(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    server.abort();
+
+    assert!(
+        std::str::from_utf8(&response[..count])
+            .unwrap()
+            .starts_with("HTTP/1.1 403"),
+        "unexpected response: {}",
+        String::from_utf8_lossy(&response[..count])
+    );
+    assert_eq!(store.0.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -429,13 +529,13 @@ impl SessionStore for PendingStore {
     fn insert<'a>(
         &'a self,
         _: String,
-        _: BrowserSession,
+        _: BrowserSessionState,
         _: Option<String>,
         _: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>> {
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
         Box::pin(std::future::pending())
     }
-    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSession>> {
+    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSessionState>> {
         Box::pin(std::future::pending())
     }
     fn remove<'a>(
@@ -452,16 +552,58 @@ impl SessionStore for PendingStore {
         _: String,
         _: u64,
         _: CredentialId,
-    ) -> PortFuture<'a, BrowserSession> {
+    ) -> PortFuture<'a, BrowserSessionState> {
         Box::pin(std::future::pending())
     }
     fn abandon_login<'a>(
         &'a self,
         _: String,
-        _: Option<(String, BrowserSession)>,
+        _: Option<(String, BrowserSessionState)>,
         _: u64,
     ) -> PortFuture<'a, ()> {
         Box::pin(std::future::pending())
+    }
+}
+
+struct ReadCountingStore(AtomicU64);
+impl SessionStore for ReadCountingStore {
+    fn insert<'a>(
+        &'a self,
+        _: String,
+        _: BrowserSessionState,
+        _: Option<String>,
+        _: u64,
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
+        Box::pin(async { Err(AccessError::Unsupported) })
+    }
+    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSessionState>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(AccessError::Unsupported) })
+    }
+    fn remove<'a>(
+        &'a self,
+        _: String,
+        _: u64,
+        _: RemovalReason,
+        _: Option<CredentialId>,
+    ) -> PortFuture<'a, ()> {
+        Box::pin(async { Err(AccessError::Unsupported) })
+    }
+    fn renew<'a>(
+        &'a self,
+        _: String,
+        _: u64,
+        _: CredentialId,
+    ) -> PortFuture<'a, BrowserSessionState> {
+        Box::pin(async { Err(AccessError::Unsupported) })
+    }
+    fn abandon_login<'a>(
+        &'a self,
+        _: String,
+        _: Option<(String, BrowserSessionState)>,
+        _: u64,
+    ) -> PortFuture<'a, ()> {
+        Box::pin(async { Err(AccessError::Unsupported) })
     }
 }
 
@@ -502,21 +644,18 @@ impl SessionStore for GatedStore {
     fn insert<'a>(
         &'a self,
         id: String,
-        session: BrowserSession,
+        session: BrowserSessionState,
         prior: Option<String>,
         now: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>> {
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
         Box::pin(async move {
-            let replaced = self
-                .inner
-                .insert(id.clone(), session, prior, now)
-                .await?;
+            let replaced = self.inner.insert(id.clone(), session, prior, now).await?;
             *self.inserted_id.lock().unwrap() = Some(id);
             self.hold_after_commit(GatedMutation::Insert).await;
             Ok(replaced)
         })
     }
-    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSession>> {
+    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSessionState>> {
         self.inner.get(id)
     }
     fn remove<'a>(
@@ -538,7 +677,7 @@ impl SessionStore for GatedStore {
         id: String,
         now: u64,
         initiator: CredentialId,
-    ) -> PortFuture<'a, BrowserSession> {
+    ) -> PortFuture<'a, BrowserSessionState> {
         Box::pin(async move {
             let renewed = self.inner.renew(id, now, initiator).await?;
             self.hold_after_commit(GatedMutation::Renew).await;
@@ -548,7 +687,7 @@ impl SessionStore for GatedStore {
     fn abandon_login<'a>(
         &'a self,
         id: String,
-        prior: Option<(String, BrowserSession)>,
+        prior: Option<(String, BrowserSessionState)>,
         now: u64,
     ) -> PortFuture<'a, ()> {
         Box::pin(async move {
@@ -578,7 +717,9 @@ async fn wait_for_removal(store: &GatedStore, reason: RemovalReason) {
 #[tokio::test]
 async fn timed_out_login_is_reclaimed_after_the_committed_insert_finishes() {
     let (mut state, _) = fixture(MembershipRole::Admin);
-    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
+    state.settings = state
+        .settings
+        .with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     let store = Arc::new(GatedStore::new(GatedMutation::Insert));
     set_browser_sessions(&mut state, store.clone());
     let login = tokio::spawn(entrypoint::login(
@@ -587,7 +728,10 @@ async fn timed_out_login_is_reclaimed_after_the_committed_insert_finishes() {
         Json(serde_json::from_value(json!({"token":"secret"})).unwrap()),
     ));
     store.committed.notified().await;
-    assert_eq!(login.await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        login.await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     let id = store.inserted_id.lock().unwrap().clone().unwrap();
     assert!(store.inner.get(id.clone()).await.unwrap().is_some());
     store.release.add_permits(1);
@@ -598,12 +742,14 @@ async fn timed_out_login_is_reclaimed_after_the_committed_insert_finishes() {
 #[tokio::test]
 async fn timed_out_replacement_login_atomically_restores_the_prior_cookie() {
     let (mut state, _) = fixture(MembershipRole::Admin);
-    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
+    state.settings = state
+        .settings
+        .with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     let store = Arc::new(GatedStore::new(GatedMutation::Insert));
     let prior_id = "6".repeat(64);
-    let prior = BrowserSession::new(
+    let prior = BrowserSessionState::new(
         authenticate(&state).await.context().credential_id().clone(),
-        "https://127.0.0.1:1443".into(),
+        session_origin("https://127.0.0.1:1443"),
         100,
     )
     .unwrap();
@@ -620,7 +766,10 @@ async fn timed_out_replacement_login_atomically_restores_the_prior_cookie() {
         Json(serde_json::from_value(json!({"token":"secret"})).unwrap()),
     ));
     store.committed.notified().await;
-    assert_eq!(login.await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        login.await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     assert!(store.inner.get(prior_id.clone()).await.unwrap().is_none());
     let replacement = store.inserted_id.lock().unwrap().clone().unwrap();
     store.release.add_permits(1);
@@ -628,7 +777,9 @@ async fn timed_out_replacement_login_atomically_restores_the_prior_cookie() {
     assert!(store.inner.get(replacement).await.unwrap().is_none());
     assert!(store.inner.get(prior_id).await.unwrap().is_some());
     let mut state = state;
-    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_secs(1)), None);
+    state.settings = state
+        .settings
+        .with_deadlines(Some(std::time::Duration::from_secs(1)), None);
     assert_eq!(
         entrypoint::check(State(state), with_cookie(&prior_cookie))
             .await
@@ -648,13 +799,23 @@ async fn timed_out_logout_finishes_the_exact_signout_transition() {
         Json(serde_json::from_value(json!({"token":"secret"})).unwrap()),
     )
     .await;
-    let cookie = login.headers()[header::SET_COOKIE].to_str().unwrap().to_owned();
-    let id = entrypoint::cookie(&with_cookie(&cookie)).unwrap().to_owned();
+    let cookie = login.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let id = entrypoint::cookie(&with_cookie(&cookie))
+        .unwrap()
+        .to_owned();
     let mut timed = state;
-    timed.settings = timed.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
+    timed.settings = timed
+        .settings
+        .with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     let logout = tokio::spawn(entrypoint::logout(State(timed), with_cookie(&cookie)));
     store.committed.notified().await;
-    assert_eq!(logout.await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        logout.await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     assert!(store.inner.get(id).await.unwrap().is_none());
     store.release.add_permits(1);
     wait_for_removal(&store, RemovalReason::SignOut).await;
@@ -683,24 +844,25 @@ async fn timed_out_check_finishes_the_exact_renewal_transition() {
         .inner
         .insert(
             id.clone(),
-            BrowserSession::new(
-                credential_id,
-                "https://127.0.0.1:1443".into(),
-                100,
-            )
-            .unwrap(),
+            BrowserSessionState::new(credential_id, session_origin("https://127.0.0.1:1443"), 100)
+                .unwrap(),
             None,
             100,
         )
         .await
         .unwrap();
     set_browser_sessions(&mut state, store.clone());
-    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
+    state.settings = state
+        .settings
+        .with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     authority.now.store(3_700, Ordering::SeqCst);
     let cookie = format!("__Host-nessa-session={id}");
     let check = tokio::spawn(entrypoint::check(State(state), with_cookie(&cookie)));
     store.committed.notified().await;
-    assert_eq!(check.await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        check.await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     assert_eq!(
         store.inner.get(id).await.unwrap().unwrap().renewed_at(),
         3_700
@@ -797,7 +959,12 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
     let body = Json(serde_json::from_value(json!({"token":"secret"})).unwrap());
     let login = entrypoint::login(State(state.clone()), headers(), body).await;
     let cookie = login.headers()[header::SET_COOKIE].to_str().unwrap();
-    let permits = state.requests.clone().acquire_many_owned(128).await.unwrap();
+    let permits = state
+        .requests
+        .clone()
+        .acquire_many_owned(128)
+        .await
+        .unwrap();
     assert_eq!(
         entrypoint::check(State(state.clone()), with_cookie(cookie))
             .await
@@ -819,12 +986,15 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
             std::time::Duration::from_millis(50),
             entrypoint::check(State(state.clone()), with_cookie(cookie)),
         )
-            .await
-            .unwrap()
-            .status(),
+        .await
+        .unwrap()
+        .status(),
         StatusCode::NO_CONTENT
     );
-    assert_eq!(stalled_check.await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        stalled_check.await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     let body = Json(serde_json::from_value(json!({"token":"secret"})).unwrap());
     assert_eq!(
         entrypoint::login(State(stalled.clone()), headers(), body)
@@ -839,7 +1009,9 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
         StatusCode::SERVICE_UNAVAILABLE
     );
     let mut elapsed = state;
-    elapsed.settings = elapsed.settings.with_deadlines(Some(std::time::Duration::ZERO), None);
+    elapsed.settings = elapsed
+        .settings
+        .with_deadlines(Some(std::time::Duration::ZERO), None);
     elapsed.access = Arc::new(PendingAccess);
     assert_eq!(
         entrypoint::check(State(elapsed), with_cookie(cookie))
@@ -864,47 +1036,83 @@ async fn development_http_cookie_is_separate_and_origin_bound() {
         assert!(cookie.starts_with("nessa-local-session="));
         assert!(!cookie.contains("Secure"));
         assert!(cookie.contains("HttpOnly; SameSite=Strict"));
-        h.insert(header::COOKIE, cookie.split(';').next().unwrap().parse().unwrap());
-        assert_eq!(entrypoint::check(State(state.clone()), h.clone()).await.status(), StatusCode::NO_CONTENT);
+        h.insert(
+            header::COOKIE,
+            cookie.split(';').next().unwrap().parse().unwrap(),
+        );
+        assert_eq!(
+            entrypoint::check(State(state.clone()), h.clone())
+                .await
+                .status(),
+            StatusCode::NO_CONTENT
+        );
         let mut secure = h.clone();
-        secure.insert(header::ORIGIN, origin.replacen("http:", "https:", 1).parse().unwrap());
-        assert_eq!(entrypoint::check(State(state.clone()), secure).await.status(), StatusCode::UNAUTHORIZED);
+        secure.insert(
+            header::ORIGIN,
+            origin.replacen("http:", "https:", 1).parse().unwrap(),
+        );
+        assert_eq!(
+            entrypoint::check(State(state.clone()), secure)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
         let mut disabled = state.clone();
         disabled.browser_http_allowed = false;
-        assert_eq!(entrypoint::check(State(disabled), h.clone()).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            entrypoint::check(State(disabled), h.clone()).await.status(),
+            StatusCode::FORBIDDEN
+        );
         let logout = entrypoint::logout(State(state.clone()), h.clone()).await;
         assert_eq!(logout.status(), StatusCode::NO_CONTENT);
-        assert!(logout.headers()[header::SET_COOKIE].to_str().unwrap().starts_with("nessa-local-session=;"));
-        assert_eq!(entrypoint::check(State(state.clone()), h).await.status(), StatusCode::UNAUTHORIZED);
+        assert!(logout.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .starts_with("nessa-local-session=;"));
+        assert_eq!(
+            entrypoint::check(State(state.clone()), h).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
-    for origin in ["http://localhost:1420", "http://192.168.1.2:1420", "http://127.0.0.1.evil.example", "http://127.0.0.1:1420@evil.example", "null"] {
+    for origin in [
+        "http://localhost:1420",
+        "http://192.168.1.2:1420",
+        "http://127.0.0.1.evil.example",
+        "http://127.0.0.1:1420@evil.example",
+        "null",
+    ] {
         let mut h = headers();
         h.insert(header::ORIGIN, origin.parse().unwrap());
         let body = Json(serde_json::from_value(json!({"token":"secret"})).unwrap());
-        assert_eq!(entrypoint::login(State(state.clone()), h, body).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            entrypoint::login(State(state.clone()), h, body)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
     }
 }
 
 struct HostileStore {
-    session: BrowserSession,
+    session: BrowserSessionState,
     removals: Mutex<Vec<RemovalReason>>,
 }
 
 struct RenewingStore {
-    session: BrowserSession,
+    session: BrowserSessionState,
     renewals: Mutex<Vec<u64>>,
 }
 impl SessionStore for RenewingStore {
     fn insert<'a>(
         &'a self,
         _: String,
-        _: BrowserSession,
+        _: BrowserSessionState,
         _: Option<String>,
         _: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>> {
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
         Box::pin(async { Err(AccessError::Unsupported) })
     }
-    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSession>> {
+    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSessionState>> {
         Box::pin(async { Ok(Some(self.session.clone())) })
     }
     fn remove<'a>(
@@ -921,7 +1129,7 @@ impl SessionStore for RenewingStore {
         _: String,
         now: u64,
         _: CredentialId,
-    ) -> PortFuture<'a, BrowserSession> {
+    ) -> PortFuture<'a, BrowserSessionState> {
         Box::pin(async move {
             self.renewals.lock().unwrap().push(now);
             self.session
@@ -932,7 +1140,7 @@ impl SessionStore for RenewingStore {
     fn abandon_login<'a>(
         &'a self,
         _: String,
-        _: Option<(String, BrowserSession)>,
+        _: Option<(String, BrowserSessionState)>,
         _: u64,
     ) -> PortFuture<'a, ()> {
         Box::pin(async { Err(AccessError::Unsupported) })
@@ -965,9 +1173,9 @@ async fn check_uses_one_time_sample_for_expected_and_persisted_renewal() {
     authority.snapshot.lock().unwrap().membership = context;
     let credential_id = authenticate(&state).await.context().credential_id().clone();
     let store = Arc::new(RenewingStore {
-        session: BrowserSession::new(
+        session: BrowserSessionState::new(
             credential_id,
-            "https://127.0.0.1:1443".into(),
+            session_origin("https://127.0.0.1:1443"),
             100,
         )
         .unwrap(),
@@ -989,13 +1197,13 @@ impl SessionStore for HostileStore {
     fn insert<'a>(
         &'a self,
         _: String,
-        _: BrowserSession,
+        _: BrowserSessionState,
         _: Option<String>,
         _: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>> {
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
         Box::pin(async { Err(AccessError::Unsupported) })
     }
-    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSession>> {
+    fn get<'a>(&'a self, _: String) -> PortFuture<'a, Option<BrowserSessionState>> {
         Box::pin(async { Ok(Some(self.session.clone())) })
     }
     fn remove<'a>(
@@ -1015,13 +1223,13 @@ impl SessionStore for HostileStore {
         _: String,
         _: u64,
         _: CredentialId,
-    ) -> PortFuture<'a, BrowserSession> {
+    ) -> PortFuture<'a, BrowserSessionState> {
         Box::pin(async { Err(AccessError::Unsupported) })
     }
     fn abandon_login<'a>(
         &'a self,
         _: String,
-        _: Option<(String, BrowserSession)>,
+        _: Option<(String, BrowserSessionState)>,
         _: u64,
     ) -> PortFuture<'a, ()> {
         Box::pin(async { Err(AccessError::Unsupported) })
@@ -1031,18 +1239,33 @@ impl SessionStore for HostileStore {
 #[tokio::test]
 async fn current_identity_failures_keep_distinct_automatic_removal_causes() {
     for (error, expected) in [
-        (AccessError::CredentialRevoked, RemovalReason::CredentialRevoked),
-        (AccessError::CredentialExpired, RemovalReason::CredentialExpired),
-        (AccessError::InactiveMembership, RemovalReason::InactiveMembership),
-        (AccessError::IdentityMismatch, RemovalReason::IdentityMismatch),
-        (AccessError::InvalidCredential, RemovalReason::InvalidCredential),
+        (
+            AccessError::CredentialRevoked,
+            RemovalReason::CredentialRevoked,
+        ),
+        (
+            AccessError::CredentialExpired,
+            RemovalReason::CredentialExpired,
+        ),
+        (
+            AccessError::InactiveMembership,
+            RemovalReason::InactiveMembership,
+        ),
+        (
+            AccessError::IdentityMismatch,
+            RemovalReason::IdentityMismatch,
+        ),
+        (
+            AccessError::InvalidCredential,
+            RemovalReason::InvalidCredential,
+        ),
     ] {
         let (mut state, _) = fixture(MembershipRole::Admin);
         let identity = authenticate(&state).await;
         let store = Arc::new(HostileStore {
-            session: BrowserSession::new(
+            session: BrowserSessionState::new(
                 identity.context().credential_id().clone(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 100,
             )
             .unwrap(),
@@ -1100,9 +1323,9 @@ async fn logout_attributes_only_current_verified_authority_as_explicit() {
         let (mut state, _) = fixture(MembershipRole::Admin);
         let identity = authenticate(&state).await;
         let store = Arc::new(HostileStore {
-            session: BrowserSession::new(
+            session: BrowserSessionState::new(
                 identity.context().credential_id().clone(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 100,
             )
             .unwrap(),
@@ -1139,9 +1362,9 @@ async fn hostile_store_cannot_restore_an_expired_domain_session() {
     )
     .unwrap();
     let identity = authenticate(&state).await;
-    let expired = BrowserSession::restore(
+    let expired = BrowserSessionState::restore(
         identity.context().credential_id().clone(),
-        "https://127.0.0.1:1443".into(),
+        session_origin("https://127.0.0.1:1443"),
         100,
         100,
         100 + crate::browser_session::domain::value_objects::IDLE_SECONDS,
