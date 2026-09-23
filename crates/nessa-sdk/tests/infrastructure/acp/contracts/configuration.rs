@@ -6,6 +6,48 @@ use crate::infrastructure::session_storage::InMemoryStorage;
 use serde_json::json;
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicU8, Ordering},
+    task::{Context, Poll},
+};
+
+struct DropPanicClosureAudit;
+impl Future for DropPanicClosureAudit {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+impl Drop for DropPanicClosureAudit {
+    fn drop(&mut self) {
+        panic!("provider closure audit drop panic");
+    }
+}
+
+struct SelectiveClosureAudit {
+    failure: AtomicU8,
+    closures: Mutex<Vec<SessionClosureRecord>>,
+}
+impl ExecutionAudit for SelectiveClosureAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        let closure = matches!(record, ExecutionAuditRecord::SessionClosed(_));
+        if let ExecutionAuditRecord::SessionClosed(record) = record {
+            self.closures.lock().unwrap().push(record);
+        }
+        if !closure {
+            return Box::pin(async { Ok(()) });
+        }
+        match self.failure.load(Ordering::SeqCst) {
+            1 => Box::pin(async { Err(AgentError::AuditFailure) }),
+            2 => panic!("provider closure audit construction panic"),
+            3 => Box::pin(async { panic!("provider closure audit poll panic") }),
+            4 => Box::pin(DropPanicClosureAudit),
+            _ => Box::pin(async { Ok(()) }),
+        }
+    }
+}
 
 #[tokio::test]
 async fn fails_closed_on_invalid_configuration() {
@@ -687,6 +729,68 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
     drop(agent);
     drop(SessionManager::open(Some(id), storage).await.unwrap());
     assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn close_during_configuration_retains_provider_closure_audit_failure() {
+    let _slot = process_test_slot().await;
+    for restored in [false, true] {
+        for failure in [1, 2, 3, 4] {
+            let audit = Arc::new(SelectiveClosureAudit {
+                failure: AtomicU8::new(0),
+                closures: Mutex::new(Vec::new()),
+            });
+            let mode = if restored {
+                "configuration-stall-on-resume"
+            } else {
+                "configuration-stall"
+            };
+            let (root, config, model) = test_acp_configuration(mode, 16);
+            let binding = ClaudeAcpProvider::new(
+                config,
+                &model,
+                TokenLimits::new(900, 100).unwrap(),
+                audit.clone(),
+            )
+            .unwrap();
+            let storage = Arc::new(InMemoryStorage::new());
+            let manager = SessionManager::open(None, storage).await.unwrap();
+            let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
+                .await
+                .unwrap();
+            if restored {
+                attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+                    .await
+                    .unwrap();
+                agent.close(close_action()).await.unwrap();
+            }
+            audit.failure.store(failure, Ordering::SeqCst);
+            let authorization = agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+                .unwrap();
+            let opening = agent.start_attachment(authorization).unwrap();
+            wait_for_file(&root, "configuration-wait").await;
+
+            assert_eq!(
+                agent.close(close_action()).await,
+                Err(AgentError::AuditFailure)
+            );
+            assert!(opening.wait().await.is_err());
+            assert!(agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+                .is_err());
+            assert_eq!(
+                agent.close(close_action()).await,
+                Err(AgentError::AuditFailure)
+            );
+            let closures = audit.closures.lock().unwrap();
+            assert_eq!(closures.len(), usize::from(restored) + 1);
+            let record = closures.last().unwrap();
+            assert_eq!(record.origin(), &CancellationOrigin::Client(close_action()));
+            drop(closures);
+            assert_gone(&root, "pid");
+        }
+    }
 }
 
 #[tokio::test]

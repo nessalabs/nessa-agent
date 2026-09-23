@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{CleanupFuture, OpenedProviderSession, SessionCloseRequest};
+use super::{CleanupFuture, CleanupReport, OpenedProviderSession, SessionCloseRequest};
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use std::{error::Error, fmt, future::Future, pin::Pin, sync::Arc};
@@ -96,7 +96,15 @@ pub trait ProviderCleanup: Send + Sync {
 /// ```
 pub struct ProviderOpenError {
     cause: AgentError,
-    cleanup: Option<Arc<dyn ProviderCleanup>>,
+    cleanup: FailedOpenCleanup,
+}
+pub(crate) enum FailedOpenCleanup {
+    NotStarted,
+    Completed(CleanupReport),
+    Retained {
+        report: CleanupReport,
+        owner: Arc<dyn ProviderCleanup>,
+    },
 }
 impl ProviderOpenError {
     /// Report `cause` only when no attachment resources remain owned or live.
@@ -108,7 +116,7 @@ impl ProviderOpenError {
         let cause = cause.bounded();
         Self {
             cause,
-            cleanup: None,
+            cleanup: FailedOpenCleanup::NotStarted,
         }
     }
 
@@ -121,7 +129,26 @@ impl ProviderOpenError {
     pub fn with_cleanup(cause: AgentError, cleanup: Arc<dyn ProviderCleanup>) -> Self {
         Self {
             cause: cause.bounded(),
-            cleanup: Some(cleanup),
+            cleanup: FailedOpenCleanup::Retained {
+                report: CleanupReport::unconfirmed(AgentError::CleanupUncertain),
+                owner: cleanup,
+            },
+        }
+    }
+
+    pub(crate) fn with_cleanup_report(
+        cause: AgentError,
+        report: CleanupReport,
+        cleanup: Option<Arc<dyn ProviderCleanup>>,
+    ) -> Self {
+        let cleanup = match (report.is_confirmed(), cleanup) {
+            (true, None) => FailedOpenCleanup::Completed(report),
+            (false, Some(owner)) => FailedOpenCleanup::Retained { report, owner },
+            _ => panic!("provider open cleanup evidence contradicts resource ownership"),
+        };
+        Self {
+            cause: cause.bounded(),
+            cleanup,
         }
     }
 
@@ -133,10 +160,13 @@ impl ProviderOpenError {
     /// Borrow the owned cleanup handle, if resources still require supervision.
     /// Its presence is an ownership claim, not proof that a retry will succeed.
     pub fn cleanup(&self) -> Option<&Arc<dyn ProviderCleanup>> {
-        self.cleanup.as_ref()
+        match &self.cleanup {
+            FailedOpenCleanup::Retained { owner, .. } => Some(owner),
+            FailedOpenCleanup::NotStarted | FailedOpenCleanup::Completed(_) => None,
+        }
     }
 
-    pub(crate) fn into_parts(self) -> (AgentError, Option<Arc<dyn ProviderCleanup>>) {
+    pub(crate) fn into_parts(self) -> (AgentError, FailedOpenCleanup) {
         (self.cause, self.cleanup)
     }
 }
@@ -144,7 +174,18 @@ impl fmt::Debug for ProviderOpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderOpenError")
             .field("cause", &self.cause)
-            .field("cleanup_pending", &self.cleanup.is_some())
+            .field(
+                "cleanup_report",
+                &match &self.cleanup {
+                    FailedOpenCleanup::NotStarted => None,
+                    FailedOpenCleanup::Completed(report)
+                    | FailedOpenCleanup::Retained { report, .. } => Some(report),
+                },
+            )
+            .field(
+                "cleanup_pending",
+                &matches!(&self.cleanup, FailedOpenCleanup::Retained { .. }),
+            )
             .finish()
     }
 }

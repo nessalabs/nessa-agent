@@ -204,6 +204,7 @@ impl Agent {
                 .lifecycle
                 .record_attachment_audit(ExecutionAuditRecord::Attachment(started))
                 .await;
+            start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
             let provider = agent.inner.provider.clone();
             let mut result = match started {
@@ -215,7 +216,7 @@ impl Agent {
                                 .manager
                                 .attach(provider.as_ref(), start.open_control)
                                 .await?;
-                            lifecycle
+                            let published_evidence = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AgentError::Closed)?;
                             let published = AttachmentAuditRecord::new(
@@ -226,13 +227,15 @@ impl Agent {
                                 AttachmentAuditCause::Published,
                                 start.actor.clone(),
                             );
-                            agent
+                            let published_result = agent
                                 .inner
                                 .lifecycle
                                 .record_attachment_audit(ExecutionAuditRecord::Attachment(
                                     published,
                                 ))
-                                .await?;
+                                .await;
+                            published_evidence.send_replace(Some(published_result.clone()));
+                            published_result?;
                             if !lifecycle.acknowledge_attachment_publication(start.generation) {
                                 return Err(AgentError::Closed);
                             }
@@ -261,13 +264,13 @@ impl Agent {
                     _ => AttachmentFailureCode::Provider,
                 };
                 let recorded_context = agent.inner.manager.has_observed_provider_context().await;
-                let transitioned = lifecycle.fail_attachment(
+                let transition = lifecycle.fail_attachment(
                     start.generation,
                     code,
                     result.as_ref().expect_err("attachment failed").clone(),
                     recorded_context,
                 );
-                if transitioned {
+                if let Ok(failed_evidence) = transition {
                     // Initial attachment has no runner available to own queued
                     // receipts. Claim their first terminal cause immediately;
                     // a concurrent close keeps any owners it already cancelled.
@@ -294,10 +297,13 @@ impl Agent {
                             AttachmentAuditCause::Failed,
                             start.actor.clone(),
                         );
-                        if let Err(audit_error) = lifecycle
+                        let failed_result = lifecycle
                             .record_attachment_audit(ExecutionAuditRecord::Attachment(failed))
-                            .await
-                        {
+                            .await;
+                        if let Some(completion) = failed_evidence {
+                            completion.send_replace(Some(failed_result.clone()));
+                        }
+                        if let Err(audit_error) = failed_result {
                             lifecycle.retain_attachment_evidence_failure(
                                 start.generation,
                                 start.cause,

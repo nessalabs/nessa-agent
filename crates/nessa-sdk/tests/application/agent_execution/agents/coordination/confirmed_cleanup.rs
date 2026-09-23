@@ -97,13 +97,25 @@ async fn confirmed_control_then_last_agent_drop_releases_lease_without_closing_a
 }
 
 #[tokio::test]
-async fn same_attachment_ready_confirmation_reconciles_the_existing_stop_report() {
+async fn late_confirmation_updates_only_the_current_physical_attempt() {
     for (audit_failed, prior_audit_failed) in
         [(false, false), (true, false), (false, true), (true, true)]
     {
         for cleanup_in_flight in [false, true] {
             for explicit in [false, true] {
-                let (agent, backend) = agent_with_backend().await;
+                let backend = Arc::new(Backend::default());
+                let audit = Arc::new(CountingAudit::default());
+                let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+                    .await
+                    .unwrap();
+                let agent = attached_agent_with_audit(
+                    Arc::new(Provider(backend.clone())),
+                    manager,
+                    audit.clone(),
+                )
+                .await
+                .unwrap();
+                let initial_audits = audit.0.load(Ordering::SeqCst);
                 backend.fail_cleanup_once.store(true, Ordering::SeqCst);
                 if prior_audit_failed {
                     *backend.cleanup_report.lock().unwrap() = Some(CleanupReport::new(
@@ -146,11 +158,14 @@ async fn same_attachment_ready_confirmation_reconciles_the_existing_stop_report(
                 };
                 let attempt = agent.start_shutdown(request.clone());
                 started.await.unwrap();
-                if !cleanup_in_flight {
-                    let failed = attempt.clone().wait().await;
+                let historical = if cleanup_in_flight {
+                    None
+                } else {
+                    let failed = attempt.clone().wait_physical().await;
                     assert!(!failed.is_confirmed());
                     assert_eq!(agent.inner.lifecycle.complete_stop(&attempt).await, failed);
-                }
+                    Some(failed)
+                };
                 release_control.send(()).unwrap();
                 assert_eq!(control.await, Err(AgentError::StalePermission));
                 if let Some(release) = release_cleanup {
@@ -160,14 +175,40 @@ async fn same_attachment_ready_confirmation_reconciles_the_existing_stop_report(
                     .await
                     .unwrap()
                     .unwrap();
-                let result = timeout(Duration::from_secs(2), attempt.clone().wait())
+                let current = if let Some(historical) = historical {
+                    assert_eq!(
+                        attempt.clone().wait_physical().await,
+                        historical,
+                        "a finalized physical attempt keeps its immutable result"
+                    );
+                    let retry = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+                    let waiter = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);
+                    let (retry_result, waiter_result) = tokio::join!(
+                        agent.inner.lifecycle.complete_stop(&retry),
+                        agent.inner.lifecycle.complete_stop(&waiter)
+                    );
+                    assert_eq!(retry_result, waiter_result);
+                    assert_eq!(
+                        retry.request, request,
+                        "a physical retry keeps the first cause"
+                    );
+                    retry
+                } else {
+                    attempt.clone()
+                };
+                let result = timeout(Duration::from_secs(2), current.clone().wait_physical())
                     .await
                     .unwrap();
                 assert_eq!(
                     result, expected,
                     "same attachment confirmation must update the shared close result"
                 );
-                assert_eq!(agent.inner.lifecycle.complete_stop(&attempt).await, result);
+                assert_eq!(agent.inner.lifecycle.complete_stop(&current).await, result);
+                assert_eq!(
+                    audit.0.load(Ordering::SeqCst),
+                    initial_audits,
+                    "physical retry must not redeliver attachment evidence"
+                );
                 drop(admission);
                 assert!(!agent.inner.lifecycle.attachment_needs_cleanup());
                 assert_eq!(
@@ -178,6 +219,64 @@ async fn same_attachment_ready_confirmation_reconciles_the_existing_stop_report(
             }
         }
     }
+}
+
+#[tokio::test]
+async fn delayed_old_finalizer_cannot_publish_over_a_physical_retry() {
+    let backend = Arc::new(Backend::default());
+    backend.fail_cleanup_once.store(true, Ordering::SeqCst);
+    let audit = Arc::new(CountingAudit::default());
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+        .await
+        .unwrap();
+    let agent =
+        attached_agent_with_audit(Arc::new(Provider(backend.clone())), manager, audit.clone())
+            .await
+            .unwrap();
+    let initial_audits = audit.0.load(Ordering::SeqCst);
+    let first_actor = ActionContext::new("owner", "phone", "first-stop").unwrap();
+    let first_request = SessionCloseRequest::Explicit(first_actor);
+    let first = agent.start_shutdown(first_request.clone());
+    let first_physical = first.clone().wait_physical().await;
+    assert!(!first_physical.is_confirmed());
+
+    let (entered, paused) = oneshot::channel();
+    let (release, waiting) = oneshot::channel();
+    agent
+        .inner
+        .lifecycle
+        .pause_next_stop_finalization(entered, waiting);
+    let lifecycle = agent.inner.lifecycle.clone();
+    let old = first.clone();
+    let old_finalizer = tokio::spawn(async move { lifecycle.complete_stop(&old).await });
+    paused.await.unwrap();
+
+    let (release_cleanup, cleanup_waiting) = oneshot::channel();
+    *backend.cleanup_gate.lock().unwrap() = Some(cleanup_waiting);
+    let retry = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+    let retry_waiter = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);
+    assert_eq!(retry.attempt_id, retry_waiter.attempt_id);
+    assert_ne!(retry.attempt_id, first.attempt_id);
+    assert_eq!(retry.request, first_request);
+    assert!(agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .is_err());
+    release_cleanup.send(()).unwrap();
+    let retry_result = agent.inner.lifecycle.complete_stop(&retry).await;
+    assert!(retry_result.is_confirmed());
+    assert_eq!(
+        agent.inner.lifecycle.complete_stop(&retry_waiter).await,
+        retry_result
+    );
+
+    release.send(()).unwrap();
+    assert_eq!(old_finalizer.await.unwrap(), first_physical);
+    assert_eq!(first.clone().wait_physical().await, first_physical);
+    assert_eq!(audit.0.load(Ordering::SeqCst), initial_audits);
+    assert_eq!(
+        *backend.closes.lock().unwrap(),
+        vec![first_request.clone(), first_request]
+    );
 }
 
 #[tokio::test]
@@ -218,14 +317,14 @@ async fn repeated_confirmation_keeps_distinct_failures_without_growing_history()
             &ProviderSessionState::CleanupReported(second.clone()),
         );
         let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
-        let combined = attempt.clone().wait().await;
+        let combined = attempt.clone().wait_physical().await;
         for _ in 0..3 {
             agent.inner.lifecycle.record_control_state(
                 &admission,
                 &ProviderSessionState::CleanupReported(second.clone()),
             );
             assert_eq!(
-                attempt.clone().wait().await,
+                attempt.clone().wait_physical().await,
                 combined,
                 "reobserving known cleanup evidence must not append the same failure again"
             );

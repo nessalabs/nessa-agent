@@ -90,16 +90,16 @@ impl Resources {
         .await;
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(operation))) {
             std::mem::forget(payload);
-            let error = match result.resources() {
-                ResourceCleanup::Confirmed(_) => AgentError::CleanupUncertain,
-                ResourceCleanup::Unconfirmed(error) => AgentError::MultipleOperationFailures {
+            let error = match result.operation_failure() {
+                Some(error) => AgentError::MultipleOperationFailures {
                     first_error: Box::new(error.clone()),
                     subsequent_error: Box::new(AgentError::CleanupUncertain),
                 },
+                None => AgentError::CleanupUncertain,
             };
             // Future destruction cannot erase a report already returned by poll.
-            // Preserve audit/operation evidence while retaining resource ownership.
-            return result.with_resources(ResourceCleanup::Unconfirmed(error));
+            // Preserve physical and audit evidence and record destruction separately.
+            return result.with_operation_failure(Some(error));
         }
         result
     }
@@ -143,9 +143,11 @@ impl AttachmentLease {
         &self,
         lease: Arc<dyn SessionStorageLease>,
         cleanup: Arc<dyn ProviderCleanup>,
+        report: CleanupReport,
     ) {
         self.arm_target(lease, CleanupTarget::FailedOpen(cleanup))
             .await;
+        self.reconcile_cleanup(report);
     }
     pub(crate) async fn arm_unknown_open(&self, lease: Arc<dyn SessionStorageLease>) {
         let mut state = self.state.lock().await;
@@ -194,6 +196,14 @@ impl AttachmentLease {
         }
         report
     }
+    pub(crate) fn publish_final_cleanup(&self, report: CleanupReport) -> CleanupReport {
+        *self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence") = Some(report.clone());
+        self.pending.store(!report.is_confirmed(), Ordering::SeqCst);
+        report
+    }
     fn record_cleanup_attempt(&self, report: CleanupReport) -> CleanupReport {
         let mut evidence = self
             .cleanup_report
@@ -203,6 +213,21 @@ impl AttachmentLease {
         // remain owned. Independent operation confirmation is different: once
         // confirmed, a competing close result cannot revoke that known release.
         let report = match evidence.as_ref().filter(|prior| prior.is_confirmed()) {
+            Some(prior) => Self::merge_cleanup(prior, &report),
+            None => report,
+        };
+        *evidence = Some(report.clone());
+        if report.is_confirmed() {
+            self.pending.store(false, Ordering::SeqCst);
+        }
+        report
+    }
+    fn record_failed_open_cleanup(&self, report: CleanupReport) -> CleanupReport {
+        let mut evidence = self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence");
+        let report = match evidence.as_ref() {
             Some(prior) => Self::merge_cleanup(prior, &report),
             None => report,
         };
@@ -308,7 +333,13 @@ impl AttachmentLease {
             reason.started = true;
             reason.request.clone()
         };
-        let result = self.record_cleanup_attempt(owned.cleanup(reason).await);
+        let failed_open = matches!(&owned.target, CleanupTarget::FailedOpen(_));
+        let attempted = owned.cleanup(reason).await;
+        let result = if failed_open {
+            self.record_failed_open_cleanup(attempted)
+        } else {
+            self.record_cleanup_attempt(attempted)
+        };
         if result.is_confirmed() {
             *state = AttachmentState::Cleaned(result.clone());
             self.pending.store(false, Ordering::SeqCst);

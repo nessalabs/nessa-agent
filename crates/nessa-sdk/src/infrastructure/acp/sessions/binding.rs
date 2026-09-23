@@ -85,7 +85,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         Ok(id) => id,
         Err(cause) => {
             let completed = completion(generation.completion.clone()).await;
-            let (cause, confirmed) = match completed {
+            let (cause, cleanup_report) = match completed {
                 Ok(completed) => {
                     let cleanup = completed.cleanup.clone();
                     let cleanup_error = cleanup.clone().into_result().err();
@@ -102,20 +102,26 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
                     } else {
                         combine_failure(cause, cleanup_error.or(actual))
                     };
-                    (cause, cleanup.is_confirmed())
+                    (cause, Some(cleanup))
                 }
                 Err(error) => (
                     AgentError::MultipleOperationFailures {
                         first_error: Box::new(cause),
                         subsequent_error: Box::new(error),
                     },
-                    false,
+                    None,
                 ),
             };
-            return Err(if confirmed {
-                ProviderOpenError::no_resources(cause)
-            } else {
-                ProviderOpenError::with_cleanup(cause, generation.recovery.clone())
+            return Err(match cleanup_report {
+                Some(report) if report.is_confirmed() => {
+                    ProviderOpenError::with_cleanup_report(cause, report, None)
+                }
+                Some(report) => ProviderOpenError::with_cleanup_report(
+                    cause,
+                    report,
+                    Some(generation.recovery.clone()),
+                ),
+                None => ProviderOpenError::with_cleanup(cause, generation.recovery.clone()),
             });
         }
     };

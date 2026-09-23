@@ -26,6 +26,14 @@ impl ExecutionAudit for AcceptingAudit {
         Box::pin(async { Ok(()) })
     }
 }
+#[derive(Default)]
+struct CountingAudit(AtomicUsize);
+impl ExecutionAudit for CountingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
 fn capabilities_ref() -> &'static EffectiveCapabilities {
     static CAPABILITIES: std::sync::OnceLock<EffectiveCapabilities> = std::sync::OnceLock::new();
     CAPABILITIES.get_or_init(|| {
@@ -62,7 +70,14 @@ async fn attached_agent(
     provider: Arc<dyn AgentProvider>,
     manager: SessionManager,
 ) -> Result<Agent, AgentError> {
-    let agent = Agent::prepare(provider, manager, Arc::new(AcceptingAudit))
+    attached_agent_with_audit(provider, manager, Arc::new(AcceptingAudit)).await
+}
+async fn attached_agent_with_audit(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+    audit: Arc<dyn ExecutionAudit>,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, audit)
         .await
         .map_err(|error| error.cause().clone())?;
     let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(actor()))?;
@@ -437,7 +452,7 @@ async fn assert_shutdown_queue_attribution(first: SessionCloseRequest, uncertain
     let release = if uncertain {
         let first_attempt = agent.start_shutdown(first.clone());
         assert_eq!(
-            first_attempt.wait().await.into_result(),
+            first_attempt.wait_physical().await.into_result(),
             Err(AgentError::CleanupUncertain)
         );
         None
@@ -661,7 +676,7 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
             SchedulingCause::RunnerStopped
         );
         assert_eq!(work.cancellation().unwrap().actor, None);
-        assert!(first.wait().await.is_confirmed());
+        assert!(first.wait_physical().await.is_confirmed());
         drop(work);
         assert!(!agent.inner.lifecycle.is_closed());
         reattach(&agent).await;

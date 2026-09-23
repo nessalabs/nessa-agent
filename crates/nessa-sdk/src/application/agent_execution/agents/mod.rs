@@ -11,7 +11,8 @@
 //!       |                        |-> pending wait interrupted by shared stop
 //!       |-> SessionLifecycle -> work permits / work generations
 //!                              |-> attachment generation / active dispatch
-//!                              |-> shared stop -> cleanup facts / retained lease
+//!                              |-> attachment evidence ledger
+//!                              |-> shared stop -> cleanup attempts / retained lease
 //!       |-> event subscribers
 //! ```
 //! Arrows show calls. Agent drains provider events and saves evidence before
@@ -27,6 +28,7 @@
 
 mod agent;
 mod attachment;
+mod attachment_evidence;
 mod coordination;
 mod error;
 mod error_limits;

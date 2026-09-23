@@ -12,7 +12,7 @@ use crate::application::agent_execution::{
     permissions::ActionContext,
     providers::{
         AgentProvider, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
-        ProviderOpenControl, ProviderOpenRequest, ProviderSession,
+        FailedOpenCleanup, ProviderOpenControl, ProviderOpenRequest, ProviderSession,
     },
     tools::ToolReviewInput,
 };
@@ -253,9 +253,12 @@ impl SessionManager {
             }
         };
         if result.is_none() || drop_panicked {
+            let drop_failure =
+                AgentError::Protocol("provider opening future panicked while being dropped".into());
             let mut cause = AgentError::CleanupUncertain;
             match result {
                 Some(Ok(opened)) => {
+                    cause = drop_failure;
                     let events = Arc::new(Mutex::new(opened.events));
                     self.attachment
                         .arm(self.storage_lease.clone(), opened.session, events)
@@ -263,20 +266,23 @@ impl SessionManager {
                 }
                 Some(Err(error)) => {
                     let (error, cleanup) = error.into_parts();
-                    cause = AgentError::OperationAndCleanupFailure {
-                        operation_error: Box::new(error),
-                        cleanup_error: Box::new(AgentError::CleanupUncertain),
+                    cause = AgentError::MultipleOperationFailures {
+                        first_error: Box::new(error),
+                        subsequent_error: Box::new(drop_failure),
                     };
                     match cleanup {
-                        Some(cleanup) => {
+                        FailedOpenCleanup::Retained { report, owner } => {
                             self.attachment
-                                .arm_failed_open(self.storage_lease.clone(), cleanup)
+                                .arm_failed_open(self.storage_lease.clone(), owner, report)
                                 .await
                         }
-                        None => {
+                        FailedOpenCleanup::NotStarted => {
                             self.attachment
                                 .arm_unknown_open(self.storage_lease.clone())
                                 .await
+                        }
+                        FailedOpenCleanup::Completed(report) => {
+                            self.attachment.reconcile_cleanup(report);
                         }
                     }
                 }
@@ -292,10 +298,16 @@ impl SessionManager {
             Ok(opened) => opened,
             Err(error) => {
                 let (cause, cleanup) = error.into_parts();
-                if let Some(cleanup) = cleanup {
-                    self.attachment
-                        .arm_failed_open(self.storage_lease.clone(), cleanup)
-                        .await;
+                match cleanup {
+                    FailedOpenCleanup::NotStarted => {}
+                    FailedOpenCleanup::Completed(report) => {
+                        self.attachment.reconcile_cleanup(report);
+                    }
+                    FailedOpenCleanup::Retained { report, owner } => {
+                        self.attachment
+                            .arm_failed_open(self.storage_lease.clone(), owner, report)
+                            .await;
+                    }
                 }
                 return Err(cause);
             }

@@ -44,7 +44,7 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
         let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(closer.clone()));
         assert!(agent.inner.lifecycle.is_closed());
         cleanup_started.await.unwrap();
-        let stopped = attempt.clone().wait();
+        let stopped = attempt.clone().wait_physical();
         tokio::pin!(stopped);
         assert!(
             poll_fn(|cx| Poll::Ready(stopped.as_mut().poll(cx)))

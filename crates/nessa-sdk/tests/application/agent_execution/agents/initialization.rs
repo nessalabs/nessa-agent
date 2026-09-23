@@ -815,8 +815,16 @@ async fn close_before_attachment_task_runs_preserves_close_without_failed_transi
     let attachment = agent.start_attachment(authorization).unwrap();
     audit.entered.notified().await;
 
-    agent.close(close_action()).await.unwrap();
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    assert!(!closing.is_finished());
     release.send(()).unwrap();
+    closing.await.unwrap().unwrap();
     assert_eq!(attachment.wait().await, Err(AgentError::Closed));
     assert!(provider.calls.opens.lock().unwrap().is_empty());
     assert!(provider.calls.closes.lock().unwrap().is_empty());
@@ -834,6 +842,40 @@ async fn close_before_attachment_task_runs_preserves_close_without_failed_transi
             && record.after() == AttachmentAuditStage::Absent
             && record.actor() == Some(&close_action())
     }));
+}
+
+#[tokio::test]
+async fn caller_loss_while_started_audit_is_pending_keeps_close_evidence_owned() {
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::Starting);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(provider.clone(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    closing.abort();
+    let _ = closing.await;
+    assert!(agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .is_err());
+
+    release.send(()).unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    agent.close(close_action()).await.unwrap();
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -876,6 +918,70 @@ async fn published_context_is_not_dispatchable_before_audit_acknowledgement() {
             .map(AttachmentFailure::code),
         Some(AttachmentFailureCode::Audit)
     );
+}
+
+#[tokio::test]
+async fn close_joins_context_publication_registered_before_delivery() {
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::ContextPublished);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(provider.clone(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    assert!(!closing.is_finished());
+    release.send(()).unwrap();
+    closing.await.unwrap().unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    assert_eq!(provider.calls.closes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn close_joins_failed_transition_registered_before_delivery() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::Failed);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = Agent::prepare(
+        Arc::new(NoResourcesProvider),
+        storage.manager().await,
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    while agent.attachment_status().phase()
+        != AttachmentPhase::Failed(AttachmentFailureCode::Provider)
+    {
+        tokio::task::yield_now().await;
+    }
+    assert!(!closing.is_finished());
+    release.send(()).unwrap();
+    closing.await.unwrap().unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
 }
 
 #[tokio::test]
@@ -1044,11 +1150,16 @@ async fn rejecting_starting_close_audit_blocks_close_and_retains_the_failed_gene
     let attachment = agent.start_attachment(authorization).unwrap();
     audit.entered.notified().await;
 
-    assert_eq!(
-        agent.close(close_action()).await,
-        Err(AgentError::AuditFailure)
-    );
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    assert!(!closing.is_finished());
     release.send(()).unwrap();
+    assert_eq!(closing.await.unwrap(), Err(AgentError::AuditFailure));
     assert_eq!(attachment.wait().await, Err(AgentError::Closed));
     let status = agent.attachment_status();
     let failed = status.evidence_failure().unwrap();
@@ -1225,6 +1336,52 @@ async fn attachment_audit_construction_poll_and_drop_panics_settle_failed() {
             AttachmentPhase::Failed(AttachmentFailureCode::Audit)
         );
         assert_eq!(status.failure().unwrap().cause(), AttachmentCause::Initial);
+    }
+}
+
+#[tokio::test]
+async fn close_joins_a_held_started_audit_panic_before_replacement() {
+    for failure in [AuditPanic::Construct, AuditPanic::Poll, AuditPanic::Drop] {
+        let storage = MemoryStorage::default();
+        let provider = TestProvider::new();
+        let agent = prepared(
+            provider.clone(),
+            &storage,
+            Arc::new(PanickingAudit(failure)),
+        )
+        .await;
+        let (entered, paused) = oneshot::channel();
+        let (release, waiting) = oneshot::channel();
+        agent.inner.lifecycle.pause_next_attachment_audit(
+            AttachmentAuditStage::Starting,
+            entered,
+            waiting,
+        );
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        let attachment = agent.start_attachment(authorization).unwrap();
+        paused.await.unwrap();
+        let closing = tokio::spawn({
+            let agent = agent.clone();
+            async move { agent.close(close_action()).await }
+        });
+        while agent.attachment_status().phase() != AttachmentPhase::Absent {
+            tokio::task::yield_now().await;
+        }
+        assert!(!closing.is_finished());
+        assert!(agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .is_err());
+        release.send(()).unwrap();
+        assert_eq!(attachment.wait().await, Err(AgentError::AuditFailure));
+        let expected = AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure),
+        };
+        assert_eq!(closing.await.unwrap(), Err(expected.clone()));
+        assert_eq!(agent.close(close_action()).await, Err(expected));
+        assert!(provider.calls.opens.lock().unwrap().is_empty());
     }
 }
 
