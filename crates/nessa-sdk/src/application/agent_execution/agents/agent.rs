@@ -272,7 +272,6 @@ impl Agent {
                         let settlement = agent
                             .settle_failed_pending(&mut scheduler, original.clone())
                             .await;
-                        scheduler.running = false;
                         settlement
                     };
                     if let Err(settlement_error) = settlement {
