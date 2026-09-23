@@ -250,12 +250,22 @@ async fn workflow_from_storage(
     storage: MemoryStorage,
 ) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
     let backend = workflow_backend();
-    let agent = attached_agent(
+    let agent = Agent::prepare(
         Arc::new(WorkflowProvider(backend.clone())),
         storage.manager().await,
+        backend.audit.clone(),
     )
     .await
     .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     (agent, backend, storage)
 }
 fn workflow_backend() -> Arc<WorkflowBackend> {
