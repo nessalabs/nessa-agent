@@ -183,7 +183,10 @@ fn incomplete_recovery_confirmation_fact_must_agree_with_its_state() {
         ),
     ] {
         let (mut attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
-        attempt.verified().unwrap();
+        assert_eq!(
+            attempt.verified().unwrap().kind(),
+            InstallTransitionKind::Verified
+        );
         assert_eq!(
             attempt.recovery_incomplete(state, failures),
             Err(InstallAttemptError::Contradictory(expected))
@@ -207,7 +210,10 @@ fn incomplete_recovery_confirmation_fact_must_agree_with_its_state() {
         ),
     ] {
         let (mut attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
-        attempt.verified().unwrap();
+        assert_eq!(
+            attempt.verified().unwrap().kind(),
+            InstallTransitionKind::Verified
+        );
         assert!(attempt.recovery_incomplete(state, failures).is_ok());
     }
 }
