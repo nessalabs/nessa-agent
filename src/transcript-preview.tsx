@@ -152,6 +152,18 @@ const running = chat(
   {},
   { text: "", status: "running", parts: parts.slice(0, 4) },
 )
+const single = chat(
+  "single",
+  {},
+  {
+    text: "That file is not there.",
+    status: "completed",
+    parts: [
+      { offset: 0, kind: "tool" as const, text: "", toolId: "two" },
+      { offset: 1, kind: "text" as const, text: "That file is not there.", toolId: "" },
+    ],
+  },
+)
 const thinking = chat(
   "thinking",
   {},
@@ -188,6 +200,7 @@ createRoot(container).render(
         <Panel label="Finished turn — one line for five tools" conversation={done} />
         <Panel label="While it runs" conversation={running} />
         <Panel label="Thinking, before any tool" conversation={thinking} />
+        <Panel label="One tool — the sheet still has a floor" conversation={single} />
       </div>
     </Provider>
   </React.StrictMode>,
