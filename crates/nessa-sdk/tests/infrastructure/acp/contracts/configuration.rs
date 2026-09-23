@@ -619,18 +619,19 @@ async fn close_during_fresh_configuration_retains_the_explicit_actor() {
         std::fs::read_to_string(root.path().join("configuration-wait")).unwrap(),
     )
     .unwrap();
-    let records = audit.closures.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].closure().session_id(), &provider_id);
-    assert_eq!(
-        records[0].closure().reason(),
-        &PermissionCancellationReason::session_closed()
-    );
-    assert_eq!(
-        records[0].origin(),
-        &CancellationOrigin::Client(close_action())
-    );
-    drop(records);
+    {
+        let records = audit.closures.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].closure().session_id(), &provider_id);
+        assert_eq!(
+            records[0].closure().reason(),
+            &PermissionCancellationReason::session_closed()
+        );
+        assert_eq!(
+            records[0].origin(),
+            &CancellationOrigin::Client(close_action())
+        );
+    }
     assert_gone(&root, "pid");
     drop(agent);
     drop(SessionManager::open(Some(id), storage).await.unwrap());
