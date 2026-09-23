@@ -422,10 +422,11 @@ async fn requested_failure_shutdown_preserves_typed_error_and_exact_finish_cause
             if reject {
                 assert_eq!(
                     result,
-                    Err(AgentError::OperationAndCleanupFailure {
-                        operation_error: Box::new(expected.clone()),
-                        cleanup_error: Box::new(AgentError::AuditFailure),
-                    })
+                    Err(ordered_failures(&[
+                        AgentError::AuditFailure,
+                        expected.clone(),
+                        AgentError::AuditFailure,
+                    ]))
                 );
                 assert!(close.is_err());
             } else {
@@ -528,17 +529,17 @@ async fn consumer_loss_after_explicit_close_retains_both_causes_and_finishes_onc
         if reject_finish {
             assert_eq!(
                 result,
-                Err(AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(AgentError::Backpressure),
-                    cleanup_error: Box::new(AgentError::AuditFailure),
-                })
+                Err(ordered_failures(&[
+                    AgentError::Backpressure,
+                    AgentError::AuditFailure,
+                ]))
             );
             assert_eq!(
                 cleanup,
-                Err(AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(AgentError::Backpressure),
-                    cleanup_error: Box::new(AgentError::AuditFailure),
-                })
+                Err(ordered_failures(&[
+                    AgentError::Backpressure,
+                    AgentError::AuditFailure,
+                ]))
             );
         } else {
             assert_eq!(result, Err(AgentError::Backpressure));

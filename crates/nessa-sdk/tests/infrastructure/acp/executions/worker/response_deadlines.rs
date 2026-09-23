@@ -200,12 +200,13 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
         );
         tokio::time::resume();
         audit.reject.store(reject_audit, Ordering::SeqCst);
+        let failure = worker.cover_failure(
+            worker.settlement_facts.cursor(),
+            OperationEffectPhase::Worker,
+            AgentError::Deadline,
+        );
         let completed = worker
-            .finish(
-                &mut Some(execution),
-                Err(AgentError::Deadline.into()),
-                &mut None,
-            )
+            .finish(&mut Some(execution), Err(failure), &mut None)
             .await;
         assert!(completed.cleanup.is_confirmed());
         assert_eq!(

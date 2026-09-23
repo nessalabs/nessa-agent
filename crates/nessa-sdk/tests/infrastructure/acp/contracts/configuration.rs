@@ -1075,10 +1075,7 @@ async fn live_duplicate_configuration_retires_context_and_preserves_audit_failur
                 .unwrap();
             let protocol = AgentError::Protocol("duplicate model or mode config option".into());
             let expected = if reject {
-                AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(protocol),
-                    cleanup_error: Box::new(AgentError::AuditFailure),
-                }
+                ordered_failures(&[protocol, AgentError::AuditFailure, AgentError::AuditFailure])
             } else {
                 protocol
             };

@@ -412,8 +412,7 @@ fn settlement_fact_budgets_preserve_both_categories_in_either_arrival_order() {
         audit.validate_retained_size().unwrap();
         operation.validate_retained_size().unwrap();
         let combined = report.into_result().unwrap_err();
-        assert_eq!(count_matching(&combined, &AgentError::Deadline), 31);
-        assert_eq!(count_matching(&combined, &AgentError::AuditFailure), 31);
+        assert_eq!(combined, AgentError::DiagnosticLimit);
         combined.validate_retained_size().unwrap();
     }
 }

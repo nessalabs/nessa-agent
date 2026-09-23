@@ -521,7 +521,7 @@ async fn a_codex_approval_the_audit_cannot_record_is_never_given_to_codex() {
         .await
         .unwrap_err();
     assert_eq!(failure.error(), &AgentError::AuditFailure);
-    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(running.await.unwrap(), Err(rejected_audits(3)));
     // The point of refusing: Codex is never told to proceed on a decision
     // nothing could record. What it is told, if anything, is that the request
     // was cancelled — which is the session being torn down around it, not an

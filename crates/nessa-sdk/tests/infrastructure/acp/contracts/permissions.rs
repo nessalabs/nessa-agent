@@ -338,9 +338,9 @@ async fn cancellation_audit_failure_is_reported_after_process_cleanup() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_gone(&root, "pid");
     assert!(!root.path().join("fixture.txt").exists());
 }
@@ -360,7 +360,16 @@ async fn dropping_the_event_reader_retains_cancellation_in_the_audit() {
         panic!("expected permission")
     };
     drop(opened.events);
-    assert_eq!(active.await.unwrap(), Err(AgentError::Backpressure));
+    // The first backpressure is the drive loop observing consumer loss. The
+    // second is the separately attempted final execution-event publication;
+    // the cancellation record below proves teardown still ran between them.
+    assert_eq!(
+        active.await.unwrap(),
+        Err(ordered_failures(&[
+            AgentError::Backpressure,
+            AgentError::Backpressure,
+        ]))
+    );
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -475,19 +484,14 @@ async fn provider_error_cannot_hide_a_failed_cancellation_audit() {
         next(&mut opened).await,
         ExecutionUpdate::PermissionRequested { .. }
     ));
-    let expected = AgentError::OperationAndCleanupFailure {
-        operation_error: Box::new(AgentError::Provider {
-            code: -32000,
-            diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
-        }),
-        cleanup_error: Box::new(AgentError::AuditFailure),
+    let provider_failure = AgentError::Provider {
+        code: -32000,
+        diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
     };
+    let expected = rejected_audits(3);
     let settlement_error = AgentError::ExecutionObservation {
         error: Box::new(expected.clone()),
-        execution_result: Some(Box::new(Err(AgentError::Provider {
-            code: -32000,
-            diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
-        }))),
+        execution_result: Some(Box::new(Err(provider_failure))),
     };
     assert_eq!(active.await.unwrap(), Err(settlement_error.clone()));
     assert_eq!(
@@ -631,9 +635,9 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
         .await
         .unwrap()
         .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_gone(&root, "pid");
 }
 
@@ -787,7 +791,7 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(outcome, Err(AgentError::AuditFailure), "{outcome:?}");
+    assert_eq!(outcome, Err(rejected_audits(4)), "{outcome:?}");
 
     // The refusal went anyway: the provider recorded the answer it was given.
     // Exactly one answer, and it is the refusal: a request answered twice is
@@ -886,24 +890,20 @@ async fn a_refusal_failing_to_write_and_to_record_preserves_both_causes() {
         .unwrap();
     // The sink refuses the teardown's own records too, so the refusal's pair of
     // causes arrives inside that outer failure rather than instead of it. All
-    // three survive, each still saying what it is.
-    let Err(AgentError::OperationAndCleanupFailure {
-        operation_error,
-        cleanup_error,
-    }) = outcome
-    else {
-        panic!("both causes are required: {outcome:?}");
-    };
-    assert_eq!(cleanup_error, Box::new(AgentError::AuditFailure));
-    let AgentError::PermissionAnswerDeliveryAndAuditFailure {
-        delivery_error,
-        cleanup_error,
-    } = *operation_error
-    else {
-        panic!("the refusal must keep both of its own causes");
-    };
-    assert!(matches!(*delivery_error, AgentError::Transport(_)));
-    assert_eq!(cleanup_error, None);
+    // four survive, each still saying what it is.
+    assert_eq!(
+        outcome,
+        Err(ordered_failures(&[
+            AgentError::AuditFailure,
+            AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                delivery_error: Box::new(AgentError::Transport("stdin write failed".into())),
+                cleanup_error: None,
+            },
+            AgentError::AuditFailure,
+            AgentError::AuditFailure,
+        ])),
+        "both causes and both later audits are required"
+    );
     let _ = opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

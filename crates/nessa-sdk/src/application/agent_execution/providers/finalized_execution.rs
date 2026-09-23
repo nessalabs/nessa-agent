@@ -10,6 +10,7 @@ use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionOutcome;
 
 const MAX_FINALIZED_FACTS_PER_CATEGORY: usize = 128;
+const MAX_PROJECTED_FAILURES: usize = 32;
 
 /// One authoritative finalized execution failure fact.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,7 +98,7 @@ impl FinalizedExecutionProjection {
     }
 
     pub(super) fn operation_failure(&self) -> Option<AgentError> {
-        Self::project(
+        Self::project_category(
             self.components
                 .iter()
                 .filter_map(|component| match component {
@@ -114,7 +115,7 @@ impl FinalizedExecutionProjection {
     }
 
     pub(super) fn audit_result(&self) -> Result<(), AgentError> {
-        Self::project(
+        Self::project_category(
             self.components
                 .iter()
                 .filter_map(|component| match component {
@@ -130,22 +131,35 @@ impl FinalizedExecutionProjection {
     }
 
     pub(super) fn consumer_failure(&self) -> Option<AgentError> {
-        Self::project(self.components.iter().map(|component| match component {
-            FinalizedFailureComponent::Operation(error) => error.clone(),
-            FinalizedFailureComponent::Audit => AgentError::AuditFailure,
-            FinalizedFailureComponent::PermissionDeliveryAndAudit { delivery_error } => {
-                AgentError::PermissionAnswerDeliveryAndAuditFailure {
-                    delivery_error: Box::new(delivery_error.clone()),
-                    cleanup_error: None,
+        let errors = self
+            .components
+            .iter()
+            .map(|component| match component {
+                FinalizedFailureComponent::Operation(error) => error.clone(),
+                FinalizedFailureComponent::Audit => AgentError::AuditFailure,
+                FinalizedFailureComponent::PermissionDeliveryAndAudit { delivery_error } => {
+                    AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                        delivery_error: Box::new(delivery_error.clone()),
+                        cleanup_error: None,
+                    }
                 }
-            }
-            FinalizedFailureComponent::OperationOverflow
-            | FinalizedFailureComponent::AuditOverflow => AgentError::DiagnosticLimit,
-        }))
+                FinalizedFailureComponent::OperationOverflow
+                | FinalizedFailureComponent::AuditOverflow => AgentError::DiagnosticLimit,
+            })
+            .collect::<Vec<_>>();
+        if errors.len() > MAX_PROJECTED_FAILURES {
+            Some(AgentError::DiagnosticLimit)
+        } else {
+            Self::balanced(&errors).map(AgentError::bounded)
+        }
     }
 
-    fn project(errors: impl IntoIterator<Item = AgentError>) -> Option<AgentError> {
-        let errors = errors.into_iter().collect::<Vec<_>>();
+    fn project_category(errors: impl IntoIterator<Item = AgentError>) -> Option<AgentError> {
+        let mut errors = errors.into_iter().collect::<Vec<_>>();
+        if errors.len() >= MAX_PROJECTED_FAILURES {
+            errors.truncate(MAX_PROJECTED_FAILURES - 1);
+            errors.push(AgentError::DiagnosticLimit);
+        }
         Self::balanced(&errors).map(AgentError::bounded)
     }
 

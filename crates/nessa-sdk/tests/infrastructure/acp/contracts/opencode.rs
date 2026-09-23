@@ -801,7 +801,7 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
         .await
         .unwrap_err();
     assert_eq!(failure.error(), &AgentError::AuditFailure);
-    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(running.await.unwrap(), Err(rejected_audits(3)));
     // Opencode is never told to proceed. If it is told anything, it is that the
     // request was cancelled, which is the session being torn down around it.
     if let Ok(told) = std::fs::read_to_string(root.path().join("permission-outcome")) {
@@ -816,7 +816,7 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
     assert_gone(&root, "pid");
 }
@@ -894,9 +894,9 @@ async fn opencode_permission_cancellation_audit_failure_is_visible_after_cleanup
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(running.await.unwrap(), Err(rejected_audits(3)));
     assert_gone(&root, "pid");
 }
 

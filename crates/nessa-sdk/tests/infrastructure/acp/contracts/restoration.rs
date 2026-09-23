@@ -242,12 +242,12 @@ async fn audit_failure_prevents_automatic_process_restart() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_eq!(
         opened.session.execute(prompt("later")).await.into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
     let launches: Vec<u32> =
         serde_json::from_str(&std::fs::read_to_string(root.path().join("launches")).unwrap())

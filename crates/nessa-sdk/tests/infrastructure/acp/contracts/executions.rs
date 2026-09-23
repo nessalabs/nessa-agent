@@ -50,10 +50,12 @@ async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() 
         if reject_audit {
             assert_eq!(
                 failure,
-                AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(AgentError::Backpressure),
-                    cleanup_error: Box::new(AgentError::AuditFailure),
-                }
+                ordered_failures(&[
+                    AgentError::Backpressure,
+                    AgentError::AuditFailure,
+                    AgentError::AuditFailure,
+                    AgentError::AuditFailure,
+                ])
             );
             assert_eq!(
                 opened
@@ -353,10 +355,10 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
         tokio::time::resume();
         let result = running.await.unwrap();
         let expected_result = if reject_closure {
-            Err(AgentError::OperationAndCleanupFailure {
-                operation_error: Box::new(AgentError::Deadline),
-                cleanup_error: Box::new(AgentError::AuditFailure),
-            })
+            Err(ordered_failures(&[
+                AgentError::Deadline,
+                AgentError::AuditFailure,
+            ]))
         } else {
             Err(AgentError::Deadline)
         };

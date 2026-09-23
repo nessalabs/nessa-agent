@@ -23,6 +23,24 @@ pub(super) use std::{
 pub(super) use tempfile::TempDir;
 pub(super) use tokio::time::timeout;
 
+pub(super) fn ordered_failures(errors: &[AgentError]) -> AgentError {
+    match errors {
+        [] => panic!("an ordered failure projection requires at least one fact"),
+        [error] => error.clone(),
+        errors => {
+            let middle = errors.len() / 2;
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(ordered_failures(&errors[..middle])),
+                subsequent_error: Box::new(ordered_failures(&errors[middle..])),
+            }
+        }
+    }
+}
+
+pub(super) fn rejected_audits(count: usize) -> AgentError {
+    ordered_failures(&vec![AgentError::AuditFailure; count])
+}
+
 struct AcceptingLifecycleAudit;
 impl ExecutionAudit for AcceptingLifecycleAudit {
     fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {

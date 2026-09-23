@@ -217,9 +217,14 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     Poll::Ready(result) => result.map(|_| ()),
                     Poll::Pending => Err(AgentError::Deadline),
                 };
-                let completed = worker
-                    .finish(&mut execution, result.map_err(Into::into), &mut None)
-                    .await;
+                let result = result.map_err(|error| {
+                    worker.cover_failure(
+                        worker.settlement_facts.cursor(),
+                        OperationEffectPhase::Worker,
+                        error,
+                    )
+                });
+                let completed = worker.finish(&mut execution, result, &mut None).await;
                 drop(control);
                 control_thread.join().unwrap();
                 assert_eq!(
@@ -246,9 +251,9 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 assert_eq!(
                     completed.failure,
                     Some(if reject_audit && method == "session/set_config_option" {
-                        AgentError::OperationAndCleanupFailure {
-                            operation_error: Box::new(AgentError::Deadline),
-                            cleanup_error: Box::new(AgentError::AuditFailure),
+                        AgentError::MultipleOperationFailures {
+                            first_error: Box::new(AgentError::Deadline),
+                            subsequent_error: Box::new(AgentError::AuditFailure),
                         }
                     } else {
                         AgentError::Deadline

@@ -293,8 +293,15 @@ async fn failed_answer_write_and_failed_delivery_audit_preserve_both_errors() {
     assert!(report.is_confirmed());
     assert_eq!(report.audit(), &Err(AgentError::AuditFailure));
     assert_eq!(report.operation_failure(), Some(delivery_error.as_ref()));
-    let expected = report.into_result().unwrap_err();
-    assert_eq!(active.await.unwrap(), Err(expected));
+    let cleanup_error = report.into_result().unwrap_err();
+    assert_eq!(
+        cleanup_error,
+        AgentError::OperationAndCleanupFailure {
+            operation_error: delivery_error.clone(),
+            cleanup_error: Box::new(AgentError::AuditFailure),
+        }
+    );
+    assert_eq!(active.await.unwrap(), Err(failure));
     assert_eq!(answers(&audit).len(), 2);
     assert_gone(&root, "pid");
 }
@@ -838,10 +845,6 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
         let combined = AgentError::MultipleOperationFailures {
             first_error: Box::new(first_error),
             subsequent_error: Box::new(second_error),
-        };
-        let combined = AgentError::OperationAndCleanupFailure {
-            operation_error: Box::new(combined),
-            cleanup_error: Box::new(AgentError::AuditFailure),
         };
         assert_eq!(active.await.unwrap(), Err(combined.clone()));
         let close_report = closing.await;
