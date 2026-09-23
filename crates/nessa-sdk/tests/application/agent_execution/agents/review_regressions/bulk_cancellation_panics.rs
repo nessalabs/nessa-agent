@@ -126,13 +126,21 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
             });
             backend.closing.notified().await;
             let first_result = timeout(Duration::from_secs(2), first.wait()).await.unwrap();
-            assert!(matches!(
-                &first_result,
-                Err(AgentError::StorageAfterExecution {
-                    error: StorageError::Io(_),
-                    execution_result,
-                }) if execution_result.as_ref() == &Err(AgentError::Closed)
-            ), "commit_first={commit_first}, drop_panics={drop_panics}, panics={panics}, result={first_result:?}");
+            let mut retained = &first_result;
+            let mut storage_failures = 0;
+            while let Err(AgentError::StorageAfterExecution {
+                error: StorageError::Io(_),
+                execution_result,
+            }) = retained
+            {
+                storage_failures += 1;
+                retained = execution_result.as_ref();
+            }
+            assert_eq!(
+                storage_failures, panics,
+                "commit_first={commit_first}, drop_panics={drop_panics}, result={first_result:?}"
+            );
+            assert_eq!(retained, &Err(AgentError::Closed));
             assert_eq!(
                 timeout(Duration::from_secs(2), priority.wait())
                     .await

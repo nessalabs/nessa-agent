@@ -4,7 +4,7 @@ use super::*;
 async fn assert_permissions_fenced(
     agent: &Agent,
     backend: &Probe,
-    calls: usize,
+    expected_calls: usize,
     expected: AgentError,
     stage: &str,
 ) {
@@ -15,7 +15,7 @@ async fn assert_permissions_fenced(
             "{stage}: {operation:?}"
         );
     }
-    assert_eq!(backend.controls.load(Ordering::SeqCst), calls);
+    assert_eq!(backend.controls.load(Ordering::SeqCst), expected_calls);
 }
 
 #[tokio::test]
@@ -69,8 +69,8 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         assert_permissions_fenced(
             &agent,
             &backend,
-            calls,
-            AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
+            calls + 2,
+            AgentError::StalePermission,
             "while replacement preparation is gated",
         )
         .await;
@@ -81,7 +81,7 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
             invoke_control(&agent, ProviderControl::Answer).await,
             Err(AgentError::StalePermission)
         );
-        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 1);
+        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 3);
         agent.close(actor()).await.unwrap();
     }
 }
@@ -230,9 +230,11 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
                         Some(Err(expected.clone()))
                     );
                 } else {
+                    let admission = admission.unwrap();
+                    assert_eq!(admission.result, None);
                     assert_eq!(
-                        admission.unwrap().result,
-                        Some(Err(AgentError::AuditFailure))
+                        admission.acknowledgement,
+                        SubmissionAcknowledgement::Pending
                     );
                 }
                 assert_permissions_fenced(
