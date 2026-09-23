@@ -48,7 +48,7 @@ fn failure(failure: &ProviderFailure) -> Value {
         AgentError::Closed => json!({"kind": "closed"}),
         AgentError::CleanupUncertain => json!({"kind": "cleanup_uncertain"}),
         AgentError::AuditFailure => json!({"kind": "audit_failure"}),
-        AgentError::Provider { code } => json!({"kind": "provider", "code": code}),
+        AgentError::Provider { code, .. } => json!({"kind": "provider", "code": code}),
         AgentError::Storage(error) => {
             json!({"kind": "storage", "diagnostic": error.to_string()})
         }

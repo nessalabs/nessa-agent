@@ -26,6 +26,10 @@ impl AgentError {
                 | Self::InvalidInput(text)
                 | Self::Protocol(text)
                 | Self::Transport(text) => bytes = bytes.saturating_add(text.capacity()),
+                Self::Provider { diagnostic, .. } => {
+                    bytes = bytes
+                        .saturating_add(diagnostic.as_ref().map_or(0, |value| value.as_str().len()))
+                }
                 Self::Storage(error)
                 | Self::StorageDuringClose { error, .. }
                 | Self::StorageInitialization { error, .. }
@@ -66,7 +70,6 @@ impl AgentError {
                 | Self::Busy
                 | Self::Closed
                 | Self::StalePermission
-                | Self::Provider { .. }
                 | Self::Deadline
                 | Self::StartupDeadline(_)
                 | Self::Backpressure

@@ -107,7 +107,13 @@ async fn every_failure_a_warm_up_can_reach_is_discriminated() {
         (AgentError::Closed, "closed"),
         (AgentError::CleanupUncertain, "cleanup_uncertain"),
         (AgentError::AuditFailure, "audit_failure"),
-        (AgentError::Provider { code: -32000 }, "provider"),
+        (
+            AgentError::Provider {
+                code: -32000,
+                diagnostic: None,
+            },
+            "provider",
+        ),
         (AgentError::Transport("pipe closed".into()), "transport"),
         (AgentError::Protocol("bad frame".into()), "protocol"),
         (

@@ -583,7 +583,10 @@ impl InvocationHook for OrderedHook {
 async fn hooks_run_in_registration_order_and_preserve_a_failed_provider_result() {
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
-    Arc::get_mut(&mut provider).unwrap().outcome = Err(AgentError::Provider { code: -42 });
+    Arc::get_mut(&mut provider).unwrap().outcome = Err(AgentError::Provider {
+        code: -42,
+        diagnostic: None,
+    });
     let agent = Agent::new(provider.clone(), storage.manager().await)
         .await
         .unwrap();
@@ -596,7 +599,7 @@ async fn hooks_run_in_registration_order_and_preserve_a_failed_provider_result()
         }));
     }
     assert!(
-        matches!(invoke(&agent, "failure").await, Err(AgentError::AfterInvocationHooks { failures, execution_result }) if failures.len() == 2 && *execution_result == Err(AgentError::Provider { code: -42 }))
+        matches!(invoke(&agent, "failure").await, Err(AgentError::AfterInvocationHooks { failures, execution_result }) if failures.len() == 2 && *execution_result == Err(AgentError::Provider { code: -42, diagnostic: None }))
     );
     assert_eq!(
         *provider.calls.order.lock().unwrap(),
@@ -681,11 +684,14 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
 async fn failed_final_save_retains_the_original_provider_error() {
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
-    Arc::get_mut(&mut provider).unwrap().outcome = Err(AgentError::Provider { code: -42 });
+    Arc::get_mut(&mut provider).unwrap().outcome = Err(AgentError::Provider {
+        code: -42,
+        diagnostic: None,
+    });
     let agent = Agent::new(provider, storage.manager().await).await.unwrap();
     storage.0.lock().unwrap().fail_settlement = Some("provider-failure".into());
     assert!(
-        matches!(invoke(&agent, "provider-failure").await, Err(AgentError::StorageAfterExecution { error: StorageError::Io(_), execution_result }) if *execution_result == Err(AgentError::Provider { code: -42 }))
+        matches!(invoke(&agent, "provider-failure").await, Err(AgentError::StorageAfterExecution { error: StorageError::Io(_), execution_result }) if *execution_result == Err(AgentError::Provider { code: -42, diagnostic: None }))
     );
 }
 

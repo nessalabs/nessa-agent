@@ -16,7 +16,7 @@ use super::{
     wire,
 };
 use crate::application::agent_execution::agents::{
-    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, ProviderDiagnostic,
 };
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
@@ -68,15 +68,19 @@ use tokio::{
 /// Turn a provider's error response into this adapter's error, reporting what
 /// the provider said on the way past.
 ///
-/// The error itself carries only the code, because the code is what decides
-/// anything. The text is the operator's: `-32000` from a Codex that is not
-/// signed in is indistinguishable from any other provider refusal, and
-/// "Authentication required" is the entire answer. Logged once, here, so every
-/// provider failure says as much as the provider said.
+/// The code is the decision fact. Provider text is retained and logged only as
+/// bounded diagnostic context, so it cannot decide lifecycle behavior or grow
+/// through an untrusted response.
 fn provider_failure(phase: &str, error: RpcError) -> AgentError {
-    match &error.message {
+    let diagnostic = error.message.map(ProviderDiagnostic::new);
+    match &diagnostic {
         Some(message) => {
-            tracing::warn!(code = error.code, phase, %message, "provider refused")
+            tracing::warn!(
+                code = error.code,
+                phase,
+                message = message.as_str(),
+                "provider refused"
+            )
         }
         None => tracing::warn!(
             code = error.code,
@@ -84,7 +88,10 @@ fn provider_failure(phase: &str, error: RpcError) -> AgentError {
             "provider refused without a message"
         ),
     }
-    AgentError::Provider { code: error.code }
+    AgentError::Provider {
+        code: error.code,
+        diagnostic,
+    }
 }
 
 type ExecutionReply = oneshot::Sender<ProviderExecutionReply>;
