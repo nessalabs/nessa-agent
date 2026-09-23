@@ -87,8 +87,17 @@ if (!canBuildTheHost()) {
 }
 
 for (const args of [
-  ["clippy", "-p", "nessa-app", "--all-targets", "--", "-D", "warnings"],
-  ["test", "-p", "nessa-app"],
+  [
+    "clippy",
+    "-p",
+    "nessa-app",
+    "--no-default-features",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings",
+  ],
+  ["test", "-p", "nessa-app", "--no-default-features"],
 ]) {
   const result = spawnSync("cargo", args, { stdio: "inherit" })
   if (result.error) throw result.error

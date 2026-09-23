@@ -49,6 +49,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
         .filter((part) => part.kind === "thought")
         .map((part) => part.text)
         .join("") ||
+      message.parts.some((part) => part.kind === "local_notice") ||
       message.error ||
       !["queued", "running"].includes(message.status)
     ) {

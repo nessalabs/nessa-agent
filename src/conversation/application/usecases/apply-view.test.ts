@@ -17,8 +17,8 @@ const view: ConversationView = {
       attachments: [],
       files: [],
       parts: [
-        { offset: 0, kind: "thought", text: "reasoning", toolId: "" },
-        { offset: 1, kind: "text", text: "streaming text", toolId: "" },
+        { offset: 0, kind: "thought", text: "reasoning", toolId: "", noticeId: "" },
+        { offset: 1, kind: "text", text: "streaming text", toolId: "", noticeId: "" },
       ],
       status: "running",
     },
@@ -53,6 +53,7 @@ const view: ConversationView = {
       details: "",
       toolId: "tool",
       title: "Read",
+      kind: "read",
       status: "pending",
     },
   ],
@@ -102,8 +103,8 @@ it("keeps error and status separate from actual assistant text, and handles empt
       {
         ...view.messages[0]!,
         parts: [
-          { offset: 0, kind: "thought", text: "", toolId: "" },
-          { offset: 1, kind: "text", text: "", toolId: "" },
+          { offset: 0, kind: "thought", text: "", toolId: "", noticeId: "" },
+          { offset: 1, kind: "text", text: "", toolId: "", noticeId: "" },
         ],
         status: "failed",
         error: "Provider failed",

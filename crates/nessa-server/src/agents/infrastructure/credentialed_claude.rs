@@ -15,6 +15,7 @@ use nessa_sdk::{
     domain::{
         agent_execution::{prompts::SystemPrompt, sessions::ExecutionSessionId},
         common::value_objects::TokenLimits,
+        effective_capabilities::value_objects::EffectiveCapabilities,
         model_metadata::entities::ModelMetadata,
     },
     infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
@@ -36,6 +37,7 @@ pub struct CredentialedClaudeProvider {
     prompt: SystemPrompt,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
+    capabilities: EffectiveCapabilities,
 }
 
 impl CredentialedClaudeProvider {
@@ -52,9 +54,10 @@ impl CredentialedClaudeProvider {
         prompt: SystemPrompt,
         credentials: Arc<dyn AgentCredentialSource>,
     ) -> Result<Self, AgentError> {
-        let identity = ClaudeAcpProvider::new(config.clone(), &model, limits, audit.clone())?
-            .with_system_prompt(prompt.clone())
-            .identity();
+        let provider = ClaudeAcpProvider::new(config.clone(), &model, limits, audit.clone())?
+            .with_system_prompt(prompt.clone());
+        let identity = provider.identity();
+        let capabilities = provider.capabilities().clone();
         Ok(Self {
             config,
             model,
@@ -63,6 +66,7 @@ impl CredentialedClaudeProvider {
             prompt,
             credentials,
             identity,
+            capabilities,
         })
     }
 }
@@ -70,6 +74,10 @@ impl CredentialedClaudeProvider {
 impl AgentProvider for CredentialedClaudeProvider {
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
+    }
+
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
     }
 
     fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {

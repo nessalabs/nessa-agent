@@ -1,6 +1,6 @@
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
-import { TurnActivity, TurnActivityDetails } from "./turn-activity"
+import { WorkActivity, WorkDetails } from "./work-activity"
 import {
   MessageScroller,
   MessageScrollerViewport,
@@ -17,11 +17,12 @@ import {
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageContentView } from "./message-content"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
+import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
 import { Starting, Thinking } from "./thinking"
-import { selectedTurnActivity } from "./activity-selection"
+import { selectedWork } from "./work-selection"
 
 export function Transcript({
   conversation,
@@ -42,10 +43,13 @@ export function Transcript({
   gatewayAvailable: boolean
   onOpenPaste: (text: string) => void
 }) {
-  const [activityFor, setActivityFor] = React.useState<{
+  // Scoped to the conversation, so a key that happens to recur in the next
+  // tab does not open that tab's sheet.
+  const [workFor, setWorkFor] = React.useState<{
     conversationId: string
     key: string
   } | null>(null)
+  const sheetId = React.useId()
   const normalized = React.useMemo(
     () =>
       agentTranscript(
@@ -60,13 +64,13 @@ export function Transcript({
     [normalized],
   )
   const segments = rows.flatMap((row) => row.content)
-  const selectedActivity = selectedTurnActivity(
+  const openWork = selectedWork(
     segments,
-    activityFor?.conversationId === conversation.id ? activityFor.key : null,
+    workFor?.conversationId === conversation.id ? workFor.key : null,
   )
   React.useEffect(() => {
-    if (activityFor !== null && !selectedActivity) setActivityFor(null)
-  }, [activityFor, selectedActivity])
+    if (workFor !== null && !openWork) setWorkFor(null)
+  }, [openWork, workFor])
   const users = new Map(
     conversation.turns
       .filter((turn) => turn.from === "user")
@@ -113,19 +117,22 @@ export function Transcript({
                   )}
                   {row.content.map((part) => (
                     <React.Fragment key={part.key}>
-                      {"activity" in part && (
-                        <TurnActivity
-                          items={part.activity}
-                          running={part.running}
+                      {part.work && (
+                        <WorkActivity
+                          work={part.work}
+                          running={part.running ?? false}
+                          seed={conversation.id}
+                          expanded={
+                            workFor?.conversationId === conversation.id &&
+                            workFor.key === part.key
+                          }
+                          sheetId={sheetId}
                           onOpen={() =>
-                            setActivityFor({
-                              conversationId: conversation.id,
-                              key: part.key,
-                            })
+                            setWorkFor({ conversationId: conversation.id, key: part.key })
                           }
                         />
                       )}
-                      {"text" in part && part.text && (
+                      {part.text && (
                         <TurnRow
                           turn={{
                             id: part.key,
@@ -138,6 +145,14 @@ export function Transcript({
                           animateMount={animateMount}
                           onOpenPaste={onOpenPaste}
                         />
+                      )}
+                      {"notice" in part && (
+                        <p
+                          role="status"
+                          className="rounded-lg border border-border/70 bg-muted/50 px-3 py-2 text-xs [overflow-wrap:anywhere]"
+                        >
+                          {part.notice}
+                        </p>
                       )}
                     </React.Fragment>
                   ))}
@@ -173,11 +188,12 @@ export function Transcript({
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
-      {selectedActivity && (
-        <TurnActivityDetails
-          items={selectedActivity.activity}
-          running={selectedActivity.running}
-          onClose={() => setActivityFor(null)}
+      {openWork?.work && (
+        <WorkDetails
+          work={openWork.work}
+          running={openWork.running ?? false}
+          sheetId={sheetId}
+          onClose={() => setWorkFor(null)}
         />
       )}
     </>
@@ -216,12 +232,18 @@ const TurnRow = React.memo(function TurnRow({
   )
 })
 
+/**
+ * How a turn ended, when it did not simply finish. It belongs to the turn, not
+ * to a bubble — a turn cancelled before it said anything has no bubble to hang
+ * it on — and it is a mark on the transcript rather than a line the agent
+ * said, so it is drawn as the same rule the compaction divider draws.
+ */
 function TurnStatus({ status }: { status: string }) {
   if (["running", "completed"].includes(status)) return null
   return (
-    <p role="status" className="[overflow-wrap:anywhere] text-xs">
+    <TranscriptDivider role="status" className="[overflow-wrap:anywhere]">
       {status === "cancelled" ? "Cancelled" : status}
-    </p>
+    </TranscriptDivider>
   )
 }
 

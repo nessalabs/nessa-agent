@@ -9,6 +9,14 @@ export class NessaPrivateFileUnavailableError extends Error {
   }
 }
 
+/** The bridge found an object that cannot safely hold local private data. */
+export class NessaPrivateFileUnsafeError extends Error {
+  constructor(message = "Windows private file is unsafe") {
+    super(message)
+    this.name = "NessaPrivateFileUnsafeError"
+  }
+}
+
 /** The bridge did not answer within its budget, so nothing is known about the
  * file. Unlike an unavailable answer this is transient, and a caller that can
  * wait may try again. */
@@ -31,9 +39,10 @@ const BRIDGE_BUDGET_MS = 60_000
  * bridge; filenames and secrets travel over stdin, never command arguments.
  * Validation and I/O use the same handle. No process-global mutable state.
  *
- * Rejects with {@link NessaPrivateFileUnavailableError} when the bridge refuses
- * the file, and with {@link NessaPrivateFileTimeoutError} when it does not
- * answer in time. Branch on those types; do not read the message. */
+ * Rejects with {@link NessaPrivateFileUnavailableError} when the file is absent
+ * or I/O is unavailable, {@link NessaPrivateFileUnsafeError} when an object is
+ * present but unsafe, and {@link NessaPrivateFileTimeoutError} when the bridge
+ * does not answer in time. Branch on those types; do not read the message. */
 export async function windowsPrivateFile(
   operation: "read" | "reserve" | "write",
   path: string,
@@ -78,6 +87,10 @@ export async function windowsPrivateFile(
     child.stdin.on("error", fail)
     child.on("close", (code) => {
       clearTimeout(timer)
+      if (code === 3) {
+        reject(new NessaPrivateFileUnsafeError())
+        return
+      }
       if (code !== 0 || output.length > 32768) {
         fail()
         return
@@ -97,11 +110,13 @@ $ErrorActionPreference = 'Stop'
 try {
 Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
+public class NessaUnsafePrivateFileException : IOException {}
 public static class NessaPrivateFile {
   [StructLayout(LayoutKind.Sequential)] struct Attributes { public int Length; public IntPtr Descriptor; public int Inherit; }
   [StructLayout(LayoutKind.Sequential)] struct Info { public uint Attributes; public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write; public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow; }
@@ -111,10 +126,14 @@ public static class NessaPrivateFile {
   [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(SafeFileHandle handle, int type, uint flags, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
   [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
-  static void Require(bool condition) { if (!condition) throw new IOException("Unsafe private file"); }
+  static void Require(bool condition) { if (!condition) throw new NessaUnsafePrivateFileException(); }
   static SafeFileHandle Open(string path, uint access, uint disposition, IntPtr attributes) {
     var handle = CreateFileW(path, access, 7, attributes, disposition, 0x02200000, IntPtr.Zero);
-    if (handle.IsInvalid) { handle.Dispose(); throw new IOException("Cannot open private file"); }
+    if (handle.IsInvalid) {
+      int error = Marshal.GetLastWin32Error(); handle.Dispose();
+      if (error == 2 || error == 3) throw new FileNotFoundException();
+      throw new IOException("Cannot open private file", new Win32Exception(error));
+    }
     return handle;
   }
   static Info Inspect(SafeFileHandle handle) {
@@ -178,5 +197,11 @@ public static class NessaPrivateFile {
 $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $result = [NessaPrivateFile]::Run($request.operation, $request.path, $request.value)
 [Console]::Out.Write($result)
-} catch { exit 1 }
+} catch {
+  $failure = $_.Exception
+  while ($failure.InnerException -ne $null) { $failure = $failure.InnerException }
+  if ($failure -is [System.IO.FileNotFoundException]) { exit 2 }
+  if ($failure.GetType().Name -eq 'NessaUnsafePrivateFileException') { exit 3 }
+  exit 1
+}
 `

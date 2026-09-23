@@ -185,8 +185,8 @@ it("known-unsent follow-up does not settle the earlier running invocation before
               attachments: [],
               files: [],
               parts: [
-                { offset: 0, kind: "thought", text: "", toolId: "" },
-                { offset: 1, kind: "text", text: "", toolId: "" },
+                { offset: 0, kind: "thought", text: "", toolId: "", noticeId: "" },
+                { offset: 1, kind: "text", text: "", toolId: "", noticeId: "" },
               ],
               status: "running",
             },

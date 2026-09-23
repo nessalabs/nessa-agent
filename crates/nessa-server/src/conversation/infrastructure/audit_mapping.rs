@@ -199,6 +199,7 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
+        "declineId":record.id().as_str(),
         "declaredTool":decline.declared(),
         "reason":match decline.reason() {
             ReviewDeclineReason::ToolNotReviewable => "tool_not_reviewable",

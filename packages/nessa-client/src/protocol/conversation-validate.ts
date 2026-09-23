@@ -137,6 +137,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageImages = new Map<string, string>()
   const messageFiles = new Map<string, string>()
   const toolPartIds = new Set<string>()
+  const noticePartIds = new Set<string>()
   for (const message of messages) {
     exact(message, [
       "executionId",
@@ -169,19 +170,33 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Invalid steering offset")
     let previousOffset = -1
     for (const part of items(message, "parts", 512)) {
-      exact(part, ["offset", "kind", "text", "toolId", "messageId"])
+      exact(part, ["offset", "kind", "text", "toolId", "noticeId", "messageId"])
       if (!Number.isSafeInteger(part.offset) || (part.offset as number) <= previousOffset)
         throw new Error("Invalid part order")
       previousOffset = part.offset as number
       const kind = text(part, "kind")
-      oneOf(kind, ["text", "thought", "tool"])
+      oneOf(kind, ["text", "thought", "tool", "local_notice"])
       text(part, "text")
       const toolId = text(part, "toolId", 256)
+      const noticeId = text(part, "noticeId", 20)
       if (kind === "tool") {
         if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
         toolPartIds.add(JSON.stringify([executionId, toolId]))
       } else if (toolId.length) {
         throw new Error("Conversation non-tool part has a tool identity")
+      }
+      if (kind === "local_notice") {
+        if (
+          !/^[1-9][0-9]{0,19}$/.test(noticeId) ||
+          (noticeId.length === 20 && noticeId > "18446744073709551615")
+        )
+          throw new Error("Conversation local notice has no valid identity")
+        const key = JSON.stringify([executionId, noticeId])
+        if (noticePartIds.has(key))
+          throw new Error("Conversation response repeats a local notice identity")
+        noticePartIds.add(key)
+      } else if (noticeId.length) {
+        throw new Error("Conversation non-notice part has a notice identity")
       }
       if (part.messageId !== undefined) identity(part, "messageId")
     }
@@ -282,13 +297,28 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   const toolIds = new Set<string>()
   for (const tool of items(item, "tools", 128)) {
-    exact(tool, ["executionId", "toolId", "title", "status", "details", "input"])
+    exact(tool, ["executionId", "toolId", "title", "kind", "status", "details", "input"])
     identity(tool, "executionId")
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])
     if (toolIds.has(toolKey)) throw new Error("Conversation response repeats a tool")
     toolIds.add(toolKey)
     text(tool, "title", 2048)
+    // The provider's own category, empty until it says. The schema names the
+    // values, so an unknown one is a gateway this client does not understand.
+    oneOf(text(tool, "kind", 32), [
+      "",
+      "read",
+      "edit",
+      "search",
+      "fetch",
+      "execute",
+      "think",
+      "delete",
+      "move",
+      "switch_mode",
+      "other",
+    ])
     text(tool, "status", 64)
     text(tool, "details", 16384)
     text(tool, "input", 32768)

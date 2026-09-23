@@ -22,7 +22,8 @@ use nessa_sdk::domain::agent_execution::{
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionDecision,
         PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-        PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineReason,
+        PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineId,
+        ReviewDeclineReason,
     },
     tools::{ToolCallId, ToolCallUpdate},
 };
@@ -379,6 +380,7 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
             ReviewDeclineRecord::new(
                 ExecutionSessionId::new("session").unwrap(),
                 ExecutionId::new("run").unwrap(),
+                ReviewDeclineId::new("1").unwrap(),
                 ReviewDecline::new(tool, reason),
                 delivery,
             ),
@@ -392,6 +394,7 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
     assert_eq!(value["kind"], "review_declined");
     assert_eq!(value["sessionId"], "session");
     assert_eq!(value["executionId"], "run");
+    assert_eq!(value["declineId"], "1");
     assert_eq!(value["reason"], "tool_not_reviewable");
     assert_eq!(value["delivery"]["stage"], "selected");
     assert_eq!(value["origin"]["kind"], "runtime");

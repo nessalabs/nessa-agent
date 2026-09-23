@@ -34,7 +34,7 @@ function view() {
         attachments: [],
         files: [],
         status: "running",
-        parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool" }],
+        parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool", noticeId: "" }],
       },
     ],
     pending: [
@@ -52,6 +52,7 @@ function view() {
         executionId: "running",
         toolId: "tool",
         title: "Tool",
+        kind: "execute",
         status: "running",
         details: "",
         input: "{}",
@@ -83,6 +84,44 @@ function view() {
 describe("conversation view agreement", () => {
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
+  })
+
+  it("accepts one bounded local notice and rejects a repeated identity", () => {
+    const value = view()
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "local_notice",
+      text: "Nessa declined.",
+      toolId: "",
+      noticeId: "1",
+    })
+    expect(conversationView(value, "conversation").messages[1]!.parts[1]!.noticeId).toBe(
+      "1",
+    )
+    value.messages[1]!.parts.push({
+      offset: 2,
+      kind: "local_notice",
+      text: "conflicting duplicate",
+      toolId: "",
+      noticeId: "1",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a local notice identity",
+    )
+  })
+
+  it("rejects a local notice identity outside the SDK sequence range", () => {
+    const value = view()
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "local_notice",
+      text: "Nessa declined.",
+      toolId: "",
+      noticeId: "18446744073709551616",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "local notice has no valid identity",
+    )
   })
 
   it("rejects contradictory pending text when queue evidence is complete", () => {
@@ -271,5 +310,37 @@ describe("conversation view agreement", () => {
     expect(() =>
       conversationReorder({ requestId: "r", outcome: "applied", extra: true }, "r"),
     ).toThrow()
+  })
+})
+
+describe("a tool's kind", () => {
+  const withKind = (kind: unknown) => {
+    const value = view()
+    value.tools = [{ ...value.tools[0]!, kind } as (typeof value.tools)[number]]
+    return value
+  }
+
+  it.each(["", "read", "edit", "search", "execute", "switch_mode", "other"])(
+    "accepts the provider's category %j",
+    (kind) => {
+      expect(() => conversationView(withKind(kind), "conversation")).not.toThrow()
+    },
+  )
+
+  it.each([["guess"], [7], [null]])(
+    "rejects %j, which the schema does not name",
+    (kind) => {
+      expect(() => conversationView(withKind(kind), "conversation")).toThrow()
+    },
+  )
+
+  it("rejects a tool that leaves it out", () => {
+    const value = view()
+    const { kind: _kind, ...tool } = value.tools[0]!
+    value.tools = [tool as (typeof value.tools)[number]]
+    // Required, not optional: a gateway that stopped sending it has changed shape.
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "Invalid conversation kind",
+    )
   })
 })

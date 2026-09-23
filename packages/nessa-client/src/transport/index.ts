@@ -17,4 +17,8 @@
  * ```
  */
 export { waitForSocketOpen } from "./socket.js"
+export {
+  LocalGatewayEndpointSource,
+  nodeGatewayEndpointSource,
+} from "./local-gateway-endpoint.js"
 export { WireSession } from "./wire-session.js"

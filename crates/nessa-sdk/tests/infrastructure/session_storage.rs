@@ -7,6 +7,7 @@
 use nessa_local_storage as private;
 mod benchmark;
 mod custom_storage;
+mod declined_reviews;
 mod file_identity;
 use file_identity::journal_path;
 #[cfg(unix)]

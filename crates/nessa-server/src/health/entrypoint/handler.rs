@@ -4,10 +4,29 @@ use axum::{
     response::{IntoResponse, Response},
     Extension,
 };
-/// HTTP liveness includes the verified generation only for a composed desktop runtime.
-pub(crate) async fn handle_http_health(identity: Option<Extension<RunningRuntime>>) -> Response {
+use nessa_gateway_endpoint::domain::EndpointIdentity;
+/// HTTP liveness includes one endpoint correlation identity on every run and
+/// the verified generation only for a composed desktop runtime.
+pub(crate) async fn handle_http_health(
+    endpoint: Option<Extension<EndpointIdentity>>,
+    runtime: Option<Extension<RunningRuntime>>,
+) -> Response {
     let mut response = StatusCode::OK.into_response();
-    if let Some(Extension(value)) = identity {
+    if let Some(Extension(value)) = endpoint {
+        for (name, text) in [
+            ("x-nessa-endpoint-instance", value.instance().to_owned()),
+            (
+                "x-nessa-endpoint-process-id",
+                value.process_id().to_string(),
+            ),
+        ] {
+            response.headers_mut().insert(
+                HeaderName::from_static(name),
+                HeaderValue::from_str(&text).expect("validated endpoint identity header"),
+            );
+        }
+    }
+    if let Some(Extension(value)) = runtime {
         for (name, text) in [
             (
                 "x-nessa-runtime-fingerprint",

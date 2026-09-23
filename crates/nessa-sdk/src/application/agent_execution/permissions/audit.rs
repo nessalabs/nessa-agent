@@ -4,7 +4,7 @@
 use super::PermissionResolution;
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionId;
-use crate::domain::agent_execution::permissions::ReviewDecline;
+use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 
 /// Observed delivery stage of an already selected permission answer.
@@ -67,11 +67,17 @@ impl PermissionAnswerRecord {
 pub struct ReviewDeclineRecord {
     session_id: ExecutionSessionId,
     execution_id: ExecutionId,
+    id: ReviewDeclineId,
     decline: ReviewDecline,
     delivery: PermissionAnswerDelivery,
 }
 impl ReviewDeclineRecord {
     /// Record that `decline` was decided for `execution_id` within `session_id`.
+    ///
+    /// The constructor consumes the provider `session_id`, owning `execution_id`,
+    /// execution-scoped decline `id`, immutable `decline`, and observed
+    /// `delivery` stage. It performs no I/O and cannot fail because each domain
+    /// value was validated before reaching this application boundary.
     ///
     /// `delivery` describes this binding's own progress — [`Selected`] before a
     /// response is written, then [`Written`] or [`Failed`] once the write has
@@ -79,18 +85,24 @@ impl ReviewDeclineRecord {
     /// the tool did not run; an agent that is told no has still been told
     /// something, and what it does next is its own.
     ///
+    /// The audit producer must emit `Selected` first and reuse the same `id` and
+    /// `decline` for the later delivery record; this immutable record preserves
+    /// that correlation but does not read prior audit history itself.
+    ///
     /// [`Selected`]: PermissionAnswerDelivery::Selected
     /// [`Written`]: PermissionAnswerDelivery::Written
     /// [`Failed`]: PermissionAnswerDelivery::Failed
     pub fn new(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
+        id: ReviewDeclineId,
         decline: ReviewDecline,
         delivery: PermissionAnswerDelivery,
     ) -> Self {
         Self {
             session_id,
             execution_id,
+            id,
             decline,
             delivery,
         }
@@ -102,6 +114,10 @@ impl ReviewDeclineRecord {
     /// Execution the agent was running when it asked for the tool.
     pub fn execution_id(&self) -> &ExecutionId {
         &self.execution_id
+    }
+    /// Stable identity pairing the selected and delivery-stage audit records.
+    pub fn id(&self) -> &ReviewDeclineId {
+        &self.id
     }
     /// Which tool was refused, where it could be named, and why.
     pub fn decline(&self) -> &ReviewDecline {

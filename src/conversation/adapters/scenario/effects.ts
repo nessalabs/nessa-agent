@@ -41,8 +41,8 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
         attachments: input.attachments,
         files: input.files,
         parts: [
-          { offset: 0, kind: "thought", text: "", toolId: "" },
-          { offset: 1, kind: "text", text: input.text, toolId: "" },
+          { offset: 0, kind: "thought", text: "", toolId: "", noticeId: "" },
+          { offset: 1, kind: "text", text: input.text, toolId: "", noticeId: "" },
         ],
         status: "completed",
       })

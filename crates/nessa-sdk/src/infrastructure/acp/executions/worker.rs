@@ -40,7 +40,8 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
     PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId, PermissionScope,
-    ReviewDecline, ReviewDeclineReason,
+    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+    ReviewDeclineStage,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
@@ -126,6 +127,121 @@ struct ActiveExecution {
     execution_id: ExecutionId,
     reply: ExecutionReply,
     deadline: Option<Instant>,
+}
+/// Ensures a selected local refusal gets a final publication attempt even when
+/// the async operation is cancelled between selection and response settlement.
+struct DeclineNoticePublication {
+    events: EventSender,
+    execution_id: ExecutionId,
+    observation: ReviewDeclineObservation,
+    selected: bool,
+    write_attempted: bool,
+    final_stage: Option<ReviewDeclineStage>,
+    settled: bool,
+}
+impl DeclineNoticePublication {
+    fn new(
+        events: EventSender,
+        execution_id: ExecutionId,
+        observation: ReviewDeclineObservation,
+    ) -> Self {
+        Self {
+            events,
+            execution_id,
+            observation,
+            selected: false,
+            write_attempted: false,
+            final_stage: None,
+            settled: false,
+        }
+    }
+    fn event(&self, stage: ReviewDeclineStage) -> ExecutionEvent {
+        let observation = if stage == ReviewDeclineStage::Selected {
+            self.observation.clone()
+        } else {
+            self.observation
+                .advance(stage)
+                .expect("decline publication advances selection to a final stage")
+        };
+        ExecutionEvent::new(
+            self.execution_id.clone(),
+            ExecutionUpdate::ReviewDeclined(observation),
+        )
+    }
+    fn publish_selected(&mut self) -> Result<(), QueueError> {
+        if !self.selected {
+            self.events
+                .try_send(self.event(ReviewDeclineStage::Selected))?;
+            self.selected = true;
+        }
+        Ok(())
+    }
+    fn begin_write(&mut self) {
+        self.write_attempted = true;
+    }
+    fn settle(&mut self, stage: ReviewDeclineStage) -> Result<(), QueueError> {
+        self.final_stage = Some(stage);
+        self.publish_selected()?;
+        self.events.try_send(self.event(stage))?;
+        self.settled = true;
+        Ok(())
+    }
+}
+impl Drop for DeclineNoticePublication {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let stage = self.final_stage.unwrap_or(if self.write_attempted {
+            ReviewDeclineStage::WriteUnconfirmed
+        } else {
+            ReviewDeclineStage::WriteNotAttempted
+        });
+        let result = self.publish_selected().and_then(|()| {
+            let event = self.event(stage);
+            self.events.try_send(event)
+        });
+        if let Err(error) = result {
+            tracing::error!(
+                execution_id = %self.execution_id.as_str(),
+                decline_id = %self.observation.id().as_str(),
+                ?error,
+                "declined-review notice could not be finalized during operation drop"
+            );
+        }
+    }
+}
+fn combine_decline_result(
+    result: Result<(), AgentError>,
+    notice: Result<(), AgentError>,
+) -> Result<(), AgentError> {
+    match (result, notice) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(notice_error)) => Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(error),
+            subsequent_error: Box::new(notice_error),
+        }),
+    }
+}
+/// Retain the lifecycle fact a closed event queue proves before returning its
+/// caller-facing diagnostic. A full queue is still open and proves no closure.
+fn event_publication_result(
+    cancellation_cause: &mut Option<(PermissionCancellationReason, CancellationOrigin)>,
+    result: Result<(), QueueError>,
+) -> Result<(), AgentError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(QueueError::Closed) => {
+            cancellation_cause.get_or_insert((
+                PermissionCancellationReason::event_consumer_dropped(),
+                CancellationOrigin::Runtime,
+            ));
+            Err(AgentError::Backpressure)
+        }
+        Err(QueueError::Full) => Err(AgentError::Backpressure),
+    }
 }
 struct Worker<P> {
     profile: P,
@@ -1527,17 +1643,8 @@ impl<P: AcpProfile> Worker<P> {
         Ok(())
     }
     fn emit(&mut self, event: ExecutionEvent) -> Result<(), AgentError> {
-        match self.events.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(QueueError::Closed) => {
-                self.cancellation_cause.get_or_insert((
-                    PermissionCancellationReason::event_consumer_dropped(),
-                    CancellationOrigin::Runtime,
-                ));
-                Err(AgentError::Backpressure)
-            }
-            Err(QueueError::Full) => Err(AgentError::Backpressure),
-        }
+        let result = self.events.try_send(event);
+        event_publication_result(&mut self.cancellation_cause, result)
     }
     fn check_session(
         &self,
@@ -1791,6 +1898,26 @@ impl<P: AcpProfile> Worker<P> {
                 )
                 .await;
         };
+        let sequence = self
+            .permission_sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| json_rpc::protocol("review identity exhausted"))?
+            + 1;
+        let decline_id = ReviewDeclineId::new(sequence.to_string())
+            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        let mut publication = DeclineNoticePublication::new(
+            self.events.clone(),
+            execution_id.clone(),
+            ReviewDeclineObservation::selected(decline_id.clone(), decline.clone()),
+        );
+        if let Err(error) = publication.publish_selected() {
+            tracing::error!(
+                ?error,
+                "declined-review selection notice publication will be retried at settlement"
+            );
+        }
         tracing::warn!(
             session_id = %session_id.as_str(),
             execution_id = %execution_id.as_str(),
@@ -1802,6 +1929,7 @@ impl<P: AcpProfile> Worker<P> {
             ExecutionAuditRecord::ReviewDeclined(ReviewDeclineRecord::new(
                 session_id.clone(),
                 execution_id.clone(),
+                decline_id.clone(),
                 decline.clone(),
                 delivery,
             ))
@@ -1821,16 +1949,26 @@ impl<P: AcpProfile> Worker<P> {
         // review to register. The dispatcher is told so it does not answer the
         // same request a second time when this returns an audit failure.
         self.declined = Some(wire_id);
+        publication.begin_write();
         let delivery = self.send_before(response, response_deadline).await;
         let observed = match &delivery {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
         };
+        let notice_delivery = if delivery.is_ok() {
+            ReviewDeclineStage::WriteConfirmed
+        } else {
+            ReviewDeclineStage::WriteUnconfirmed
+        };
+        let final_notice = publication.settle(notice_delivery);
+        // The caller-visible fact follows the observed write immediately. A
+        // slow or cancelled final audit must not relabel a confirmed write as
+        // unconfirmed through the publication guard's drop fallback.
         let written = self.record_audit(record(observed)).await;
         // Three ways this can fail and three different things a reader needs to
         // know, so a transport cause is never replaced by a generic audit one.
         // An answered review keeps them apart the same way.
-        match (decided.and(written), delivery) {
+        let result = match (decided.and(written), delivery) {
             (Ok(()), delivery) => delivery,
             (Err(audit), Ok(())) => Err(audit),
             (Err(_), Err(delivery_error)) => {
@@ -1839,7 +1977,11 @@ impl<P: AcpProfile> Worker<P> {
                     cleanup_error: None,
                 })
             }
-        }
+        };
+        // A successful final publication necessarily retried and published the
+        // selection first, so an earlier full queue has recovered.
+        let notice = event_publication_result(&mut self.cancellation_cause, final_notice);
+        combine_decline_result(result, notice)
     }
     async fn record_audit(&mut self, record: ExecutionAuditRecord) -> Result<(), AgentError> {
         let result = catch_worker_panic(async {

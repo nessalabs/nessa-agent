@@ -1,6 +1,6 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::{clipped, Projection},
+    projection::{clipped, Projection, MAX_TEXT},
     ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
@@ -34,6 +34,8 @@ use nessa_sdk::{
         permissions::{
             PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
             PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
+            ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+            ReviewDeclineStage,
         },
         prompts::{PromptText, UserMessage},
         sessions::{ExecutionSessionId, ProviderContext, SessionId},
@@ -135,6 +137,20 @@ fn lifecycle_diagnostics_are_clipped_at_a_utf8_boundary() {
     let clipped = clipped(&oversized, 2048);
     assert_eq!(clipped, "😀".repeat(512));
     assert_eq!(clipped.len(), 2048);
+}
+
+fn decline_event(id: &str, delivery: ReviewDeclineStage) -> ExecutionEvent {
+    let selected = ReviewDeclineObservation::selected(
+        ReviewDeclineId::new(id).unwrap(),
+        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+    );
+    event(ExecutionUpdate::ReviewDeclined(
+        if delivery == ReviewDeclineStage::Selected {
+            selected
+        } else {
+            selected.advance(delivery).unwrap()
+        },
+    ))
 }
 fn review(arguments: String) -> ExecutionEvent {
     event(ExecutionUpdate::PermissionRequested {
@@ -700,6 +716,169 @@ fn lagged_projection_rebuilds_saved_text_from_a_terminal_snapshot_exactly_once()
         )),
     );
     assert_eq!(text_parts(&projection.read(), "later"), "later answer");
+}
+
+#[test]
+fn declined_reviews_upsert_by_identity_in_order_and_match_restoration() {
+    let events = vec![
+        decline_event("1", ReviewDeclineStage::Selected),
+        decline_event("1", ReviewDeclineStage::WriteConfirmed),
+        decline_event("2", ReviewDeclineStage::Selected),
+        decline_event("2", ReviewDeclineStage::WriteUnconfirmed),
+        event(ExecutionUpdate::Message(MessageChunk::text("carried on"))),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
+    ];
+    let mut live = projection();
+    for event in &events {
+        live.event(event);
+    }
+    let live_view = live.read();
+    let parts = &live_view.messages[0].parts;
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].notice_id, "1");
+    assert_eq!(parts[0].offset, 0);
+    assert_eq!(parts[1].notice_id, "2");
+    assert_eq!(parts[1].offset, 2);
+    assert!(parts[1].text.contains("could not confirm writing"));
+    assert_eq!(parts[2].text, "carried on");
+    assert_eq!(parts[2].offset, 4);
+    assert_eq!(
+        live_view.messages[0].status,
+        ConversationMessageStatus::Completed
+    );
+
+    let snapshot = completed_snapshot("execution", events);
+    let restored = Projection::new(
+        "conversation".into(),
+        live_view.capabilities.clone(),
+        Some(&snapshot),
+    )
+    .read();
+    assert_eq!(restored.messages[0].parts, live_view.messages[0].parts);
+    assert_eq!(restored.messages[0].status, live_view.messages[0].status);
+}
+
+#[test]
+fn declined_review_replay_after_lag_preserves_one_final_notice_and_following_text() {
+    let selected = decline_event("1", ReviewDeclineStage::Selected);
+    let confirmed = decline_event("1", ReviewDeclineStage::WriteConfirmed);
+    let text = event(ExecutionUpdate::Message(MessageChunk::text("carried on")));
+    let finished = event(ExecutionUpdate::Finished(ExecutionOutcome::Completed));
+    let events = vec![selected.clone(), confirmed.clone(), text.clone(), finished];
+    let snapshot = completed_snapshot("execution", events.clone());
+    let mut live = projection();
+    live.event(&selected);
+    live.lagged();
+    live.event(&confirmed);
+    live.event(&text);
+    let lagged = live.read();
+    assert!(text_parts(&lagged, "execution").is_empty());
+    assert_eq!(
+        lagged.messages[0]
+            .parts
+            .iter()
+            .filter(|part| part.kind == "local_notice")
+            .count(),
+        1
+    );
+
+    live.settled("execution", Some(&snapshot));
+    let settled = live.read();
+    for buffered in &events {
+        live.event(buffered);
+    }
+    live.settled("execution", Some(&snapshot));
+    let repeated = live.read();
+    let restored = Projection::new(
+        "conversation".into(),
+        settled.capabilities.clone(),
+        Some(&snapshot),
+    )
+    .read();
+    for view in [&settled, &repeated, &restored] {
+        assert_eq!(view.messages.len(), 1);
+        let message = &view.messages[0];
+        assert_eq!(message.parts, settled.messages[0].parts);
+        assert_eq!(message.parts.len(), 2);
+        assert_eq!(message.parts[0].kind, "local_notice");
+        assert_eq!(message.parts[0].notice_id, "1");
+        assert_eq!(message.parts[0].offset, 0);
+        assert!(!message.parts[0].text.contains("has not confirmed"));
+        assert_eq!(message.parts[1].kind, "text");
+        assert_eq!(message.parts[1].offset, 2);
+        assert_eq!(message.parts[1].text, "carried on");
+        assert_eq!(message.event_count, events.len());
+        assert_eq!(message.status, ConversationMessageStatus::Completed);
+        assert!(message.error.is_none());
+        assert!(view.permissions.is_empty());
+        assert!(view.pending.is_empty());
+    }
+    // A recovered turn does not clear the session-wide live-lag warning. A fresh
+    // restored projection has no missed-live-observation history to report.
+    assert!(settled.truncated);
+    assert!(repeated.truncated);
+    assert_eq!(
+        settled.permission_view_error,
+        repeated.permission_view_error
+    );
+    assert!(!restored.truncated);
+    assert!(restored.permission_view_error.is_none());
+}
+
+#[test]
+fn local_notice_append_and_upsert_obey_the_message_text_budget() {
+    let mut projection = projection();
+    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
+        "x".repeat((MAX_TEXT * 2) - 8),
+    ))));
+    projection.event(&decline_event("1", ReviewDeclineStage::Selected));
+    projection.event(&decline_event("1", ReviewDeclineStage::WriteUnconfirmed));
+    let view = projection.read();
+    assert!(view.truncated);
+    assert!(
+        view.messages[0]
+            .parts
+            .iter()
+            .map(|part| part.text.len())
+            .sum::<usize>()
+            <= MAX_TEXT * 2
+    );
+    assert_eq!(
+        view.messages[0]
+            .parts
+            .iter()
+            .filter(|part| part.kind == "local_notice")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn selected_notice_remains_truthful_when_terminal_history_has_no_final_publication() {
+    let events = vec![
+        decline_event("1", ReviewDeclineStage::Selected),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
+    ];
+    let mut live = projection();
+    for event in &events {
+        live.event(event);
+    }
+    let live_view = live.read();
+    let notice = &live_view.messages[0].parts[0];
+    assert!(notice.text.contains("has not confirmed writing"));
+    assert_eq!(
+        live_view.messages[0].status,
+        ConversationMessageStatus::Completed
+    );
+
+    let restored = Projection::new(
+        "conversation".into(),
+        live_view.capabilities.clone(),
+        Some(&completed_snapshot("execution", events)),
+    )
+    .read();
+    assert_eq!(restored.messages[0].parts, live_view.messages[0].parts);
+    assert_eq!(restored.messages[0].status, live_view.messages[0].status);
 }
 
 #[test]

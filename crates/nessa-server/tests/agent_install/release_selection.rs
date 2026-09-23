@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchivePath, ArchiveUrl, Libc, ReleasePlatform, ReleaseRequirements,
-    ReleaseVersion,
+    ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, Libc, ReleaseContents,
+    ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
 };
 
 fn host(avx2: bool, libc: Libc) -> HostPlatform {
@@ -20,8 +20,13 @@ fn release(libc: Libc, avx2: bool, digest: char) -> PinnedRelease {
         ReleasePlatform::new("linux", "x86_64").unwrap(),
         ReleaseRequirements::new(Some(libc), avx2),
         ArchiveUrl::parse(&format!("https://example.test/opencode-{digest}.tar.gz")).unwrap(),
+        ArchiveSize::parse(46_009_615).unwrap(),
         ArchiveDigest::parse(&digest.to_string().repeat(64)).unwrap(),
-        ArchivePath::parse("package/bin/opencode").unwrap(),
+        ReleaseContents::new(vec![ReleaseFile::new(
+            ArchivePath::parse("package/bin/opencode").unwrap(),
+            FileRole::Launch,
+        )])
+        .unwrap(),
     )
     .unwrap()
 }

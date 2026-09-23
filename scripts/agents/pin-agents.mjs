@@ -1,13 +1,22 @@
-// Pin the Opencode release Nessa installs, by measuring it rather than trusting it.
+// Pin the agent runtimes Nessa installs, by measuring them rather than trusting them.
 //
-// Nessa does not install whatever Opencode publishes today; it installs the
+// Nessa does not install whatever an agent publishes today; it installs the
 // version it has tested, and refuses anything whose archive does not hash to
 // what was recorded here. That guarantee is only as good as the digests, so
-// they are produced by downloading every platform's archive and hashing it —
+// they are produced by downloading every build's archive and hashing it —
 // never by copying a number out of a release page.
 //
-//   node scripts/agents/pin-opencode.mjs            # pin the latest release
-//   node scripts/agents/pin-opencode.mjs 1.18.31    # pin an exact version
+//   node scripts/agents/pin-agents.mjs            # pin every agent
+//   node scripts/agents/pin-agents.mjs 1.18.31    # pin an exact opencode version
+//
+// Three agents, and they do not get their versions the same way, because they
+// are not in the same situation. Opencode's comes from the registry: Nessa
+// chooses which version of it to test. Claude's and Codex's come from the
+// harness lockfiles, because their JavaScript ships inside the application and
+// expects the native package that `npm ci` resolved beside it — a pin that
+// named a different version would install a binary the bundled wrapper is not
+// the wrapper for. So those two are read rather than chosen, and the argument
+// above applies only to Opencode.
 //
 // Writes crates/nessa-server/data/agent-releases.json, which is compiled into
 // the server. Review the diff: a changed digest with an unchanged version means
@@ -96,7 +105,7 @@ const registry = "https://registry.npmjs.org"
 // the failure this whole mechanism exists to prevent, on machines old enough
 // that the vendor does not describe them either. Saying so here is the honest
 // alternative to implying the check is complete.
-export const PLATFORMS = [
+export const OPENCODE_BUILDS = [
   {
     operatingSystem: "macos",
     architecture: "aarch64",
@@ -145,6 +154,90 @@ export const PLATFORMS = [
 // rather than assumed: if a future release moves it, this script fails instead
 // of writing a pin that installs nothing.
 export const EXECUTABLE = "package/bin/opencode"
+
+// Every agent Nessa installs, and what is pinned for each.
+//
+// `install` is the part that changed when Claude and Codex stopped shipping
+// inside the application, and it is worth stating plainly, because it is two
+// different shapes of release rather than one with an option:
+//
+//   - "launch"  — the archive holds one program and nothing the program needs.
+//                 That is Opencode: `package/bin/opencode` and some metadata
+//                 nothing reads. Pinning the metadata would claim it matters.
+//   - "package" — the archive is a package whose parts find each other. Codex's
+//                 `codex` looks for its ripgrep at `../codex-path/rg` and a zsh
+//                 under `../codex-resources/`, both relative to itself, so
+//                 installing only the program installs something that starts
+//                 and then cannot search or run a command. Every regular file
+//                 in the archive is pinned, and the archive's own layout is
+//                 kept.
+//
+// Claude's package is one program and three documents and would be correct
+// either way; it is pinned as a package because that is what it is, and because
+// the bundled wrapper resolves it as a package directory rather than as a path
+// to a binary.
+//
+// What no build here says is which *platform* other than macOS on Apple silicon
+// Claude and Codex are pinned for, and the answer is none. The 467 MB measured
+// for this change was measured on a darwin-arm64 build, and no other platform's
+// archive has been fetched, listed or checked. Adding one is a line in this
+// table and a run of this script; claiming one without that would be claiming a
+// measurement nobody took. Opencode keeps its six because they were measured.
+export const AGENTS = [
+  {
+    name: "opencode",
+    // The version Nessa chooses to test, from the registry, defaulting to the
+    // newest. The argument to this script is this and nothing else.
+    version: { from: "registry", package: "opencode-ai" },
+    launch: EXECUTABLE,
+    install: "launch",
+    builds: OPENCODE_BUILDS,
+  },
+  {
+    name: "claude",
+    version: {
+      from: "lockfile",
+      harness: "claude-acp",
+      dependency: "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+    },
+    launch: "package/claude",
+    install: "package",
+    builds: [
+      {
+        operatingSystem: "macos",
+        architecture: "aarch64",
+        libc: null,
+        requiresAvx2: false,
+        package: "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+      },
+    ],
+  },
+  {
+    name: "codex",
+    version: {
+      from: "lockfile",
+      harness: "codex-acp",
+      // The lockfile's own name for it. There is no `@openai/codex-darwin-arm64`
+      // package on the registry: `@openai/codex` declares this as an optional
+      // dependency aliased to itself at a platform-suffixed version, so npm
+      // writes the alias under this name and resolves it to the tarball of
+      // `@openai/codex@<version>-darwin-arm64`. The `package` below is
+      // therefore the real coordinate and this is the key to look it up by.
+      dependency: "@openai/codex-darwin-arm64",
+    },
+    launch: "package/vendor/aarch64-apple-darwin/bin/codex",
+    install: "package",
+    builds: [
+      {
+        operatingSystem: "macos",
+        architecture: "aarch64",
+        libc: null,
+        requiresAvx2: false,
+        package: "@openai/codex",
+      },
+    ],
+  },
+]
 
 // What the first bytes of a program look like on the platforms this script
 // pins. ELF for Linux; Mach-O for macOS, thin in either byte order and fat,
@@ -265,23 +358,81 @@ export function kind(line) {
   return "something that is not a file"
 }
 
-export function executableDigest(archive) {
+// Whether a listing line describes a file its owner may run.
+//
+// The mode column's fourth character, which both GNU and BSD tar print in the
+// same place. It is the one fact the archive offers about which of its files
+// are programs, and it decides only the difference between a helper and a
+// document — never whether a *document* becomes runnable, because the
+// installer sets the mode from the pin's role and ignores the archive's
+// entirely.
+export function ownerMayRun(line) {
+  return line.trim()[3] === "x"
+}
+
+// What a release installs, read off a listing, or the reason it installs
+// nothing.
+//
+// `install` is the agent's own shape: "launch" pins the one program and
+// nothing else, "package" pins every regular file the archive holds. The roles
+// come from the listing's mode column rather than from a table, so a release
+// that stops shipping its ripgrep executable fails here rather than installing
+// one that cannot run.
+//
+// Sorted by path, which is the order `ReleaseContents` canonicalises to, so
+// that the file this writes is the file the server reads back unchanged.
+export function releaseFiles(listing, { launch, install }) {
+  const lines = listing.split("\n").filter((line) => line.trim() !== "")
+  const named = lines.filter((line) => entryName(line) === launch)
+  const program = named.find((line) => line.trim().startsWith("-"))
+  if (!program) {
+    // An archive that does not hold the program and one that holds something
+    // else under its name are different things to be told, and the second is
+    // the one a maintainer can act on: a release that started shipping a
+    // launcher symlink is a packaging change to go and read, not a missing
+    // file.
+    const [other] = named
+    return {
+      refusal: other
+        ? `holds ${launch} as ${kind(other)} rather than as a regular file`
+        : `does not hold ${launch} at all`,
+    }
+  }
+  if (!ownerMayRun(program))
+    return { refusal: `holds ${launch}, which is not marked as a program` }
+  if (install === "launch") return { files: [{ path: launch, role: "launch" }], program }
+
+  // Every regular file, and nothing else. A release that started shipping a
+  // symbolic link inside its package is a packaging change to go and read:
+  // the installer refuses a link entry outright, so pinning one would fail for
+  // every user rather than here, where somebody can still do something.
+  const files = []
+  for (const line of lines) {
+    const path = entryName(line)
+    if (line.trim().startsWith("d")) continue
+    if (!line.trim().startsWith("-"))
+      return { refusal: `holds ${path} as ${kind(line)} rather than as a regular file` }
+    files.push({
+      path,
+      role: path === launch ? "launch" : ownerMayRun(line) ? "helper" : "document",
+    })
+  }
+  files.sort((left, right) => (left.path < right.path ? -1 : 1))
+  return { files, program }
+}
+
+export function executableDigest(archive, launch = EXECUTABLE) {
   // Listed with the platform's own tar rather than a dependency: this script
   // runs on a maintainer's machine, not in the app.
   const listing = execFileSync("tar", ["-tvzf", archive], { encoding: "utf8" })
-  const entries = listing.split("\n").filter((line) => entryName(line) === EXECUTABLE)
+  const entries = listing.split("\n").filter((line) => entryName(line) === launch)
   const named = entries.find((line) => line.trim().startsWith("-"))
   if (!named) {
-    // An archive that does not hold the executable and one that holds
-    // something else under its name are different things to be told, and the
-    // second is the one a maintainer can act on: a release that started
-    // shipping a launcher symlink is a packaging change to go and read, not a
-    // missing file.
     const [other] = entries
     return {
       refusal: other
-        ? `holds ${EXECUTABLE} as ${kind(other)} rather than as a regular file`
-        : `does not hold ${EXECUTABLE} at all`,
+        ? `holds ${launch} as ${kind(other)} rather than as a regular file`
+        : `does not hold ${launch} at all`,
     }
   }
 
@@ -299,8 +450,7 @@ export function executableDigest(archive) {
   try {
     execFileSync("tar", ["-xzf", archive, "-C", extracted, stored])
     const entry = join(extracted, stored)
-    if (statSync(entry).size === 0)
-      return { refusal: `holds ${EXECUTABLE} as an empty file` }
+    if (statSync(entry).size === 0) return { refusal: `holds ${launch} as an empty file` }
     // Hashed while it is here, because it is the only moment the bytes that
     // will actually be launched exist in this script. The archive digest says
     // nothing about them: two archives can differ in a `package.json` field and
@@ -308,7 +458,7 @@ export function executableDigest(archive) {
     // exists to catch.
     const bytes = readFileSync(entry)
     if (!isProgram(bytes))
-      return { refusal: `holds ${EXECUTABLE}, whose bytes are not a program` }
+      return { refusal: `holds ${launch}, whose bytes are not a program` }
     return { digest: createHash("sha256").update(bytes).digest("hex") }
   } finally {
     // The entry is a hundred megabytes, and this runs once per platform.
@@ -320,7 +470,7 @@ export function executableDigest(archive) {
 //
 // The pin's whole purpose is that a machine is offered a build it can actually
 // run, and the two claims that decide that — the C library and whether AVX2 is
-// required — are read off the package's *name* in `PLATFORMS`. A name is not a
+// required — are read off the package's *name* in `OPENCODE_BUILDS`. A name is
 // measurement. Opencode publishes `opencode-linux-x64` and
 // `opencode-linux-x64-baseline`, and if the two hold the same executable then
 // one of the two pins is stating something that is not true of the file it
@@ -331,7 +481,7 @@ export function executableDigest(archive) {
 //
 // Which of the two it is cannot be told from here, and that is the point: this
 // stops rather than guesses, and names the packages so whoever is pinning can
-// settle it with the vendor. `pin-opencode` says in its own header that the
+// settle it with the vendor. `pin-agents` says in its own header that the
 // digests are measured; this is what makes the requirements measured too.
 export function sameBinaryUnderDifferentClaims(measured) {
   const claim = (build) => `${build.libc ?? "no libc"}, avx2=${build.requiresAvx2}`
@@ -402,77 +552,147 @@ export async function agreesWithRegistry(archive, dist, named) {
     throw new Error(`${named} does not match the shasum the registry published`)
 }
 
-// Measure every platform's archive and write the pin file.
-async function pin() {
-  // Encoded, so that an argument with a slash in it asks the registry about a
-  // version of this package and not about a different package entirely.
-  const requested = encodeURIComponent(process.argv[2] ?? "latest")
-  const metadata = await json(`${registry}/opencode-ai/${requested}`)
-  const version = metadata.version
-  if (!version) throw new Error("the registry did not name a version")
+// What the harness lockfiles resolved for a native package.
+//
+// Read rather than asked of the registry, because this is the whole point of a
+// lockfile: it is what `npm ci` installs beside the JavaScript in the bundle,
+// so it is what the bundled wrapper expects to find. `resolved` and
+// `integrity` come back too, so the coordinate this script then looks up can
+// be checked against the one the build actually uses.
+export function lockedDependency(document, dependency) {
+  const entry = document.packages?.[`node_modules/${dependency}`]
+  if (!entry?.version) throw new Error(`${dependency} is not in the lockfile`)
+  return { version: entry.version, resolved: entry.resolved, integrity: entry.integrity }
+}
 
+// The version to pin for one agent, and what the lockfile said about it.
+async function versionOf(agent) {
+  if (agent.version.from === "registry") {
+    // Encoded, so that an argument with a slash in it asks the registry about a
+    // version of this package and not about a different package entirely.
+    const requested = encodeURIComponent(process.argv[2] ?? "latest")
+    const metadata = await json(`${registry}/${agent.version.package}/${requested}`)
+    if (!metadata.version) throw new Error("the registry did not name a version")
+    return { version: metadata.version, locked: undefined }
+  }
+  const lockfile = join(
+    root,
+    "crates/nessa-sdk/harnesses",
+    agent.version.harness,
+    "package-lock.json",
+  )
+  const locked = lockedDependency(
+    JSON.parse(readFileSync(lockfile, "utf8")),
+    agent.version.dependency,
+  )
+  return { version: locked.version, locked }
+}
+
+// Refuse a pin that would install a different binary than the bundle expects.
+//
+// The lockfile names the tarball `npm ci` fetches and the checksum it verifies.
+// If the coordinate this script looked up resolves anywhere else, the pin and
+// the bundled JavaScript are describing two different builds — which is exactly
+// the failure unbundling is supposed not to introduce.
+export function agreesWithLockfile(locked, dist, named) {
+  if (!locked) return
+  if (locked.resolved && dist?.tarball && locked.resolved !== dist.tarball)
+    throw new Error(
+      `${named} resolves to ${dist.tarball}, but the harness lockfile installs ` +
+        `${locked.resolved}; the pin and the bundle would be different builds`,
+    )
+  if (locked.integrity && dist?.integrity && locked.integrity !== dist.integrity)
+    throw new Error(`${named} does not match the integrity the harness lockfile recorded`)
+}
+
+// Measure every agent's archives and write the pin file.
+async function pin() {
   const scratchDirectory = join(root, "target/agent-pins")
   mkdirSync(scratchDirectory, { recursive: true })
 
-  const releases = []
-  // What each package's executable actually is, so the claims each pin makes
-  // can be checked against the bytes rather than against the package's name.
-  const measured = []
-  for (const platform of PLATFORMS) {
-    const detail = await json(`${registry}/${platform.package}/${version}`)
-    const archive = detail.dist?.tarball
-    if (!archive) throw new Error(`${platform.package}@${version} has no tarball`)
-    // Parsed rather than matched on a prefix, which `https://` alone would
-    // pass while naming nothing at all. The same rule is applied again when the
-    // pin is compiled in; this is the earlier of the two places.
-    if (new URL(archive).protocol !== "https:")
-      throw new Error(`${platform.package}@${version} is not served over https`)
-    const scratch = join(scratchDirectory, `${platform.package}.tgz`)
-    process.stderr.write(`measuring ${platform.package}@${version}\n`)
-    const digest = await digestOf(archive, scratch)
-    // The registry publishes its own checksum for these bytes, in the metadata
-    // already in hand. Comparing them is the only thing in this chain that can
-    // catch a download that arrived wrong: everything downstream checks that
-    // the *same* bytes arrive again, so a bad measurement made here would be
-    // pinned permanently and would verify perfectly forever.
-    await agreesWithRegistry(scratch, detail.dist, `${platform.package}@${version}`)
-    const executable = executableDigest(scratch)
-    if (executable.refusal)
-      throw new Error(`${platform.package}@${version} ${executable.refusal}`)
-    rmSync(scratch, { force: true })
-    measured.push({
-      package: platform.package,
-      libc: platform.libc,
-      requiresAvx2: platform.requiresAvx2,
-      digest: executable.digest,
-    })
-    releases.push({
-      operatingSystem: platform.operatingSystem,
-      architecture: platform.architecture,
-      // Written out even when there is nothing to require, because this file is
-      // read by people reviewing a pin: an entry that simply omits them leaves
-      // "this build runs anywhere on its platform" and "whoever generated this
-      // forgot" looking identical.
-      libc: platform.libc,
-      requiresAvx2: platform.requiresAvx2,
-      version,
-      archiveUrl: archive,
-      archiveDigest: digest,
-      executable: EXECUTABLE,
-    })
+  const agents = {}
+  for (const agent of AGENTS) {
+    const { version, locked } = await versionOf(agent)
+    const releases = []
+    // What each package's launched program actually is, so the claims each pin
+    // makes can be checked against the bytes rather than against the package's
+    // name.
+    const measured = []
+    for (const build of agent.builds) {
+      const named = `${build.package}@${version}`
+      const detail = await json(
+        `${registry}/${build.package}/${encodeURIComponent(version)}`,
+      )
+      const archive = detail.dist?.tarball
+      if (!archive) throw new Error(`${named} has no tarball`)
+      // Parsed rather than matched on a prefix, which `https://` alone would
+      // pass while naming nothing at all. The same rule is applied again when
+      // the pin is compiled in; this is the earlier of the two places.
+      if (new URL(archive).protocol !== "https:")
+        throw new Error(`${named} is not served over https`)
+      agreesWithLockfile(locked, detail.dist, named)
+      const scratch = join(scratchDirectory, `${build.package.replace(/\//g, "-")}.tgz`)
+      process.stderr.write(`measuring ${named}\n`)
+      const digest = await digestOf(archive, scratch)
+      // The registry publishes its own checksum for these bytes, in the
+      // metadata already in hand. Comparing them is the only thing in this
+      // chain that can catch a download that arrived wrong: everything
+      // downstream checks that the *same* bytes arrive again, so a bad
+      // measurement made here would be pinned permanently and would verify
+      // perfectly forever.
+      await agreesWithRegistry(scratch, detail.dist, named)
+      // Measured from the file rather than read out of the metadata, for the
+      // same reason as the digest: the installer holds the fetch to this
+      // number, so it has to be the length of the bytes that were hashed.
+      const archiveBytes = statSync(scratch).size
+      const listing = execFileSync("tar", ["-tvzf", scratch], { encoding: "utf8" })
+      const contents = releaseFiles(listing, agent)
+      if (contents.refusal) throw new Error(`${named} ${contents.refusal}`)
+      const program = executableDigest(scratch, agent.launch)
+      if (program.refusal) throw new Error(`${named} ${program.refusal}`)
+      rmSync(scratch, { force: true })
+      measured.push({
+        package: build.package,
+        libc: build.libc,
+        requiresAvx2: build.requiresAvx2,
+        digest: program.digest,
+      })
+      releases.push({
+        operatingSystem: build.operatingSystem,
+        architecture: build.architecture,
+        // Written out even when there is nothing to require, because this file
+        // is read by people reviewing a pin: an entry that simply omits them
+        // leaves "this build runs anywhere on its platform" and "whoever
+        // generated this forgot" looking identical.
+        libc: build.libc,
+        requiresAvx2: build.requiresAvx2,
+        version,
+        archiveUrl: archive,
+        archiveBytes,
+        archiveDigest: digest,
+        files: contents.files,
+      })
+    }
+    sameBinaryUnderDifferentClaims(measured)
+    agents[agent.name] = releases
+    process.stderr.write(
+      `pinned ${agent.name} ${version} across ${releases.length} builds\n`,
+    )
   }
-
-  sameBinaryUnderDifferentClaims(measured)
 
   const destination = join(root, "crates/nessa-server/data/agent-releases.json")
   mkdirSync(resolve(destination, ".."), { recursive: true })
   const document = {
     comment:
-      "Generated by scripts/agents/pin-opencode.mjs. Digests are measured from the published archives; do not edit by hand.",
-    agents: { opencode: releases },
+      "Generated by scripts/agents/pin-agents.mjs. Digests and sizes are measured from the published archives; do not edit by hand.",
+    // Sorted, so that adding an agent does not reorder the file.
+    agents: Object.fromEntries(
+      Object.keys(agents)
+        .sort()
+        .map((name) => [name, agents[name]]),
+    ),
   }
   writeFileSync(destination, `${JSON.stringify(document, null, 2)}\n`)
-  process.stderr.write(`pinned opencode ${version} across ${releases.length} builds\n`)
 }
 
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
