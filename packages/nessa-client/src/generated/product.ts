@@ -641,12 +641,14 @@ export interface ConversationRuntime {
 export interface ConversationPart {
   /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
   offset: number
-  /** Text, exposed thought content, or a tool observation. */
-  kind: "text" | "thought" | "tool"
-  /** Exact text fragment for text or thought observations; empty for tool observations. */
+  /** Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice. */
+  kind: "text" | "thought" | "tool" | "local_notice"
+  /** Exact text fragment for text, thought, or local notice observations; empty for tool observations. */
   text: string
-  /** Owning tool identity for a tool observation; empty for text or thought observations. */
+  /** Owning tool identity for a tool observation; empty otherwise. */
   toolId: string
+  /** Stable execution-scoped declined-review identity for a local notice; empty otherwise. */
+  noticeId: string
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }

@@ -306,6 +306,9 @@ especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 The gateway now owns a shared Agent for each authorized conversation. The
 conversation context owns durable creator/organization metadata and a bounded
 read projection; SDK Agent remains the sole scheduler and execution authority.
+The projection also carries ordered runtime-owned declined-review notices from
+persisted invocation events, replacing selection with later local write evidence
+by identity without turning it into permission authority or provider output.
 NessaClient sends stable-ID commands over its existing authenticated socket.
 The floating panel polls current replacement views, displays streaming output and
 permission choices, and queues busy follow-ups. Closing a tab detaches a view;

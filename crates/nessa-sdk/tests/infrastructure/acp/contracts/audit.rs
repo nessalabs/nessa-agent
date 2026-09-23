@@ -170,6 +170,101 @@ async fn event_consumer_loss_cannot_discard_session_closure() {
     assert_gone(&root, "pid");
 }
 
+struct PauseSelectedDeclineAudit {
+    accepted: RecordingAudit,
+    gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+impl ExecutionAudit for PauseSelectedDeclineAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            let selected = matches!(
+                &record,
+                ExecutionAuditRecord::ReviewDeclined(decline)
+                    if decline.delivery() == &PermissionAnswerDelivery::Selected
+            );
+            self.accepted.record(record).await?;
+            if selected {
+                let gate = self.gate.lock().unwrap().take();
+                if let Some((entered, release)) = gate {
+                    entered.send(()).unwrap();
+                    release.await.unwrap();
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn decline_publication_consumer_loss_keeps_its_cause_after_wire_delivery() {
+    let _slot = process_test_slot().await;
+    let (entered, selected_audit) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let audit = Arc::new(PauseSelectedDeclineAudit {
+        accepted: RecordingAudit::default(),
+        gate: Mutex::new(Some((entered, released))),
+    });
+    let (root, config, model) = test_acp_configuration("declined-tool", 16);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "decline-consumer-loss").await;
+
+    selected_audit.await.unwrap();
+    drop(opened.events);
+    release.send(()).unwrap();
+    assert_eq!(active.await.unwrap(), Err(AgentError::Backpressure));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    wait_for_file(&root, "permission-outcome").await;
+    let answered: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        answered,
+        serde_json::json!({"outcome":"selected","optionId":"deny-one"})
+    );
+    let declines = audit.accepted.declines.lock().unwrap();
+    assert_eq!(declines.len(), 2);
+    assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(declines[1].delivery(), &PermissionAnswerDelivery::Written);
+    assert_eq!(declines[0].id(), declines[1].id());
+    assert_eq!(declines[0].decline(), declines[1].decline());
+    drop(declines);
+    let closures = audit.accepted.closures.lock().unwrap();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(
+        closures[0].closure().execution_id().unwrap().as_str(),
+        "decline-consumer-loss"
+    );
+    assert_eq!(
+        closures[0].closure().reason(),
+        &PermissionCancellationReason::event_consumer_dropped()
+    );
+    assert_eq!(closures[0].origin(), &CancellationOrigin::Runtime);
+    drop(closures);
+    let finishes = audit.accepted.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].execution_id().as_str(), "decline-consumer-loss");
+    assert_eq!(
+        finishes[0].result(),
+        &Err(PermissionCancellationReason::event_consumer_dropped())
+    );
+    assert!(audit.accepted.records.lock().unwrap().is_empty());
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test]
 async fn dropping_idle_session_handles_audits_before_event_stream_ends() {
     let _slot = process_test_slot().await;

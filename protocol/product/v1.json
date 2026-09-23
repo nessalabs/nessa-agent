@@ -1659,20 +1659,27 @@
         },
         "kind": {
           "type": "string",
-          "enum": ["text", "thought", "tool"],
-          "description": "Text, exposed thought content, or a tool observation."
+          "enum": ["text", "thought", "tool", "local_notice"],
+          "description": "Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice."
         },
         "text": {
           "type": "string",
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
-          "description": "Exact text fragment for text or thought observations; empty for tool observations."
+          "description": "Exact text fragment for text, thought, or local notice observations; empty for tool observations."
         },
         "toolId": {
           "type": "string",
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Owning tool identity for a tool observation; empty for text or thought observations."
+          "description": "Owning tool identity for a tool observation; empty otherwise."
+        },
+        "noticeId": {
+          "type": "string",
+          "maxLength": 20,
+          "x-utf8MaxBytes": 20,
+          "pattern": "^[1-9][0-9]{0,19}$|^$",
+          "description": "Stable execution-scoped declined-review identity for a local notice; empty otherwise."
         },
         "messageId": {
           "type": "string",
@@ -1682,7 +1689,7 @@
           "description": "Opaque provider message identity; only fragments with the same identity may be combined."
         }
       },
-      "required": ["offset", "kind", "text", "toolId"],
+      "required": ["offset", "kind", "text", "toolId", "noticeId"],
       "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
     },
     "ConversationErrorCode": {

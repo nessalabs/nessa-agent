@@ -12,7 +12,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, MessageChunk},
-    permissions::{PermissionId, PermissionOptions, PermissionRequest},
+    permissions::{PermissionId, PermissionOptions, PermissionRequest, ReviewDeclineObservation},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservation},
 };
 
@@ -76,6 +76,7 @@ impl ExecutionEvent {
                 )?;
                 Ok(())
             }
+            ExecutionUpdate::ReviewDeclined(_) => Ok(()),
         }
     }
 
@@ -125,6 +126,11 @@ impl ExecutionEvent {
                     .saturating_add(record.input().arguments_json.capacity())
                     .saturating_add(actor)
             }
+            ExecutionUpdate::ReviewDeclined(observation) => observation
+                .id()
+                .as_str()
+                .len()
+                .saturating_add(observation.decline().declared().map_or(0, str::len)),
         };
         size_of::<Self>()
             .saturating_add(self.execution_id().as_str().len())
@@ -170,6 +176,12 @@ pub enum ExecutionUpdate {
     Tool(ToolCallUpdate),
     /// Once-only cancellation evidence; independent audit remains mandatory.
     PermissionCancelled(PermissionCancellation),
+    /// Runtime-owned refusal of a review that never became actionable.
+    ///
+    /// Repeated observations with the same `id` advance one local fact from
+    /// selection to its wire-write result. They do not describe provider
+    /// acknowledgement, tool execution, or a terminal execution state.
+    ReviewDeclined(ReviewDeclineObservation),
     /// Pending review with the exact offered choices and captured tool input.
     PermissionRequested {
         /// Review identity, scoped to this execution.

@@ -34,7 +34,7 @@ function view() {
         attachments: [],
         files: [],
         status: "running",
-        parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool" }],
+        parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool", noticeId: "" }],
       },
     ],
     pending: [
@@ -83,6 +83,44 @@ function view() {
 describe("conversation view agreement", () => {
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
+  })
+
+  it("accepts one bounded local notice and rejects a repeated identity", () => {
+    const value = view()
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "local_notice",
+      text: "Nessa declined.",
+      toolId: "",
+      noticeId: "1",
+    })
+    expect(conversationView(value, "conversation").messages[1]!.parts[1]!.noticeId).toBe(
+      "1",
+    )
+    value.messages[1]!.parts.push({
+      offset: 2,
+      kind: "local_notice",
+      text: "conflicting duplicate",
+      toolId: "",
+      noticeId: "1",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a local notice identity",
+    )
+  })
+
+  it("rejects a local notice identity outside the SDK sequence range", () => {
+    const value = view()
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "local_notice",
+      text: "Nessa declined.",
+      toolId: "",
+      noticeId: "18446744073709551616",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "local notice has no valid identity",
+    )
   })
 
   it("rejects contradictory pending text when queue evidence is complete", () => {

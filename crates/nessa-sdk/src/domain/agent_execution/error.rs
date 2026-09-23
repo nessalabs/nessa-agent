@@ -53,6 +53,12 @@ pub enum ExecutionError {
     UnknownPermission,
     /// This review identity was already admitted in the current execution.
     DuplicatePermission,
+    /// A local declined-review identity is not a checked positive decimal sequence.
+    InvalidReviewDeclineId,
+    /// A restored declined-review tool label violates the retained label contract.
+    InvalidReviewDeclineToolName,
+    /// Declined-review evidence did not advance once from selection to a final write fact.
+    InvalidReviewDeclineTransition,
     /// An update targets a different tool entity.
     DifferentTool,
     /// An action targets a different or inactive execution.

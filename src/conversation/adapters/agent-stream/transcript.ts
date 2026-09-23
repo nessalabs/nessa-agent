@@ -129,6 +129,24 @@ export function agentTranscript(
     const seenTools = new Set<string>()
     for (const part of turn.parts) {
       insertInputs(part.offset)
+      if (part.kind === "local_notice") {
+        flush()
+        const noticeId = part.noticeId
+        if (!noticeId) throw new Error("Local notice has no identity")
+        push(
+          `${turn.id}:notice:${noticeId}`,
+          {
+            type: "unknown",
+            wireType: "nessa.local_review_declined",
+            subtype: null,
+          },
+          {
+            ...execution,
+            localNotice: { id: noticeId, text: part.text },
+          },
+        )
+        continue
+      }
       if (part.kind !== "tool") {
         if (buffered && (bufferKind !== part.kind || bufferMessageId !== part.messageId))
           flush()

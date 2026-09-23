@@ -672,6 +672,7 @@ pub struct ConversationPart {
     pub kind: String,
     pub text: String,
     pub tool_id: String,
+    pub notice_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 }

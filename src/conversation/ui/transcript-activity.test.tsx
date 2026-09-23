@@ -53,10 +53,16 @@ function workingConversation(id: string): Conversation {
         text: "",
         status: "running",
         parts: [
-          { offset: 0, kind: "thought", text: "First thought", toolId: "" },
-          { offset: 1, kind: "tool", text: "", toolId: "one" },
-          { offset: 2, kind: "thought", text: "Second thought", toolId: "" },
-          { offset: 3, kind: "tool", text: "", toolId: "two" },
+          { offset: 0, kind: "thought", text: "First thought", toolId: "", noticeId: "" },
+          { offset: 1, kind: "tool", text: "", toolId: "one", noticeId: "" },
+          {
+            offset: 2,
+            kind: "thought",
+            text: "Second thought",
+            toolId: "",
+            noticeId: "",
+          },
+          { offset: 3, kind: "tool", text: "", toolId: "two", noticeId: "" },
         ],
       },
     ],
@@ -140,7 +146,7 @@ const withoutActivity = (value: Conversation): Conversation => ({
 })
 
 function terminalConversation(
-  status: "failed" | "cancelled",
+  status: "completed" | "failed" | "cancelled",
   parts: Extract<Conversation["turns"][number], { from: "assistant" }>["parts"],
   tools: NonNullable<Conversation["remote"]>["tools"] = [],
 ): Conversation {
@@ -320,7 +326,7 @@ it("renders one terminal notice beside a tools-only turn", async () => {
   await render(
     terminalConversation(
       "failed",
-      [{ offset: 0, kind: "tool", text: "", toolId: "shell" }],
+      [{ offset: 0, kind: "tool", text: "", toolId: "shell", noticeId: "" }],
       [
         {
           executionId: "run",
@@ -344,10 +350,117 @@ it("renders one terminal notice beside a tools-only turn", async () => {
   ).toBe("failed")
 })
 
+it("renders a local decline once without implying terminal failure or ongoing typing", async () => {
+  const notice = "Nessa declined a tool review because that tool is not reviewable here."
+  await render(
+    terminalConversation("completed", [
+      { offset: 0, kind: "local_notice", text: notice, toolId: "", noticeId: "1" },
+    ]),
+  )
+  const statuses = container.querySelectorAll('p[role="status"]')
+  expect(statuses).toHaveLength(1)
+  expect(statuses.item(0).textContent).toBe(notice)
+  expect(container.querySelector('[aria-label="Nessa is typing"]')).toBeNull()
+  expect(container.textContent).not.toContain("failed")
+})
+
+it("keeps work and distinct local declines ordered across updates and repeated renders", async () => {
+  const conversation = (firstNotice: string, revision: string) => ({
+    ...terminalConversation(
+      "completed",
+      [
+        {
+          offset: 0,
+          kind: "thought" as const,
+          text: "Before",
+          toolId: "",
+          noticeId: "",
+        },
+        { offset: 1, kind: "tool" as const, text: "", toolId: "one", noticeId: "" },
+        {
+          offset: 2,
+          kind: "local_notice" as const,
+          text: firstNotice,
+          toolId: "",
+          noticeId: "1",
+        },
+        {
+          offset: 3,
+          kind: "thought" as const,
+          text: "After",
+          toolId: "",
+          noticeId: "",
+        },
+        { offset: 4, kind: "tool" as const, text: "", toolId: "two", noticeId: "" },
+        {
+          offset: 5,
+          kind: "local_notice" as const,
+          text: "Nessa declined the same review again.",
+          toolId: "",
+          noticeId: "2",
+        },
+      ],
+      ["one", "two"].map((toolId) => ({
+        executionId: "run",
+        toolId,
+        title: toolId === "one" ? "Read" : "Shell",
+        kind: "execute",
+        status: "completed",
+        input: "{}",
+        details: "done",
+      })),
+    ),
+    revision,
+  })
+  const selected =
+    "Nessa declined the review. Nessa has not confirmed sending the response."
+  const confirmed = "Nessa declined the review."
+
+  for (let renderCount = 0; renderCount < 3; renderCount++) {
+    await render(conversation(selected, `selected-${renderCount}`))
+    const siblings = container.querySelectorAll(
+      '[data-slot="agent-activity"], p[role="status"]',
+    )
+    expect([...siblings].map((element) => element.textContent)).toEqual([
+      "Ran 1 tool",
+      selected,
+      "Ran 1 tool",
+      "Nessa declined the same review again.",
+    ])
+  }
+
+  await render(conversation(confirmed, "confirmed"))
+  const siblings = container.querySelectorAll(
+    '[data-slot="agent-activity"], p[role="status"]',
+  )
+  expect([...siblings].map((element) => element.textContent)).toEqual([
+    "Ran 1 tool",
+    confirmed,
+    "Ran 1 tool",
+    "Nessa declined the same review again.",
+  ])
+  expect(container.textContent).not.toContain(selected)
+  expect(container.querySelectorAll('p[role="status"]')).toHaveLength(2)
+})
+
 it("renders one terminal notice across multiple text rows and repeated renders", async () => {
   const conversation = terminalConversation("failed", [
-    { offset: 0, kind: "text", text: "First.", messageId: "first", toolId: "" },
-    { offset: 1, kind: "text", text: "Second.", messageId: "second", toolId: "" },
+    {
+      offset: 0,
+      kind: "text",
+      text: "First.",
+      messageId: "first",
+      toolId: "",
+      noticeId: "",
+    },
+    {
+      offset: 1,
+      kind: "text",
+      text: "Second.",
+      messageId: "second",
+      toolId: "",
+      noticeId: "",
+    },
   ])
   for (let renderCount = 0; renderCount < 3; renderCount++) {
     await render({ ...conversation, revision: String(renderCount) })

@@ -22,6 +22,14 @@ export type WorkStep = {
   thought?: string
   tool?: AgentToolView
 }
+/** One ordered transcript sibling: working, an answer, or a local Nessa notice. */
+export type AgentTurnContentView = {
+  key: string
+  text?: string
+  work?: WorkStep[]
+  running?: boolean
+  notice?: string
+}
 function rawText(raw: JsonValue, key: string): string {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return ""
   if (!Object.hasOwn(raw, key)) return ""
@@ -38,11 +46,23 @@ function nullableRawText(raw: Record<string, JsonValue>, key: string): string | 
   if (value === null || typeof value === "string") return value
   throw new Error("Transcript event has invalid source execution metadata")
 }
+function localNotice(raw: JsonValue): { id: string; text: string } | undefined {
+  if (raw === null || Array.isArray(raw) || typeof raw !== "object") return undefined
+  const value = raw.localNotice
+  if (value === null || Array.isArray(value) || typeof value !== "object")
+    return undefined
+  if (!Object.hasOwn(value, "id") || !Object.hasOwn(value, "text")) return undefined
+  return typeof value.id === "string" && typeof value.text === "string"
+    ? { id: value.id, text: value.text }
+    : undefined
+}
 function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | undefined {
-  const productEvents = events.filter(({ payload }) =>
-    ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
-      payload.type,
-    ),
+  const productEvents = events.filter(
+    ({ payload, raw }) =>
+      ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
+        payload.type,
+      ) ||
+      (payload.type === "unknown" && localNotice(raw) !== undefined),
   )
   if (productEvents.length === 0) return undefined
   const facts = productEvents.map(({ raw }) => {
@@ -77,6 +97,11 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
   const events: AgentEvent[] = turn.work.flatMap((item) =>
     isToolGroup(item) ? [...item.calls] : [item],
   )
+  // The shared builder may hold a tool run across an `unknown` event because
+  // it cannot know that this product renders the event as a local notice.
+  // Sequence is the source ordering contract; restore it before placing that
+  // product-specific sibling so work cannot move across the notice.
+  events.sort((left, right) => left.seq - right.seq)
   // The builder separates finalText from work. Find the event it came from,
   // so every other line of assistant text can be told apart from the answer.
   const nextTurn = transcript.turns[transcript.turns.indexOf(turn) + 1]
@@ -121,25 +146,34 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       },
     ]
   })
-  /**
-   * A turn is two things in the transcript: what it worked through, and what
-   * it came back with. The working — every thought, every tool call, every
-   * line the agent said to itself on the way — is one collapsed segment, kept
-   * in the order it happened so a rationale still sits beside the call it
-   * explains. Only the answer is left outside, because the answer is what was
-   * asked for.
-   */
-  const steps: WorkStep[] = []
+  const content: AgentTurnContentView[] = []
+  let steps: WorkStep[] = []
+  const execution = executionMetadata([
+    ...events,
+    ...(turn.completed ? [turn.completed] : []),
+  ])
   // A thought streams in as many events — "hello", " ", "world" — and is one
   // thought. The run is gathered and written once something else happens, so
   // a lone space joins its neighbours instead of being mistaken for nothing.
   let thinking: { key: string; text: string } | null = null
-  const thought = () => {
+  const flushThought = () => {
     // A run of nothing but whitespace is a disclosure over nothing, and the
     // ends of a real one are blank lines the sheet would draw as a gap.
     const text = thinking?.text.trim()
     if (thinking && text) steps.push({ key: thinking.key, thought: text })
     thinking = null
+  }
+  const flushWork = () => {
+    flushThought()
+    const first = steps[0]
+    if (!first) return
+    if (!execution) throw new Error("Turn activity has no execution metadata")
+    content.push({
+      key: `${turn.key}:work:${first.key}`,
+      work: steps,
+      running: execution.activityRunning,
+    })
+    steps = []
   }
   for (const event of events) {
     const payload = event.payload
@@ -149,7 +183,7 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       continue
     }
     if (payload.type === "assistant_text" || payload.type === "tool_call_started")
-      thought()
+      flushThought()
     // The final answer is the only text that stays in the conversation. What
     // the agent said on the way is Markdown, where an indented code block or
     // a trailing hard break is meaning: whitespace decides whether it counts,
@@ -164,25 +198,15 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       const tool = tools.find((tool) => tool.callId === payload.callId)
       if (tool) steps.push({ key: event.id, tool })
     }
+    if (payload.type === "unknown") {
+      const notice = localNotice(event.raw)
+      if (notice) {
+        flushWork()
+        content.push({ key: `notice:${notice.id}`, notice: notice.text })
+      }
+    }
   }
-  thought()
-  const content: { key: string; text?: string; work?: WorkStep[]; running?: boolean }[] =
-    []
-  if (steps.length) {
-    // Whether the working is still going is the adapter's fact about this
-    // turn's execution, not the turn's own status: a steered turn's activity
-    // settles while the conversation carries on.
-    const execution = executionMetadata([
-      ...events,
-      ...(turn.completed ? [turn.completed] : []),
-    ])
-    if (!execution) throw new Error("Turn activity has no execution metadata")
-    content.push({
-      key: `${turn.key}:work`,
-      work: steps,
-      running: execution.activityRunning,
-    })
-  }
+  flushWork()
   // Keyed on the turn, not the event: which text is the answer changes while a
   // turn runs, and a key that moved with it would remount the bubble.
   if (turn.finalText !== null)
