@@ -8,7 +8,7 @@ use super::super::{
         AcpConfig,
     },
 };
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use super::failure::MAX_RETAINED_CATEGORY_FACTS;
 use super::{
     event_queue::{EventSender, QueueError},

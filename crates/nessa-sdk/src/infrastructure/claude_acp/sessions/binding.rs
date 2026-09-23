@@ -95,7 +95,7 @@ impl ClaudeAcpProvider {
             process: None,
         })
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_process_factory(mut self, process: acp_binding::ProcessFactory) -> Self {
         self.process = Some(process);
         self
