@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
+import { loadEnvironment } from "./src/env/environment"
 
 /**
  * Nessa UI is consumed as source, not as its published bundle.
@@ -61,8 +62,36 @@ const tlsKey = process.env.NESSA_BROWSER_TLS_KEY
 if (Boolean(tlsCert) !== Boolean(tlsKey))
   throw new Error("Set both browser TLS certificate and key")
 
+// A packaged frontend is built before Cargo embeds it. Leave one small record
+// beside those assets so the host build can prove it is embedding UI for the
+// same stage, including when `dist/` came from an earlier command.
+let bundledStage: string | undefined
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "nessa-bundle-stage",
+      apply: "build",
+      configResolved(config) {
+        // `config.env` is Vite's final environment after `.env.<mode>`, process
+        // overrides, and DEV/PROD have been resolved. Passing those same values
+        // through the UI's sole parser makes the record describe what
+        // `import.meta.env` will make the application use.
+        bundledStage = loadEnvironment(config.env, config.env.DEV).stage
+      },
+      generateBundle() {
+        if (bundledStage === undefined)
+          throw new Error("Vite did not resolve a bundle stage")
+        this.emitFile({
+          type: "asset",
+          fileName: "nessa-stage.json",
+          source: `${JSON.stringify({ stage: bundledStage })}\n`,
+        })
+      },
+    },
+  ],
   clearScreen: false,
   server: {
     https:
