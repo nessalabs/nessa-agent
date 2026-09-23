@@ -392,23 +392,30 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
         )
         .unwrap();
     let mut cancellations = Vec::new();
-    let mut finished = None;
     for record in records {
         match record {
             ExecutionAuditRecord::Cancelled(record) => cancellations.push(record),
-            record @ ExecutionAuditRecord::Finished(_) => finished = Some(record),
             ExecutionAuditRecord::SessionClosed(_) => {}
             _ => panic!("closing pending reviews emitted an unrelated record"),
         }
     }
     assert_eq!(cancellations.len(), MAX_RETAINED_CATEGORY_FACTS);
+    let terminal = controller
+        .finish_execution(
+            &execution_id,
+            Err(PermissionCancellationReason::session_closed()),
+        )
+        .unwrap();
+    assert_eq!(terminal.len(), 1, "all reviews were already cancelled");
+    let finished = terminal
+        .into_iter()
+        .next()
+        .filter(|record| matches!(record, ExecutionAuditRecord::Finished(_)))
+        .expect("finishing the closed execution emits its terminal record");
     audit.0.store(true, Ordering::SeqCst);
     assert!(worker.record_cancellations(cancellations).await.is_err());
     let failure = match worker
-        .record_audit(
-            finished.expect("finished record"),
-            AuditEffectPhase::Lifecycle,
-        )
+        .record_audit(finished, AuditEffectPhase::Lifecycle)
         .await
     {
         Err(failure) => failure,
