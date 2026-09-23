@@ -63,23 +63,20 @@ fn a_matching_archive_is_published() {
     let store = FakeStore::empty(root.path());
     let platform = platform();
     let host = host();
+    let release = release("1.18.31", PINNED_DIGEST, &platform);
 
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
         audit: audit(),
     }
-    .execute(
-        &agent(),
-        &release("1.18.31", PINNED_DIGEST, &platform),
-        &host,
-        &request(),
-    )
+    .execute(&agent(), &release, &host, &request())
     .expect("a matching archive installs");
 
     assert_eq!(installed.version.as_str(), "1.18.31");
     assert!(installed.downloaded);
     assert_eq!(store.published(), vec!["opencode".to_string()]);
+    assert_eq!(source.bounded_by(), vec![release.archive_size().bytes()]);
 }
 
 #[test]
