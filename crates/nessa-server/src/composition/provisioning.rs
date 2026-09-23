@@ -27,7 +27,10 @@ pub(super) struct NessaAuth;
 
 impl AuthCommand for NessaAuth {
     fn execute(&self, args: &[String]) -> Result<(), RunError> {
-        super::auth_command::execute(args)
+        super::auth_command::execute_with_context(
+            args,
+            super::credential_registry::RegistryOpenContext::AutomaticProvisioning,
+        )
     }
 }
 
@@ -100,6 +103,7 @@ fn provision_with(auth_command: &dyn AuthCommand, config: &Environment) -> Resul
 /// already and saying it twice reads like two different failures.
 fn context(step: &str, error: RunError) -> RunError {
     match error {
+        registry @ RunError::Registry(_) => registry,
         RunError::Authentication(message) => failure(format!("{step}: {message}")),
         other => failure(format!("{step}: {other}")),
     }
