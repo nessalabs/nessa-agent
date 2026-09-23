@@ -2,6 +2,8 @@ use nessa_local_storage::{
     create_directory, create_private_directory_tree_beneath, OpenMode, PrivateDirectory,
     PrivateFileType, PrivatePublicationStage,
 };
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     ffi::{OsStr, OsString},
     io::{Read, Seek, SeekFrom, Write},
@@ -445,8 +447,6 @@ fn windows_reservation_identity_publish_reopen_and_cleanup_share_one_file() {
 #[cfg(windows)]
 #[test]
 fn windows_publication_accepts_a_unicode_destination_beyond_max_path() {
-    use std::os::windows::ffi::OsStrExt;
-
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("root");
     create_directory(&root).unwrap();
