@@ -66,14 +66,18 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         release_active.send(()).unwrap();
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         backend.preparing.notified().await;
-        assert_permissions_fenced(
-            &agent,
-            &backend,
-            calls + 2,
-            AgentError::StalePermission,
-            "while replacement preparation is gated",
-        )
-        .await;
+        assert_eq!(
+            invoke_control(&agent, ProviderControl::Answer).await,
+            Err(AgentError::StalePermission),
+            "the first gated control reports cleanup against the preparing context"
+        );
+        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 1);
+        assert_eq!(
+            invoke_control(&agent, ProviderControl::CancelPermission).await,
+            Err(AgentError::AttachmentUnavailable(AttachmentPhase::Absent)),
+            "the confirmed cleanup retires that context before the next control"
+        );
+        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 1);
         *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
         release_prepare.send(()).unwrap();
         assert_eq!(following.wait().await, Ok(ExecutionOutcome::Completed));
@@ -81,7 +85,7 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
             invoke_control(&agent, ProviderControl::Answer).await,
             Err(AgentError::StalePermission)
         );
-        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 3);
+        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 2);
         agent.close(actor()).await.unwrap();
     }
 }
@@ -221,20 +225,13 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
                     .invocations
                     .iter()
                     .find(|record| record.request.execution_id.as_str() == id);
+                // The retained cleanup-audit failure is an admission fence, so
+                // none of the direct calls can create another invocation.
+                assert!(admission.is_none());
                 if matches!(source, ProviderControl::Steer) {
-                    // Native delivery finalized failed cleanup before this call:
-                    // admission fails before it can create another invocation.
-                    assert!(admission.is_none());
                     assert_eq!(
                         saved.invocations.last().unwrap().result,
                         Some(Err(expected.clone()))
-                    );
-                } else {
-                    let admission = admission.unwrap();
-                    assert_eq!(admission.result, None);
-                    assert_eq!(
-                        admission.acknowledgement,
-                        SubmissionAcknowledgement::Pending
                     );
                 }
                 assert_permissions_fenced(

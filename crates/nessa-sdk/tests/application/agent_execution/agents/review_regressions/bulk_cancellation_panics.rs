@@ -159,7 +159,8 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                 .unwrap()
                 .unwrap();
             assert!(
-                matches!(closed, Err(AgentError::StorageDuringClose { cleanup_result, .. }) if cleanup_result.is_ok())
+                matches!(&closed, Err(AgentError::StorageDuringClose { cleanup_result, .. }) if cleanup_result.is_ok()),
+                "commit_first={commit_first}, drop_panics={drop_panics}, panics={panics}, close={closed:?}"
             );
             assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
             assert_eq!(
