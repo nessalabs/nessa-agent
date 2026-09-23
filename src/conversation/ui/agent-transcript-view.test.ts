@@ -809,6 +809,20 @@ it("splits work around distinct local notices without changing their meaning", (
     })),
   )
 
+  expect(
+    transcript.events
+      .filter(({ payload }) =>
+        ["reasoning", "tool_call_started", "unknown"].includes(payload.type),
+      )
+      .map(({ payload }) => payload.type),
+  ).toEqual([
+    "reasoning",
+    "tool_call_started",
+    "unknown",
+    "reasoning",
+    "tool_call_started",
+    "unknown",
+  ])
   const row = agentTurnView(transcript.turns[0]!, transcript)
   expect(
     row.content.map((part) =>

@@ -97,6 +97,11 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
   const events: AgentEvent[] = turn.work.flatMap((item) =>
     isToolGroup(item) ? [...item.calls] : [item],
   )
+  // The shared builder may hold a tool run across an `unknown` event because
+  // it cannot know that this product renders the event as a local notice.
+  // Sequence is the source ordering contract; restore it before placing that
+  // product-specific sibling so work cannot move across the notice.
+  events.sort((left, right) => left.seq - right.seq)
   // The builder separates finalText from work. Find the event it came from,
   // so every other line of assistant text can be told apart from the answer.
   const nextTurn = transcript.turns[transcript.turns.indexOf(turn) + 1]
