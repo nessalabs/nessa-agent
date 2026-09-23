@@ -914,6 +914,10 @@ is a download, a hash and an unpack and the HTTP client it uses declines to run
 inside the async runtime. See [installing an agent
 runtime](#installing-an-agent-runtime).
 Tests mirror those responsibilities under `tests/cli/`; `scripts/smoke-auth.mjs`
-checks actual process output and authenticated server effects. Offline bootstrap
+checks actual process output and authenticated server effects.
+`scripts/smoke-conversation.mjs` drives the real gateway and `@nessa/client`
+through authentication, attachments, retry/reconnect, controls, persistence and
+cleanup; `scripts/conversation-smoke/` supplies its bounded deterministic Claude
+ACP process and evidence helpers. Offline bootstrap
 remains in `composition/auth_command.rs`; it requires explicit `--local` selection.
 Cloud auth is reserved but not implemented. See [local auth](guides/local-auth.md).
