@@ -263,6 +263,8 @@ async fn reorder_waiting_for_evidence_leaves_live_order_and_history_agreeing() {
     storage.0.lock().unwrap().pause_save = Some((started, gate));
     backend
         .output
+        .lock()
+        .unwrap()
         .send(Some(ExecutionEvent::new(
             ExecutionId::new("running").unwrap(),
             ExecutionUpdate::Tool(ToolCallUpdate::new(
@@ -314,6 +316,8 @@ async fn close_interrupts_reorder_retention_and_leaves_the_order_unchanged() {
     storage.0.lock().unwrap().pause_save = Some((started, gate));
     backend
         .output
+        .lock()
+        .unwrap()
         .send(Some(ExecutionEvent::new(
             ExecutionId::new("running").unwrap(),
             ExecutionUpdate::Tool(ToolCallUpdate::new(

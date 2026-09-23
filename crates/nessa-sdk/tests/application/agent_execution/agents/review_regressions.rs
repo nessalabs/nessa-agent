@@ -704,6 +704,7 @@ async fn failure_cleanup_closes_admission_before_awaiting_provider_shutdown() {
     // A previous successful close must not be mistaken for a concurrent close.
     agent.close(actor()).await.unwrap();
     backend.closing.notified().await;
+    reattach_after_explicit_close(&agent).await;
     let (release, gate) = oneshot::channel();
     *backend.close_gate.lock().unwrap() = Some(gate);
     let (settle, gate) = oneshot::channel();
@@ -1004,6 +1005,7 @@ async fn completed_close_actor_is_not_reused_for_later_runtime_failure_cancellat
         .close(ActionContext::new("historical-user", "old-surface", "old-close").unwrap())
         .await
         .unwrap();
+    reattach_after_explicit_close(&agent).await;
     let (settle, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
     *backend.execution_error.lock().unwrap() = Some(AgentError::CleanupUncertain);

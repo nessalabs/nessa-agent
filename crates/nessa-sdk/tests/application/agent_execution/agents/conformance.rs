@@ -64,7 +64,7 @@ impl ExecutionAudit for WorkflowAudit {
 struct WorkflowEvents(mpsc::UnboundedReceiver<Option<ExecutionEvent>>);
 struct WorkflowBackend {
     audit: Arc<WorkflowAudit>,
-    output: mpsc::UnboundedSender<Option<ExecutionEvent>>,
+    output: Mutex<mpsc::UnboundedSender<Option<ExecutionEvent>>>,
     receiver: Mutex<Option<mpsc::UnboundedReceiver<Option<ExecutionEvent>>>>,
     dispatched: Notify,
     execution_gate: Mutex<Option<oneshot::Receiver<()>>>,
@@ -89,15 +89,19 @@ impl AgentProvider for WorkflowProvider {
     }
     fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            let receiver = self.0.receiver.lock().unwrap().take().unwrap_or_else(|| {
+                let (output, receiver) = mpsc::unbounded_channel();
+                *self.0.output.lock().unwrap() = output;
+                receiver
+            });
+            self.0.closed.send_replace(false);
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("workflow-context").unwrap(),
                     self.0.clone(),
                     capabilities(),
                 ),
-                events: Box::new(WorkflowEvents(
-                    self.0.receiver.lock().unwrap().take().unwrap(),
-                )),
+                events: Box::new(WorkflowEvents(receiver)),
             })
         })
     }
@@ -136,6 +140,7 @@ impl ProviderSessionBackend for WorkflowBackend {
         })
     }
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+        let output = self.output.lock().unwrap().clone();
         Box::pin(async move {
             assert!(self
                 .target
@@ -155,14 +160,14 @@ impl ProviderSessionBackend for WorkflowBackend {
             }
             self.target.lock().unwrap().take();
             if let Some(report) = self.execution_report.lock().unwrap().clone() {
-                self.output.send(None).unwrap();
+                output.send(None).unwrap();
                 return ProviderExecutionReply::Finished(report);
             }
             let fault = self.execution_fault.lock().unwrap().clone();
             match fault {
                 Some(fault) => {
                     let (error, attachment) = fault.into_parts();
-                    self.output.send(None).unwrap();
+                    output.send(None).unwrap();
                     ProviderExecutionReply::Finished(ExecutionReport::new(
                         Some(Err(error)),
                         None,
@@ -172,7 +177,7 @@ impl ProviderSessionBackend for WorkflowBackend {
                 None => {
                     // This fixture's provider really reports Completed even when
                     // its completion races local close; cleanup cannot rewrite it.
-                    self.output
+                    output
                         .send(Some(ExecutionEvent::new(
                             input.execution_id,
                             ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -298,7 +303,7 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
     let (output, receiver) = mpsc::unbounded_channel();
     Arc::new(WorkflowBackend {
         audit: Arc::new(WorkflowAudit::default()),
-        output,
+        output: Mutex::new(output),
         receiver: Mutex::new(Some(receiver)),
         dispatched: Notify::new(),
         execution_gate: Mutex::new(None),

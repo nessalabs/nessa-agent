@@ -972,11 +972,7 @@ impl SessionLifecycle {
                 // when a concurrent stop already advanced the work generation.
                 // Control callers checked the provider generation before this call;
                 // execution reports are serialized with provider restoration.
-                state.active = None;
-                state.provider_ready = false;
-                if matches!(state.attachment, AttachmentState::Attached { .. }) {
-                    state.attachment_generation += 1;
-                    state.attachment = AttachmentState::Absent { recorded: true };
+                if Self::retire_confirmed_provider_generation(state) {
                     state.automatic_recovery_ready = true;
                 }
                 self.notify_stop(
@@ -1027,6 +1023,17 @@ impl SessionLifecycle {
                 recovery: RecoveryPolicy::CleanupNotStarted,
             });
             self.notify_stop(state, &SessionCloseRequest::ExecutionFailed, true);
+        }
+    }
+    fn retire_confirmed_provider_generation(state: &mut State) -> bool {
+        state.active = None;
+        state.provider_ready = false;
+        if matches!(state.attachment, AttachmentState::Attached { .. }) {
+            state.attachment_generation += 1;
+            state.attachment = AttachmentState::Absent { recorded: true };
+            true
+        } else {
+            false
         }
     }
     // Save each admitted owner's first causal stop before waking any operation.
@@ -1319,8 +1326,13 @@ impl SessionLifecycle {
         if let Some(cleanup) = &state.cleanup {
             cleanup.completion.send_replace(Some(report.clone()));
         }
-        if report.is_confirmed() {
-            state.active = None;
+        if report.is_confirmed()
+            && state
+                .cleanup
+                .as_ref()
+                .is_some_and(|cleanup| cleanup.provider_generation == state.provider_generation)
+        {
+            Self::retire_confirmed_provider_generation(&mut state);
         }
         if !report.is_confirmed() || report.audit().is_err() {
             // Final cleanup failure removes the promised restoration boundary.

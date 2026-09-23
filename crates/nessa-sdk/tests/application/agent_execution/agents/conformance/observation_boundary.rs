@@ -32,6 +32,8 @@ async fn settled_observation_boundary_rejects_old_output_in_each_delivery_mode()
             bounded(backend.dispatched.notified()).await;
             backend
                 .output
+                .lock()
+                .unwrap()
                 .send(Some(ExecutionEvent::new(
                     ExecutionId::new("first").unwrap(),
                     update,
@@ -119,6 +121,8 @@ async fn settled_observation_boundary_keeps_only_correlated_trailing_cancellatio
     ] {
         backend
             .output
+            .lock()
+            .unwrap()
             .send(Some(ExecutionEvent::new(execution.clone(), update)))
             .unwrap();
     }
@@ -130,6 +134,8 @@ async fn settled_observation_boundary_keeps_only_correlated_trailing_cancellatio
     );
     backend
         .output
+        .lock()
+        .unwrap()
         .send(Some(ExecutionEvent::new(
             execution,
             ExecutionUpdate::PermissionCancelled(cancellation),
@@ -178,6 +184,8 @@ async fn buffered_stale_output_prevents_next_provider_dispatch() {
                     .store(usize::from(exhausted_budget), Ordering::SeqCst);
                 backend
                     .output
+                    .lock()
+                    .unwrap()
                     .send(Some(ExecutionEvent::new(
                         ExecutionId::new("first").unwrap(),
                         update,
