@@ -1,13 +1,29 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::Projection, ConversationAgentFeatures, ConversationCapabilities,
-    ConversationMessageStatus, ConversationPendingMode, PermissionDenialSupport,
+    projection::Projection, ConversationAgentFeatures, ConversationCaller,
+    ConversationCapabilities, ConversationDependencies, ConversationLimits,
+    ConversationMessageStatus, ConversationPendingMode, ConversationService,
+    PermissionDenialSupport, SubmissionMode, SubmittedMessage,
 };
+use crate::{
+    conversation::domain::ConversationId,
+    conversation_test_support::{
+        fixture, only, AcceptingCreationAudit, Provider, RecordingFileLinkAudit, TestClock,
+    },
+};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::{
-        executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
+        agents::{AgentError, ProviderDiagnostic},
+        executions::{
+            ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+            SubmissionMode as InvocationSubmissionMode,
+        },
         permissions::ActionContext,
-        providers::{OperationCapabilities, ProviderIdentity},
+        providers::{
+            ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
+            ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
+        },
         sessions::{InvocationRecord, SessionSnapshot},
         tools::ToolReviewInput,
     },
@@ -22,6 +38,7 @@ use nessa_sdk::{
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
+use std::sync::Arc;
 fn said(text: &str) -> UserMessage {
     UserMessage::text_only(PromptText::new(text).unwrap())
 }
@@ -38,6 +55,14 @@ fn projection() -> Projection {
         },
         None,
     )
+}
+fn caller(action: &str) -> ConversationCaller {
+    ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        action_id: action.into(),
+    }
 }
 
 #[test]
@@ -107,7 +132,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         queue_history: vec![],
         invocations: vec![InvocationRecord {
             target_event_offset: None,
-            submission: SubmissionMode::Immediate,
+            submission: InvocationSubmissionMode::Immediate,
             request: ExecutionRequest {
                 execution_id: ExecutionId::new("execution").unwrap(),
                 user_message: said("message"),
@@ -275,6 +300,317 @@ fn completed_snapshot(id: &str, events: Vec<ExecutionEvent>) -> SessionSnapshot 
     snapshot.invocations[0].request.execution_id = ExecutionId::new(id).unwrap();
     snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
     snapshot
+}
+
+#[test]
+fn provider_diagnostic_survives_receipt_failure_and_snapshot_restoration() {
+    let provider_error = AgentError::Provider {
+        code: -32603,
+        diagnostic: Some(ProviderDiagnostic::new("provider refused the prompt")),
+    };
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].provider_report = Some(ExecutionReport::new(
+        Some(Err(provider_error.clone())),
+        None,
+        ProviderSessionState::CleanupRequired,
+    ));
+    snapshot.invocations[0].result = Some(Err(provider_error));
+
+    let expected = "The agent provider reported an error: provider refused the prompt";
+    let mut live = projection();
+    live.settled("execution", Some(&snapshot));
+    live.receipt_failed("execution");
+    assert_eq!(live.read().messages[0].error.as_deref(), Some(expected));
+
+    let restored = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    );
+    assert_eq!(restored.read().messages[0].error.as_deref(), Some(expected));
+}
+
+#[test]
+fn provider_diagnostic_and_independent_failure_are_both_visible() {
+    let provider_error = AgentError::Provider {
+        code: -32603,
+        diagnostic: Some(ProviderDiagnostic::new("provider refused the prompt")),
+    };
+    let report = ExecutionReport::new(
+        Some(Err(provider_error)),
+        Some(AgentError::AuditFailure),
+        ProviderSessionState::Usable,
+    );
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(report.clone().into_result());
+    snapshot.invocations[0].provider_report = Some(report);
+    let restored = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    );
+    assert_eq!(
+        restored.read().messages[0].error.as_deref(),
+        Some(
+            "The agent provider reported an error: provider refused the prompt. The turn could not complete all required work."
+        )
+    );
+}
+
+#[test]
+fn successful_provider_result_with_later_failure_does_not_claim_provider_refusal() {
+    let report = ExecutionReport::new(
+        Some(Ok(ExecutionOutcome::Completed)),
+        Some(AgentError::AuditFailure),
+        ProviderSessionState::Usable,
+    );
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(report.clone().into_result());
+    snapshot.invocations[0].provider_report = Some(report);
+    let restored = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    );
+    let error = restored.read().messages[0].error.clone().unwrap();
+    assert_eq!(error, "The turn could not complete all required work.");
+    assert!(!error.contains("provider refused"));
+}
+
+#[test]
+fn blank_provider_diagnostic_and_missing_snapshot_use_reachable_generic_notice() {
+    let provider_error = AgentError::Provider {
+        code: -32603,
+        diagnostic: Some(ProviderDiagnostic::new("  \n\t")),
+    };
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].provider_report = Some(ExecutionReport::new(
+        Some(Err(provider_error.clone())),
+        None,
+        ProviderSessionState::CleanupRequired,
+    ));
+    snapshot.invocations[0].result = Some(Err(provider_error));
+    let generic = "The turn could not complete all required work.";
+    let restored = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    );
+    assert_eq!(restored.read().messages[0].error.as_deref(), Some(generic));
+
+    let mut without_snapshot = projection();
+    without_snapshot.receipt_failed("execution");
+    assert_eq!(
+        without_snapshot.read().messages[0].error.as_deref(),
+        Some(generic)
+    );
+}
+
+fn assert_partial_tool(view: &super::ConversationView, expected: bool) {
+    if !expected {
+        assert!(view.tools.is_empty());
+        return;
+    }
+    assert_eq!(view.tools.len(), 1);
+    assert_eq!(view.tools[0].status, "running");
+    assert_eq!(view.tools[0].details, "partial output");
+    assert!(view.messages[0]
+        .parts
+        .iter()
+        .any(|part| part.kind == "tool" && part.tool_id == "tool"));
+}
+
+async fn assert_terminal_failure_round_trip(
+    provider_error: AgentError,
+    updates: Vec<ExecutionUpdate>,
+    expected_notice: &str,
+    expected_partial_tool: bool,
+) {
+    let (service, provider, repository, storage) = fixture(ConversationLimits::default());
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(provider_error.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        provider_error,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    *provider.execution_updates.lock().unwrap() = updates;
+    let (release_execution, execution_gate) = tokio::sync::oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller("create"), None)
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("send"),
+            "execution".into(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        provider.execution_started.notified(),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "provider execution did not start; dispatched executions: {:?}",
+            provider.executions.lock().unwrap()
+        )
+    });
+    assert_eq!(
+        provider.executions.lock().unwrap().as_slice(),
+        ["execution"]
+    );
+    release_execution.send(()).unwrap();
+
+    let failed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let view = service.read(id.clone(), caller("read")).await.unwrap();
+            if view.messages.first().is_some_and(|message| {
+                message.status == ConversationMessageStatus::Failed && message.error.is_some()
+            }) {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        let executions = provider.executions.lock().unwrap().clone();
+        let close_calls = provider
+            .close_calls
+            .load(std::sync::atomic::Ordering::SeqCst);
+        panic!(
+            "provider execution did not project a terminal failure; executions: {executions:?}, close calls: {close_calls}"
+        )
+    });
+    assert!(failed.pending.is_empty());
+    assert_eq!(failed.messages[0].error.as_deref(), Some(expected_notice));
+    assert_partial_tool(&failed, expected_partial_tool);
+    assert_eq!(
+        provider
+            .close_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+
+    let repeated = service
+        .read(id.clone(), caller("repeat-read"))
+        .await
+        .unwrap();
+    assert_eq!(repeated.revision, failed.revision);
+    assert_eq!(
+        repeated.messages[0].status,
+        ConversationMessageStatus::Failed
+    );
+    assert_eq!(repeated.messages[0].error, failed.messages[0].error);
+    assert_partial_tool(&repeated, expected_partial_tool);
+
+    service.shutdown().await.unwrap();
+    assert_eq!(
+        provider
+            .close_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    drop(service);
+    tokio::task::yield_now().await;
+    let restored = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider))),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let view = restored.read(id, caller("restored-read")).await.unwrap();
+    assert_eq!(view.messages[0].status, ConversationMessageStatus::Failed);
+    assert_eq!(view.messages[0].error, failed.messages[0].error);
+    assert_partial_tool(&view, expected_partial_tool);
+}
+
+#[tokio::test]
+async fn provider_failure_stays_terminal_across_closed_session_reads_and_restoration() {
+    assert_terminal_failure_round_trip(
+        AgentError::Provider {
+            code: -32603,
+            diagnostic: Some(ProviderDiagnostic::new(
+                "OpenCode's free tier can only be used from within OpenCode",
+            )),
+        },
+        Vec::new(),
+        "The agent provider reported an error: OpenCode's free tier can only be used from within OpenCode. The turn could not complete all required work.",
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn protocol_failure_after_partial_tool_preserves_observation_across_terminal_reads() {
+    // The accepted prefix is a valid domain update. The ACP contract tests own
+    // malformed-wire parsing; this boundary starts with its typed protocol
+    // failure and proves the SDK/session/projection path that follows it.
+    assert_terminal_failure_round_trip(
+        AgentError::Protocol("invalid tool status".into()),
+        vec![ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("tool").unwrap(),
+            Some("Shell".into()),
+            None,
+            Some(ToolStatus::Running),
+            None,
+            Some(vec![ToolContent::text("partial output")]),
+        ))],
+        "The turn could not complete all required work.",
+        true,
+    )
+    .await;
 }
 
 #[test]

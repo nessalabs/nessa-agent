@@ -155,6 +155,7 @@ impl<'de> Visitor<'de> for Seed {
         self.charge(0)?;
         let mut fields = 0;
         let mut has_index = false;
+        let mut has_provider_diagnostic = false;
         if matches!(self.shape, Shape::Metadata) {
             if let Some(present) = &self.metadata_present {
                 present.set(true);
@@ -178,12 +179,20 @@ impl<'de> Visitor<'de> for Seed {
                 if matches!(self.shape, Shape::Record) {
                     self.indices.finish()?;
                 }
+                if matches!(self.shape, Shape::ProviderError) && !has_provider_diagnostic {
+                    return Err(de::Error::custom(
+                        "saved provider error has no diagnostic field",
+                    ));
+                }
                 return Ok(());
             };
             if !self.shape.allows(&key) {
-                return Err(de::Error::custom("journal image has an unknown field"));
+                return Err(de::Error::custom(
+                    "journal value has an unknown field for its schema",
+                ));
             }
             has_index |= key == "index";
+            has_provider_diagnostic |= key == "diagnostic";
             fields += 1;
             if fields > 32 {
                 return Err(de::Error::custom("journal object has too many fields"));
