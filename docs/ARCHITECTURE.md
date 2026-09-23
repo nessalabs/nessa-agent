@@ -62,7 +62,7 @@ opinion rather than the product's.
 | --- | --- |
 | `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
 | `conversation/` | The conversation vertical. See the table below. |
-| `session/` | Authenticated wire session to `nessa-server` via `@nessa/client`, including health and reconnect lifecycle. |
+| `session/` | Authenticated wire session to `nessa-server` via `@nessa/client`, including verified local endpoint discovery, health, and reconnect lifecycle. |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
 
@@ -91,7 +91,7 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | `SessionPhase`, status copy for the empty state. |
-| `adapters/client/` | `connectDevSession` (native credential loading, authenticated session, health; closes on probe failure) + injected session handle (live client outside Redux). |
+| `adapters/client/` | `connectDevSession` (injected native endpoint and credential loading, authenticated session, health; closes on probe failure) + injected session handle (live client outside Redux). |
 | `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
 | `adapters/lifecycle/` | React lifetime plus `supervisor.ts`: fresh connections after typed transient startup failures or exhausted SDK retries, capped backoff, stale callback disposal, explicit retry for terminal errors. No message replay. |
 | `ui/use-session.ts` | Hook the panel reads for status. |
@@ -363,6 +363,14 @@ provider adapters remain separate features. Existing design proposals do not rep
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
+
+**Local agent credential values** (`crates/nessa-agent-credentials`) — pure
+shared domain, no binary or effects. The gateway adapter constructs its
+validated private credential and stage/instance namespace through a
+caller-owned read port. The canonical keychain names
+are infrastructure data in `protocol/defaults/agent-credentials.json`; provider
+environment mapping stays in the gateway adapter. See the
+[crate guide](../crates/nessa-agent-credentials/README.md).
 
 ## Gateway authorization
 

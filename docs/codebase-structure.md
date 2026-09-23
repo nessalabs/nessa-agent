@@ -272,6 +272,14 @@ below, and reports a sink failure beside the primary fault.
 Server composition supplies whether the open came from gateway startup,
 automatic provisioning, or an explicit local command.
 
+`crates/nessa-agent-credentials` is the smaller pure domain consumed by the
+gateway credential-source adapter and available to later credential consumers. It owns
+the immutable validated credential text, API-key/OAuth meaning, the explicit
+Claude/OpenCode credential identity, and the durable stage/instance namespace.
+It owns no keychain, environment, provider, serialization, or filesystem code;
+the gateway keeps those effects behind its own application port. See the
+[crate map](../crates/nessa-agent-credentials/README.md).
+
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
@@ -284,6 +292,24 @@ tree can be written to by anything else uses the second.
 name at a time. Unix syncs each parent before descent and the final leaf before
 success. Windows revalidates the anchored tree because it has no directory-fsync
 equivalent; sinks flush record files and use write-through moves separately.
+
+`crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
+identity, application publication/discovery ports, and private-file adapters.
+Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
+validates the listener and process identity, while `advertisement.rs` enforces
+agreement between that endpoint and optional desktop-managed identity. Tests
+mirror those responsibilities under `tests/domain/value_objects/`.
+File adapters require an already-created, current-user-private data root and
+resolve the stage and instance namespace beneath that root without following
+links. Server credential provisioning establishes that root on a new install;
+an existing permissive or redirected root is refused.
+Server composition publishes the actual listener address atomically beside
+`gateway.log`; local Rust clients accept it only when every identity field agrees
+with a bounded unauthenticated `/health` response. This correlation rejects stale
+and mismatched listeners but is not authentication. `nessa-server` and the desktop
+host compose the shared ports without depending on one another, and the Node
+client is held to the same canonical record by the cross-runtime fixture in
+`protocol/fixtures/gateway-endpoint.json`.
 
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or
@@ -660,6 +686,15 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
 
+The same context defines `AgentCredentialSource`; its local adapter can read
+standalone Claude environment credentials before the Nessa keychain while
+preserving API-key versus OAuth meaning. Its values and stage/instance account namespace come from
+`nessa-agent-credentials`; `protocol/defaults/agent-credentials.json` is the one
+infrastructure mapping for the Security.framework service and the Claude and
+OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
+can read an injected source on a blocking worker for each process open. Neither
+adapter puts the source value in configuration, plist, arguments, or logs.
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
@@ -822,9 +857,19 @@ context and the published protocol schema must agree on (`agreement.rs`).
 ## Installing an agent runtime
 
 `crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
-machine at the version Nessa has tested. Claude and Codex are expected to be
-installed already; Opencode is the one Nessa fetches, because it is the agent a
-first-time user can reach with nothing signed in.
+machine at the version Nessa has tested. All three agents are pinned, and
+`install-agent` fetches and verifies any of them; Opencode is the only one that
+is also *launched* from what was fetched, because the desktop still resolves
+Claude and Codex inside the bundle. Their pins cover macOS on Apple silicon and
+no other platform, which is where the 467 MB was measured and the only archives
+anybody has listed. That split was once
+explained by Opencode being the agent a first-time user could reach with nothing
+signed in, and that turned out to be false — its free models are refused outside
+OpenCode's own application, so all three want the person's own account. What is
+left of the reason applies to every agent equally: telling somebody to go and
+install something before they can use Nessa is the thing this context exists to
+avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
+fetch all three and ship none.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
 which is the identity in this context and is constrained to what can also be a
@@ -854,7 +899,8 @@ network) and `RuntimeStore` (this machine's disk), whose `StagedArchive` carries
 an open file rather than a path, so the bytes that are measured are the bytes
 that are unpacked.
 
-`infrastructure/` holds the three outside things: `pinned_releases.rs` reads
+`infrastructure/` holds the three outside things — the pins, the network and
+the disk, one module each. `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
 what is beside the binary, and is also the one boundary that reads *the
 machine* — `host_platform()` builds a `HostPlatform` from the compiler's own
@@ -874,7 +920,17 @@ private to its owner like everything else there.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases
-that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-opencode.mjs` regenerates
+The domain says what a release *is*: `pinned_release.rs` holds the pin, and
+`release_contents.rs` holds the set of files it installs — each one an
+`ArchivePath` with a `FileRole` of `Launch`, `Helper` or `Document`, exactly one
+of them the launch. That set is why one install path serves an agent that ships
+a single binary and one that ships four programs plus the tools they call.
+`ArchiveSize` bounds the download against the size the pin measured. Composition
+reads the store at every start through `composition/installed_launch.rs`, which
+answers with a launch or with nothing, and never with a path it wrote down
+earlier.
+
+that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-agents.mjs` regenerates
 the pin file by downloading and hashing every platform's archive. Tests under
 `tests/agent_install/` split the domain's rules, the ordering, the two adapters
 and the command's output.
@@ -904,6 +960,10 @@ is a download, a hash and an unpack and the HTTP client it uses declines to run
 inside the async runtime. See [installing an agent
 runtime](#installing-an-agent-runtime).
 Tests mirror those responsibilities under `tests/cli/`; `scripts/smoke-auth.mjs`
-checks actual process output and authenticated server effects. Offline bootstrap
+checks actual process output and authenticated server effects.
+`scripts/smoke-conversation.mjs` drives the real gateway and `@nessa/client`
+through authentication, attachments, retry/reconnect, controls, persistence and
+cleanup; `scripts/conversation-smoke/` supplies its bounded deterministic Claude
+ACP process and evidence helpers. Offline bootstrap
 remains in `composition/auth_command.rs`; it requires explicit `--local` selection.
 Cloud auth is reserved but not implemented. See [local auth](guides/local-auth.md).

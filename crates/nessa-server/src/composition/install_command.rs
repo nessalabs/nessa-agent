@@ -83,12 +83,17 @@ fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError>
 
 /// The tested release for this agent on this machine.
 ///
-/// The two ways there is none are two different things to be told. Claude and
-/// Codex are expected to be on the machine already, so Nessa pins no release for
-/// them at all and saying so by name beats a failure that reads as though a
-/// download went wrong. An agent Nessa *does* install but not for this
-/// platform is the opposite message: the agent is right, the machine is not one
-/// there is a tested build for.
+/// The two ways there is none are two different things to be told: an agent
+/// this build pins nothing for at all, and one it pins for other machines but
+/// not this one. The first is the agent being wrong, the second is the machine
+/// being wrong, and a single failure would read as a download that went astray.
+///
+/// All three agents are pinned now — Claude and Codex were not when this was
+/// written, and the paragraph here said so. What that means for this command is
+/// not yet what it should be: `nessa install-agent claude` fetches and verifies
+/// a runtime that nothing launches, because the desktop still starts Claude and
+/// Codex from the bundle. The install is real and the launch has not moved yet.
+/// See `docs/adr/todo/173-fetch-agent-runtimes.md`.
 fn pinned(agent: &AgentName, host: &HostPlatform) -> Result<PinnedRelease, RunError> {
     let releases = releases_for(agent).map_err(|error| RunError::Agent(error.to_string()))?;
     if releases.is_empty() {
@@ -152,7 +157,7 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::Download(SourceFailure::TooLarge(_))
         | InstallFailure::Rejected(_)
         | InstallFailure::Store(
-            StoreFailure::MissingExecutable(_) | StoreFailure::MalformedArchive(_),
+            StoreFailure::IncompleteArchive(_) | StoreFailure::MalformedArchive(_),
         ) => format!(
             "{failure}; nothing was installed and this is not worth retrying — \
              report it rather than running the command again"

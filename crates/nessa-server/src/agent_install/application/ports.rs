@@ -16,10 +16,11 @@ pub enum SourceFailure {
     /// Something answered and said no. Carries the status so a 404 — the pin
     /// naming a release that no longer exists — is distinguishable from a 503.
     Refused(u16),
-    /// The response kept coming past any size an agent runtime is. Not a
-    /// rejection of the archive — nothing has been measured yet — but a refusal
-    /// to keep filling a disk on the strength of a `Content-Length` nobody
-    /// checked.
+    /// The response kept coming past the length the pin says the archive is.
+    /// Not a rejection of the archive's *contents* — nothing has been hashed
+    /// yet — but a refusal to keep writing bytes that already cannot be the
+    /// pinned archive, rather than filling a disk first and finding out from
+    /// the digest afterwards. Carries the length that was pinned.
     TooLarge(u64),
     /// The bytes arrived and this machine could not keep them: a full disk, or
     /// a file that stopped being writable part-way. Its own variant because
@@ -54,9 +55,18 @@ pub enum StoreFailure {
     Unwritable(String),
     /// A file that should be there could not be read.
     Unreadable(String),
-    /// The archive did not contain the file the release says is its executable.
-    /// A pin that is wrong about its own contents, not a machine that failed.
-    MissingExecutable(String),
+    /// The archive did not contain one of the files the release says it
+    /// installs. A pin that is wrong about its own contents, not a machine that
+    /// failed — and true of any of them, not only the program that is launched:
+    /// Codex's runtime finds its ripgrep and its zsh through the directory it
+    /// is installed in, so an archive missing one of those is as unusable as
+    /// one missing the program itself. Named for the archive rather than for
+    /// the executable because a release stopped being one file: this is raised
+    /// for a missing document as readily as for the program, and a reader who
+    /// went looking for a missing *executable* would be looking for the wrong
+    /// thing. It sits beside [`Self::MalformedArchive`], which is an archive
+    /// that could not be read at all rather than one read and found short.
+    IncompleteArchive(String),
     /// The archive is not a well-formed gzip tar.
     MalformedArchive(String),
 }
@@ -66,7 +76,7 @@ impl fmt::Display for StoreFailure {
         match self {
             Self::Unwritable(detail) => write!(f, "could not write the agent runtime: {detail}"),
             Self::Unreadable(detail) => write!(f, "could not read the agent runtime: {detail}"),
-            Self::MissingExecutable(path) => {
+            Self::IncompleteArchive(path) => {
                 write!(f, "the release archive does not contain {path}")
             }
             Self::MalformedArchive(detail) => {
@@ -150,11 +160,26 @@ impl StagedArchive {
 /// and holding one in memory to hash it and then again to unpack it is a cost
 /// with nothing to show for it.
 pub trait ArchiveSource: Send + Sync {
-    /// Fetch `url` into `staged`, which is empty when this is called.
+    /// Fetch `url` into `staged`, which is empty when this is called, keeping
+    /// at most `at_most` bytes of it.
+    ///
+    /// `at_most` is the length the pin says the archive is, and an
+    /// implementation stops with [`SourceFailure::TooLarge`] the moment more
+    /// than that has arrived. It is a bound rather than an expectation: a body
+    /// that is *shorter* is not this port's business, because a truncated
+    /// download is exactly what the digest check afterwards is for. Passed in
+    /// rather than chosen here so that the number a fetch is held to is the one
+    /// that was measured when the release was pinned, not a constant somebody
+    /// guessed.
     ///
     /// A failure may leave bytes in `staged`; the caller discards it either way
     /// and never asks for its digest.
-    fn download(&self, url: &str, staged: &mut StagedArchive) -> Result<(), SourceFailure>;
+    fn download(
+        &self,
+        url: &str,
+        at_most: u64,
+        staged: &mut StagedArchive,
+    ) -> Result<(), SourceFailure>;
 }
 
 /// Where installed runtimes live on this machine.
@@ -177,12 +202,13 @@ pub trait RuntimeStore: Send + Sync {
     /// handing out a launch path for a runtime nobody named.
     ///
     /// The implementation reports `Some` only when what it recorded agrees with
-    /// `release` on both the version and the executable, and when that
-    /// executable is really on the disk. Answering from the record alone would
-    /// let a half-finished install, or one whose executable was since deleted,
-    /// be reported as a runtime Nessa can launch. Keeping those checks here
-    /// rather than at the call site is what lets the use case above touch no
-    /// files.
+    /// `release` on the version and on every file it installs, and when all of
+    /// those files are really on the disk. Answering from the record alone
+    /// would let a half-finished install, or one whose executable was since
+    /// deleted, be reported as a runtime Nessa can launch — and checking only
+    /// the launch would do the same for a runtime whose helper programs are
+    /// gone. Keeping those checks here rather than at the call site is what
+    /// lets the use case above touch no files.
     fn installed(
         &self,
         agent: &AgentName,
@@ -200,14 +226,22 @@ pub trait RuntimeStore: Send + Sync {
     /// The SHA-256 of what has been staged.
     fn digest(&self, staged: &mut StagedArchive) -> Result<ArchiveDigest, StoreFailure>;
 
-    /// Unpack the release's executable out of `staged` and make it the
-    /// installed runtime for `agent`, returning where it now is.
+    /// Unpack every file the release names out of `staged` and make them the
+    /// installed runtime for `agent`, returning where the program to launch now
+    /// is.
+    ///
+    /// All of them or none: a runtime whose helper programs are missing starts
+    /// and then cannot do its work, so an implementation that cannot finish
+    /// takes back what it wrote and reports nothing as installed. One path
+    /// comes back rather than a list because one of the files is the launch and
+    /// the rest are found relative to it — see
+    /// [`ReleaseContents`](crate::agent_install::domain::ReleaseContents).
     ///
     /// Called only after [`PinnedRelease::accept`] has passed, and given the
     /// same open file that was measured, so an implementation may assume it is
     /// unpacking the pinned bytes. It may not assume anything about their
-    /// *contents*: the executable named by the pin can still be absent, which
-    /// is [`StoreFailure::MissingExecutable`].
+    /// *contents*: a file named by the pin can still be absent, which is
+    /// [`StoreFailure::IncompleteArchive`].
     ///
     /// Durable on return: an executable this reports is one a machine that
     /// loses power immediately afterwards still has.

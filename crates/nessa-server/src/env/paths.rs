@@ -9,7 +9,8 @@ pub(super) fn auth_directory(
     stage: &str,
     instance: Option<&str>,
 ) -> Result<Option<PathBuf>, EnvironmentError> {
-    Ok(namespace(data_dir, home, stage, instance)?.map(|root| root.join("auth")))
+    Ok(namespace(data_dir, home, stage, instance)?
+        .map(|(root, relative)| root.join(relative).join("auth")))
 }
 
 /// Where this stage's gateway writes its log. The launchd definition redirects
@@ -21,7 +22,18 @@ pub(super) fn log_directory(
     stage: &str,
     instance: Option<&str>,
 ) -> Result<Option<PathBuf>, EnvironmentError> {
-    Ok(namespace(data_dir, home, stage, instance)?.map(|root| root.join("logs")))
+    Ok(namespace(data_dir, home, stage, instance)?
+        .map(|(root, relative)| root.join(relative).join("logs")))
+}
+
+pub(super) fn endpoint_storage(
+    data_dir: Option<&str>,
+    home: Option<&str>,
+    stage: &str,
+    instance: Option<&str>,
+) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
+    Ok(namespace(data_dir, home, stage, instance)?
+        .map(|(root, relative)| (root, relative.join("logs"))))
 }
 
 /// Resolve the stage/instance namespace beneath an absolute data root.
@@ -32,7 +44,7 @@ fn namespace(
     home: Option<&str>,
     stage: &str,
     instance: Option<&str>,
-) -> Result<Option<PathBuf>, EnvironmentError> {
+) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
     for segment in std::iter::once(stage).chain(instance) {
         if segment.is_empty()
             || segment == "."
@@ -55,16 +67,15 @@ fn namespace(
         (None, Some(_)) => return Err(EnvironmentError::Backend("HOME must be an absolute path")),
         (None, None) => return Ok(None),
     };
-    let root = if stage == "prod" {
-        base
-    } else {
-        base.join(stage)
-    };
-    let root = match instance {
-        Some(value) => root.join("instances").join(value),
-        None => root,
-    };
-    Ok(Some(root))
+    let mut relative = PathBuf::new();
+    if stage != "prod" {
+        relative.push(stage);
+    }
+    if let Some(value) = instance {
+        relative.push("instances");
+        relative.push(value);
+    }
+    Ok(Some((base, relative)))
 }
 
 #[cfg(test)]

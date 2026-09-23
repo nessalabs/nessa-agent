@@ -27,6 +27,8 @@ export {
 export type {
   NessaClientConnectOptions,
   ProductConnectOptions,
+  GatewayEndpointContext,
+  GatewayEndpointSource,
 } from "./application/index.js"
 export type { NessaClientEvents } from "./application/index.js"
 export {
@@ -35,6 +37,7 @@ export {
   NessaRpcError,
   NessaProtocolCompatibilityError,
   NessaConnectionClosedError,
+  NessaEndpointDiscoveryError,
   resolveConnectOptions,
   stageAllowsDefaultUrl,
   StageConfigError,

@@ -44,10 +44,9 @@ export class NessaClient {
    * socket. This literal is checked against that table in `nessa-client.test.ts`
    * — the package stays self-contained, and the number still cannot drift.
    *
-   * It is a default, not a discovery mechanism: `NESSA_PORT` and
-   * `NESSA_INSTANCE` both move the gateway somewhere this cannot predict, and
-   * a caller in that position passes `url` until the gateway publishes where
-   * it bound.
+   * When `url` is omitted, local Node clients first verify the gateway's private
+   * endpoint publication. This value remains the dev-only fallback when that
+   * publication is absent or unreadable.
    */
   static readonly defaultUrl = "ws://127.0.0.1:7421"
 

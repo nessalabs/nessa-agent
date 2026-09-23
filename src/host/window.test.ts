@@ -17,16 +17,34 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("native surface credential failures", () => {
+  it("returns the native host's verified endpoint", async () => {
+    const { loadAssignedGatewayEndpoint } = await import("./window")
+    invoke.mockResolvedValue("ws://127.0.0.1:9137")
+    await expect(loadAssignedGatewayEndpoint("prod")).resolves.toBe("ws://127.0.0.1:9137")
+    expect(invoke).toHaveBeenCalledWith("load_gateway_endpoint", { stage: "prod" })
+  })
+
+  it("preserves endpoint verification failures without exposing arbitrary payloads", async () => {
+    const { loadAssignedGatewayEndpoint } = await import("./window")
+    invoke.mockRejectedValue({ endpoint: "secret" })
+    await expect(loadAssignedGatewayEndpoint("prod")).rejects.toThrow(
+      "Could not verify the desktop gateway endpoint.",
+    )
+  })
+
   it.each([
     "Move Nessa to Applications before starting its background service",
     { message: "The gateway update failed; existing agents were preserved" },
   ])("preserves safe native messages as Errors", async (failure) => {
     const { loadAssignedSurfaceCredential } = await import("./window")
     invoke.mockRejectedValue(failure)
-    await expect(loadAssignedSurfaceCredential("prod")).rejects.toThrow(
-      typeof failure === "string" ? failure : failure.message,
-    )
-    expect(invoke).toHaveBeenCalledWith("load_surface_credential", { stage: "prod" })
+    await expect(
+      loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420"),
+    ).rejects.toThrow(typeof failure === "string" ? failure : failure.message)
+    expect(invoke).toHaveBeenCalledWith("load_surface_credential", {
+      stage: "prod",
+      url: "ws://127.0.0.1:7420",
+    })
   })
 
   it.each([undefined, null, 42, "  ", { message: 4 }, { token: "secret" }])(
@@ -34,9 +52,9 @@ describe("native surface credential failures", () => {
     async (failure) => {
       const { loadAssignedSurfaceCredential } = await import("./window")
       invoke.mockRejectedValue(failure)
-      await expect(loadAssignedSurfaceCredential("prod")).rejects.toThrow(
-        "Could not load the desktop gateway credential.",
-      )
+      await expect(
+        loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420"),
+      ).rejects.toThrow("Could not load the desktop gateway credential.")
     },
   )
 
@@ -44,7 +62,9 @@ describe("native surface credential failures", () => {
     const { loadAssignedSurfaceCredential } = await import("./window")
     const failure = new TypeError("native transport failed")
     invoke.mockRejectedValue(failure)
-    await expect(loadAssignedSurfaceCredential("prod")).rejects.toBe(failure)
+    await expect(
+      loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420"),
+    ).rejects.toBe(failure)
   })
 
   it("shows the native reason and explicit session retry invokes native setup again", async () => {
@@ -63,7 +83,7 @@ describe("native surface credential failures", () => {
     const failed = vi.fn()
     const ready = vi.fn()
     const connect = vi.fn(async () => {
-      await loadAssignedSurfaceCredential("prod")
+      await loadAssignedSurfaceCredential("prod", "ws://127.0.0.1:7420")
       return { client, hello: client.productSession, health: {} } as EstablishedDevSession
     })
     const options = {

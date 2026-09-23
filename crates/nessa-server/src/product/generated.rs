@@ -513,6 +513,7 @@ pub struct ConversationTool {
     pub execution_id: String,
     pub tool_id: String,
     pub title: String,
+    pub kind: String,
     pub status: String,
     pub details: String,
     pub input: String,

@@ -9,7 +9,9 @@ describe("frontend environment", () => {
     expect(loadEnvironment({}).conversation.backend).toBe("local")
   })
   it("sends a packaged build straight at the local gateway", () => {
-    expect(loadEnvironment({}).gatewayBaseUrl).toBe("http://127.0.0.1:7420")
+    const environment = loadEnvironment({})
+    expect(environment.gatewayBaseUrl).toBe("http://127.0.0.1:7420")
+    expect(environment.gatewayBaseUrlOverride).toBeUndefined()
   })
 
   it("points a packaged dev-stage build at the dev port, not the product one", () => {
@@ -23,10 +25,11 @@ describe("frontend environment", () => {
   })
 
   it("takes a configured gateway as an origin, without its path", () => {
-    expect(
-      loadEnvironment({ VITE_NESSA_GATEWAY_URL: "https://gateway.example:8443/ignored/" })
-        .gatewayBaseUrl,
-    ).toBe("https://gateway.example:8443")
+    const environment = loadEnvironment({
+      VITE_NESSA_GATEWAY_URL: "https://gateway.example:8443/ignored/",
+    })
+    expect(environment.gatewayBaseUrl).toBe("https://gateway.example:8443")
+    expect(environment.gatewayBaseUrlOverride).toBe("https://gateway.example:8443")
   })
 
   it.each(["127.0.0.1:7420", "ws://127.0.0.1:7420", "file:///tmp", "nonsense"])(

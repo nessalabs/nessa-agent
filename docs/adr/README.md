@@ -8,6 +8,31 @@ does not make an implementation done.
 - **`done/`** — implemented decisions, retaining their original IDs and filenames.
 - **`0000-template.md`** — template only; never a work item.
 
+## Numbering: open the issue first
+
+**A new record takes the number of the GitHub issue that proposed it.** Open the
+issue, then write `todo/<issue>-<slug>.md`. The issue is where the decision is
+argued and the record is where it is settled, and they share one number so
+either one finds the other.
+
+This is not bookkeeping. Numbering by "the next free one in this directory"
+collided twice, both times the same way: two branches in flight, each reading a
+directory that cannot see what the other is doing, and whichever merged second
+was wrong the moment it landed — with green CI on both, because the filenames
+differ and nothing compiles a Markdown directory. GitHub hands out issue numbers
+centrally, one at a time, to everybody at once. Two branches cannot be given the
+same one.
+
+`0001`–`0014` were written before this rule and keep the numbers they have. A
+four-digit number means "from that era" and nothing more; issues are past 140,
+so the two ranges cannot meet. `pnpm architecture` refuses a number used twice
+either way, for the mistake the rule does not prevent — a file copied and
+half-renamed, or a number typed from memory.
+
+The same habit applies past ADRs: anything significant enough to explain gets an
+issue before it gets a branch. That is what makes the number available to name
+it by.
+
 ## Done
 
 | ADR | Implemented scope |
@@ -24,9 +49,12 @@ does not make an implementation done.
 
 ## Todo — implementation priority
 
-Completed ADR numbers stay unchanged. Pending ADRs are numbered in the agreed
-priority order below; 0010 is already implemented. This ordering was explicitly
-requested during planning and does not change implementation or approval status.
+Completed ADR numbers stay unchanged. The pending records below happen to be
+numbered in their agreed priority order, because they were written when a number
+meant "next in line"; 0010 is already implemented. That coincidence ends with
+this list — an issue number says when a decision was proposed and nothing about
+when it should be done, so the `Priority` column is the only thing that orders
+this table. None of it changes implementation or approval status.
 
 | Priority | ADR | Remaining work |
 | --- | --- | --- |
@@ -35,6 +63,7 @@ requested during planning and does not change implementation or approval status.
 | 4 | [0011 — Shared conversations and collaboration](todo/0011-nessa-session-protocol-and-authorities.md) | Multiple-surface attachment, authorized transcript replay, and collaboration inboxes |
 | 5 | [0012 — Harnesses and optional tools](todo/0012-agent-harnesses-and-optional-tools.md) | Optional MCP/CLI interfaces while preserving external harness behavior |
 | 6 | [0014 — Nessa-owned policy hooks](todo/0014-nessa-owned-policy-hooks.md) | Proposed hook enforcement, context disclosure, capability degradation and attributed policy stops |
+| 7 | [173 — Fetch every agent runtime](todo/173-fetch-agent-runtimes.md) | Pin and fetch Claude's and Codex's native binaries the way Opencode's already are, resolve a runtime already on the machine within a supported range, and record what each install did |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides

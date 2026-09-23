@@ -29,6 +29,7 @@ const tool: ConversationView["tools"][number] = {
   executionId: "run",
   toolId: "shell",
   title: "Shell",
+  kind: "execute",
   status: "completed",
   input: JSON.stringify({ command: 'echo "hi"' }),
   details: "  <output>\n",

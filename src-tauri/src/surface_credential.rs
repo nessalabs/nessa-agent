@@ -2,7 +2,7 @@
 use crate::composition::HostDependencies;
 use crate::gateway::application::Gateway;
 use crate::panel;
-use std::{io::Read, path::PathBuf};
+use std::{io::Read, path::PathBuf, sync::Arc};
 use tauri::State;
 
 /// Why there is no token to hand over.
@@ -77,28 +77,38 @@ pub struct SurfaceCredential {
 }
 
 impl SurfaceCredential {
-    /// The credential file this process's environment points at.
-    ///
-    /// `stage` is passed in rather than read here: composition resolves the
-    /// stage once and the gateway is registered under the same one, and two
-    /// independent reads of `NESSA_STAGE` are two things that could disagree.
-    pub fn from_environment(stage: String) -> Self {
-        let instance = std::env::var("NESSA_INSTANCE").ok();
-        let base = std::env::var("NESSA_DATA_DIR")
-            .map(PathBuf::from)
-            .ok()
-            .or_else(|| {
-                std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                    .ok()
-                    .map(|home| PathBuf::from(home).join(".nessa"))
-            });
-        let (root, relative) = credential_location(base, &stage, instance.as_deref());
+    /// Build the credential reader from composition's one resolved service namespace.
+    pub fn for_namespace(namespace: Option<ServiceNamespace>, stage: String) -> Self {
         Self {
-            root,
-            relative,
+            root: namespace.as_ref().map(|value| value.root.clone()),
+            relative: namespace
+                .map(|value| value.relative.join("auth/surfaces/nessa-panel.token"))
+                .unwrap_or_default(),
             stage,
         }
     }
+}
+
+/// A validated relative service namespace anchored at one trusted data root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ServiceNamespace {
+    pub(crate) root: PathBuf,
+    pub(crate) relative: PathBuf,
+}
+
+/// Resolve the service namespace once for composition to inject into endpoint
+/// and credential readers. Environment reads stay at this composition edge.
+pub(crate) fn service_namespace_from_environment(stage: &str) -> Option<ServiceNamespace> {
+    let instance = std::env::var("NESSA_INSTANCE").ok();
+    let base = std::env::var("NESSA_DATA_DIR")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .ok()
+                .map(|home| PathBuf::from(home).join(".nessa"))
+        });
+    service_namespace(base, stage, instance.as_deref())
 }
 
 /// Whether a name may be one path segment of a namespace.
@@ -126,13 +136,13 @@ fn segment(value: &str) -> bool {
 ///
 /// Mirrors `crates/nessa-server/src/env/paths.rs`, which is what actually
 /// writes the file.
-fn credential_location(
+fn service_namespace(
     base: Option<PathBuf>,
     stage: &str,
     instance: Option<&str>,
-) -> (Option<PathBuf>, PathBuf) {
+) -> Option<ServiceNamespace> {
     let root =
-        base.filter(|base| base.is_absolute() && segment(stage) && instance.is_none_or(segment));
+        base.filter(|base| base.is_absolute() && segment(stage) && instance.is_none_or(segment))?;
     let mut relative = PathBuf::new();
     if stage != "prod" {
         relative.push(stage);
@@ -141,8 +151,7 @@ fn credential_location(
         relative.push("instances");
         relative.push(instance);
     }
-    relative.push("auth/surfaces/nessa-panel.token");
-    (root, relative)
+    Some(ServiceNamespace { root, relative })
 }
 
 /// Say which of the two things went wrong, because the repairs differ.
@@ -155,6 +164,9 @@ fn credential_location(
 /// keeps the operating system's own words rather than a guessed cause.
 /// Which refusal an operating-system error is.
 fn unreadable(error: &std::io::Error) -> CredentialRefusal {
+    if nessa_local_storage::is_unsafe_file(error) {
+        return CredentialRefusal::Refused;
+    }
     match error.kind() {
         std::io::ErrorKind::NotFound => CredentialRefusal::NotProvisioned,
         std::io::ErrorKind::PermissionDenied => CredentialRefusal::Refused,
@@ -208,8 +220,10 @@ impl SurfaceCredentials for SurfaceCredential {
 async fn load_for(
     label: &str,
     gateway: Option<&Gateway>,
+    endpoint: Arc<crate::gateway_endpoint::application::GatewayEndpointAccess>,
     credential: &dyn SurfaceCredentials,
     stage: &str,
+    url: &str,
 ) -> Result<String, String> {
     if label != panel::MAIN_WINDOW {
         return Err("Only the bundled chat surface can load this credential".into());
@@ -220,6 +234,13 @@ async fn load_for(
             .await
             .map_err(|error| error.to_string())?;
     }
+    let stage_for_endpoint = stage.to_owned();
+    let requested_url = url.to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        endpoint.permits_credential_for(&stage_for_endpoint, &requested_url)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     // The variant becomes a sentence here, at the edge: the webview takes a
     // string, and everything above this point can still tell the refusals apart.
     credential
@@ -232,10 +253,20 @@ pub async fn load_surface_credential(
     window: tauri::WebviewWindow,
     deps: State<'_, HostDependencies>,
     stage: String,
+    url: String,
 ) -> Result<String, String> {
     let gateway = deps.gateway.clone();
+    let endpoint = deps.endpoint.clone();
     let credential = deps.credential.clone();
-    load_for(window.label(), gateway.as_deref(), &*credential, &stage).await
+    load_for(
+        window.label(),
+        gateway.as_deref(),
+        endpoint,
+        &*credential,
+        &stage,
+        &url,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -245,7 +276,28 @@ mod tests {
         testing::system_login_shell, GatewayError, GatewayHost, ReconciledGateway,
     };
     use crate::gateway::domain::value_objects::SearchPath;
+    use nessa_gateway_endpoint::{
+        application::EndpointDiscovery,
+        domain::{EndpointIdentity, GatewayEndpoint},
+    };
     use std::{fs, io::Write, path::Path, sync::Arc, sync::Mutex};
+
+    struct FixedEndpoint(Option<GatewayEndpoint>);
+
+    impl EndpointDiscovery for FixedEndpoint {
+        fn discover(&self) -> std::io::Result<Option<GatewayEndpoint>> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn endpoint_access(
+        endpoint: Option<GatewayEndpoint>,
+    ) -> crate::gateway_endpoint::application::GatewayEndpointAccess {
+        crate::gateway_endpoint::application::GatewayEndpointAccess::new(
+            "ci".into(),
+            Arc::new(FixedEndpoint(endpoint)),
+        )
+    }
 
     /// A credential source that has already made up its mind, and writes down
     /// whether it was asked at all.
@@ -347,7 +399,14 @@ mod tests {
         gateway: Option<&Gateway>,
         credential: &dyn SurfaceCredentials,
     ) -> Result<String, String> {
-        tauri::async_runtime::block_on(load_for(label, gateway, credential, "ci"))
+        tauri::async_runtime::block_on(load_for(
+            label,
+            gateway,
+            Arc::new(endpoint_access(None)),
+            credential,
+            "ci",
+            "ws://127.0.0.1:7420",
+        ))
     }
 
     /// The whole of the ordering: the window is checked first, then the gateway
@@ -393,6 +452,26 @@ mod tests {
             load(panel::MAIN_WINDOW, Some(&gateway), &credential).err(),
             Some("not installed".to_string())
         );
+        assert_eq!(credential.reads(), 0);
+    }
+
+    #[test]
+    fn a_mismatched_verified_destination_is_refused_before_the_token_is_read() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let endpoint = GatewayEndpoint::new(
+            "ws://127.0.0.1:9137".into(),
+            EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
+        )
+        .unwrap();
+        let result = tauri::async_runtime::block_on(load_for(
+            panel::MAIN_WINDOW,
+            None,
+            Arc::new(endpoint_access(Some(endpoint))),
+            &credential,
+            "ci",
+            "ws://127.0.0.1:7420",
+        ));
+        assert!(result.is_err());
         assert_eq!(credential.reads(), 0);
     }
 
@@ -468,7 +547,7 @@ mod tests {
     /// An absolute path on the platform running the test.
     ///
     /// `/data` is absolute on Unix and is not on Windows, where a path needs a
-    /// drive — and `credential_location` is right to refuse a base that is not
+    /// drive — and `service_namespace` is right to refuse a base that is not
     /// absolute, so a test that hardcoded `/data` asserted the refusal there
     /// rather than the nesting it meant to.
     fn absolute(path: &str) -> PathBuf {
@@ -482,20 +561,31 @@ mod tests {
     fn a_stage_that_is_not_prod_nests_and_prod_does_not() {
         let base = || Some(absolute("data"));
 
-        let (root, relative) = credential_location(base(), "prod", None);
-        assert_eq!(root, Some(absolute("data")));
-        assert_eq!(relative, PathBuf::from("auth/surfaces/nessa-panel.token"));
-
-        let (_, relative) = credential_location(base(), "dev", None);
+        let root = service_namespace(base(), "prod", None);
         assert_eq!(
-            relative,
-            PathBuf::from("dev/auth/surfaces/nessa-panel.token")
+            root,
+            Some(ServiceNamespace {
+                root: absolute("data"),
+                relative: PathBuf::new()
+            })
         );
 
-        let (_, relative) = credential_location(base(), "dev", Some("wt"));
+        let root = service_namespace(base(), "dev", None);
         assert_eq!(
-            relative,
-            PathBuf::from("dev/instances/wt/auth/surfaces/nessa-panel.token")
+            root,
+            Some(ServiceNamespace {
+                root: absolute("data"),
+                relative: PathBuf::from("dev")
+            })
+        );
+
+        let root = service_namespace(base(), "dev", Some("wt"));
+        assert_eq!(
+            root,
+            Some(ServiceNamespace {
+                root: absolute("data"),
+                relative: PathBuf::from("dev/instances/wt")
+            })
         );
     }
 
@@ -513,7 +603,7 @@ mod tests {
             (Some(absolute("data")), "dev", Some("one two")),
             (None, "dev", None),
         ] {
-            let (root, _) = credential_location(base, stage, instance);
+            let root = service_namespace(base, stage, instance);
             assert_eq!(root, None, "stage {stage:?} instance {instance:?}");
         }
     }
@@ -609,6 +699,35 @@ mod tests {
             stage: "ci".into(),
         };
         assert!(storage.read("ci").is_err());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_namespace_cannot_redirect_the_credential_outside_its_data_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_directory("namespace-link");
+        let outside = temporary_directory("namespace-outside");
+        nessa_local_storage::create_directory(&outside.join("auth/surfaces")).unwrap();
+        let mut token = nessa_local_storage::open(
+            &outside.join("auth/surfaces/nessa-panel.token"),
+            nessa_local_storage::OpenMode::CreateNew,
+        )
+        .unwrap();
+        token.write_all(b"redirected-token").unwrap();
+        drop(token);
+        symlink(&outside, root.join("ci")).unwrap();
+
+        let storage = SurfaceCredential::for_namespace(
+            Some(ServiceNamespace {
+                root: root.clone(),
+                relative: PathBuf::from("ci"),
+            }),
+            "ci".into(),
+        );
+        assert_eq!(storage.read("ci").unwrap_err(), CredentialRefusal::Refused);
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }
