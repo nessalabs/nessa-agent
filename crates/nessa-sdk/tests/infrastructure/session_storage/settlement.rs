@@ -6,6 +6,37 @@ use nessa_sdk::application::agent_execution::providers::{
 use nessa_sdk::domain::agent_execution::executions::SchedulingCause;
 
 #[tokio::test]
+async fn provider_diagnostic_presence_and_text_round_trip_exactly() {
+    let root = tempfile::tempdir().unwrap();
+    let stores: Vec<Arc<dyn SessionStorage>> = vec![
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(LocalFileStorage::new(root.path().join("provider-diagnostic")).unwrap()),
+    ];
+    for storage in stores {
+        let lease = storage
+            .open(SessionId::new("provider-diagnostic").unwrap())
+            .await
+            .unwrap();
+        for diagnostic in [
+            None,
+            Some(ProviderDiagnostic::new("")),
+            Some(ProviderDiagnostic::new("provider quota was exhausted")),
+        ] {
+            let expected = AgentError::Provider {
+                code: -32000,
+                diagnostic,
+            };
+            let mut value = snapshot("provider-diagnostic");
+            value.invocations[0].events.clear();
+            value.invocations[0].result = Some(Err(expected.clone()));
+            lease.save(value).await.unwrap();
+            let restored = lease.load().await.unwrap().unwrap();
+            assert_eq!(restored.invocations[0].result, Some(Err(expected)));
+        }
+    }
+}
+
+#[tokio::test]
 async fn explicit_settlement_facts_round_trip_all_outcomes_and_cleanup_statuses() {
     let root = tempfile::tempdir().unwrap();
     let stores: Vec<Arc<dyn SessionStorage>> = vec![
