@@ -420,7 +420,7 @@ async fn provider_open_failure_without_resources_reports_confirmed_absence() {
 }
 
 #[tokio::test]
-async fn storage_and_audit_failures_report_unconfirmed_physical_cleanup_independently() {
+async fn publication_failures_report_physical_cleanup_at_capture_time() {
     for audit_failure in [false, true] {
         let execution_audit: Arc<dyn ExecutionAudit> = if audit_failure {
             Arc::new(RejectPublishedAudit)
@@ -453,27 +453,33 @@ async fn storage_and_audit_failures_report_unconfirmed_physical_cleanup_independ
         assert!(fixture.records.completed.lock().unwrap().is_empty());
         let audit = fixture.audit.records.lock().unwrap();
         let failure = audit[0].failure.as_ref().unwrap();
-        assert!(failure.cleanup_unconfirmed);
-        let operation_error = match &failure.error {
-            AgentError::OperationAndCleanupFailure {
-                operation_error,
-                cleanup_error,
-            } => {
-                assert_eq!(
-                    cleanup_error.as_ref(),
-                    &AgentError::Transport("cleanup retained".into())
-                );
-                operation_error.as_ref()
-            }
-            error => panic!("publication and cleanup failures must stay distinct: {error:?}"),
-        };
         if audit_failure {
-            assert_eq!(operation_error, &AgentError::AuditFailure);
+            assert!(failure.cleanup_unconfirmed);
+            assert_eq!(
+                failure.error,
+                AgentError::OperationAndCleanupFailure {
+                    operation_error: Box::new(AgentError::AuditFailure),
+                    cleanup_error: Box::new(AgentError::Transport("cleanup retained".into())),
+                }
+            );
         } else {
-            assert!(matches!(
-                operation_error,
-                AgentError::StorageInitialization { .. }
-            ));
+            assert!(!failure.cleanup_unconfirmed);
+            let AgentError::StorageInitialization {
+                error,
+                cleanup_result,
+            } = &failure.error
+            else {
+                panic!(
+                    "publication storage failure must retain its original category: {:?}",
+                    failure.error
+                )
+            };
+            assert_eq!(error, &StorageError::Io("publication rejected".into()));
+            assert_eq!(
+                cleanup_result.as_ref(),
+                &Err(AgentError::Transport("cleanup retained".into())),
+                "the first cleanup failure remains historical evidence after retry confirms release"
+            );
         }
     }
 }
