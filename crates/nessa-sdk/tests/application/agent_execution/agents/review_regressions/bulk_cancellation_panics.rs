@@ -158,10 +158,33 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(
-                matches!(&closed, Err(AgentError::StorageDuringClose { cleanup_result, .. }) if cleanup_result.is_ok()),
-                "commit_first={commit_first}, drop_panics={drop_panics}, panics={panics}, close={closed:?}"
-            );
+            match (&closed, panics) {
+                (
+                    Err(AgentError::StorageDuringClose { cleanup_result, .. }),
+                    1,
+                ) => assert!(cleanup_result.is_ok()),
+                (
+                    Err(AgentError::MultipleOperationFailures {
+                        first_error,
+                        subsequent_error,
+                    }),
+                    2,
+                ) => {
+                    assert!(matches!(
+                        first_error.as_ref(),
+                        AgentError::Storage(StorageError::Io(message))
+                            if message == "pending cancellation persistence panicked"
+                    ));
+                    assert!(matches!(
+                        subsequent_error.as_ref(),
+                        AgentError::Storage(StorageError::Io(message))
+                            if message == "pending cancellation receipt persistence panicked"
+                    ));
+                }
+                _ => panic!(
+                    "commit_first={commit_first}, drop_panics={drop_panics}, panics={panics}, close={closed:?}"
+                ),
+            }
             assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
             assert_eq!(
                 *backend.close_requests.lock().unwrap(),
