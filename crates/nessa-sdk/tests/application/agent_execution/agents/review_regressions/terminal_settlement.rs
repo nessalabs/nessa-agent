@@ -29,6 +29,8 @@ async fn terminal_observation_with_failed_settlement_cleans_up_and_preserves_bot
                 backend.executing.notified().await;
                 backend
                     .sender
+                    .lock()
+                    .unwrap()
                     .send(ExecutionEvent::new(
                         ExecutionId::new("terminal-error").unwrap(),
                         ExecutionUpdate::Finished(reported),

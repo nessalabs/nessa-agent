@@ -153,6 +153,8 @@ async fn observations_after_rejection_never_reenter_the_rejected_history() {
         assert_eq!(backend.closes.load(Ordering::SeqCst), 0);
         backend
             .sender
+            .lock()
+            .unwrap()
             .send(ExecutionEvent::new(
                 ExecutionId::new("rejected").unwrap(),
                 update,
