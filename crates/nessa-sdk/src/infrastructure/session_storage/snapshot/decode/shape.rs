@@ -135,8 +135,8 @@ impl Shape {
             (_, "result" | "execution_result" | "cleanup_result" | "resources" | "audit") => Result,
             (
                 _,
-                "failure" | "operation_failure" | "first_error" | "subsequent_error"
-                | "operation_error" | "cleanup_error" | "delivery_error",
+                "failure" | "operation_failure" | "completion_failure" | "first_error"
+                | "subsequent_error" | "operation_error" | "cleanup_error" | "delivery_error",
             ) => Error,
             (_, "failures") => Hooks,
             _ => Generic,

@@ -812,18 +812,16 @@ async fn close_during_configuration_retains_provider_closure_audit_failure() {
             let opening = agent.start_attachment(authorization).unwrap();
             wait_for_file(&root, "configuration-wait").await;
 
-            assert_eq!(
-                agent.close(close_action()).await,
-                Err(AgentError::AuditFailure)
-            );
+            let expected = AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(AgentError::Closed),
+                cleanup_error: Box::new(AgentError::AuditFailure),
+            };
+            assert_eq!(agent.close(close_action()).await, Err(expected.clone()));
             assert!(opening.wait().await.is_err());
             assert!(agent
                 .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
                 .is_err());
-            assert_eq!(
-                agent.close(close_action()).await,
-                Err(AgentError::AuditFailure)
-            );
+            assert_eq!(agent.close(close_action()).await, Err(expected));
             let closures = audit.closures.lock().unwrap();
             assert_eq!(closures.len(), usize::from(restored) + 1);
             let record = closures.last().unwrap();

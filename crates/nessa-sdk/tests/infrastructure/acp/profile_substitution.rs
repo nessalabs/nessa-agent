@@ -565,11 +565,15 @@ async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_start
     stop_initial_generation(&mut opened, &root).await;
 
     let failure = opened.session.prepare_invocation().await.unwrap_err();
-    assert!(matches!(
-        failure.session_state(),
-        ProviderSessionState::CleanupRequired
-    ));
     assert!(matches!(failure.error(), AgentError::Transport(_)));
+    let ProviderSessionState::CleanupReported(report) = failure.session_state() else {
+        panic!("failed restoration must retain its exact cleanup report")
+    };
+    assert!(matches!(
+        report.resources(),
+        ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain)
+    ));
+    assert_eq!(report.operation_failure(), Some(failure.error()));
     let directory = failed_directory.lock().unwrap().clone().unwrap();
     assert!(directory.is_dir());
 

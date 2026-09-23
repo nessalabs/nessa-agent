@@ -29,6 +29,7 @@ pub(super) struct Cleanup {
     resources: Result<bool, SavedError>,
     audit: Result<(), SavedError>,
     operation_failure: Option<SavedError>,
+    completion_failure: Option<SavedError>,
 }
 impl From<CleanupReport> for Cleanup {
     fn from(value: CleanupReport) -> Self {
@@ -39,6 +40,7 @@ impl From<CleanupReport> for Cleanup {
             },
             audit: value.audit().clone().map_err(Into::into),
             operation_failure: value.operation_failure().cloned().map(Into::into),
+            completion_failure: value.completion_failure().cloned().map(Into::into),
         }
     }
 }
@@ -52,6 +54,7 @@ impl From<Cleanup> for CleanupReport {
             value.audit.map_err(Into::into),
         )
         .with_operation_failure(value.operation_failure.map(Into::into))
+        .with_completion_failure(value.completion_failure.map(Into::into))
     }
 }
 impl From<ProviderSessionState> for Attachment {

@@ -40,7 +40,7 @@ mod steering;
 pub use close::SessionCloseRequest;
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
-pub(crate) use open::FailedOpenCleanup;
+pub(crate) use open::{FailedOpenCauseSource, FailedOpenCleanup};
 pub use open::{
     ProviderCleanup, ProviderOpenControl, ProviderOpenError, ProviderOpenFuture,
     ProviderOpenRequest,

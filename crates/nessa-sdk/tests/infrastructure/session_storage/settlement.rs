@@ -71,10 +71,13 @@ async fn explicit_settlement_facts_round_trip_all_outcomes_and_cleanup_statuses(
                     None,
                     Some(AgentError::Transport("failed command write".into())),
                 ] {
-                    let cleanup = CleanupReport::new(resources.clone(), audit.clone())
-                        .with_operation_failure(operation);
-                    reports.push(ExecutionReport::cancelled_locally(cleanup.clone()));
-                    attachments.push(ProviderSessionState::CleanupReported(cleanup));
+                    for completion in [None, Some(AgentError::CleanupUncertain)] {
+                        let cleanup = CleanupReport::new(resources.clone(), audit.clone())
+                            .with_operation_failure(operation.clone())
+                            .with_completion_failure(completion);
+                        reports.push(ExecutionReport::cancelled_locally(cleanup.clone()));
+                        attachments.push(ProviderSessionState::CleanupReported(cleanup));
+                    }
                 }
             }
         }
@@ -116,6 +119,44 @@ async fn explicit_settlement_facts_round_trip_all_outcomes_and_cleanup_statuses(
                 Some(Err(AgentError::Transport("later local failure".into())))
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn confirmed_cleanup_supervision_failure_survives_restoration() {
+    let root = tempfile::tempdir().unwrap();
+    let stores: Vec<Arc<dyn SessionStorage>> = vec![
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(LocalFileStorage::new(root.path().join("cleanup-supervision")).unwrap()),
+    ];
+    for storage in stores {
+        let lease = storage
+            .open(SessionId::new("cleanup-supervision").unwrap())
+            .await
+            .unwrap();
+        let report = CleanupReport::confirmed(CloseOutcome { forced: false })
+            .with_completion_failure(Some(AgentError::CleanupUncertain));
+        let mut value = snapshot("cleanup-supervision");
+        value.invocations[0].events.clear();
+        value.invocations[0].result = Some(Ok(ExecutionOutcome::Cancelled));
+        value.invocations[0].local_cancellation = Some(InvocationCancellationEvent {
+            cause: SchedulingCause::SessionClosed,
+            actor: None,
+        });
+        value.invocations[0].provider_report =
+            Some(ExecutionReport::cancelled_locally(report.clone()));
+        lease.save(value).await.unwrap();
+
+        let restored = lease.load().await.unwrap().unwrap();
+        let restored = restored.invocations[0]
+            .provider_report
+            .clone()
+            .expect("restored cleanup report");
+        assert_eq!(
+            restored.session_state(),
+            &ProviderSessionState::CleanupReported(report)
+        );
+        assert_eq!(restored.into_result(), Err(AgentError::CleanupUncertain));
     }
 }
 

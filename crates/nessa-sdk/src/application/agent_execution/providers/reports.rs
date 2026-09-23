@@ -23,6 +23,7 @@ pub struct CleanupReport {
     resources: ResourceCleanup,
     audit: Result<(), AgentError>,
     operation_failure: Option<AgentError>,
+    completion_failure: Option<AgentError>,
 }
 impl CleanupReport {
     /// Record actual `resources` and independent `audit` acknowledgement.
@@ -36,6 +37,7 @@ impl CleanupReport {
             resources,
             audit: audit.map_err(AgentError::bounded),
             operation_failure: None,
+            completion_failure: None,
         }
     }
     /// Confirm cleanup with no outstanding audit failure.
@@ -60,12 +62,16 @@ impl CleanupReport {
     }
     /// Replace physical evidence after retry, retaining the original audit result.
     pub fn with_resources(self, resources: ResourceCleanup) -> Self {
-        Self::new(resources, self.audit).with_operation_failure(self.operation_failure)
+        Self::new(resources, self.audit)
+            .with_operation_failure(self.operation_failure)
+            .with_completion_failure(self.completion_failure)
     }
     /// Replace audit acknowledgement while preserving physical cleanup and the
     /// initiating operation diagnostic.
     pub fn with_audit(self, audit: Result<(), AgentError>) -> Self {
-        Self::new(self.resources, audit).with_operation_failure(self.operation_failure)
+        Self::new(self.resources, audit)
+            .with_operation_failure(self.operation_failure)
+            .with_completion_failure(self.completion_failure)
     }
     /// Preserve the initiating operation diagnostic alongside cleanup and audit.
     pub fn with_operation_failure(mut self, failure: Option<AgentError>) -> Self {
@@ -76,17 +82,42 @@ impl CleanupReport {
     pub fn operation_failure(&self) -> Option<&AgentError> {
         self.operation_failure.as_ref()
     }
+    /// Failure while supervising completion of this cleanup attempt.
+    ///
+    /// This is independent of physical release and audit acknowledgement. For
+    /// example, a provider may return confirmed cleanup before destroying its
+    /// cleanup future panics. The confirmed physical fact remains authoritative,
+    /// while callers still observe the supervision failure.
+    pub fn completion_failure(&self) -> Option<&AgentError> {
+        self.completion_failure.as_ref()
+    }
+    /// Preserve a failure from supervising this cleanup attempt.
+    pub fn with_completion_failure(mut self, failure: Option<AgentError>) -> Self {
+        self.completion_failure = failure.map(AgentError::bounded);
+        self
+    }
     /// Return the result of this cleanup attempt.
-    /// Confirmed resources and successful audit delivery return `Ok`, even when
-    /// `operation_failure` retains an earlier operation error. That field is
-    /// historical evidence, not a failure of otherwise successful cleanup.
-    /// If cleanup or audit fails, the returned error includes that earlier error.
+    /// Confirmed resources and successful audit delivery return `Ok` when cleanup
+    /// supervision also completed, even when `operation_failure` retains an earlier
+    /// operation error. That field is historical evidence, not a failure of an
+    /// otherwise successful cleanup. A `completion_failure` remains observable
+    /// without changing the physical-release fact.
+    /// If cleanup, supervision, or audit fails, the returned error includes it.
     /// Inspect [`Self::operation_failure`] before consuming the report when the
     /// original operation matters. Session lifecycle decisions use
     /// [`Self::resources`] and [`Self::audit`] directly.
     pub fn into_result(self) -> Result<CloseOutcome, AgentError> {
-        let cleanup = match (self.resources, self.audit) {
-            (ResourceCleanup::Confirmed(outcome), Ok(())) => return Ok(outcome),
+        let Self {
+            resources,
+            audit,
+            operation_failure,
+            completion_failure,
+        } = self;
+        let cleanup = match (resources, audit) {
+            (ResourceCleanup::Confirmed(outcome), Ok(())) => match completion_failure {
+                Some(error) => return Err(error),
+                None => return Ok(outcome),
+            },
             (ResourceCleanup::Confirmed(_), Err(error))
             | (ResourceCleanup::Unconfirmed(error), Ok(())) => error,
             (ResourceCleanup::Unconfirmed(cleanup_error), Err(operation_error)) => {
@@ -96,14 +127,19 @@ impl CleanupReport {
                 }
             }
         };
-        Err(match self.operation_failure {
-            Some(operation_error) if operation_error != cleanup => {
-                AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(operation_error),
-                    cleanup_error: Box::new(cleanup),
-                }
-            }
-            _ => cleanup,
+        let cleanup = match completion_failure {
+            Some(completion_error) => AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(cleanup),
+                cleanup_error: Box::new(completion_error),
+            },
+            None => cleanup,
+        };
+        Err(match operation_failure {
+            Some(operation_error) => AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(operation_error),
+                cleanup_error: Box::new(cleanup),
+            },
+            None => cleanup,
         })
     }
 }

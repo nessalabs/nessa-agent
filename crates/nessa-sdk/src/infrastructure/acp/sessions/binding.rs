@@ -45,16 +45,6 @@ use tokio::{
 pub(crate) type ProcessFactory =
     Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
 
-fn combine_failure(first: AgentError, second: Option<AgentError>) -> AgentError {
-    match second {
-        Some(second) if second != first => AgentError::MultipleOperationFailures {
-            first_error: Box::new(first),
-            subsequent_error: Box::new(second),
-        },
-        _ => first,
-    }
-}
-
 pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     process: ProcessFactory,
     config: AcpConfig,
@@ -88,19 +78,10 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
             let (cause, cleanup_report) = match completed {
                 Ok(completed) => {
                     let cleanup = completed.cleanup.clone();
-                    let cleanup_error = cleanup.clone().into_result().err();
-                    let actual = completed
-                        .failure
-                        .or_else(|| cleanup.operation_failure().cloned());
                     let cause = if stop_selected {
-                        combine_failure(
-                            AgentError::Closed,
-                            cleanup_error
-                                .or(actual)
-                                .or_else(|| (cause != AgentError::Closed).then_some(cause)),
-                        )
+                        AgentError::Closed
                     } else {
-                        combine_failure(cause, cleanup_error.or(actual))
+                        cause
                     };
                     (cause, Some(cleanup))
                 }

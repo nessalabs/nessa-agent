@@ -90,16 +90,9 @@ impl Resources {
         .await;
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(operation))) {
             std::mem::forget(payload);
-            let error = match result.operation_failure() {
-                Some(error) => AgentError::MultipleOperationFailures {
-                    first_error: Box::new(error.clone()),
-                    subsequent_error: Box::new(AgentError::CleanupUncertain),
-                },
-                None => AgentError::CleanupUncertain,
-            };
             // Future destruction cannot erase a report already returned by poll.
             // Preserve physical and audit evidence and record destruction separately.
-            return result.with_operation_failure(Some(error));
+            return result.with_completion_failure(Some(AgentError::CleanupUncertain));
         }
         result
     }
@@ -247,6 +240,7 @@ impl AttachmentLease {
             _ => Ok(()),
         };
         let mut failure = prior.operation_failure().cloned();
+        let mut completion_failure = prior.completion_failure().cloned();
         let superseded = match prior.resources() {
             ResourceCleanup::Unconfirmed(error) if report.is_confirmed() => Some(error),
             _ => None,
@@ -265,6 +259,12 @@ impl AttachmentLease {
                 None => error.clone(),
             });
         }
+        if let Some(error) = report.completion_failure() {
+            completion_failure = Some(match completion_failure {
+                Some(first) => Self::combine_failures(first, error.clone()),
+                None => error.clone(),
+            });
+        }
         CleanupReport::new(
             if prior.is_confirmed() {
                 prior.resources().clone()
@@ -274,6 +274,7 @@ impl AttachmentLease {
             audit,
         )
         .with_operation_failure(failure)
+        .with_completion_failure(completion_failure)
     }
     // Re-observing a report adds no new failure. Flatten only this diagnostic
     // grouping; other typed errors retain their own lifecycle meaning intact.

@@ -97,6 +97,12 @@ pub trait ProviderCleanup: Send + Sync {
 pub struct ProviderOpenError {
     cause: AgentError,
     cleanup: Box<FailedOpenCleanup>,
+    cause_source: FailedOpenCauseSource,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailedOpenCauseSource {
+    Independent,
+    CleanupReport,
 }
 pub(crate) enum FailedOpenCleanup {
     NotStarted,
@@ -117,6 +123,7 @@ impl ProviderOpenError {
         Self {
             cause,
             cleanup: Box::new(FailedOpenCleanup::NotStarted),
+            cause_source: FailedOpenCauseSource::Independent,
         }
     }
 
@@ -133,6 +140,7 @@ impl ProviderOpenError {
                 report: CleanupReport::unconfirmed(AgentError::CleanupUncertain),
                 owner: cleanup,
             }),
+            cause_source: FailedOpenCauseSource::Independent,
         }
     }
 
@@ -141,14 +149,22 @@ impl ProviderOpenError {
         report: CleanupReport,
         cleanup: Option<Arc<dyn ProviderCleanup>>,
     ) -> Self {
+        let reported_cause = report.clone().into_result().err();
+        let cause_source = if reported_cause.is_some() {
+            FailedOpenCauseSource::CleanupReport
+        } else {
+            FailedOpenCauseSource::Independent
+        };
+        let cause = reported_cause.unwrap_or(cause).bounded();
         let cleanup = match (report.is_confirmed(), cleanup) {
             (true, None) => FailedOpenCleanup::Completed(report),
             (false, Some(owner)) => FailedOpenCleanup::Retained { report, owner },
             _ => panic!("provider open cleanup evidence contradicts resource ownership"),
         };
         Self {
-            cause: cause.bounded(),
+            cause,
             cleanup: Box::new(cleanup),
+            cause_source,
         }
     }
 
@@ -166,8 +182,8 @@ impl ProviderOpenError {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (AgentError, FailedOpenCleanup) {
-        (self.cause, *self.cleanup)
+    pub(crate) fn into_parts(self) -> (AgentError, FailedOpenCleanup, FailedOpenCauseSource) {
+        (self.cause, *self.cleanup, self.cause_source)
     }
 }
 impl fmt::Debug for ProviderOpenError {

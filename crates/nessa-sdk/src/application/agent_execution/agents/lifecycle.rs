@@ -603,14 +603,17 @@ impl SessionLifecycle {
             && matches!(state.work_status, WorkStatus::Open)
             && matches!(state.attachment, AttachmentState::Attached { generation: current, .. } if current == generation)
     }
-    pub(super) async fn run_attachment<T>(
+    pub(super) async fn run_attachment<T, E>(
         &self,
         generation: u64,
-        operation: impl Future<Output = Result<T, AgentError>>,
-    ) -> Result<T, AgentError> {
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E>
+    where
+        E: From<AgentError>,
+    {
         let _transition = self.resource_transition.lock().await;
         if !self.attachment_current(generation) {
-            return Err(AgentError::Closed);
+            return Err(AgentError::Closed.into());
         }
         #[cfg(test)]
         {
@@ -1476,11 +1479,17 @@ impl SessionLifecycle {
         if matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
             if stop.finalized)
         {
-            return ticket
+            let report = ticket
                 .result
                 .borrow()
                 .clone()
                 .unwrap_or_else(|| report.clone());
+            // An explicit caller may join an already-finalized automatic stop and
+            // change only its recovery authority. Apply that authoritative policy
+            // under the same attempt-id fence; outstanding work owners still gate
+            // reopening in `maybe_reopen`.
+            self.maybe_reopen(&mut state);
+            return report;
         }
         // A concurrent retry or operation may have supplied newer evidence while
         // this waiter was settling work. Never republish its earlier snapshot.

@@ -145,10 +145,15 @@ fn diagnostic_normalization_preserves_explicit_resource_and_audit_reports() {
                 failures: Vec::new(),
                 execution_result: Box::new(Err(AgentError::Transport("x".repeat(MAX_BYTES)))),
             }),
-        );
+        )
+        .with_completion_failure(Some(AgentError::Transport("x".repeat(MAX_BYTES))));
         assert_eq!(report.resources(), &resource);
         assert_eq!(report.is_confirmed(), confirmed);
         assert_eq!(report.audit(), &Err(AgentError::DiagnosticLimit));
+        assert_eq!(
+            report.completion_failure(),
+            Some(&AgentError::DiagnosticLimit)
+        );
         let failure = ProviderOperationFailure::new(
             AgentError::MultipleOperationFailures {
                 first_error: Box::new(AgentError::Provider {

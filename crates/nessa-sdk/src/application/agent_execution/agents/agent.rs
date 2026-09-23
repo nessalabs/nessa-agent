@@ -5,6 +5,9 @@ use super::{
         AttachmentAuthorization, AttachmentFailureCode, AttachmentRequest, AttachmentStatus,
         AttachmentWait,
     },
+    attachment_evidence::{
+        AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
+    },
     lifecycle::{SessionLifecycle, WorkPermit},
     scheduling::{ActiveInvocation, Scheduler},
 };
@@ -29,7 +32,7 @@ use crate::application::agent_execution::providers::{
     ProviderExecutionReply, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
-    ProviderContext, SessionManager, StorageError,
+    AttachmentOpenFailureSource, ProviderContext, SessionManager, StorageError,
 };
 use crate::domain::{
     agent_execution::executions::ExecutionOutcome,
@@ -207,7 +210,7 @@ impl Agent {
             start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
             let provider = agent.inner.provider.clone();
-            let mut result = match started {
+            let attempt_result = match started {
                 Ok(()) => {
                     lifecycle
                         .run_attachment(start.generation, async {
@@ -215,10 +218,23 @@ impl Agent {
                                 .inner
                                 .manager
                                 .attach(provider.as_ref(), start.open_control)
-                                .await?;
+                                .await
+                                .map_err(|failure| {
+                                    let source = match failure.source {
+                                        AttachmentOpenFailureSource::Independent => {
+                                            AttachmentFailureSource::Independent
+                                        }
+                                        AttachmentOpenFailureSource::FailedOpenCleanup => {
+                                            AttachmentFailureSource::FailedOpenCleanup(
+                                                start.generation,
+                                            )
+                                        }
+                                    };
+                                    AttachmentAttemptFailure::new(failure.cause, source)
+                                })?;
                             let published_evidence = lifecycle
                                 .publish_attachment(start.generation, attached)
-                                .map_err(|_| AgentError::Closed)?;
+                                .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;
                             let published = AttachmentAuditRecord::new(
                                 agent.inner.manager.id().clone(),
                                 start.generation,
@@ -235,21 +251,35 @@ impl Agent {
                                 ))
                                 .await;
                             published_evidence.send_replace(Some(published_result.clone()));
-                            published_result?;
+                            if let Err(error) = published_result {
+                                return Err(AttachmentAttemptFailure::new(
+                                    error,
+                                    AttachmentFailureSource::Transition(
+                                        start.generation,
+                                        AttachmentEvidenceTransition::ContextPublished,
+                                    ),
+                                ));
+                            }
                             if !lifecycle.acknowledge_attachment_publication(start.generation) {
-                                return Err(AgentError::Closed);
+                                return Err(AgentError::Closed.into());
                             }
                             lifecycle
                                 .attachment_published(start.generation)
                                 .then_some(())
-                                .ok_or(AgentError::Closed)
+                                .ok_or_else(|| AgentError::Closed.into())
                         })
                         .await
                 }
-                Err(error) => Err(error),
+                Err(error) => Err(AttachmentAttemptFailure::new(
+                    error,
+                    AttachmentFailureSource::Transition(
+                        start.generation,
+                        AttachmentEvidenceTransition::Started,
+                    ),
+                )),
             };
-            if result.is_err() {
-                let original = result.as_ref().expect_err("attachment failed").clone();
+            let result = if let Err(mut failure) = attempt_result {
+                let original = failure.error();
                 let code = match &original {
                     AgentError::AuditFailure | AgentError::AuditAndCleanupFailure => {
                         AttachmentFailureCode::Audit
@@ -267,7 +297,7 @@ impl Agent {
                 let transition = lifecycle.fail_attachment(
                     start.generation,
                     code,
-                    result.as_ref().expect_err("attachment failed").clone(),
+                    original.clone(),
                     recorded_context,
                 );
                 if let Ok(failed_evidence) = transition {
@@ -281,12 +311,7 @@ impl Agent {
                             .await
                     };
                     if let Err(settlement_error) = settlement {
-                        result = Err(AgentError::MultipleOperationFailures {
-                            first_error: Box::new(
-                                result.expect_err("attachment failure requires settlement"),
-                            ),
-                            subsequent_error: Box::new(settlement_error),
-                        });
+                        failure.retain_independent(settlement_error);
                     }
                     if code != AttachmentFailureCode::Audit {
                         let failed = AttachmentAuditRecord::new(
@@ -309,12 +334,13 @@ impl Agent {
                                 start.cause,
                                 audit_error.clone(),
                             );
-                            result = Err(AgentError::MultipleOperationFailures {
-                                first_error: Box::new(
-                                    result.expect_err("attachment failure requires audit"),
+                            failure.retain(
+                                audit_error,
+                                AttachmentFailureSource::Transition(
+                                    start.generation,
+                                    AttachmentEvidenceTransition::Failed,
                                 ),
-                                subsequent_error: Box::new(audit_error),
-                            });
+                            );
                         }
                     } else {
                         lifecycle.retain_attachment_evidence_failure(
@@ -329,25 +355,22 @@ impl Agent {
                     // resource cleanup is still running.
                     let attempt = agent.start_shutdown(SessionCloseRequest::SessionFailed);
                     let cleanup = lifecycle.complete_stop(&attempt).await;
-                    if let Err(cleanup_error) = cleanup.into_result() {
-                        result = Err(AgentError::OperationAndCleanupFailure {
-                            operation_error: Box::new(
-                                result.expect_err("attachment failure requires cleanup"),
-                            ),
-                            cleanup_error: Box::new(cleanup_error),
-                        });
-                    }
+                    Err(failure.with_cleanup(&attempt, cleanup.into_result().map(|_| ())))
                 } else if code == AttachmentFailureCode::Audit {
                     lifecycle.retain_attachment_evidence_failure(
                         start.generation,
                         start.cause,
                         original,
                     );
+                    Err(failure.error())
+                } else {
+                    Err(failure.error())
                 }
             } else {
                 let mut scheduler = agent.inner.scheduler.lock().await;
                 agent.start_runner(&mut scheduler);
-            }
+                Ok(())
+            };
             start.result.send_if_modified(|settled| {
                 if settled.is_some() {
                     false

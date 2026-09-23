@@ -12,7 +12,8 @@ use crate::application::agent_execution::{
     permissions::ActionContext,
     providers::{
         AgentProvider, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
-        FailedOpenCleanup, ProviderOpenControl, ProviderOpenRequest, ProviderSession,
+        FailedOpenCauseSource, FailedOpenCleanup, ProviderOpenControl, ProviderOpenRequest,
+        ProviderSession,
     },
     tools::ToolReviewInput,
 };
@@ -33,6 +34,35 @@ use std::{
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+pub(crate) struct AttachmentOpenError {
+    pub(crate) cause: AgentError,
+    pub(crate) source: AttachmentOpenFailureSource,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttachmentOpenFailureSource {
+    Independent,
+    FailedOpenCleanup,
+}
+impl AttachmentOpenError {
+    fn independent(cause: AgentError) -> Self {
+        Self {
+            cause,
+            source: AttachmentOpenFailureSource::Independent,
+        }
+    }
+    fn failed_open(cause: AgentError, source: FailedOpenCauseSource) -> Self {
+        Self {
+            cause,
+            source: match source {
+                FailedOpenCauseSource::Independent => AttachmentOpenFailureSource::Independent,
+                FailedOpenCauseSource::CleanupReport => {
+                    AttachmentOpenFailureSource::FailedOpenCleanup
+                }
+            },
+        }
+    }
+}
 
 /// Owns the local conversation key, its exclusive storage lease, and saved evidence.
 /// Provider-private model/tool state is restored by the selected provider.
@@ -212,7 +242,7 @@ impl SessionManager {
         &self,
         provider: &dyn AgentProvider,
         control: ProviderOpenControl,
-    ) -> Result<AttachedProvider, AgentError> {
+    ) -> Result<AttachedProvider, AttachmentOpenError> {
         let snapshot = self
             .evidence
             .lock()
@@ -231,7 +261,9 @@ impl SessionManager {
                 self.attachment
                     .arm_unknown_open(self.storage_lease.clone())
                     .await;
-                return Err(AgentError::CleanupUncertain);
+                return Err(AttachmentOpenError::independent(
+                    AgentError::CleanupUncertain,
+                ));
             }
         };
         let result = poll_fn(|context| {
@@ -265,7 +297,7 @@ impl SessionManager {
                         .await;
                 }
                 Some(Err(error)) => {
-                    let (error, cleanup) = error.into_parts();
+                    let (error, cleanup, _) = error.into_parts();
                     cause = AgentError::MultipleOperationFailures {
                         first_error: Box::new(error),
                         subsequent_error: Box::new(drop_failure),
@@ -292,12 +324,12 @@ impl SessionManager {
                         .await
                 }
             }
-            return Err(cause);
+            return Err(AttachmentOpenError::independent(cause));
         }
         let opened = match result.expect("completed provider open") {
             Ok(opened) => opened,
             Err(error) => {
-                let (cause, cleanup) = error.into_parts();
+                let (cause, cleanup, source) = error.into_parts();
                 match cleanup {
                     FailedOpenCleanup::NotStarted => {}
                     FailedOpenCleanup::Completed(report) => {
@@ -309,7 +341,7 @@ impl SessionManager {
                             .await;
                     }
                 }
-                return Err(cause);
+                return Err(AttachmentOpenError::failed_open(cause, source));
             }
         };
         if restore.as_ref().is_some_and(|id| id != opened.session.id()) {
@@ -321,10 +353,12 @@ impl SessionManager {
                 )
                 .await;
             let cleanup_result = self.attachment.cleanup().await;
-            return Err(AgentError::StorageInitialization {
-                error: StorageError::IdentityMismatch,
-                cleanup_result: Box::new(cleanup_result.into_result()),
-            });
+            return Err(AttachmentOpenError::independent(
+                AgentError::StorageInitialization {
+                    error: StorageError::IdentityMismatch,
+                    cleanup_result: Box::new(cleanup_result.into_result()),
+                },
+            ));
         }
         if opened.session.capabilities() != provider.capabilities() {
             self.attachment
@@ -335,10 +369,12 @@ impl SessionManager {
                 )
                 .await;
             let cleanup_result = self.attachment.cleanup().await;
-            return Err(AgentError::StorageInitialization {
-                error: StorageError::IdentityMismatch,
-                cleanup_result: Box::new(cleanup_result.into_result()),
-            });
+            return Err(AttachmentOpenError::independent(
+                AgentError::StorageInitialization {
+                    error: StorageError::IdentityMismatch,
+                    cleanup_result: Box::new(cleanup_result.into_result()),
+                },
+            ));
         }
         let session = opened.session;
         let events = Arc::new(Mutex::new(opened.events));
@@ -366,10 +402,12 @@ impl SessionManager {
         };
         if let Err(error) = save_result {
             let cleanup_result = self.attachment.cleanup().await;
-            return Err(AgentError::StorageInitialization {
-                error,
-                cleanup_result: Box::new(cleanup_result.into_result()),
-            });
+            return Err(AttachmentOpenError::independent(
+                AgentError::StorageInitialization {
+                    error,
+                    cleanup_result: Box::new(cleanup_result.into_result()),
+                },
+            ));
         }
         Ok(AttachedProvider { session, events })
     }
