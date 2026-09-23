@@ -349,6 +349,7 @@ try {
   assert.notEqual(staleEndpointInstance, endpointRecord.endpointInstance)
   const RealWebSocket = globalThis.WebSocket
   const realFetch = globalThis.fetch
+  let completedHealth
   let credentialReads = 0
   let healthRequests = 0
   let socketAdmissions = 0
@@ -358,9 +359,21 @@ try {
       JSON.stringify({ ...endpointRecord, endpointInstance: staleEndpointInstance }),
       { mode: endpointMode },
     )
-    globalThis.fetch = (input, init) => {
-      if (String(input) === `http://127.0.0.1:${port}/health`) healthRequests += 1
-      return realFetch(input, init)
+    globalThis.fetch = async (input, init) => {
+      const response = await realFetch(input, init)
+      if (String(input) === `http://127.0.0.1:${port}/health`) {
+        healthRequests += 1
+        completedHealth = {
+          status: response.status,
+          endpointInstance: response.headers.get("x-nessa-endpoint-instance"),
+          endpointProcessId: response.headers.get("x-nessa-endpoint-process-id"),
+          runtimeFingerprint: response.headers.get("x-nessa-runtime-fingerprint"),
+          serviceGeneration: response.headers.get("x-nessa-service-generation"),
+          runtimeInstance: response.headers.get("x-nessa-runtime-instance"),
+          runtimeProcessId: response.headers.get("x-nessa-process-id"),
+        }
+      }
+      return response
     }
     globalThis.WebSocket = new Proxy(RealWebSocket, {
       construct(target, argumentsList, newTarget) {
@@ -391,6 +404,19 @@ try {
       (error) => error instanceof NessaEndpointDiscoveryError,
     )
     assert.equal(healthRequests, 1)
+    assert.deepEqual(completedHealth, {
+      status: 200,
+      endpointInstance: endpointRecord.endpointInstance,
+      endpointProcessId: String(endpointRecord.processId),
+      runtimeFingerprint: endpointRecord.runtimeFingerprint ?? null,
+      serviceGeneration: endpointRecord.serviceGeneration ?? null,
+      runtimeInstance: endpointRecord.runtimeInstance ?? null,
+      runtimeProcessId:
+        endpointRecord.runtimeProcessId === undefined
+          ? null
+          : String(endpointRecord.runtimeProcessId),
+    })
+    assert.notEqual(completedHealth.endpointInstance, staleEndpointInstance)
     assert.equal(credentialReads, 0)
     assert.equal(socketAdmissions, 0)
   } finally {
