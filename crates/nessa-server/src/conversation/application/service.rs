@@ -791,7 +791,7 @@ impl ConversationService {
                                             report_opening_failure(&attachment_id, &error);
                                         }
                                     }
-                                    Err(error) if matches!(error, AgentError::Closed) => {}
+                                    Err(AgentError::Closed) => {}
                                     Err(error) => report_opening_failure(&attachment_id, &error),
                                 }
                             });

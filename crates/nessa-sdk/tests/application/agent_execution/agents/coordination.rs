@@ -11,7 +11,7 @@ use crate::application::{
         providers::{
             AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
             ExecutionReport, OpenedProviderSession, ProviderExecutionFuture,
-            ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture,
+            ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
             ProviderOpenFuture, ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
             ProviderSessionBackend, ProviderSessionState,
         },
@@ -73,7 +73,7 @@ use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, InvocationStage, SchedulingCause},
         prompts::{PromptText, UserMessage},
-        sessions::ExecutionSessionId,
+        sessions::{ExecutionSessionId, SessionId},
     },
     effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},
     model_metadata::{
@@ -93,6 +93,10 @@ use tokio::{
 };
 
 struct Provider(Arc<Backend>);
+struct RecoveryOpenFailureProvider {
+    inner: Provider,
+    opens: AtomicUsize,
+}
 #[derive(Default)]
 struct Backend {
     executions: AtomicUsize,
@@ -155,6 +159,21 @@ impl AgentProvider for Provider {
                 events: Box::new(ExhaustedEvents),
             })
         })
+    }
+}
+impl AgentProvider for RecoveryOpenFailureProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.inner.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.inner.capabilities()
+    }
+    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        if self.opens.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.inner.open(restore)
+        } else {
+            Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+        }
     }
 }
 impl ProviderSessionBackend for Backend {
@@ -326,6 +345,66 @@ async fn old_control_supervisor_failure_cannot_close_a_recovered_attachment() {
     assert!(agent.inner.lifecycle.is_closed());
     drop(current);
     agent.close(actor()).await.unwrap();
+}
+
+#[tokio::test]
+async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt() {
+    let storage = Arc::new(InMemoryStorage::new());
+    let id = SessionId::new("automatic-recovery-failure").unwrap();
+    let backend = Arc::new(Backend::default());
+    let provider = Arc::new(RecoveryOpenFailureProvider {
+        inner: Provider(backend),
+        opens: AtomicUsize::new(0),
+    });
+    let manager = SessionManager::open(Some(id.clone()), storage.clone())
+        .await
+        .unwrap();
+    let agent = attached_agent(provider.clone(), manager).await.unwrap();
+
+    let control = agent.accept_control().unwrap();
+    assert_eq!(
+        agent
+            .run_control(control, async {
+                Err::<(), _>(ProviderOperationFailure::new(
+                    AgentError::Protocol("provider requested restart".into()),
+                    ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                        forced: false,
+                    })),
+                ))
+            })
+            .await,
+        Err(AgentError::Protocol("provider requested restart".into()))
+    );
+
+    let receipt = agent.enqueue(input(), actor()).await.unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), receipt.wait())
+            .await
+            .expect("automatic recovery failure settles its receipt"),
+        Err(AgentError::Closed)
+    );
+    assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
+    let snapshot = agent.inner.manager.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.invocations[0].result,
+        Some(Err(AgentError::Closed))
+    );
+    assert_eq!(
+        snapshot.invocations[0].scheduling.last().unwrap().stage,
+        InvocationStage::Settled
+    );
+
+    drop(agent);
+    let restored = Agent::prepare(
+        provider.clone(),
+        SessionManager::open(Some(id), storage).await.unwrap(),
+        Arc::new(AcceptingAudit),
+    )
+    .await
+    .unwrap();
+    let retry = restored.enqueue(input(), actor()).await.unwrap();
+    assert_eq!(retry.wait().await, Err(AgentError::Closed));
+    assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

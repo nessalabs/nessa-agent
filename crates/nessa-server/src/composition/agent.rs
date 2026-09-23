@@ -518,7 +518,10 @@ pub(super) fn providers(
         // known to use it: the runtime sends an image only to an agent that
         // advertised `promptCapabilities.image`, so an agent that takes none is
         // offered none without this having to know which those are.
-        let (provider, execution_audit) = match build::provider(
+        let build::ProviderComposition {
+            provider,
+            execution_audit,
+        } = match build::provider(
             agent,
             config,
             runtime,
@@ -636,6 +639,11 @@ mod build {
         sync::Arc,
     };
 
+    pub(super) struct ProviderComposition {
+        pub(super) provider: Arc<dyn AgentProvider>,
+        pub(super) execution_audit: Arc<dyn ExecutionAudit>,
+    }
+
     /// The largest ACP frame, derived from the largest message rather than
     /// chosen beside it. One `session/prompt` carries every image of a message
     /// as base64, which grows bytes by a third: `UserMessage::MAX_IMAGE_BYTES`
@@ -742,7 +750,7 @@ mod build {
         directory: &Path,
         clock: Arc<dyn Clock>,
         images: Arc<dyn UserImageSource>,
-    ) -> Result<(Arc<dyn AgentProvider>, Arc<dyn ExecutionAudit>), RunError> {
+    ) -> Result<ProviderComposition, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
         let model = super::model(agent, config, runtime)?;
         let workspace = config
@@ -793,7 +801,10 @@ mod build {
                 OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
             ),
         };
-        Ok((provider, audit))
+        Ok(ProviderComposition {
+            provider,
+            execution_audit: audit,
+        })
     }
 }
 
