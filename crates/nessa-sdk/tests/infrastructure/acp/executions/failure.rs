@@ -135,3 +135,131 @@ fn unexpected_finish_failure_is_reported_unless_execution_was_already_released()
         }
     }
 }
+
+fn contains_diagnostic_limit(error: &AgentError) -> bool {
+    match error {
+        AgentError::DiagnosticLimit => true,
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        }
+        | AgentError::OperationAndCleanupFailure {
+            operation_error: first_error,
+            cleanup_error: subsequent_error,
+        } => contains_diagnostic_limit(first_error) || contains_diagnostic_limit(subsequent_error),
+        _ => false,
+    }
+}
+
+fn count_matching(error: &AgentError, expected: &AgentError) -> usize {
+    match error {
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        }
+        | AgentError::OperationAndCleanupFailure {
+            operation_error: first_error,
+            cleanup_error: subsequent_error,
+        } => count_matching(first_error, expected) + count_matching(subsequent_error, expected),
+        error if error == expected => 1,
+        _ => 0,
+    }
+}
+
+#[test]
+fn settlement_fact_identity_preserves_equal_independent_failures() {
+    let mut facts = SettlementFacts::new();
+    facts.record_audit(AuditAttemptId(1));
+    facts.record_audit(AuditAttemptId(1));
+    assert_eq!(facts.audit_result(), Err(AgentError::AuditFailure));
+    facts.record_audit(AuditAttemptId(2));
+    assert_eq!(
+        facts.audit_result(),
+        Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure),
+        })
+    );
+
+    let error = AgentError::AuditFailure;
+    facts.record_operation(
+        OperationEffectId {
+            sequence: 1,
+            phase: OperationEffectPhase::Worker,
+        },
+        error.clone(),
+    );
+    facts.record_operation(
+        OperationEffectId {
+            sequence: 2,
+            phase: OperationEffectPhase::Worker,
+        },
+        error.clone(),
+    );
+    assert_eq!(
+        facts.operation_failure(),
+        Some(AgentError::MultipleOperationFailures {
+            first_error: Box::new(error.clone()),
+            subsequent_error: Box::new(error),
+        })
+    );
+}
+
+#[test]
+fn settlement_fact_budgets_preserve_both_categories_in_either_arrival_order() {
+    for audit_first in [false, true] {
+        let mut facts = SettlementFacts::new();
+        if audit_first {
+            for index in 0..=MAX_RETAINED_CATEGORY_FACTS as u64 {
+                facts.record_audit(AuditAttemptId(index));
+            }
+            for index in 0..=MAX_RETAINED_CATEGORY_FACTS as u64 {
+                facts.record_operation(
+                    OperationEffectId {
+                        sequence: index,
+                        phase: OperationEffectPhase::PermissionDelivery,
+                    },
+                    AgentError::Deadline,
+                );
+            }
+        } else {
+            for index in 0..=MAX_RETAINED_CATEGORY_FACTS as u64 {
+                facts.record_operation(
+                    OperationEffectId {
+                        sequence: index,
+                        phase: OperationEffectPhase::PermissionDelivery,
+                    },
+                    AgentError::Deadline,
+                );
+            }
+            for index in 0..=MAX_RETAINED_CATEGORY_FACTS as u64 {
+                facts.record_audit(AuditAttemptId(index));
+            }
+        }
+        let audit = facts.audit_result().unwrap_err();
+        let operation = facts.operation_failure().unwrap();
+        assert!(contains_diagnostic_limit(&audit));
+        assert!(contains_diagnostic_limit(&operation));
+        assert_eq!(count_matching(&audit, &AgentError::AuditFailure), 31);
+        assert_eq!(count_matching(&operation, &AgentError::Deadline), 31);
+        audit.validate_retained_size().unwrap();
+        operation.validate_retained_size().unwrap();
+        let combined = CleanupReport::new(
+            ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+            Err(audit),
+        )
+        .with_operation_failure(Some(operation))
+        .into_result()
+        .unwrap_err();
+        let AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } = &combined
+        else {
+            panic!("both projected categories must remain independently visible")
+        };
+        assert_eq!(count_matching(operation_error, &AgentError::Deadline), 31);
+        assert_eq!(count_matching(cleanup_error, &AgentError::AuditFailure), 31);
+        combined.validate_retained_size().unwrap();
+    }
+}

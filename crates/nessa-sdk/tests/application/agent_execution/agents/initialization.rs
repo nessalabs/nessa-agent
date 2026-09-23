@@ -1395,7 +1395,14 @@ async fn cleanup_construction_poll_and_drop_panics_remain_retryable() {
             agent.close(close_action()).await,
             Err(AgentError::CleanupUncertain)
         );
-        agent.close(close_action()).await.unwrap();
+        assert_eq!(
+            agent.close(close_action()).await,
+            if matches!(failure, CleanupPanic::Drop) {
+                Err(AgentError::CleanupUncertain)
+            } else {
+                Ok(CloseOutcome { forced: false })
+            }
+        );
         drop(agent);
         drop(storage.manager().await);
     }

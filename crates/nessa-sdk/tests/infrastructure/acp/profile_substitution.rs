@@ -573,7 +573,7 @@ async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_start
         report.resources(),
         ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain)
     ));
-    assert_eq!(report.operation_failure(), Some(failure.error()));
+    assert_eq!(report.operation_failure(), None);
     let directory = failed_directory.lock().unwrap().clone().unwrap();
     assert!(directory.is_dir());
 

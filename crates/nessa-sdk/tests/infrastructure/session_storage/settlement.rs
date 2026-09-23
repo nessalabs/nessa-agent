@@ -138,7 +138,7 @@ async fn confirmed_cleanup_supervision_failure_survives_restoration() {
             .with_completion_failure(Some(AgentError::CleanupUncertain));
         let mut value = snapshot("cleanup-supervision");
         value.invocations[0].events.clear();
-        value.invocations[0].result = Some(Ok(ExecutionOutcome::Cancelled));
+        value.invocations[0].result = Some(Err(AgentError::CleanupUncertain));
         value.invocations[0].local_cancellation = Some(InvocationCancellationEvent {
             cause: SchedulingCause::SessionClosed,
             actor: None,
