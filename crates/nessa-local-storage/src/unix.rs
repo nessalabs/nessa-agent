@@ -9,6 +9,10 @@ use std::{
     },
     path::Component,
 };
+mod retained_directory;
+pub(crate) use retained_directory::{
+    validate_native_name, RetainedDirectory, RetainedDirectoryEntries,
+};
 pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
