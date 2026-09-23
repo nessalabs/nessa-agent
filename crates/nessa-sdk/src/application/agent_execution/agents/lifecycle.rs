@@ -29,6 +29,8 @@ use crate::domain::agent_execution::{
     executions::{ExecutionId, SchedulingCause},
     sessions::{AttachmentCause, SessionId},
 };
+#[cfg(test)]
+use std::sync::mpsc::Receiver;
 use std::{
     collections::HashMap,
     future::{poll_fn, Future},
@@ -150,7 +152,7 @@ enum AttachmentState {
 }
 pub(super) struct SessionLifecycle {
     #[cfg(test)]
-    work_admission_pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    work_admission_pause: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
     #[cfg(test)]
     preparation_pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     #[cfg(test)]
@@ -727,24 +729,26 @@ impl SessionLifecycle {
         self.changed.send_replace(());
     }
     pub(super) fn accept_work(self: &Arc<Self>) -> Result<WorkPermit, AgentError> {
-        self.accept_work_kind(WorkPhase::Active, false)
+        let work = self.accept_work_kind(WorkPhase::Active, false)?;
+        #[cfg(test)]
+        {
+            let pause = self.work_admission_pause.lock().unwrap().take();
+            if let Some((entered, release)) = pause {
+                tokio::task::block_in_place(|| {
+                    entered.send(()).unwrap();
+                    release.recv().unwrap();
+                });
+            }
+        }
+        Ok(work)
     }
     #[cfg(test)]
     pub(super) fn pause_next_work_admission(
         &self,
         entered: oneshot::Sender<()>,
-        release: oneshot::Receiver<()>,
+        release: Receiver<()>,
     ) {
         *self.work_admission_pause.lock().unwrap() = Some((entered, release));
-    }
-    #[cfg(test)]
-    pub(super) async fn wait_for_work_admission_release(&self) {
-        let pause = self.work_admission_pause.lock().unwrap().take();
-        if let Some((entered, release)) = pause {
-            if entered.send(()).is_ok() {
-                let _ = release.await;
-            }
-        }
     }
     pub(super) fn accept_waiting_work(self: &Arc<Self>) -> Result<WorkPermit, AgentError> {
         self.accept_work_kind(WorkPhase::Waiting, false)

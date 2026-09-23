@@ -139,6 +139,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::channel,
         Arc, Mutex as StateMutex,
     },
     task::Poll,
@@ -599,12 +600,12 @@ async fn new_close_after_completed_cleanup_owns_newly_queued_cancellation() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn close_after_work_admission_preserves_input_and_closer_before_handoff() {
     for caller_lost in [false, true] {
         let (agent, backend) = agent_with_backend().await;
         let (entered, accepted) = oneshot::channel();
-        let (release, waiting) = oneshot::channel();
+        let (release, waiting) = channel();
         agent
             .inner
             .lifecycle
