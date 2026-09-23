@@ -13,6 +13,7 @@ use nessa_local_storage::OpenMode;
 use sha2::Sha256;
 use tar::{EntryType, Header};
 
+use crate::agent_install::application::PublicationRecovery;
 use crate::agent_install::domain::{
     AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, Libc, ReleaseContents, ReleaseFile,
     ReleasePlatform, ReleaseRequirements,
