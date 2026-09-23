@@ -316,10 +316,9 @@ fn identity_from_status(status: &libc::stat) -> PrivateFileIdentity {
 
 #[cfg(target_vendor = "apple")]
 fn identity_from_status(status: &libc::stat) -> PrivateFileIdentity {
-    // Apple exposes `dev_t` as signed i32. Device identity is its native
-    // 32-bit representation, including the high bit, widened without loss.
-    let device = u64::from(u32::from_ne_bytes(status.st_dev.to_ne_bytes()));
-    PrivateFileIdentity::from_u64s(device, status.st_ino)
+    // Match the standard library's Darwin `MetadataExt::dev` projection so
+    // identities from `fstatat` and `File::metadata` have one representation.
+    PrivateFileIdentity::from_u64s(status.st_dev as u64, status.st_ino)
 }
 
 fn file_type(mode: libc::mode_t) -> PrivateFileType {
@@ -383,5 +382,24 @@ fn set_errno(value: i32) {
 fn set_errno(value: i32) {
     unsafe {
         *libc::__error() = value;
+    }
+}
+
+#[cfg(all(test, target_vendor = "apple"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apple_stat_identity_matches_metadata_projection_across_dev_t_values() {
+        for (device, inode) in [(0, 0), (17, 19), (-17, 23), (i32::MIN, u64::MAX)] {
+            let mut status = unsafe { std::mem::zeroed::<libc::stat>() };
+            status.st_dev = device;
+            status.st_ino = inode;
+
+            assert_eq!(
+                identity_from_status(&status),
+                PrivateFileIdentity::from_u64s(device as u64, inode)
+            );
+        }
     }
 }
