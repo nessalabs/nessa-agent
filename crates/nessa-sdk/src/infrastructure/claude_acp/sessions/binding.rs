@@ -145,7 +145,7 @@ impl AgentProvider for ClaudeAcpProvider {
         Box::pin(async move {
             let factory = self.clone();
             acp_binding::open(
-                Arc::new(move || ProcessScope::spawn(factory.launch_command())),
+                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into)),
                 self.config.clone(),
                 self.capabilities.clone(),
                 ClaudeProfile::new(self.system_prompt.clone()).with_mcp_servers(&self.config),
