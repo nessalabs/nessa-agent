@@ -292,6 +292,18 @@ tree can be written to by anything else uses the second.
 name at a time. Unix syncs each parent before descent and the final leaf before
 success. Windows revalidates the anchored tree because it has no directory-fsync
 equivalent; sinks flush record files and use write-through moves separately.
+`PrivateDirectory` is the narrower retained-authority API for a store that scans,
+locks, opens, and publishes repeatedly in one directory. It preserves the original
+root, directory chain, and native identities; each enumeration owns an independent
+non-atomic cursor, and every file operation takes one native component. Publication
+never replaces a name and returns the still-open destination handle. A failure after
+rename retains that published fact separately from its failed acknowledgement, while
+a pre-rename cleanup failure stays separate from the primary failure. On Unix the
+caller must hold its stable lock across each residual leaf check/effect interval; on
+Windows non-delete-sharing handles pin the directory chain. Binding checks are
+acknowledgement checkpoints rather than continuous attachment. Windows `sync` only
+revalidates binding and does not claim directory durability or arbitrary power-loss
+survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map).
 
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
