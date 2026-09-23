@@ -44,13 +44,22 @@ pub(super) fn restart(error: &RunError) -> Restart {
         // Contents this build cannot make sense of, including a registry
         // written by a schema it does not know. Reading them again is reading
         // the same bytes.
-        RunError::Registry(LocalStoreError::Corrupt | LocalStoreError::Capacity) => {
+        RunError::Registry(failure)
+            if matches!(
+                failure.primary(),
+                LocalStoreError::Corrupt
+                    | LocalStoreError::InvalidRegistry { .. }
+                    | LocalStoreError::Capacity
+            ) =>
+        {
             Restart::Pointless
         }
         // A registry another process is holding. That holder can let go — an
         // upgrade's outgoing gateway is still finishing while its replacement
         // starts — so this is exactly the failure launchd's retry is for.
-        RunError::Registry(LocalStoreError::Locked) => Restart::Worthwhile,
+        RunError::Registry(failure) if matches!(failure.primary(), LocalStoreError::Locked) => {
+            Restart::Worthwhile
+        }
         // A prepared runtime that is missing, unreadable, or not the one this
         // registration was fingerprinted against. Only a new registration
         // changes any of that.
@@ -84,8 +93,8 @@ mod tests {
     #[test]
     fn a_registry_this_build_cannot_read_is_not_worth_starting_for_again() {
         for error in [
-            RunError::Registry(LocalStoreError::Corrupt),
-            RunError::Registry(LocalStoreError::Capacity),
+            RunError::registry(LocalStoreError::Corrupt, None),
+            RunError::registry(LocalStoreError::Capacity, None),
             RunError::Environment(EnvironmentError::Empty { variable: HOST }),
             RunError::Runtime("missing bundled runtime file".into()),
             // The command line is read again unchanged, so the next attempt
@@ -102,10 +111,11 @@ mod tests {
     #[test]
     fn a_failure_that_can_clear_on_its_own_is_still_retried() {
         for error in [
-            RunError::Registry(LocalStoreError::Locked),
-            RunError::Registry(LocalStoreError::Io(Error::from(
-                ErrorKind::PermissionDenied,
-            ))),
+            RunError::registry(LocalStoreError::Locked, None),
+            RunError::registry(
+                LocalStoreError::Io(Error::from(ErrorKind::PermissionDenied)),
+                None,
+            ),
             RunError::Bind {
                 addr: "127.0.0.1:7420".into(),
                 source: Error::from(ErrorKind::AddrInUse),

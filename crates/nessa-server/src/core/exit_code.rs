@@ -46,13 +46,22 @@ pub(super) fn reason(error: &RunError) -> &'static str {
         // is already holding is not a registry problem at all: it is the
         // second gateway for this stage being refused, which is the whole
         // point of that lock, and it deserves to be said as such.
-        RunError::Registry(LocalStoreError::Locked) => "alreadyRunning",
+        RunError::Registry(failure) if matches!(failure.primary(), LocalStoreError::Locked) => {
+            "alreadyRunning"
+        }
         // "Invalid" is contents this build cannot make sense of — the schema
         // version among them — which is a different thing to tell someone
         // than a registry that would not open. Anything new in that family
         // says the general thing, which stays true, rather than blaming a
         // version.
-        RunError::Registry(LocalStoreError::Corrupt | LocalStoreError::Capacity) => {
+        RunError::Registry(failure)
+            if matches!(
+                failure.primary(),
+                LocalStoreError::Corrupt
+                    | LocalStoreError::InvalidRegistry { .. }
+                    | LocalStoreError::Capacity
+            ) =>
+        {
             "credentialRegistryInvalid"
         }
         RunError::Registry(_) => "credentialRegistry",
@@ -113,11 +122,12 @@ mod tests {
             RunError::Environment(crate::env::EnvironmentError::Empty {
                 variable: crate::env::HOST,
             }),
-            RunError::Registry(LocalStoreError::Corrupt),
-            RunError::Registry(LocalStoreError::Locked),
-            RunError::Registry(LocalStoreError::Io(Error::from(
-                ErrorKind::PermissionDenied,
-            ))),
+            RunError::registry(LocalStoreError::Corrupt, None),
+            RunError::registry(LocalStoreError::Locked, None),
+            RunError::registry(
+                LocalStoreError::Io(Error::from(ErrorKind::PermissionDenied)),
+                None,
+            ),
             RunError::Usage("unknown command".into()),
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
@@ -152,8 +162,8 @@ mod tests {
     /// that failed for another reason.
     #[test]
     fn the_reasons_the_desktop_names_are_told_apart() {
-        let registry = exit_code(&RunError::Registry(LocalStoreError::Corrupt));
-        let locked = exit_code(&RunError::Registry(LocalStoreError::Locked));
+        let registry = exit_code(&RunError::registry(LocalStoreError::Corrupt, None));
+        let locked = exit_code(&RunError::registry(LocalStoreError::Locked, None));
         let taken = exit_code(&RunError::Bind {
             addr: "127.0.0.1:7420".into(),
             source: Error::from(ErrorKind::AddrInUse),
