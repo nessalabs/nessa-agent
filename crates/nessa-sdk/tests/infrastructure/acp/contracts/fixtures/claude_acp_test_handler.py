@@ -132,6 +132,12 @@ for line in sys.stdin:
         assert options["tools"] == {"type": "preset", "preset": "claude_code"}
         assert "Bash" in options["disallowedTools"]
         assert "Bash" in options["settings"]["permissions"]["deny"]
+        for canonical in ("TaskOutput", "TaskStop"):
+            assert canonical in options["disallowedTools"]
+            assert canonical in options["settings"]["permissions"]["deny"]
+        for historical in ("BashOutput", "KillShell"):
+            assert historical not in options["disallowedTools"]
+            assert historical not in options["settings"]["permissions"]["deny"]
         # Every tool the harness offers is reviewed by Nessa's permission owner;
         # naming them one by one left unnamed tools running unreviewed and
         # failed the execution when one of them was called.
@@ -216,7 +222,26 @@ for line in sys.stdin:
         elif mode == "provider-error" or (mode == "provider-error-once" and len(launches) == 1):
             if mode == "provider-error-once":
                 text("retained-before-failure")
-            send({"id": pending, "error": {"code": -32000, "message": "must not leak provider secret"}})
+            send({"id": pending, "error": {"code": -32000, "message": "provider plan does not allow this request"}})
+        elif mode == "unsupported-tool-content":
+            update({"sessionUpdate": "tool_call", **tool(), "content": [
+                {"type": "content", "content": {"type": "text", "text": "before"}},
+                {"type": "content", "content": {"type": "image", "data": "i" * 3000,
+                                                    "mimeType": "image/png"}},
+                {"type": "terminal", "terminalId": "command"},
+                {"type": "bash_code_execution_result", "stdout": "opaque"},
+            ]})
+            opaque = [
+                {"type": "future_result", "payload": "z" * 180, "ordinal": index}
+                for index in range(12)
+            ]
+            update({"sessionUpdate": "tool_call_update", "toolCallId": "file-1",
+                    "status": "completed", "content": opaque + [
+                        {"type": "content", "content": {"type": "text", "text": "after"}}
+                    ]})
+            text("continued:" + user_text)
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
         elif mode == "wrong-session":
             text(sid="someone-else")
         elif mode == "unknown-reason":

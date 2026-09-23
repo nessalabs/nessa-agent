@@ -43,16 +43,28 @@ fn validates_claude_schemas_and_preserves_complete_review_arguments() {
             serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
             input
         );
+
+        let mut extended = input;
+        extended.as_object_mut().unwrap().insert(
+            "future_schema_field".into(),
+            json!({"nested":["opaque", 7]}),
+        );
+        let review = tool_input(name, &extended).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+            extended,
+            "{name} must preserve additive provider fields for host review"
+        );
     }
     // Both spellings are in the pinned SDK's current schema; conflicts cannot
     // be hidden from the host by choosing a projection precedence.
     assert!(tool_input("Grep", &json!({"pattern":"x","context":1,"-C":2})).is_err());
     for (name, input) in [
         ("Bash", json!({"command":"true"})),
-        (
-            "Write",
-            json!({"file_path":"/a","content":"x","command":"true"}),
-        ),
+        ("Write", json!({"file_path":"/a"})),
+        ("Edit", json!({"file_path":"/a","old_string":"old"})),
+        ("Glob", json!({"path":"/a"})),
+        ("Grep", json!({"pattern":7})),
         ("Read", json!({"file_path":"/a","offset":-1})),
         ("Write", json!({"file_path":"","content":"x"})),
         ("Read", json!({"file_path":"a\0b"})),
@@ -102,7 +114,7 @@ fn invalid_content_does_not_reserve_a_provider_tool_name() {
     let mut names = HashMap::new();
     assert!(matches!(
         tool_call(
-            &json!({"toolCallId":"a","_meta":{"claudeCode":{"toolName":"Write"}},"content":[{"type":"content","content":{"type":"image"}}]}),
+            &json!({"toolCallId":"a","_meta":{"claudeCode":{"toolName":"Write"}},"content":[{"type":"content","content":{}}]}),
             &mut names
         ),
         Err(AgentError::Protocol(_))
@@ -262,8 +274,8 @@ fn execution_and_escaping_tools_are_denied_even_though_admission_is_open() {
     let mut names = HashMap::new();
     for name in [
         "Bash",
-        "BashOutput",
-        "KillShell",
+        "TaskOutput",
+        "TaskStop",
         "Monitor",
         "REPL",
         "EnterPlanMode",
@@ -303,6 +315,20 @@ fn execution_and_escaping_tools_are_denied_even_though_admission_is_open() {
         .values()
         .all(|observed| *observed == ObservedTool::Declined));
     assert_eq!(names.len(), DISALLOWED_TOOLS.len());
+
+    // The pinned SDK canonicalizes these historical spellings before applying
+    // permission rules. They are not a second local compatibility contract:
+    // raw names reaching this parser follow the same open review path as any
+    // other bounded native name.
+    for alias in ["BashOutput", "KillShell"] {
+        assert!(enabled_name(alias, &[]));
+        tool_call(
+            &json!({"toolCallId":alias,"_meta":{"claudeCode":{"toolName":alias}}}),
+            &mut names,
+        )
+        .unwrap();
+        assert_eq!(reviewable(&names, alias).as_deref(), Some(alias));
+    }
 }
 
 #[test]

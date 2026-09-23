@@ -127,7 +127,15 @@ async fn protocol_failures_and_output_overflow_close_owned_scope() {
         .into_result();
         assert!(result.is_err(), "{mode}: {result:?}");
         if mode == "provider-error" {
-            assert_eq!(result, Err(AgentError::Provider { code: -32000 }));
+            assert_eq!(
+                result,
+                Err(AgentError::Provider {
+                    code: -32000,
+                    diagnostic: Some(ProviderDiagnostic::new(
+                        "provider plan does not allow this request",
+                    )),
+                })
+            );
         }
         opened
             .session
