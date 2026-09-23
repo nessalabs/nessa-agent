@@ -853,7 +853,7 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
         assert_eq!(
             close_error,
             AgentError::OperationAndCleanupFailure {
-                operation_error: Box::new(transport),
+                operation_error: Box::new(transport.clone()),
                 cleanup_error: Box::new(AgentError::AuditFailure),
             }
         );
