@@ -12,22 +12,21 @@ use std::{
     future::{poll_fn, Future},
     task::Poll,
 };
-use tokio::sync::Mutex;
 
 async fn restore_attachment(agent: &Agent, prior: &WorkPermit) {
     agent.inner.lifecycle.record_provider_state(
-        prior.work_generation(),
+        prior,
         &ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
             forced: false,
         })),
     );
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+        .unwrap();
     agent
-        .inner
-        .lifecycle
-        .prepare(
-            agent.inner.session.clone(),
-            Arc::new(Mutex::new(Box::new(ExhaustedEvents))),
-        )
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
         .await
         .unwrap();
     let preparation = agent.accept_preparation().unwrap();
@@ -156,9 +155,8 @@ async fn current_control_failure_keeps_cleanup_owner_after_stopping_work_generat
         .lifecycle
         .start_control_cleanup(&admission)
         .expect("own failure still owns cleanup after stopping work");
-    let report = attempt.clone().wait().await;
+    let report = agent.inner.lifecycle.complete_stop(&attempt).await;
     assert!(report.is_confirmed());
-    agent.inner.lifecycle.finalize_stop(&attempt, &report).await;
     drop(admission);
     assert_eq!(
         backend.closes.lock().unwrap().as_slice(),

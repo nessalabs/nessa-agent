@@ -75,6 +75,7 @@ function view(
         incomingElicitation: "unsupported_not_implemented",
       },
     },
+    lifecycle: { phase: "attached" },
   }
 }
 

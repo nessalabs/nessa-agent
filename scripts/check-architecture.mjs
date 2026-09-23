@@ -77,7 +77,14 @@ if (existsSync(join(src, "utils.ts")) || existsSync(join(src, "utils.tsx"))) {
   fail(join(src, "utils.ts"), "there is no utils module")
 }
 
-const srcRootAllowed = new Set(["main.tsx", "store.ts", "icon-preview.tsx"])
+// Entry points, and the dev-only previews that are entry points too: each one
+// composes a vertical from outside rather than adding feature code to the root.
+const srcRootAllowed = new Set([
+  "main.tsx",
+  "store.ts",
+  "icon-preview.tsx",
+  "transcript-preview.tsx",
+])
 for (const name of readdirSync(src)) {
   const path = join(src, name)
   if (statSync(path).isFile() && /\.(ts|tsx)$/.test(name) && !srcRootAllowed.has(name)) {

@@ -586,6 +586,85 @@
       "description": "How the gateway accepted or recovered this submission.",
       "enum": ["queued", "injected", "settled"]
     },
+    "ConversationLifecyclePhase": {
+      "type": "string",
+      "description": "Current provider attachment state. This is presentation state and grants no operation authority.",
+      "enum": ["absent", "starting", "attached", "failed"]
+    },
+    "ConversationStartupFailureCode": {
+      "type": "string",
+      "description": "Stable category for a provider attachment failure.",
+      "enum": ["audit", "provider", "storage", "cleanup"]
+    },
+    "ConversationStartupFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded presentation of the latest provider attachment failure. It carries no admission or cleanup authority.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ConversationStartupFailureCode",
+          "description": "Stable failure category."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound."
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "ConversationAttachmentEvidenceFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded late failure to acknowledge mandatory attachment audit evidence. It carries no lifecycle authority.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "const": "audit",
+          "description": "Mandatory attachment audit was not acknowledged."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound."
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "ConversationLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Current provider attachment lifecycle for this conversation.",
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/ConversationLifecyclePhase",
+          "description": "Current provider attachment phase."
+        },
+        "failure": {
+          "$ref": "#/$defs/ConversationStartupFailure",
+          "description": "Present exactly when phase is failed."
+        },
+        "evidenceFailure": {
+          "$ref": "#/$defs/ConversationAttachmentEvidenceFailure",
+          "description": "Late mandatory attachment-audit failure retained independently of the current phase. It grants no lifecycle authority."
+        }
+      },
+      "required": ["phase"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "phase": { "const": "failed" } },
+            "required": ["phase"]
+          },
+          "then": { "required": ["failure"] },
+          "else": { "not": { "required": ["failure"] } }
+        }
+      ]
+    },
     "PermissionDenialSupport": {
       "type": "string",
       "description": "Whether Nessa can deliver a deny choice offered by a provider permission review.",
@@ -1111,6 +1190,23 @@
           "x-utf8MaxBytes": 2048,
           "description": "Provider tool title."
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "",
+            "read",
+            "edit",
+            "search",
+            "fetch",
+            "execute",
+            "think",
+            "delete",
+            "move",
+            "switch_mode",
+            "other"
+          ],
+          "description": "What the call does, as the provider categorised it. Empty until the provider has said, which is why a panel counts kinds it knows rather than assuming the rest are reads."
+        },
         "status": {
           "type": "string",
           "minLength": 0,
@@ -1131,7 +1227,15 @@
           "description": "Exact tool arguments observed through a permission request, or empty when unavailable."
         }
       },
-      "required": ["executionId", "toolId", "title", "status", "details", "input"]
+      "required": [
+        "executionId",
+        "toolId",
+        "title",
+        "kind",
+        "status",
+        "details",
+        "input"
+      ]
     },
     "ConversationView": {
       "type": "object",
@@ -1188,6 +1292,10 @@
           "$ref": "#/$defs/ConversationCapabilities",
           "description": "Agent operation support."
         },
+        "lifecycle": {
+          "$ref": "#/$defs/ConversationLifecycle",
+          "description": "Current provider attachment lifecycle."
+        },
         "truncated": {
           "type": "boolean",
           "description": "Some non-actionable history or text was omitted to bound this response."
@@ -1216,6 +1324,7 @@
         "permissions",
         "tools",
         "capabilities",
+        "lifecycle",
         "truncated",
         "queueComplete"
       ]
@@ -1634,20 +1743,27 @@
         },
         "kind": {
           "type": "string",
-          "enum": ["text", "thought", "tool"],
-          "description": "Text, exposed thought content, or a tool observation."
+          "enum": ["text", "thought", "tool", "local_notice"],
+          "description": "Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice."
         },
         "text": {
           "type": "string",
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
-          "description": "Exact text fragment for text or thought observations; empty for tool observations."
+          "description": "Exact text fragment for text, thought, or local notice observations; empty for tool observations."
         },
         "toolId": {
           "type": "string",
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Owning tool identity for a tool observation; empty for text or thought observations."
+          "description": "Owning tool identity for a tool observation; empty otherwise."
+        },
+        "noticeId": {
+          "type": "string",
+          "maxLength": 20,
+          "x-utf8MaxBytes": 20,
+          "pattern": "^[1-9][0-9]{0,19}$|^$",
+          "description": "Stable execution-scoped declined-review identity for a local notice; empty otherwise."
         },
         "messageId": {
           "type": "string",
@@ -1657,7 +1773,7 @@
           "description": "Opaque provider message identity; only fragments with the same identity may be combined."
         }
       },
-      "required": ["offset", "kind", "text", "toolId"],
+      "required": ["offset", "kind", "text", "toolId", "noticeId"],
       "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
     },
     "ConversationErrorCode": {

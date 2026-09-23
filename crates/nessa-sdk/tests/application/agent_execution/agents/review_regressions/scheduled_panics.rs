@@ -107,6 +107,7 @@ async fn queued_provider_panic_settles_receipts_and_allows_explicit_recovery() {
                 }
             }
             agent.close(actor()).await.unwrap();
+            reattach_after_explicit_close(&agent).await;
             let recovered = agent.enqueue(input("recovered"), actor()).await.unwrap();
             assert_eq!(
                 timeout(Duration::from_secs(2), recovered.wait())
@@ -137,6 +138,7 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
             let (agent, backend, storage) = probe(false).await;
             agent.close(close_action()).await.unwrap();
             backend.closing.notified().await; // Consume the earlier close notification.
+            reattach_after_explicit_close(&agent).await;
             let (execution_release, gate) = oneshot::channel();
             *backend.execution_gate.lock().unwrap() = Some(gate);
             let active = tokio::spawn({
@@ -236,6 +238,9 @@ async fn native_steering_panic_is_retained_even_after_caller_loss_and_prior_clos
             }
             if cleanup.is_some() {
                 agent.close(actor()).await.unwrap();
+                reattach_after_explicit_close(&agent).await;
+            } else {
+                recover_after_automatic_stop(&agent).await;
             }
             assert_eq!(
                 agent
@@ -362,7 +367,10 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
             if stage == InvocationStage::Cancelled {
                 assert!(matches!(
                     first_pending,
-                    Err(AgentError::Storage(StorageError::Io(_)))
+                    Err(AgentError::StorageAfterExecution {
+                        error: StorageError::Io(_),
+                        execution_result,
+                    }) if *execution_result == Err(AgentError::Closed)
                 ));
             } else {
                 assert_eq!(first_pending, Err(AgentError::Closed));
@@ -405,6 +413,7 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
             backend.suppress_terminal.store(false, Ordering::SeqCst);
             backend.execution_rejected.store(false, Ordering::SeqCst);
             agent.close(actor()).await.unwrap();
+            reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 agent
                     .enqueue(input("recovered"), actor())
@@ -427,7 +436,7 @@ impl InvocationHook for RejectPausedBeforeHook {
     fn before_invocation(&self, _: &InvocationContext<'_>) -> Result<(), HookError> {
         if let Some(entered) = self.entered.lock().unwrap().take() {
             entered.send(()).unwrap();
-            self.release.lock().unwrap().recv().unwrap();
+            tokio::task::block_in_place(|| self.release.lock().unwrap().recv().unwrap());
             return Err(HookError::Failed("stop before provider preparation".into()));
         }
         Ok(())
@@ -449,6 +458,7 @@ async fn dispatch_save_panic_does_not_inherit_previous_close_actor() {
     .unwrap();
     let (agent, backend) = probe_with_manager(false, manager).await;
     agent.close(close_action()).await.unwrap();
+    reattach_after_explicit_close(&agent).await;
     let (entered, waiting) = oneshot::channel();
     let (release, released) = std::sync::mpsc::channel();
     agent.add_invocation_hook(Arc::new(RejectPausedBeforeHook {

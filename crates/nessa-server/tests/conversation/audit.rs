@@ -1,6 +1,10 @@
 use super::*;
 use nessa_sdk::application::agent_execution::{
-    executions::{ExecutionController, QueueOrderRecord, SessionClosureRecord},
+    executions::{
+        AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage, ExecutionController,
+        QueueAdmissionRecord, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
+        SteeringAcknowledgementRecord,
+    },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
         PermissionAnswerDelivery, PermissionAnswerRecord, ReviewDeclineRecord,
@@ -8,14 +12,18 @@ use nessa_sdk::application::agent_execution::{
     tools::ToolReviewInput,
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange},
-    sessions::{ExecutionSession, ExecutionSessionId, SessionId},
+    executions::{
+        ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange, SchedulingCause,
+        SubmissionMode,
+    },
+    sessions::{AttachmentCause, ExecutionSession, ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::agent_execution::{
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionDecision,
         PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-        PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineReason,
+        PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineId,
+        ReviewDeclineReason,
     },
     tools::{ToolCallId, ToolCallUpdate},
 };
@@ -31,6 +39,138 @@ fn finished(outcome: ExecutionOutcome) -> ExecutionAuditRecord {
     let id = ExecutionId::new("execution").unwrap();
     session.begin_execution(id.clone()).unwrap();
     ExecutionAuditRecord::Finished(session.finish_execution(&id, Ok(outcome)).unwrap().0)
+}
+#[test]
+fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
+    let session = SessionId::new("session").unwrap();
+    let execution = ExecutionId::new("steering").unwrap();
+    let target = ExecutionId::new("active").unwrap();
+    let attachment = record_value(&ExecutionAuditRecord::Attachment(
+        AttachmentAuditRecord::new(
+            session.clone(),
+            7,
+            AttachmentAuditStage::Waiting,
+            AttachmentAuditStage::Starting,
+            AttachmentAuditCause::Started(AttachmentCause::Reopen),
+            Some(actor()),
+        ),
+    ));
+    assert_eq!(attachment["kind"], "attachment_transition");
+    assert_eq!(attachment["generation"], 7);
+    assert_eq!(attachment["before"], "waiting");
+    assert_eq!(attachment["after"], "starting");
+    assert_eq!(attachment["cause"]["kind"], "started");
+    assert_eq!(attachment["cause"]["attachmentCause"], "reopen");
+    assert_eq!(attachment["actor"]["requestId"], "action");
+
+    let admission = record_value(&ExecutionAuditRecord::QueueAdmitted(
+        QueueAdmissionRecord::submitted(
+            session.clone(),
+            execution.clone(),
+            SubmissionMode::Steering,
+            actor(),
+        ),
+    ));
+    assert_eq!(admission["executionId"], "steering");
+    assert_eq!(admission["mode"], "steering");
+    assert_eq!(admission["before"], "unowned");
+    assert_eq!(admission["after"], "owned");
+    assert_eq!(admission["cause"], "submitted");
+
+    let steering = record_value(&ExecutionAuditRecord::SteeringAcknowledged(
+        SteeringAcknowledgementRecord::provider_acknowledged(session, execution, target, actor()),
+    ));
+    assert_eq!(steering["executionId"], "steering");
+    assert_eq!(steering["target"], "active");
+    assert_eq!(steering["before"], "pending");
+    assert_eq!(steering["after"], "injected");
+    assert_eq!(steering["cause"], "provider_acknowledged");
+    assert_eq!(steering["actor"]["requestId"], "action");
+}
+#[test]
+fn audit_maps_automatic_queue_settlement_separately_from_the_input_caller() {
+    for (kind, target) in [
+        (InvocationKind::Queued, None),
+        (
+            InvocationKind::Steering,
+            Some(ExecutionId::new("active").unwrap()),
+        ),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QueueSettled(
+            QueueSettlementRecord::automatic_attachment_failed(
+                SessionId::new("session").unwrap(),
+                ExecutionId::new("waiting").unwrap(),
+                kind,
+                target.clone(),
+                actor(),
+            )
+            .unwrap(),
+        ));
+        assert_eq!(value["kind"], "queue_settled");
+        assert_eq!(value["sessionId"], "session");
+        assert_eq!(value["executionId"], "waiting");
+        assert_eq!(
+            value["target"],
+            json!(target.as_ref().map(|id| id.as_str()))
+        );
+        assert_eq!(
+            value["mode"],
+            if target.is_some() {
+                "boundary_steering"
+            } else {
+                "queued"
+            }
+        );
+        assert_eq!(value["before"], "queued");
+        assert_eq!(value["after"], "settled");
+        assert_eq!(value["cause"], "dispatch_failed");
+        assert_eq!(value["origin"], json!({"kind":"runtime"}));
+        assert_eq!(value["submittedBy"]["principalId"], actor().principal_id());
+        assert_eq!(value["submittedBy"]["surfaceId"], actor().surface_id());
+        assert_eq!(value["submittedBy"]["requestId"], "action");
+        assert!(value.get("actor").is_none());
+    }
+}
+#[test]
+fn audit_maps_queue_cancellation_with_its_own_initiator() {
+    let closer = ActionContext::new("closer", "closing-surface", "close-request").unwrap();
+    for (cause, initiator) in [
+        (SchedulingCause::SessionClosed, Some(closer.clone())),
+        (SchedulingCause::RunnerStopped, None),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QueueSettled(
+            QueueSettlementRecord::cancelled(
+                SessionId::new("session").unwrap(),
+                ExecutionId::new("waiting").unwrap(),
+                InvocationKind::Queued,
+                None,
+                cause,
+                actor(),
+                initiator.clone(),
+            )
+            .unwrap(),
+        ));
+        assert_eq!(value["before"], "queued");
+        assert_eq!(value["after"], "cancelled");
+        assert_eq!(value["submittedBy"]["requestId"], "action");
+        if initiator.is_some() {
+            assert_eq!(value["cause"], "session_closed");
+            assert_eq!(
+                value["origin"],
+                json!({
+                    "kind":"client",
+                    "actor":{
+                        "principalId":"closer",
+                        "surfaceId":"closing-surface",
+                        "requestId":"close-request",
+                    },
+                })
+            );
+        } else {
+            assert_eq!(value["cause"], "runner_stopped");
+            assert_eq!(value["origin"], json!({"kind":"runtime"}));
+        }
+    }
 }
 #[test]
 fn audit_maps_complete_queue_transition_with_priority_and_actor() {
@@ -242,6 +382,7 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
             ReviewDeclineRecord::new(
                 ExecutionSessionId::new("session").unwrap(),
                 ExecutionId::new("run").unwrap(),
+                ReviewDeclineId::new("1").unwrap(),
                 ReviewDecline::new(tool, reason),
                 delivery,
             ),
@@ -255,6 +396,7 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
     assert_eq!(value["kind"], "review_declined");
     assert_eq!(value["sessionId"], "session");
     assert_eq!(value["executionId"], "run");
+    assert_eq!(value["declineId"], "1");
     assert_eq!(value["reason"], "tool_not_reviewable");
     assert_eq!(value["delivery"]["stage"], "selected");
     assert_eq!(value["origin"]["kind"], "runtime");

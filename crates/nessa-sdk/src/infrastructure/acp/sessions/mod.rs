@@ -5,16 +5,16 @@
 //!                         |
 //!                    application ProviderSession
 //!                         |
-//!                    cleanup -> retained ProcessScope
+//!                    cleanup -> retained process or pre-start directory
 //! ```
 //! Arrows show construction. The stable client replaces a cleaned-up connection;
 //! only a successful provider resume restores the same context. Unreported idle
 //! failures are surfaced before replacement; old readers drain their correlated
 //! evidence without replaying an already-reported failure into a new invocation.
-//! Failed startup and live teardown retain uncertain process ownership for cleanup
-//! retry; confirmation cannot erase a separately failed audit delivery.
-//! Losing the final recovery handle transfers an uncertain scope to a physical
-//! cleanup supervisor, including when an opening caller disappears.
+//! Failed startup and live teardown retain uncertain resource ownership for
+//! cleanup retry; confirmation cannot erase a separately failed audit delivery.
+//! Losing the final recovery handle transfers the resource to a physical cleanup
+//! supervisor, including when an opening caller disappears.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;

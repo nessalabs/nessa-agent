@@ -21,7 +21,10 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         .map(move |attribution| (allow, attribution))
     }) {
         let (root, binding) = test_acp_binding("permission", 16);
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested {
@@ -138,7 +141,10 @@ async fn provider_cancellation_retires_only_the_matching_permission() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested { id: remaining, .. } = next(&mut opened).await
@@ -213,7 +219,10 @@ async fn close_cancels_pending_permission_before_cleanup() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -313,7 +322,10 @@ async fn cancellation_audit_failure_is_reported_after_process_cleanup() {
         ..Default::default()
     });
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
@@ -326,9 +338,9 @@ async fn cancellation_audit_failure_is_reported_after_process_cleanup() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_gone(&root, "pid");
     assert!(!root.path().join("fixture.txt").exists());
 }
@@ -338,14 +350,26 @@ async fn dropping_the_event_reader_retains_cancellation_in_the_audit() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
         panic!("expected permission")
     };
     drop(opened.events);
-    assert_eq!(active.await.unwrap(), Err(AgentError::Backpressure));
+    // The first backpressure is the drive loop observing consumer loss. The
+    // second is the separately attempted final execution-event publication;
+    // the cancellation record below proves teardown still ran between them.
+    assert_eq!(
+        active.await.unwrap(),
+        Err(ordered_failures(&[
+            AgentError::Backpressure,
+            AgentError::Backpressure,
+        ]))
+    );
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -385,7 +409,10 @@ async fn pending_reviews_retain_their_execution_end_cause_in_the_audit() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
@@ -447,26 +474,24 @@ async fn provider_error_cannot_hide_a_failed_cancellation_audit() {
     config.kill_timeout = Duration::from_secs(30);
     let binding =
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
         next(&mut opened).await,
         ExecutionUpdate::PermissionRequested { .. }
     ));
-    let expected = AgentError::OperationAndCleanupFailure {
-        operation_error: Box::new(AgentError::Provider {
-            code: -32000,
-            diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
-        }),
-        cleanup_error: Box::new(AgentError::AuditFailure),
+    let provider_failure = AgentError::Provider {
+        code: -32000,
+        diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
     };
+    let expected = rejected_audits(3);
     let settlement_error = AgentError::ExecutionObservation {
         error: Box::new(expected.clone()),
-        execution_result: Some(Box::new(Err(AgentError::Provider {
-            code: -32000,
-            diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
-        }))),
+        execution_result: Some(Box::new(Err(provider_failure))),
     };
     assert_eq!(active.await.unwrap(), Err(settlement_error.clone()));
     assert_eq!(
@@ -504,7 +529,10 @@ async fn custom_guard_cancellation_preserves_its_reason_actor_and_review() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
@@ -587,7 +615,10 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
         ..Default::default()
     });
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
@@ -604,9 +635,9 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
         .await
         .unwrap()
         .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_gone(&root, "pid");
 }
 
@@ -616,6 +647,26 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
 /// review ended the execution and closed the session, and the caller was shown
 /// nothing at all. Each mode here refuses for a different reason, and each one
 /// has to leave the agent told, the turn finishing, and the refusal recorded.
+async fn declined_updates(
+    opened: &mut OpenedProviderSession,
+) -> (ReviewDeclineId, ReviewDecline, ReviewDeclineStage) {
+    let ExecutionUpdate::ReviewDeclined(selected) = next(opened).await else {
+        panic!("expected selected declined-review notice")
+    };
+    assert_eq!(selected.stage(), ReviewDeclineStage::Selected);
+    let ExecutionUpdate::ReviewDeclined(final_observation) = next(opened).await else {
+        panic!("expected final declined-review notice")
+    };
+    assert_eq!(final_observation.id(), selected.id());
+    assert_eq!(final_observation.decline(), selected.decline());
+    assert_ne!(final_observation.stage(), ReviewDeclineStage::Selected);
+    (
+        selected.id().clone(),
+        selected.decline().clone(),
+        final_observation.stage(),
+    )
+}
+
 #[tokio::test]
 async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
     let _process_slot = process_test_slot().await;
@@ -646,7 +697,10 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
 
         // The call is observed. Refusing the frame hid the tool as well as
@@ -655,6 +709,10 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
             matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)),
             "{mode}: the declined call was not shown"
         );
+        let (decline_id, notice, delivery) = declined_updates(&mut opened).await;
+        assert_eq!(notice.reason(), reason, "{mode}");
+        assert_eq!(notice.declared(), named, "{mode}");
+        assert_eq!(delivery, ReviewDeclineStage::WriteConfirmed, "{mode}");
         // No review reaches a host: there was nothing this binding could put
         // to one. The turn carries on to its own ending.
         let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
@@ -685,6 +743,7 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
             assert_eq!(record.execution_id().as_str(), "write");
             assert_eq!(record.decline().reason(), reason, "{mode}");
             assert_eq!(record.decline().declared(), named, "{mode}");
+            assert_eq!(record.id(), &decline_id, "{mode}");
         }
         assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
         assert_eq!(declines[1].delivery(), &PermissionAnswerDelivery::Written);
@@ -715,9 +774,16 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
         ..RecordingAudit::default()
     });
     let (root, binding) = test_acp_binding_with_audit("declined-tool", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert_eq!(
+        declined_updates(&mut opened).await.2,
+        ReviewDeclineStage::WriteConfirmed
+    );
 
     // The execution ends on the audit failure — evidence is mandatory here, and
     // that is a different failure from "a tool was unfamiliar".
@@ -725,7 +791,7 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(outcome, Err(AgentError::AuditFailure), "{outcome:?}");
+    assert_eq!(outcome, Err(rejected_audits(4)), "{outcome:?}");
 
     // The refusal went anyway: the provider recorded the answer it was given.
     // Exactly one answer, and it is the refusal: a request answered twice is
@@ -761,9 +827,16 @@ async fn a_refusal_that_cannot_be_written_keeps_its_decision_and_its_delivery_fa
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("declined-write-failure", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert_eq!(
+        declined_updates(&mut opened).await.2,
+        ReviewDeclineStage::WriteUnconfirmed
+    );
     let outcome = timeout(Duration::from_secs(5), active)
         .await
         .unwrap()
@@ -801,33 +874,36 @@ async fn a_refusal_failing_to_write_and_to_record_preserves_both_causes() {
         ..RecordingAudit::default()
     });
     let (root, binding) = test_acp_binding_with_audit("declined-write-failure", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert_eq!(
+        declined_updates(&mut opened).await.2,
+        ReviewDeclineStage::WriteUnconfirmed
+    );
     let outcome = timeout(Duration::from_secs(5), active)
         .await
         .unwrap()
         .unwrap();
     // The sink refuses the teardown's own records too, so the refusal's pair of
     // causes arrives inside that outer failure rather than instead of it. All
-    // three survive, each still saying what it is.
-    let Err(AgentError::OperationAndCleanupFailure {
-        operation_error,
-        cleanup_error,
-    }) = outcome
-    else {
-        panic!("both causes are required: {outcome:?}");
-    };
-    assert_eq!(cleanup_error, Box::new(AgentError::AuditFailure));
-    let AgentError::PermissionAnswerDeliveryAndAuditFailure {
-        delivery_error,
-        cleanup_error,
-    } = *operation_error
-    else {
-        panic!("the refusal must keep both of its own causes");
-    };
-    assert!(matches!(*delivery_error, AgentError::Transport(_)));
-    assert_eq!(cleanup_error, None);
+    // four survive, each still saying what it is.
+    assert_eq!(
+        outcome,
+        Err(ordered_failures(&[
+            AgentError::AuditFailure,
+            AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                delivery_error: Box::new(AgentError::Transport("stdin write failed".into())),
+                cleanup_error: None,
+            },
+            AgentError::AuditFailure,
+            AgentError::AuditFailure,
+        ])),
+        "both causes and both later audits are required"
+    );
     let _ = opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -846,9 +922,15 @@ async fn a_declared_name_is_recorded_as_a_claim_and_does_not_decide_the_refusal(
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("declined-divergent-name", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let (_, notice, delivery) = declined_updates(&mut opened).await;
+    assert_eq!(delivery, ReviewDeclineStage::WriteConfirmed);
+    assert_eq!(notice.declared(), Some("Read"));
     let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
         panic!("expected the turn to continue after the decline");
     };

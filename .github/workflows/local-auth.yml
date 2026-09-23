@@ -139,6 +139,10 @@ jobs:
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       - run: cargo fmt --all -- --check
+      # This pure shared domain is small enough to report denied warnings
+      # before its tests without paying a second workspace compile.
+      - run: cargo clippy -p nessa-agent-credentials --all-targets -- -D warnings
+      - run: cargo test -p nessa-agent-credentials
       # Test before lint, here and in the matrix below, and it is worth saying
       # why because the intuitive order is the other one. Reporting a
       # `-D warnings` failure first would be better if it were free, and it is
@@ -279,6 +283,11 @@ jobs:
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
+      # Endpoint file publication crosses the platform-specific local-storage
+      # adapters, so each OS gives a different answer. Lint this new crate before
+      # its tests; the existing package group below retains its measured order.
+      - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
+      - run: cargo test -p nessa-gateway-endpoint
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
@@ -300,7 +309,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
+            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
+            webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
       # `cargo install` spent most of a minute building this tool from source
       # on every run, to arrive at a binary its author already publishes. Taken
@@ -320,6 +330,32 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/check-sdk-domain-coverage.sh
       - run: cargo build -p nessa-server
+      # This is the one platform where Tauri has a native WebDriver for the
+      # WebKit host. It drives the real embedded executable through a message
+      # and attachment, then proves the app, provider, gateway, and drivers are
+      # gone. macOS still gets the release-profile compile above; WKWebView has
+      # no corresponding WebDriver endpoint.
+      - name: Install native desktop WebDriver
+        if: runner.os == 'Linux'
+        run: cargo install tauri-driver --version 2.0.6 --locked
+      - name: Install native desktop smoke dependencies
+        if: runner.os == 'Linux'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Exercise the native desktop window
+        if: runner.os == 'Linux'
+        env:
+          NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
+        run: xvfb-run --auto-servernum pnpm desktop:smoke
+      - name: Upload native desktop smoke failure evidence
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-window-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nessa-native-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
       # Auth/SDK checks do not need the desktop UI's separate repository. Use an
       # isolated minimal npm harness so this job has no UI checkout credentials.
       - name: Prepare SDK integration harness
@@ -330,6 +366,7 @@ jobs:
           root.mkdir()
           shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
           shutil.copytree('scripts', root / 'scripts')
+          shutil.copytree('crates/nessa-sdk/data', root / 'crates/nessa-sdk/data')
           # The scripts resolve stage defaults — the gateway port among them —
           # from `protocol/`, relative to the tree they are in. Copied because
           # the harness is that tree here, not the checkout beside it.
@@ -342,6 +379,12 @@ jobs:
           shutil.copy2('.github/harnesses/local-auth/package-lock.json', root / 'package-lock.json')
       - run: npm ci --ignore-scripts
         working-directory: .ci-auth
+      - run: node --test scripts/conversation-smoke/*.test.mjs
+        working-directory: .ci-auth
+        if: runner.os == 'Linux'
+      - run: node --import tsx scripts/smoke-conversation.mjs
+        working-directory: .ci-auth
+        if: runner.os == 'Linux'
       - run: node --import tsx scripts/smoke-windows-private-files.ts
         working-directory: .ci-auth
         if: runner.os == 'Windows'

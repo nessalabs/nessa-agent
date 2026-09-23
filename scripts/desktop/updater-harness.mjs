@@ -75,7 +75,7 @@
  *   This is the unrecoverable failure, caught before release: the public key in
  *   `tauri.conf.json` does not verify what the private key signed, or the bytes
  *   served are not the bytes that were signed. Run the key-pair gate:
- *   `cargo test -p nessa-app --test updater_key_pairing`.
+ *   `cargo test -p nessa-app --test updater_key_pairing --no-default-features`.
  *
  *   If the tab reports a refusal and the artifact was *not* requested, the
  *   download never started and the `url` in the manifest is wrong — not the

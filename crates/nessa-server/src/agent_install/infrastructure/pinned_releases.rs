@@ -5,8 +5,9 @@ use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, HostPlatform, Libc, PinRejected,
-    PinnedRelease, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform, Libc,
+    PinRejected, PinnedRelease, ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
+    ReleaseVersion,
 };
 
 /// The releases Nessa has tested, compiled into the server.
@@ -14,7 +15,7 @@ use crate::agent_install::domain::{
 /// Embedded rather than read from disk because a pin is part of the build: a
 /// server that could be pointed at a different pin file would be a server whose
 /// "the version we tested" claim depends on what is next to it on the machine.
-/// Regenerate it with `node scripts/agents/pin-opencode.mjs`.
+/// Regenerate it with `node scripts/agents/pin-agents.mjs`.
 const PINS: &str = include_str!("../../../data/agent-releases.json");
 
 /// One release as written in the pin file.
@@ -44,8 +45,25 @@ struct ReleaseDocument {
     requires_avx2: bool,
     version: String,
     archive_url: String,
+    /// Exactly how many bytes the archive is. The fetch is held to it, so this
+    /// is not decoration: see [`ArchiveSize`].
+    archive_bytes: u64,
     archive_digest: String,
-    executable: String,
+    /// Every file this release installs. A list rather than one path because
+    /// two of the three runtimes Nessa pins are packages: Codex's holds seven
+    /// files, four of them programs that find each other through the directory
+    /// they sit in.
+    files: Vec<FileDocument>,
+}
+
+/// One installed file as written in the pin file.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileDocument {
+    path: String,
+    /// `launch`, `helper` or `document` — what the file is for, which decides
+    /// whether it is installed runnable and which single one Nessa starts.
+    role: String,
 }
 
 /// Read an optional field that still has to be written out.
@@ -289,18 +307,30 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
 ///
 /// Every field goes through its value object, so a typo in the file — an
 /// uppercase digest, a version with a slash in it, a path that escapes the
-/// archive, a plain-http URL — is a build that fails a test rather than a
-/// download that installs something unexpected.
+/// archive, a plain-http URL, a set of files naming two programs to launch — is
+/// a build that fails a test rather than a download that installs something
+/// unexpected.
 fn release(entry: &ReleaseDocument) -> Result<PinnedRelease, PinRejected> {
     let libc = entry.libc.as_deref().map(Libc::parse).transpose()?;
+    let files = entry
+        .files
+        .iter()
+        .map(|file| {
+            Ok(ReleaseFile::new(
+                ArchivePath::parse(&file.path)?,
+                FileRole::parse(&file.role)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, PinRejected>>()?;
 
     PinnedRelease::new(
         ReleaseVersion::parse(&entry.version)?,
         ReleasePlatform::new(&entry.operating_system, &entry.architecture)?,
         ReleaseRequirements::new(libc, entry.requires_avx2),
         ArchiveUrl::parse(&entry.archive_url)?,
+        ArchiveSize::parse(entry.archive_bytes)?,
         ArchiveDigest::parse(&entry.archive_digest)?,
-        ArchivePath::parse(&entry.executable)?,
+        ReleaseContents::new(files)?,
     )
 }
 

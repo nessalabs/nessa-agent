@@ -25,7 +25,10 @@ impl AgentProvider for PayloadProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("payload", "model", "").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let started = Arc::new(AtomicUsize::new(0));
             Ok(OpenedProviderSession {
@@ -33,7 +36,6 @@ impl AgentProvider for PayloadProvider {
                     ExecutionSessionId::new("provider").unwrap(),
                     Arc::new(PayloadBackend(started.clone())),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(PayloadEvents(self.0.lock().unwrap().take(), started)),
             })
@@ -154,7 +156,7 @@ fn review(
 async fn admission(update: ExecutionUpdate, accepted: bool) {
     let storage = MemoryStorage::default();
     let event = ExecutionEvent::new(ExecutionId::new("payload").unwrap(), update);
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(PayloadProvider(Mutex::new(Some(event)))),
         storage.manager().await,
     )

@@ -278,7 +278,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
     // retrying that would never help.
     let root = tempfile::tempdir().expect("temporary root");
     let source = FakeSource::serving(b"archive bytes");
-    let missing = StoreFailure::MissingExecutable("package/bin/opencode".into());
+    let missing = StoreFailure::IncompleteArchive("package/bin/opencode".into());
     let store = FakeStore::empty(root.path()).failing_to_publish(missing.clone());
     let platform = platform();
     let host = host();
@@ -421,4 +421,28 @@ fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
             "{named} was downloaded before it was refused"
         );
     }
+}
+
+#[test]
+fn the_fetch_is_bounded_by_the_length_the_pin_measured() {
+    // The digest catches a body that is not the pinned archive — but only once
+    // all of it has been written, so an endless answer to a hundred-megabyte
+    // request would be a full disk reported as a failed download. The bound
+    // comes off the pin rather than out of a constant in the adapter, which is
+    // what makes it a measurement rather than a guess.
+    let root = tempfile::tempdir().expect("temporary root");
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let platform = platform();
+    let host = host();
+    let release = release("1.18.31", PINNED_DIGEST, &platform);
+
+    InstallAgentRuntime {
+        source: &source,
+        store: &store,
+    }
+    .execute(&agent(), &release, &host)
+    .expect("a matching archive installs");
+
+    assert_eq!(source.bounded_by(), vec![release.archive_size().bytes()]);
 }

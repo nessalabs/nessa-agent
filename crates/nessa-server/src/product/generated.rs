@@ -255,6 +255,63 @@ impl ConversationDisposition {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ConversationLifecyclePhase {
+    Absent,
+    Starting,
+    Attached,
+    Failed,
+}
+impl ConversationLifecyclePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Starting => "starting",
+            Self::Attached => "attached",
+            Self::Failed => "failed",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStartupFailureCode {
+    Audit,
+    Provider,
+    Storage,
+    Cleanup,
+}
+impl ConversationStartupFailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audit => "audit",
+            Self::Provider => "provider",
+            Self::Storage => "storage",
+            Self::Cleanup => "cleanup",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationStartupFailure {
+    pub code: ConversationStartupFailureCode,
+    pub message: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAttachmentEvidenceFailure {
+    pub code: String,
+    pub message: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationLifecycle {
+    pub phase: ConversationLifecyclePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ConversationStartupFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_failure: Option<ConversationAttachmentEvidenceFailure>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionDenialSupport {
     Unknown,
     Unsupported,
@@ -513,6 +570,7 @@ pub struct ConversationTool {
     pub execution_id: String,
     pub tool_id: String,
     pub title: String,
+    pub kind: String,
     pub status: String,
     pub details: String,
     pub input: String,
@@ -527,6 +585,7 @@ pub struct ConversationView {
     pub permissions: Vec<ConversationPermission>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
+    pub lifecycle: ConversationLifecycle,
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_view_error: Option<String>,
@@ -671,6 +730,7 @@ pub struct ConversationPart {
     pub kind: String,
     pub text: String,
     pub tool_id: String,
+    pub notice_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 }

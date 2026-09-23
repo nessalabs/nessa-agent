@@ -40,11 +40,24 @@ export type ConversationView = {
     executionId: string
     toolId: string
     title: string
+    /** What the call does, as the provider categorised it; empty until it says. */
+    kind: string
     status: string
     input: string
     details: string
   }[]
   capabilities: ConversationCapabilities
+  lifecycle: {
+    phase: "absent" | "starting" | "attached" | "failed"
+    failure?: {
+      code: "audit" | "provider" | "storage" | "cleanup"
+      message: string
+    }
+    evidenceFailure?: {
+      code: "audit"
+      message: string
+    }
+  }
   permissionViewError?: string
 }
 

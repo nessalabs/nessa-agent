@@ -130,6 +130,20 @@ export function conversationNotice(
       retry: conversation.draft.length ? { kind: "draft" } : null,
     }
   const error = conversation.remote?.permissionViewError ?? conversation.error
+  const startupFailure = conversation.remote?.lifecycle.failure
+  if (startupFailure)
+    return {
+      title: "Agent could not start",
+      description: startupFailure.message,
+      retry: { kind: "refresh" },
+    }
+  const evidenceFailure = conversation.remote?.lifecycle.evidenceFailure
+  if (evidenceFailure)
+    return {
+      title: "Agent lifecycle record failed",
+      description: evidenceFailure.message,
+      retry: { kind: "refresh" },
+    }
   if (error)
     return {
       // A control runs `create` first, so a cold agent reaches this path too,

@@ -39,6 +39,37 @@ for (const [name, fixture] of Object.entries(read("fixtures.json"))) {
   if (!validate?.(fixture))
     throw new Error(`Invalid ${name} fixture: ${JSON.stringify(validate?.errors)}`)
 }
+const validateLifecycle = ajv.getSchema(`${schema.$id}#/$defs/ConversationLifecycle`)
+for (const invalid of [
+  { phase: "failed" },
+  { phase: "starting", failure: { code: "provider", message: "failed" } },
+  { phase: "failed", failure: { code: "provider", message: "😀".repeat(513) } },
+  {
+    phase: "attached",
+    evidenceFailure: { code: "audit", message: "😀".repeat(513) },
+  },
+  {
+    phase: "attached",
+    evidenceFailure: { code: "provider", message: "failed" },
+  },
+]) {
+  if (validateLifecycle(invalid))
+    throw new Error("Product conversation lifecycle accepts contradictory fields")
+}
+if (
+  !validateLifecycle({
+    phase: "failed",
+    failure: { code: "provider", message: "😀".repeat(512) },
+  })
+)
+  throw new Error("Product conversation lifecycle rejects an exact UTF-8 bound")
+if (
+  !validateLifecycle({
+    phase: "attached",
+    evidenceFailure: { code: "audit", message: "😀".repeat(512) },
+  })
+)
+  throw new Error("Product lifecycle evidence rejects an exact UTF-8 bound")
 const validateAuth = ajv.getSchema(`${schema.$id}#/$defs/SessionAuthenticateParams`)
 const auth = read("fixtures.json").SessionAuthenticateParams
 for (const invalid of [

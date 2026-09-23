@@ -2607,6 +2607,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-agent-credentials"
+version = "0.1.0"
+
+[[package]]
 name = "nessa-app"
 version = "0.1.0"
 dependencies = [
@@ -2617,6 +2621,7 @@ dependencies = [
  "json-patch",
  "libc",
  "minisign-verify",
+ "nessa-gateway-endpoint",
  "nessa-local-storage",
  "objc2",
  "objc2-app-kit",
@@ -2651,6 +2656,20 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+]
+
+[[package]]
+name = "nessa-gateway-endpoint"
+version = "0.1.0"
+dependencies = [
+ "nessa-local-storage",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2720,17 +2739,23 @@ name = "nessa-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "image",
  "libc",
+ "nessa-agent-credentials",
  "nessa-auth",
+ "nessa-gateway-endpoint",
  "nessa-images",
  "nessa-local-storage",
  "nessa-sdk",
  "reqwest",
  "rustls",
+ "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2",

@@ -1,5 +1,5 @@
 //! Restored diagnostics are bounded before retention and provider attachment.
-use super::custom_storage::assert_custom_retention_admission;
+use super::custom_storage::{assert_custom_retention_admission, assert_moved_retention_admission};
 use super::*;
 
 #[tokio::test]
@@ -31,6 +31,65 @@ async fn oversized_and_deep_errors_cannot_enter_storage_or_custom_restoration() 
             assert_same(&lease.load().await.unwrap().unwrap(), &original);
         }
         assert_custom_retention_admission(value, false).await;
+    }
+}
+
+#[tokio::test]
+async fn acknowledgement_errors_are_bounded_before_custom_storage_clone() {
+    fn acknowledgement(case: usize) -> SubmissionAcknowledgement {
+        match case {
+            0 => SubmissionAcknowledgement::Failed {
+                audit: Some(AgentError::Protocol("x".repeat(1024 * 1024))),
+                storage: None,
+            },
+            1 => {
+                let mut deep = AgentError::Deadline;
+                for _ in 0..40 {
+                    deep = AgentError::OperationAndCleanupFailure {
+                        operation_error: Box::new(deep),
+                        cleanup_error: Box::new(AgentError::AuditFailure),
+                    };
+                }
+                SubmissionAcknowledgement::Failed {
+                    audit: Some(deep),
+                    storage: None,
+                }
+            }
+            2 => {
+                let mut spare = String::with_capacity(1024 * 1024);
+                spare.push_str("small diagnostic");
+                SubmissionAcknowledgement::Failed {
+                    audit: None,
+                    storage: Some(StorageError::Io(spare)),
+                }
+            }
+            _ => unreachable!("three acknowledgement limit cases"),
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    private::create_directory(&root.path().join("private")).unwrap();
+    let stores: Vec<Arc<dyn SessionStorage>> = vec![
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+    ];
+    for case in 0..3 {
+        for storage in &stores {
+            let mut value = snapshot("acknowledgement-error-limits");
+            value.invocations[0].acknowledgement = acknowledgement(case);
+            let lease = storage.open(value.id.clone()).await.unwrap();
+            assert!(matches!(
+                lease.save(value).await,
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+        let mut value = snapshot("acknowledgement-error-limits");
+        value.invocations[0].acknowledgement = acknowledgement(case);
+        if case == 2 {
+            assert_moved_retention_admission(value, false).await;
+        } else {
+            assert_custom_retention_admission(value, false).await;
+        }
     }
 }
 

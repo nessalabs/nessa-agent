@@ -140,9 +140,10 @@ export type UserTurn = {
 export type AgentPart = {
   messageId?: string
   offset: number
-  kind: "text" | "thought" | "tool"
+  kind: "text" | "thought" | "tool" | "local_notice"
   text: string
   toolId: string
+  noticeId: string
 }
 
 export type AssistantTurn = {
@@ -204,6 +205,8 @@ type ConversationState = {
       executionId: string
       toolId: string
       title: string
+      /** What the call does, as the provider categorised it; empty until it says. */
+      kind: string
       status: string
       input: string
       details: string
@@ -215,6 +218,17 @@ type ConversationState = {
       mode: "queued" | "steering"
     }[]
     capabilities: ConversationCapabilities
+    lifecycle: {
+      phase: "absent" | "starting" | "attached" | "failed"
+      failure?: {
+        code: "audit" | "provider" | "storage" | "cleanup"
+        message: string
+      }
+      evidenceFailure?: {
+        code: "audit"
+        message: string
+      }
+    }
     queueComplete: boolean
     truncated: boolean
     permissionViewError?: string
@@ -222,7 +236,7 @@ type ConversationState = {
 }
 export type IdleConversation = ConversationState & { phase: "idle" }
 export type BusyConversation = ConversationState & {
-  phase: "thinking" | "streaming"
+  phase: "starting" | "thinking" | "streaming"
   pending: string
 }
 

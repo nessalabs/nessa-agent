@@ -7,7 +7,10 @@ use crate::infrastructure::acp::tools::wire::UNSUPPORTED_TOOL_CONTENT;
 async fn unsupported_tool_content_is_visible_and_does_not_end_the_session() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("unsupported-tool-content", 32);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
 
     for input in ["first", "second"] {
         let running = start(&opened, input).await;

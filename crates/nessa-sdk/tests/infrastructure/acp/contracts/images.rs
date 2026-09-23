@@ -209,7 +209,10 @@ async fn an_advertising_agent_receives_text_then_images_in_attachment_order() {
         ..Default::default()
     });
     let (root, provider) = image_provider("image-input", Some(source.clone()));
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert!(opened.session.operation_capabilities().image_input());
 
     let sent = message("both", Some("what is this?"), vec![second, first]);
@@ -249,7 +252,10 @@ async fn an_agent_that_did_not_advertise_images_is_sent_nothing() {
     });
     let (root, provider) = image_provider("plain", Some(source.clone()));
     // The binding can deliver images, so admission allows them...
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert!(opened.session.capabilities().features().input().image());
     // ...but this agent never agreed to receive one.
     assert!(!opened.session.operation_capabilities().image_input());
@@ -275,7 +281,10 @@ async fn an_agent_that_did_not_advertise_images_is_sent_nothing() {
 async fn a_binding_without_a_byte_source_refuses_images_at_admission() {
     let _slot = process_test_slot().await;
     let (root, provider) = image_provider("image-input", None);
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert!(!opened.session.capabilities().features().input().image());
     // This agent did advertise images; it is this process that has nowhere to
     // read them from, so the connection carries none.
@@ -315,7 +324,10 @@ async fn an_image_that_cannot_be_supplied_intact_sends_nothing_and_keeps_the_con
         ..Default::default()
     });
     let (root, provider) = image_provider("image-input", Some(source));
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
 
     for (id, image, expected) in [
         ("missing", missing, UserImageError::Missing),
@@ -349,7 +361,10 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
         ..Default::default()
     });
     let (root, provider) = image_provider("steering-image-injected", Some(source));
-    let mut opened = provider.open(None).await.unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "first").await;
     assert_eq!(
         next(&mut opened).await,
@@ -398,7 +413,10 @@ async fn a_model_without_recorded_image_limits_is_offered_no_images() {
     // could have prepared one: the binding offers none.
     let source = Arc::new(FixedImages::default());
     let (root, provider) = image_provider_with("image-input", Some(source.clone()), false);
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert!(!opened.session.capabilities().features().input().image());
     assert_eq!(opened.session.capabilities().image_input(), None);
 
@@ -422,7 +440,10 @@ async fn an_image_outside_the_models_limits_or_the_frame_is_refused_without_a_re
     let _slot = process_test_slot().await;
     let source = Arc::new(FixedImages::default());
     let (root, provider) = image_provider("image-input", Some(source.clone()));
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
 
     // The fixture model lists PNG and JPEG, and its frames hold 8192 bytes.
     let webp = reference(b"image", ImageMediaType::Webp);
@@ -469,7 +490,10 @@ async fn a_source_that_never_answers_does_not_keep_the_context_from_closing() {
     let _slot = process_test_slot().await;
     let (source, mut begins) = stalling();
     let (root, provider) = image_provider("image-input", Some(source));
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session = opened.session.clone();
     let stalled = message(
         "stalled",
@@ -498,7 +522,10 @@ async fn a_source_that_never_answers_is_unavailable_at_the_read_bound_and_keeps_
     let (source, mut begins) = stalling();
     // No execution timeout: the read still has a bound of its own.
     let (root, provider) = image_provider("image-input", Some(source));
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session = opened.session.clone();
     let stalled = message(
         "stalled",
@@ -534,7 +561,10 @@ async fn a_shorter_execution_timeout_shortens_the_read_bound() {
     assert!(limit < IMAGE_READ_TIMEOUT);
     config.execution_timeout = Some(limit);
     let (root, provider) = image_provider_from(root, config, Some(source), true);
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session = opened.session.clone();
     let stalled = message(
         "stalled",
@@ -564,7 +594,10 @@ async fn a_source_that_panics_costs_one_message_and_not_the_worker() {
         ..Default::default()
     });
     let (root, provider) = image_provider("image-input", Some(source));
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let panicking = message(
         "panics",
         Some("look"),
@@ -588,7 +621,10 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
     let _slot = process_test_slot().await;
     let (source, mut begins) = stalling();
     let (root, provider) = image_provider("steering-image-injected", Some(source));
-    let mut opened = provider.open(None).await.unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "first").await;
     assert_eq!(
         next(&mut opened).await,
@@ -646,7 +682,10 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
     let _slot = process_test_slot().await;
     let (source, mut begins) = stalling();
     let (root, provider) = image_provider("steering-image-injected", Some(source));
-    let mut opened = provider.open(None).await.unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "first").await;
     assert_eq!(
         next(&mut opened).await,
@@ -702,7 +741,10 @@ async fn reading_a_prompts_images_spends_the_executions_deadline_rather_than_add
     let limit = Duration::from_secs(4);
     config.execution_timeout = Some(limit);
     let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
-    let mut opened = provider.open(None).await.unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session = opened.session.clone();
     let sent = message("stalled", Some("look"), vec![image]);
     let running = tokio::spawn(async move { session.execute(sent).await.into_result() });
@@ -741,7 +783,10 @@ async fn reading_a_steerings_images_spends_the_steering_deadline_rather_than_add
     let (root, mut config, _) = test_acp_configuration("steering-image-stall", 32);
     config.execution_timeout = None;
     let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
-    let mut opened = provider.open(None).await.unwrap();
+    let mut opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "first").await;
     assert_eq!(
         next(&mut opened).await,
@@ -791,7 +836,10 @@ async fn a_session_bounds_the_encoded_image_bytes_waiting_to_be_dispatched() {
     let (root, mut config, _) = test_acp_configuration("image-input", 32);
     config.execution_timeout = None;
     let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
 
     let mut reading = Vec::new();
     for id in ["first", "second"] {

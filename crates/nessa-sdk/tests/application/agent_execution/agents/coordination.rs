@@ -1,9 +1,14 @@
 //! Deterministic checks at the control-result handoff before caller-side processing.
 use super::*;
-use crate::application::agent_execution::agents::AgentFuture;
+use crate::application::agent_execution::agents::{
+    AgentFuture, AttachmentPhase, AttachmentRequest,
+};
 use crate::application::{
     agent_execution::{
-        executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, SubmissionMode},
+        executions::{
+            AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionRequest,
+            SubmissionMode,
+        },
         permissions::{
             ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
             PermissionResolution,
@@ -11,9 +16,9 @@ use crate::application::{
         providers::{
             AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
             ExecutionReport, OpenedProviderSession, ProviderExecutionFuture,
-            ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture,
-            ProviderOpenFuture, ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
-            ProviderSessionBackend, ProviderSessionState,
+            ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
+            ProviderOpenFuture, ProviderOpenRequest, ProviderOperationFailure,
+            ProviderOperationFuture, ProviderSession, ProviderSessionBackend, ProviderSessionState,
         },
         sessions::SessionManager,
     },
@@ -26,11 +31,101 @@ impl ExecutionAudit for AcceptingAudit {
         Box::pin(async { Ok(()) })
     }
 }
+#[derive(Clone, Copy)]
+enum AttachmentAuditPanic {
+    Construct,
+    Poll,
+    Drop,
+}
+struct PanickingAttachmentAudit(AttachmentAuditPanic);
+struct PanickingAttachmentAuditFuture(AttachmentAuditPanic);
+impl ExecutionAudit for PanickingAttachmentAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if matches!(self.0, AttachmentAuditPanic::Construct) {
+            panic!("attachment audit construction panic");
+        }
+        Box::pin(PanickingAttachmentAuditFuture(self.0))
+    }
+}
+impl Future for PanickingAttachmentAuditFuture {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.0, AttachmentAuditPanic::Poll) {
+            panic!("attachment audit poll panic");
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+impl Drop for PanickingAttachmentAuditFuture {
+    fn drop(&mut self) {
+        if matches!(self.0, AttachmentAuditPanic::Drop) {
+            panic!("attachment audit drop panic");
+        }
+    }
+}
+#[derive(Default)]
+struct CountingAudit(AtomicUsize);
+impl ExecutionAudit for CountingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+fn capabilities_ref() -> &'static EffectiveCapabilities {
+    static CAPABILITIES: std::sync::OnceLock<EffectiveCapabilities> = std::sync::OnceLock::new();
+    CAPABILITIES.get_or_init(|| {
+        let text = ModalitiesDto {
+            text: true,
+            image: false,
+            audio: false,
+        };
+        let model = ModelMetadata::try_from(ModelMetadataDto {
+            provider: "anthropic".into(),
+            model_id: "fixture".into(),
+            display_name: "Fixture".into(),
+            input: text,
+            image_input: None,
+            output: text,
+            tool_use: true,
+            reasoning: false,
+            max_context_window_tokens: 1000,
+            max_output_tokens: 100,
+            knowledge_cutoff: "2026-01".into(),
+            documentation_url: "https://example.com".into(),
+        })
+        .unwrap();
+        let text = Modalities::new(true, false, false).unwrap();
+        EffectiveCapabilities::new(
+            &model,
+            BindingRestrictions::new(ModelFeatures::new(text, text, true, false), model.limits()),
+            model.limits(),
+        )
+        .unwrap()
+    })
+}
+async fn attached_agent(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+) -> Result<Agent, AgentError> {
+    attached_agent_with_audit(provider, manager, Arc::new(AcceptingAudit)).await
+}
+async fn attached_agent_with_audit(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+    audit: Arc<dyn ExecutionAudit>,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, audit)
+        .await
+        .map_err(|error| error.cause().clone())?;
+    let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(actor()))?;
+    agent.start_attachment(authorization)?.wait().await?;
+    Ok(agent)
+}
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, InvocationStage, SchedulingCause},
         prompts::{PromptText, UserMessage},
-        sessions::ExecutionSessionId,
+        sessions::{ExecutionSessionId, SessionId},
     },
     effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},
     model_metadata::{
@@ -39,10 +134,15 @@ use crate::domain::{
     },
 };
 use crate::infrastructure::session_storage::InMemoryStorage;
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::channel,
-    Arc, Mutex as StateMutex,
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::channel,
+        Arc, Mutex as StateMutex,
+    },
+    task::Poll,
 };
 use tokio::{
     sync::{oneshot, Notify},
@@ -50,8 +150,13 @@ use tokio::{
 };
 
 struct Provider(Arc<Backend>);
+struct RecoveryOpenFailureProvider {
+    inner: Provider,
+    opens: AtomicUsize,
+}
 #[derive(Default)]
 struct Backend {
+    opens: AtomicUsize,
     executions: AtomicUsize,
     answer: StateMutex<Option<PermissionResolution>>,
     cancellation: StateMutex<Option<PermissionCancellation>>,
@@ -68,8 +173,12 @@ impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            self.0.opens.fetch_add(1, Ordering::SeqCst);
             let text = ModalitiesDto {
                 text: true,
                 image: false,
@@ -105,11 +214,25 @@ impl AgentProvider for Provider {
                     ExecutionSessionId::new("handoff").unwrap(),
                     self.0.clone(),
                     capabilities,
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents),
             })
         })
+    }
+}
+impl AgentProvider for RecoveryOpenFailureProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.inner.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.inner.capabilities()
+    }
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        if self.opens.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.inner.open(request)
+        } else {
+            Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+        }
     }
 }
 impl ProviderSessionBackend for Backend {
@@ -204,10 +327,22 @@ async fn agent_with_backend() -> (Agent, Arc<Backend>) {
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(Provider(backend.clone())), manager)
+    let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
         .await
         .unwrap();
     (agent, backend)
+}
+async fn reattach(agent: &Agent) {
+    agent.close(actor()).await.unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
 }
 fn actor() -> ActionContext {
     ActionContext::new("caller", "surface", "close").unwrap()
@@ -241,6 +376,7 @@ async fn uncertain_control_result_closes_admission_before_returning_to_its_calle
         "uncertainty must latch inside the fenced result poll"
     );
     agent.close(actor()).await.unwrap();
+    reattach(&agent).await;
     assert_eq!(
         agent.invoke(input(), actor()).await,
         Ok(ExecutionOutcome::Completed)
@@ -259,6 +395,7 @@ async fn old_control_supervisor_failure_cannot_close_a_recovered_attachment() {
     // The old admission ticket must not acquire authority over this new lifecycle.
     agent.inner.lifecycle.block(old_epoch);
     assert!(!agent.inner.lifecycle.is_closed());
+    reattach(&agent).await;
     assert_eq!(
         agent.invoke(input(), actor()).await,
         Ok(ExecutionOutcome::Completed)
@@ -268,6 +405,66 @@ async fn old_control_supervisor_failure_cannot_close_a_recovered_attachment() {
     assert!(agent.inner.lifecycle.is_closed());
     drop(current);
     agent.close(actor()).await.unwrap();
+}
+
+#[tokio::test]
+async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt() {
+    let storage = Arc::new(InMemoryStorage::new());
+    let id = SessionId::new("automatic-recovery-failure").unwrap();
+    let backend = Arc::new(Backend::default());
+    let provider = Arc::new(RecoveryOpenFailureProvider {
+        inner: Provider(backend),
+        opens: AtomicUsize::new(0),
+    });
+    let manager = SessionManager::open(Some(id.clone()), storage.clone())
+        .await
+        .unwrap();
+    let agent = attached_agent(provider.clone(), manager).await.unwrap();
+
+    let control = agent.accept_control().unwrap();
+    assert_eq!(
+        agent
+            .run_control(control, async {
+                Err::<(), _>(ProviderOperationFailure::new(
+                    AgentError::Protocol("provider requested restart".into()),
+                    ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                        forced: false,
+                    })),
+                ))
+            })
+            .await,
+        Err(AgentError::Protocol("provider requested restart".into()))
+    );
+
+    let receipt = agent.enqueue(input(), actor()).await.unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), receipt.wait())
+            .await
+            .expect("automatic recovery failure settles its receipt"),
+        Err(AgentError::Closed)
+    );
+    assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
+    let snapshot = agent.inner.manager.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.invocations[0].result,
+        Some(Err(AgentError::Closed))
+    );
+    assert_eq!(
+        snapshot.invocations[0].scheduling.last().unwrap().stage,
+        InvocationStage::Settled
+    );
+
+    drop(agent);
+    let restored = Agent::prepare(
+        provider.clone(),
+        SessionManager::open(Some(id), storage).await.unwrap(),
+        Arc::new(AcceptingAudit),
+    )
+    .await
+    .unwrap();
+    let retry = restored.enqueue(input(), actor()).await.unwrap();
+    assert_eq!(retry.wait().await, Err(AgentError::Closed));
+    assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -299,7 +496,7 @@ async fn assert_shutdown_queue_attribution(first: SessionCloseRequest, uncertain
     let release = if uncertain {
         let first_attempt = agent.start_shutdown(first.clone());
         assert_eq!(
-            first_attempt.wait().await.into_result(),
+            first_attempt.wait_physical().await.into_result(),
             Err(AgentError::CleanupUncertain)
         );
         None
@@ -403,7 +600,7 @@ async fn new_close_after_completed_cleanup_owns_newly_queued_cancellation() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn close_after_work_admission_preserves_input_and_closer_before_handoff() {
     for caller_lost in [false, true] {
         let (agent, backend) = agent_with_backend().await;
@@ -485,11 +682,10 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
     for explicit_first in [false, true] {
         let (agent, backend) = agent_with_backend().await;
         let work = agent.inner.lifecycle.accept_work().unwrap();
-        let generation = work.work_generation();
         agent
             .inner
             .lifecycle
-            .record_provider_state(generation, &ProviderSessionState::CleanupRequired);
+            .record_provider_state(&work, &ProviderSessionState::CleanupRequired);
         let (started, waiting) = oneshot::channel();
         let (release, gate) = oneshot::channel();
         *backend.cleanup_started.lock().unwrap() = Some(started);
@@ -507,8 +703,7 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
             explicit
         });
         release.send(()).unwrap();
-        let report = second.clone().wait().await;
-        agent.inner.lifecycle.finalize_stop(&second, &report).await;
+        agent.inner.lifecycle.complete_stop(&second).await;
         assert!(
             agent.inner.lifecycle.is_closed(),
             "accepted work must retire"
@@ -525,9 +720,10 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
             SchedulingCause::RunnerStopped
         );
         assert_eq!(work.cancellation().unwrap().actor, None);
-        assert!(first.wait().await.is_confirmed());
+        assert!(first.wait_physical().await.is_confirmed());
         drop(work);
         assert!(!agent.inner.lifecycle.is_closed());
+        reattach(&agent).await;
         assert_eq!(
             agent.invoke(input(), actor()).await,
             Ok(ExecutionOutcome::Completed)
@@ -541,14 +737,13 @@ async fn local_failure_during_automatic_cleanup_requires_explicit_recovery() {
     let agent = agent().await;
     let work = agent.inner.lifecycle.accept_work().unwrap();
     let attempt = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);
-    let report = attempt.clone().wait().await;
     // The provider cleanup is now known, but a local supervisor reports a
     // failure before its evidence has settled. Resource success cannot clear it.
     agent
         .inner
         .lifecycle
         .block(agent.inner.lifecycle.work_generation());
-    agent.inner.lifecycle.finalize_stop(&attempt, &report).await;
+    agent.inner.lifecycle.complete_stop(&attempt).await;
     drop(work);
     assert!(agent.inner.lifecycle.is_closed());
     assert!(matches!(
@@ -556,11 +751,66 @@ async fn local_failure_during_automatic_cleanup_requires_explicit_recovery() {
         Err(AgentError::Closed)
     ));
     agent.close(actor()).await.unwrap();
+    reattach(&agent).await;
     assert_eq!(
         agent.invoke(input(), actor()).await,
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(actor()).await.unwrap();
+}
+
+#[tokio::test]
+async fn close_joins_a_held_started_audit_panic_before_replacement() {
+    for failure in [
+        AttachmentAuditPanic::Construct,
+        AttachmentAuditPanic::Poll,
+        AttachmentAuditPanic::Drop,
+    ] {
+        let backend = Arc::new(Backend::default());
+        let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+            .await
+            .unwrap();
+        let agent = Agent::prepare(
+            Arc::new(Provider(backend.clone())),
+            manager,
+            Arc::new(PanickingAttachmentAudit(failure)),
+        )
+        .await
+        .unwrap();
+        let (entered, paused) = oneshot::channel();
+        let (release, waiting) = oneshot::channel();
+        agent.inner.lifecycle.pause_next_attachment_audit(
+            AttachmentAuditStage::Starting,
+            entered,
+            waiting,
+        );
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        let attachment = agent.start_attachment(authorization).unwrap();
+        paused.await.unwrap();
+        let closing = tokio::spawn({
+            let agent = agent.clone();
+            async move { agent.close(actor()).await }
+        });
+        while agent.attachment_status().phase() != AttachmentPhase::Absent {
+            tokio::task::yield_now().await;
+        }
+        assert!(!closing.is_finished());
+        assert!(agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .is_err());
+        release.send(()).unwrap();
+        assert_eq!(attachment.wait().await, Err(AgentError::AuditFailure));
+        let expected = AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure),
+        };
+        assert_eq!(closing.await.unwrap(), Err(expected.clone()));
+        assert_eq!(agent.close(actor()).await, Err(expected));
+        assert_eq!(backend.opens.load(Ordering::SeqCst), 0);
+        assert!(backend.closes.lock().unwrap().is_empty());
+    }
 }
 
 #[path = "coordination/ready_results.rs"]

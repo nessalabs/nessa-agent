@@ -18,6 +18,8 @@ use std::{cell::Cell, fmt, io::Read, rc::Rc};
 // bounded provider/cleanup diagnostics. Count decoded text and structural slots
 // here; final typed validation enforces actual retained capacities and payloads.
 const CHANGE_BYTES: usize = 160 * 1024 * 1024;
+const FINALIZED_RECIPE_BYTES: usize = 2 * 128 * ERROR_BYTES;
+const FINALIZED_RECIPE_NODES: usize = 2 * 128 * 128;
 #[derive(Default)]
 struct Budget {
     bytes: Cell<usize>,
@@ -48,6 +50,7 @@ struct Seed {
     change: Option<Rc<Budget>>,
     metadata_present: Option<Rc<Cell<bool>>>,
     error: Option<Rc<Budget>>,
+    recipe: Option<Rc<Budget>>,
     error_depth: usize,
 }
 impl Seed {
@@ -57,6 +60,11 @@ impl Seed {
             Some(self.error.clone().unwrap_or_default())
         } else {
             self.error.clone()
+        };
+        let recipe = if matches!(shape, Shape::FinalizedComponents) {
+            Some(Rc::default())
+        } else {
+            self.recipe.clone()
         };
         Self {
             shape,
@@ -73,6 +81,7 @@ impl Seed {
                 self.metadata_present.clone()
             },
             error,
+            recipe,
             error_depth: self.error_depth + usize::from(matches!(shape, Shape::Error)),
         }
     }
@@ -82,6 +91,14 @@ impl Seed {
         }
         if let Some(error) = &self.error {
             error.add(bytes, 0, ERROR_BYTES, 128)?;
+        }
+        if let Some(recipe) = &self.recipe {
+            recipe.add(
+                bytes.saturating_add(8),
+                1,
+                FINALIZED_RECIPE_BYTES,
+                FINALIZED_RECIPE_NODES,
+            )?;
         }
         Ok(())
     }
@@ -106,6 +123,9 @@ impl<'de> DeserializeSeed<'de> for Seed {
         }
         if let Some(error) = &self.error {
             limit = limit.min(ERROR_BYTES.saturating_sub(error.bytes.get()));
+        }
+        if let Some(recipe) = &self.recipe {
+            limit = limit.min(FINALIZED_RECIPE_BYTES.saturating_sub(recipe.bytes.get()));
         }
         self.limit.set(limit);
         deserializer.deserialize_any(self)
@@ -273,6 +293,7 @@ pub(super) fn preflight(
         change: None,
         metadata_present: None,
         error: None,
+        recipe: None,
         error_depth: 0,
     }
     .deserialize(&mut deserializer)

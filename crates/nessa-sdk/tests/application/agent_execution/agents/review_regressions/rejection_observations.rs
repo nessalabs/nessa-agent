@@ -128,6 +128,9 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
             }
             if cleanup_failure.is_some() {
                 agent.close(actor()).await.unwrap();
+                reattach_after_explicit_close(&agent).await;
+            } else {
+                recover_after_automatic_stop(&agent).await;
             }
             assert_eq!(
                 agent.invoke(input("restored"), actor()).await,
@@ -153,6 +156,8 @@ async fn observations_after_rejection_never_reenter_the_rejected_history() {
         assert_eq!(backend.closes.load(Ordering::SeqCst), 0);
         backend
             .sender
+            .lock()
+            .unwrap()
             .send(ExecutionEvent::new(
                 ExecutionId::new("rejected").unwrap(),
                 update,
@@ -279,6 +284,7 @@ async fn same_poll_observation_and_rejection_are_drained_before_next_dispatch() 
             *backend.execution_error.lock().unwrap() = None;
             backend.execution_rejected.store(false, Ordering::SeqCst);
             backend.suppress_terminal.store(false, Ordering::SeqCst);
+            recover_after_automatic_stop(&agent).await;
             assert_eq!(
                 agent.invoke(input("after-cleanup"), actor()).await,
                 Ok(ExecutionOutcome::Completed)

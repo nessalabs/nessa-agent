@@ -161,7 +161,7 @@ jobs:
       # The gate signs with `pnpm exec tauri signer sign` — the same command a
       # release signs with — so the Tauri CLI has to be installed here.
       - run: pnpm install --frozen-lockfile
-      - run: cargo test -p nessa-app --test updater_key_pairing
+      - run: cargo test -p nessa-app --test updater_key_pairing --no-default-features
 
   build:
     name: Build ${{ matrix.updater-target }}

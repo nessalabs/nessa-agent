@@ -28,6 +28,119 @@ impl ExecutionAudit for UnexpectedAudit {
     }
 }
 
+fn decline_publication(
+    capacity: usize,
+) -> (
+    DeclineNoticePublication,
+    crate::infrastructure::acp::executions::event_queue::EventReceiver,
+) {
+    let (events, receiver) = EventQueueBudget::new().channel(capacity);
+    let observation = ReviewDeclineObservation::selected(
+        ReviewDeclineId::new("1").unwrap(),
+        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+    );
+    (
+        DeclineNoticePublication::new(events, ExecutionId::new("execution").unwrap(), observation),
+        receiver,
+    )
+}
+
+async fn decline_stage(
+    receiver: &mut crate::infrastructure::acp::executions::event_queue::EventReceiver,
+) -> ReviewDeclineStage {
+    let ExecutionUpdate::ReviewDeclined(observation) = receiver.recv().await.unwrap().into_update()
+    else {
+        panic!("expected declined-review observation")
+    };
+    observation.stage()
+}
+
+#[tokio::test]
+async fn dropping_decline_publication_finalizes_each_owned_write_state() {
+    let (mut before_write, mut before_events) = decline_publication(2);
+    before_write.publish_selected().unwrap();
+    drop(before_write);
+    assert_eq!(
+        decline_stage(&mut before_events).await,
+        ReviewDeclineStage::Selected
+    );
+    assert_eq!(
+        decline_stage(&mut before_events).await,
+        ReviewDeclineStage::WriteNotAttempted
+    );
+
+    let (mut during_write, mut during_events) = decline_publication(2);
+    during_write.publish_selected().unwrap();
+    during_write.begin_write();
+    drop(during_write);
+    assert_eq!(
+        decline_stage(&mut during_events).await,
+        ReviewDeclineStage::Selected
+    );
+    assert_eq!(
+        decline_stage(&mut during_events).await,
+        ReviewDeclineStage::WriteUnconfirmed
+    );
+}
+
+#[tokio::test]
+async fn a_full_notice_queue_retains_truthful_selection_and_reports_final_loss() {
+    let (mut publication, mut events) = decline_publication(1);
+    publication.publish_selected().unwrap();
+    publication.begin_write();
+    assert_eq!(
+        publication.settle(ReviewDeclineStage::WriteConfirmed),
+        Err(QueueError::Full)
+    );
+    drop(publication);
+    assert_eq!(
+        decline_stage(&mut events).await,
+        ReviewDeclineStage::Selected
+    );
+    assert!(events.recv().await.is_none());
+    assert_eq!(
+        combine_decline_result(Err(AgentError::AuditFailure), Err(AgentError::Backpressure)),
+        Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::Backpressure),
+        })
+    );
+}
+
+#[test]
+fn event_publication_distinguishes_closed_from_full_and_preserves_an_earlier_cause() {
+    let mut full_cause = None;
+    assert_eq!(
+        event_publication_result(&mut full_cause, Err(QueueError::Full)),
+        Err(AgentError::Backpressure)
+    );
+    assert_eq!(full_cause, None, "an open full queue is not consumer loss");
+
+    let mut closed_cause = None;
+    assert_eq!(
+        event_publication_result(&mut closed_cause, Err(QueueError::Closed)),
+        Err(AgentError::Backpressure)
+    );
+    assert_eq!(
+        closed_cause,
+        Some((
+            PermissionCancellationReason::event_consumer_dropped(),
+            CancellationOrigin::Runtime,
+        ))
+    );
+
+    let established = (
+        PermissionCancellationReason::deadline_exceeded(),
+        CancellationOrigin::Runtime,
+    );
+    let mut earlier_cause = Some(established.clone());
+    assert_eq!(
+        event_publication_result(&mut earlier_cause, Err(QueueError::Closed)),
+        Err(AgentError::Backpressure)
+    );
+    assert_eq!(earlier_cause, Some(established));
+}
+
 #[tokio::test]
 async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe() {
     for (grace, pending_permission) in [
@@ -84,13 +197,15 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             agent_accepts_images: false,
             operation_capabilities,
             permissions: HashMap::new(),
+            startup_advisory_session: None,
             declined: None,
             shutdown_deadline: None,
             configured: true,
             closing: true,
             deferred_outcome: None,
             provider_result: None,
-            audit_failure: None,
+            settlement_facts: SettlementFacts::new(),
+            correlation_sequence: 0,
             failure_cause: ObservationFailureCause::ExecutionFailed,
         };
         if pending_permission {

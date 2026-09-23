@@ -2,17 +2,26 @@ import type { CredentialSource } from "./credential-source.js"
 import type { NessaClientConfig } from "./client-config.js"
 import type { ClientInfo, ClientRole, SurfaceInfo } from "../protocol/index.js"
 import type { Stage } from "./stage.js"
+import type { GatewayEndpointSource } from "./gateway-endpoint.js"
 
 /** Options for establishing a Nessa Client API session. */
 export type CommonConnectOptions = {
   /**
    * Deployment stage, default dev. Product credentials are always required.
-   * In dev, URL defaults to loopback. Other stages require an explicit URL;
+   * In dev, URL falls back to loopback when endpoint publication is unavailable.
+   * Other stages require either a verified publication or an explicit URL;
    * non-loopback URLs outside dev require wss. Authentication is required in every stage.
    */
   stage?: Stage
-  /** Gateway WebSocket URL. Defaults to loopback in dev; product sessions use the /session endpoint. */
+  /** Gateway WebSocket URL. Explicit values bypass discovery. Product sessions use the /session endpoint. */
   url?: string
+  /**
+   * Trusted local endpoint publication source. Used only when `url` is omitted,
+   * before credential loading, and consulted again for each retry or reconnect.
+   * Node supplies its private-file adapter automatically; native hosts inject
+   * their own boundary adapter.
+   */
+  endpointSource?: GatewayEndpointSource
   /** Caller role metadata; does not confer authorization. */
   role: ClientRole
   /** Surface metadata; identity and permissions come from the credential. */

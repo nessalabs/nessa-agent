@@ -1,7 +1,7 @@
 mod opening;
 
 use super::support::*;
-use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
+use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 use nessa_sdk::{
     application::agent_execution::providers::OperationCapabilities,
     infrastructure::session_storage::InMemoryStorage, Agent,
@@ -119,14 +119,16 @@ impl AgentProvider for TestProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("test", "test", "test").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("fixture").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(EmptyEvents),
             })
@@ -137,7 +139,7 @@ pub(super) async fn provider_agent(backend: Arc<dyn ProviderSessionBackend>) -> 
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    Agent::new(Arc::new(TestProvider(backend)), manager)
+    attached_agent(Arc::new(TestProvider(backend)), manager)
         .await
         .unwrap()
 }
@@ -156,7 +158,9 @@ pub(super) async fn provider_agent_with_review(
             queue_history: Vec::new(),
             id: id.clone(),
             provider: provider.identity(),
-            provider_session_id: ExecutionSessionId::new("fixture").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("fixture").unwrap(),
+            ),
             invocations: vec![InvocationRecord {
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
@@ -169,6 +173,7 @@ pub(super) async fn provider_agent_with_review(
                     reserved_output_tokens: 1,
                 },
                 actor: close_action(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
                 events: vec![review],
                 scheduling: Vec::new(),
                 cancellation: None,
@@ -182,5 +187,5 @@ pub(super) async fn provider_agent_with_review(
         .unwrap();
     drop(lease);
     let manager = SessionManager::open(Some(id), storage).await.unwrap();
-    Agent::new(provider, manager).await.unwrap()
+    attached_agent(provider, manager).await.unwrap()
 }

@@ -230,6 +230,47 @@ export const ConversationDisposition = {
 } as const
 export type ConversationDisposition =
   (typeof ConversationDisposition)[keyof typeof ConversationDisposition]
+/** Current provider attachment state. This is presentation state and grants no operation authority. */
+export const ConversationLifecyclePhase = {
+  Absent: "absent",
+  Starting: "starting",
+  Attached: "attached",
+  Failed: "failed",
+} as const
+export type ConversationLifecyclePhase =
+  (typeof ConversationLifecyclePhase)[keyof typeof ConversationLifecyclePhase]
+/** Stable category for a provider attachment failure. */
+export const ConversationStartupFailureCode = {
+  Audit: "audit",
+  Provider: "provider",
+  Storage: "storage",
+  Cleanup: "cleanup",
+} as const
+export type ConversationStartupFailureCode =
+  (typeof ConversationStartupFailureCode)[keyof typeof ConversationStartupFailureCode]
+/** Bounded presentation of the latest provider attachment failure. It carries no admission or cleanup authority. */
+export interface ConversationStartupFailure {
+  /** Stable failure category. */
+  code: ConversationStartupFailureCode
+  /** Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound. */
+  message: string
+}
+/** Bounded late failure to acknowledge mandatory attachment audit evidence. It carries no lifecycle authority. */
+export interface ConversationAttachmentEvidenceFailure {
+  /** Mandatory attachment audit was not acknowledged. */
+  code: "audit"
+  /** Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound. */
+  message: string
+}
+/** Current provider attachment lifecycle for this conversation. */
+export interface ConversationLifecycle {
+  /** Current provider attachment phase. */
+  phase: ConversationLifecyclePhase
+  /** Present exactly when phase is failed. */
+  failure?: ConversationStartupFailure
+  /** Late mandatory attachment-audit failure retained independently of the current phase. It grants no lifecycle authority. */
+  evidenceFailure?: ConversationAttachmentEvidenceFailure
+}
 /** Whether Nessa can deliver a deny choice offered by a provider permission review. */
 export const PermissionDenialSupport = {
   Unknown: "unknown",
@@ -455,6 +496,19 @@ export interface ConversationTool {
   toolId: string
   /** Provider tool title. */
   title: string
+  /** What the call does, as the provider categorised it. Empty until the provider has said, which is why a panel counts kinds it knows rather than assuming the rest are reads. */
+  kind:
+    | ""
+    | "read"
+    | "edit"
+    | "search"
+    | "fetch"
+    | "execute"
+    | "think"
+    | "delete"
+    | "move"
+    | "switch_mode"
+    | "other"
   /** Current provider tool status. */
   status: string
   /** Bounded provider-observed tool output and file changes; omitted content is marked. */
@@ -478,6 +532,8 @@ export interface ConversationView {
   tools: ConversationTool[]
   /** Agent operation support. */
   capabilities: ConversationCapabilities
+  /** Current provider attachment lifecycle. */
+  lifecycle: ConversationLifecycle
   /** Some non-actionable history or text was omitted to bound this response. */
   truncated: boolean
   /** Why pending review choices cannot safely be shown; do not offer inferred choices. */
@@ -628,12 +684,14 @@ export interface ConversationRuntime {
 export interface ConversationPart {
   /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
   offset: number
-  /** Text, exposed thought content, or a tool observation. */
-  kind: "text" | "thought" | "tool"
-  /** Exact text fragment for text or thought observations; empty for tool observations. */
+  /** Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice. */
+  kind: "text" | "thought" | "tool" | "local_notice"
+  /** Exact text fragment for text, thought, or local notice observations; empty for tool observations. */
   text: string
-  /** Owning tool identity for a tool observation; empty for text or thought observations. */
+  /** Owning tool identity for a tool observation; empty otherwise. */
   toolId: string
+  /** Stable execution-scoped declined-review identity for a local notice; empty otherwise. */
+  noticeId: string
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }

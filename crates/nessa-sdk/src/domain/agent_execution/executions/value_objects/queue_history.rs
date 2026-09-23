@@ -11,6 +11,8 @@ pub enum QueueRemovalCause {
     SessionClosed,
     /// Automatic runner cleanup stopped pending work.
     RunnerStopped,
+    /// Provider attachment failed before pending work could be dispatched.
+    DispatchFailed,
 }
 /// One membership change at the scheduler's exclusive queue boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]

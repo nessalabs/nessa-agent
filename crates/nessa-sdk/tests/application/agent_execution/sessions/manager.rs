@@ -41,6 +41,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
+        acknowledgement: SubmissionAcknowledgement::Pending,
         events: if complete {
             vec![ExecutionEvent::new(
                 id,
@@ -74,7 +75,9 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         queue_history: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
-        provider_session_id: ExecutionSessionId::new("provider-session").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("provider-session").unwrap(),
+        ),
         invocations,
     };
     lease.save(snapshot.clone()).await.unwrap();
@@ -87,7 +90,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
             ..Evidence::default()
         })),
         dispatched: RwLock::new(HashMap::new()),
-        attachment: None,
+        attachment: Arc::new(AttachmentLease::empty()),
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)

@@ -1,6 +1,6 @@
 use super::{
     cancellation::Cancellation as InvocationCancellation,
-    errors::{Outcome, SavedError},
+    errors::{Outcome, SavedError, StorageFailure},
     permissions::{self, Actor, Cancellation, Choice, Input},
     settlement::Settlement,
     tools::{corrupt, Tool},
@@ -10,13 +10,16 @@ use crate::application::agent_execution::{
         limits::validate_observation_id, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
         SubmissionMode,
     },
-    providers::ProviderIdentity,
-    sessions::storage::{InvocationRecord, StorageError},
+    providers::{ExecutionReport, ProviderIdentity},
+    sessions::storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
 };
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
-        permissions::PermissionId,
+        permissions::{
+            PermissionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
+            ReviewDeclineReason, ReviewDeclineStage,
+        },
         prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
         sessions::ExecutionSessionId,
     },
@@ -105,11 +108,46 @@ pub(super) struct Metadata {
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
+    pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
     pub(super) local_outcome: Option<Outcome>,
     pub(super) cancellation: Option<InvocationCancellation>,
     pub(super) result: Option<Result<Outcome, SavedError>>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum Acknowledgement {
+    Pending,
+    Acknowledged,
+    Failed {
+        audit: Option<SavedError>,
+        storage: Option<StorageFailure>,
+    },
+}
+impl From<&SubmissionAcknowledgement> for Acknowledgement {
+    fn from(value: &SubmissionAcknowledgement) -> Self {
+        match value {
+            SubmissionAcknowledgement::Pending => Self::Pending,
+            SubmissionAcknowledgement::Acknowledged => Self::Acknowledged,
+            SubmissionAcknowledgement::Failed { audit, storage } => Self::Failed {
+                audit: audit.clone().map(Into::into),
+                storage: storage.clone().map(Into::into),
+            },
+        }
+    }
+}
+impl From<Acknowledgement> for SubmissionAcknowledgement {
+    fn from(value: Acknowledgement) -> Self {
+        match value {
+            Acknowledgement::Pending => Self::Pending,
+            Acknowledgement::Acknowledged => Self::Acknowledged,
+            Acknowledgement::Failed { audit, storage } => Self::Failed {
+                audit: audit.map(Into::into),
+                storage: storage.map(Into::into),
+            },
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,12 +164,31 @@ pub(super) enum Update {
     Thought(String),
     Tool(Tool),
     PermissionCancelled(Cancellation),
+    ReviewDeclined {
+        id: String,
+        tool: Option<String>,
+        reason: DeclineReason,
+        delivery: DeclineDelivery,
+    },
     PermissionRequested {
         id: String,
         tool: Tool,
         input: Input,
         options: Vec<Choice>,
     },
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum DeclineReason {
+    ToolNotReviewable,
+    UnreadableRequest,
+    UnusableOptions,
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum DeclineDelivery {
+    Selected,
+    WriteConfirmed,
+    WriteUnconfirmed,
+    WriteNotAttempted,
 }
 impl From<&InvocationRecord> for Metadata {
     fn from(value: &InvocationRecord) -> Self {
@@ -157,6 +214,7 @@ impl From<&InvocationRecord> for Metadata {
             estimated_input_tokens: value.request.estimated_input_tokens,
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
+            acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
             local_outcome: value.local_outcome.map(Into::into),
@@ -186,6 +244,21 @@ impl From<ExecutionEvent> for Event {
                 ExecutionUpdate::PermissionCancelled(cancellation) => {
                     Update::PermissionCancelled((&cancellation).into())
                 }
+                ExecutionUpdate::ReviewDeclined(observation) => Update::ReviewDeclined {
+                    id: observation.id().as_str().into(),
+                    tool: observation.decline().declared().map(str::to_owned),
+                    reason: match observation.decline().reason() {
+                        ReviewDeclineReason::ToolNotReviewable => DeclineReason::ToolNotReviewable,
+                        ReviewDeclineReason::UnreadableRequest => DeclineReason::UnreadableRequest,
+                        ReviewDeclineReason::UnusableOptions => DeclineReason::UnusableOptions,
+                    },
+                    delivery: match observation.stage() {
+                        ReviewDeclineStage::Selected => DeclineDelivery::Selected,
+                        ReviewDeclineStage::WriteConfirmed => DeclineDelivery::WriteConfirmed,
+                        ReviewDeclineStage::WriteUnconfirmed => DeclineDelivery::WriteUnconfirmed,
+                        ReviewDeclineStage::WriteNotAttempted => DeclineDelivery::WriteNotAttempted,
+                    },
+                },
                 ExecutionUpdate::PermissionRequested {
                     id,
                     tool_id,
@@ -236,9 +309,13 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
+            acknowledgement: self.acknowledgement.into(),
             events: Vec::new(),
             scheduling: Vec::new(),
-            provider_report: self.provider_report.map(Into::into),
+            provider_report: self
+                .provider_report
+                .map(ExecutionReport::try_from)
+                .transpose()?,
             local_cancellation: self
                 .local_cancellation
                 .map(InvocationCancellation::decode)
@@ -257,7 +334,7 @@ impl Metadata {
 impl Event {
     pub(super) fn decode(
         self,
-        provider_session_id: &ExecutionSessionId,
+        provider_context: &ExecutionSessionId,
         execution_id: &ExecutionId,
     ) -> Result<ExecutionEvent, StorageError> {
         if self.execution_id != execution_id.as_str() {
@@ -270,7 +347,7 @@ impl Event {
             Update::Tool(tool) => ExecutionUpdate::Tool(tool.decode()?),
             Update::PermissionCancelled(cancellation) => {
                 let cancellation = cancellation.decode()?;
-                if cancellation.session_id() != provider_session_id
+                if cancellation.session_id() != provider_context
                     || cancellation.request().execution_id() != execution_id
                 {
                     return Err(corrupt(
@@ -279,6 +356,29 @@ impl Event {
                 }
                 ExecutionUpdate::PermissionCancelled(cancellation)
             }
+            Update::ReviewDeclined {
+                id,
+                tool,
+                reason,
+                delivery,
+            } => ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::restore(
+                ReviewDeclineId::new(id).map_err(corrupt)?,
+                ReviewDecline::restore(
+                    tool,
+                    match reason {
+                        DeclineReason::ToolNotReviewable => ReviewDeclineReason::ToolNotReviewable,
+                        DeclineReason::UnreadableRequest => ReviewDeclineReason::UnreadableRequest,
+                        DeclineReason::UnusableOptions => ReviewDeclineReason::UnusableOptions,
+                    },
+                )
+                .map_err(corrupt)?,
+                match delivery {
+                    DeclineDelivery::Selected => ReviewDeclineStage::Selected,
+                    DeclineDelivery::WriteConfirmed => ReviewDeclineStage::WriteConfirmed,
+                    DeclineDelivery::WriteUnconfirmed => ReviewDeclineStage::WriteUnconfirmed,
+                    DeclineDelivery::WriteNotAttempted => ReviewDeclineStage::WriteNotAttempted,
+                },
+            )),
             Update::PermissionRequested {
                 id,
                 tool,

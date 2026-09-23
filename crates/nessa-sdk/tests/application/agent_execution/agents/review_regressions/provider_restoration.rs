@@ -4,16 +4,18 @@ use super::*;
 async fn assert_permissions_fenced(
     agent: &Agent,
     backend: &Probe,
-    calls: usize,
+    expected_calls: usize,
     expected: AgentError,
+    stage: &str,
 ) {
     for operation in [ProviderControl::Answer, ProviderControl::CancelPermission] {
         assert_eq!(
             invoke_control(agent, operation).await,
-            Err(expected.clone())
+            Err(expected.clone()),
+            "{stage}: {operation:?}"
         );
     }
-    assert_eq!(backend.controls.load(Ordering::SeqCst), calls);
+    assert_eq!(backend.controls.load(Ordering::SeqCst), expected_calls);
 }
 
 #[tokio::test]
@@ -42,7 +44,13 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
             Err(AgentError::StalePermission)
         );
         let calls = backend.controls.load(Ordering::SeqCst);
-        assert_permissions_fenced(&agent, &backend, calls, AgentError::Closed).await;
+        let expected = if matches!(source, ProviderControl::Steer) {
+            AgentError::Closed
+        } else {
+            AgentError::AttachmentUnavailable(AttachmentPhase::Absent)
+        };
+        let stage = format!("after the {source:?} cleanup-reporting control");
+        assert_permissions_fenced(&agent, &backend, calls, expected, &stage).await;
         // Steering after cleanup queues for preparation instead of targeting the retired context.
         let (release_prepare, prepare_gate) = oneshot::channel();
         *backend.prepare_gate.lock().unwrap() = Some(prepare_gate);
@@ -57,15 +65,22 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         release_active.send(()).unwrap();
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         backend.preparing.notified().await;
-        assert_permissions_fenced(&agent, &backend, calls, AgentError::Closed).await;
         *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
+        assert_permissions_fenced(
+            &agent,
+            &backend,
+            calls + 2,
+            AgentError::StalePermission,
+            "while replacement preparation is gated",
+        )
+        .await;
         release_prepare.send(()).unwrap();
         assert_eq!(following.wait().await, Ok(ExecutionOutcome::Completed));
         assert_eq!(
             invoke_control(&agent, ProviderControl::Answer).await,
             Err(AgentError::StalePermission)
         );
-        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 1);
+        assert_eq!(backend.controls.load(Ordering::SeqCst), calls + 3);
         agent.close(actor()).await.unwrap();
     }
 }
@@ -104,7 +119,18 @@ async fn already_pending_permission_cannot_resume_against_a_cleaned_generation()
             release.send(()).is_err(),
             "stopped control dropped its backend wait"
         );
-        assert_permissions_fenced(&agent, &backend, 2, AgentError::Closed).await;
+        assert_permissions_fenced(
+            &agent,
+            &backend,
+            2,
+            if audit_failure {
+                AgentError::AuditFailure
+            } else {
+                AgentError::AttachmentUnavailable(AttachmentPhase::Absent)
+            },
+            "after an already-admitted control is interrupted",
+        )
+        .await;
         let expected_close = if audit_failure {
             Err(AgentError::AuditFailure)
         } else {
@@ -143,12 +169,15 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
             };
             assert_eq!(invoke_control(&agent, source).await, Err(expected.clone()));
             let calls = backend.controls.load(Ordering::SeqCst);
-            let admission_error = if matches!(source, ProviderControl::Steer) {
-                AgentError::AuditFailure
-            } else {
-                AgentError::Closed
-            };
-            assert_permissions_fenced(&agent, &backend, calls, admission_error.clone()).await;
+            let admission_error = AgentError::AuditFailure;
+            assert_permissions_fenced(
+                &agent,
+                &backend,
+                calls,
+                AgentError::AuditFailure,
+                "after confirmed cleanup whose audit failed",
+            )
+            .await;
             // A later successful physical-cleanup report from the already-running
             // execution must not acknowledge the control's earlier failed audit.
             if later_success_report {
@@ -159,6 +188,19 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
             }
             release_active.send(()).unwrap();
             assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
+            assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+            assert!(matches!(
+                agent.authorize_attachment(AttachmentRequest::AutomaticRecovery),
+                Err(AgentError::Closed)
+            ));
+            assert!(matches!(
+                agent.enqueue(input("blocked-queue"), actor()).await,
+                Err(AgentError::AuditFailure)
+            ));
+            assert!(matches!(
+                agent.steer(input("blocked-steering"), actor()).await,
+                Err(AgentError::AuditFailure)
+            ));
             let (_release_prepare, prepare_gate) = oneshot::channel();
             *backend.prepare_gate.lock().unwrap() = Some(prepare_gate);
             for id in ["next-one", "next-two"] {
@@ -178,21 +220,23 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
                     .invocations
                     .iter()
                     .find(|record| record.request.execution_id.as_str() == id);
+                // The retained cleanup-audit failure is an admission fence, so
+                // none of the direct calls can create another invocation.
+                assert!(admission.is_none());
                 if matches!(source, ProviderControl::Steer) {
-                    // Native delivery finalized failed cleanup before this call:
-                    // admission fails before it can create another invocation.
-                    assert!(admission.is_none());
                     assert_eq!(
                         saved.invocations.last().unwrap().result,
                         Some(Err(expected.clone()))
                     );
-                } else {
-                    assert_eq!(
-                        admission.unwrap().result,
-                        Some(Err(AgentError::AuditFailure))
-                    );
                 }
-                assert_permissions_fenced(&agent, &backend, calls, admission_error.clone()).await;
+                assert_permissions_fenced(
+                    &agent,
+                    &backend,
+                    calls,
+                    admission_error.clone(),
+                    "after a blocked direct invocation",
+                )
+                .await;
             }
             assert_eq!(
                 backend.steers.load(Ordering::SeqCst),

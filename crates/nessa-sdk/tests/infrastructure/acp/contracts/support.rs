@@ -3,6 +3,7 @@ pub(super) use crate::application::agent_execution::executions::ExecutionUpdate;
 pub(super) use crate::application::agent_execution::executions::*;
 pub(super) use crate::application::agent_execution::permissions::*;
 pub(super) use crate::application::agent_execution::providers::*;
+pub(super) use crate::application::agent_execution::sessions::SessionManager;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 pub(super) use crate::domain::agent_execution::{
     executions::*, permissions::*, prompts::*, sessions::ExecutionFinish,
@@ -21,6 +22,52 @@ pub(super) use std::{
 };
 pub(super) use tempfile::TempDir;
 pub(super) use tokio::time::timeout;
+
+pub(super) fn ordered_failures(errors: &[AgentError]) -> AgentError {
+    match errors {
+        [] => panic!("an ordered failure projection requires at least one fact"),
+        [error] => error.clone(),
+        errors => {
+            let middle = errors.len() / 2;
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(ordered_failures(&errors[..middle])),
+                subsequent_error: Box::new(ordered_failures(&errors[middle..])),
+            }
+        }
+    }
+}
+
+pub(super) fn rejected_audits(count: usize) -> AgentError {
+    ordered_failures(&vec![AgentError::AuditFailure; count])
+}
+
+struct AcceptingLifecycleAudit;
+impl ExecutionAudit for AcceptingLifecycleAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+pub(super) async fn attached_agent(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, Arc::new(AcceptingLifecycleAudit))
+        .await
+        .map_err(|error| error.cause().clone())?;
+    let authorization =
+        agent.authorize_attachment(AttachmentRequest::CallerRequested(close_action()))?;
+    agent.start_attachment(authorization)?.wait().await?;
+    Ok(agent)
+}
+
+pub(super) async fn attach_agent(
+    agent: &Agent,
+    request: AttachmentRequest,
+) -> Result<(), AgentError> {
+    let authorization = agent.authorize_attachment(request)?;
+    agent.start_attachment(authorization)?.wait().await
+}
 
 #[derive(Default)]
 pub(super) struct RecordingAudit {
@@ -56,6 +103,10 @@ impl ExecutionAudit for RecordingAudit {
                 ExecutionAuditRecord::QueueReordered(record) => {
                     self.reorders.lock().unwrap().push(record)
                 }
+                ExecutionAuditRecord::Attachment(_)
+                | ExecutionAuditRecord::QueueAdmitted(_)
+                | ExecutionAuditRecord::QueueSettled(_)
+                | ExecutionAuditRecord::SteeringAcknowledged(_) => {}
                 ExecutionAuditRecord::ReviewDeclined(record) => {
                     self.declines.lock().unwrap().push(record)
                 }
@@ -201,6 +252,47 @@ pub(super) fn opencode_configuration(
     capacity: usize,
 ) -> (TempDir, AcpConfig, ModelMetadata) {
     let (root, mut config, _) = test_acp_configuration(mode, capacity);
+    let caller_home = root.path().join("caller-home");
+    let caller_config = root.path().join("caller-config");
+    let caller_data = root.path().join("caller-data");
+    std::fs::create_dir_all(caller_home.join(".opencode/tools")).unwrap();
+    std::fs::create_dir_all(caller_config.join("opencode/tools")).unwrap();
+    std::fs::create_dir_all(&caller_data).unwrap();
+    std::fs::write(
+        caller_home.join(".opencode/opencode.json"),
+        r#"{"permission":{"*":"allow"},"mcp":{"foreign":{"type":"local","command":["/bin/false"]}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        caller_config.join("opencode/tools/foreign.ts"),
+        "export default { description: 'must not load', args: {}, execute() { throw new Error('loaded') } }",
+    )
+    .unwrap();
+    config.environment.extend([
+        ("HOME".into(), caller_home.clone().into_os_string()),
+        (
+            "XDG_CONFIG_HOME".into(),
+            caller_config.clone().into_os_string(),
+        ),
+        ("XDG_DATA_HOME".into(), caller_data.clone().into_os_string()),
+        (
+            "OPENCODE_CONFIG".into(),
+            caller_home.join(".opencode/opencode.json").into_os_string(),
+        ),
+        ("OPENCODE_CONFIG_DIR".into(), caller_config.into_os_string()),
+        (
+            "NESSA_EXPECTED_OPENCODE_DATA_HOME".into(),
+            caller_data.into_os_string(),
+        ),
+        (
+            "NESSA_REFUSED_OPENCODE_HOME".into(),
+            caller_home.into_os_string(),
+        ),
+    ]);
+    config.credential_environment.insert(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        r#"{"permission":{"*":"allow"}}"#.into(),
+    );
     config.arguments = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/opencode_acp_test_handler.py")

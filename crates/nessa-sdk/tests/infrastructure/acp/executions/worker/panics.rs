@@ -185,7 +185,16 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                 .unwrap()
                 .expect("worker panic must be supervised");
             let completed = worker.completion.borrow().clone().unwrap();
-            assert_eq!(completed.cleanup.audit(), &Err(AgentError::AuditFailure));
+            assert_eq!(
+                completed.cleanup.audit(),
+                &Err(AgentError::MultipleOperationFailures {
+                    first_error: Box::new(AgentError::AuditFailure),
+                    subsequent_error: Box::new(AgentError::MultipleOperationFailures {
+                        first_error: Box::new(AgentError::AuditFailure),
+                        subsequent_error: Box::new(AgentError::AuditFailure),
+                    }),
+                })
+            );
             assert_eq!(completed.cleanup.is_confirmed(), !fail_cleanup);
             {
                 let records = audit.records.lock().unwrap();
@@ -233,6 +242,12 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         }
                         ExecutionAuditRecord::QueueReordered(_) => {
                             panic!("explicit close did not reorder pending work")
+                        }
+                        ExecutionAuditRecord::Attachment(_)
+                        | ExecutionAuditRecord::QueueAdmitted(_)
+                        | ExecutionAuditRecord::QueueSettled(_)
+                        | ExecutionAuditRecord::SteeringAcknowledged(_) => {
+                            panic!("provider cleanup emitted SDK admission evidence")
                         }
                         ExecutionAuditRecord::ReviewDeclined(_) => {
                             panic!("explicit close did not refuse a review")

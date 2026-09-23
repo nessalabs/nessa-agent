@@ -1,13 +1,12 @@
 #![deny(missing_docs)]
 
-use super::profile::OpencodeProfile;
+use super::{effective_data_home, profile::OpencodeProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ProviderIdentity, ProviderOpenFuture,
+    AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
-use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
@@ -16,7 +15,7 @@ use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
 use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
 use crate::infrastructure::process::ProcessScope;
-use std::sync::Arc;
+use std::{ffi::OsStr, path::Path, sync::Arc};
 use tokio::process::Command;
 
 /// What an Opencode session launched by this binding is allowed to do, as the
@@ -62,11 +61,11 @@ use tokio::process::Command;
 /// **Custom tools are not subject to permissions at all.** Opencode loads
 /// `{tool,tools}/*.{js,ts}` from every config directory and calls their
 /// `execute` with no permission evaluation of any kind. `"*"` does not reach
-/// them because nothing asks. `OPENCODE_DISABLE_PROJECT_CONFIG` removes the
-/// opened checkout from that search, which is the case that matters — somebody
-/// else's repository cannot introduce one — but the person's own config
-/// directories remain, and this binding passes `XDG_CONFIG_HOME` through, so
-/// theirs are found. That scan is ungated and there is no switch for it.
+/// them because nothing asks. There is no pinned switch for this scan. This
+/// binding instead gives each process a fresh private `HOME` and
+/// `XDG_CONFIG_HOME`, removes every alternate config input, and disables project
+/// config, so neither the checkout nor the person's global config can supply a
+/// custom tool.
 ///
 /// Plugin-supplied tools took the same route and no longer do: `OPENCODE_PURE`
 /// makes the external plugin list empty, so none is loaded, none of its tools
@@ -77,47 +76,30 @@ use tokio::process::Command;
 /// inside the binary Nessa pinned and are part of the agent rather than
 /// something a machine brings to it.
 ///
-/// **An MCP server in the person's config is started, not merely offered.**
-/// Opencode reads `mcp` from the merged config and spawns each stdio server's
-/// child process. `"*":"deny"` stops its tools being called; it does not stop
-/// the process being started, and nothing here does.
-///
-/// **A per-agent override still outranks this.** Opencode merges
-/// `agent.plan.permission` after the top-level rules this variable feeds, so a
-/// config file that names the mode by name wins. As above, the workspace
-/// cannot be that file and the person's own global config still can, and
-/// deliberately still does. Two variables get confused here, so both are named.
-/// `OPENCODE_CONFIG_DIR` closes nothing at all: it is *appended* to the search
-/// rather than replacing it, so the global config directory is read whatever it
-/// says. `XDG_CONFIG_HOME` is the one that decides that directory, and this
-/// binding does pass it through — pointed at an empty directory of Nessa's own
-/// it would close the global half of all three rows that remain. It is not,
-/// and the reason is not sign-in: `auth.json` is resolved from
-/// `XDG_DATA_HOME`, so signing in would survive. The reason is that
-/// `$HOME/.opencode` is read outside both conditionals and would remain open
-/// anyway, and that the person's own Opencode configuration is something this
-/// binding honours on purpose rather than something to discard.
-///
-/// So the line the three that remain draw is the same one — custom tools, an
-/// MCP server in the person's config, a per-agent override — and it is drawn
-/// at somebody else's repository rather than at the person running Nessa on
-/// their own machine.
+/// **An MCP server in config is started, not merely offered.** A top-level or
+/// `agent.plan.permission` block can also outrank this policy. The same private
+/// config boundary closes both paths: there is no global config to contribute
+/// an MCP entry or a later permission rule. The caller's resolved
+/// `XDG_DATA_HOME` is preserved separately because that is where Opencode keeps
+/// `auth.json`; code-loading configuration does not share that directory.
 ///
 /// **A launch writes to the machine before any tool runs.** Two effects sit
 /// outside permission evaluation entirely, so no policy reaches them and
-/// nothing here records them. Every directory the config search *returns* is
-/// created and given a `.gitignore`, once per instance rather than on every
-/// read of the configuration. Under this launch the search returns
-/// `$XDG_CONFIG_HOME/opencode` unconditionally, and `$HOME/.opencode` only on
-/// a machine that already has it — the walk up from `$HOME` keeps a path only
-/// where one exists — so a person who has never run Opencode has that single
-/// directory made for them by Nessa starting it. Then a detached
-/// `npm install` of `@opencode-ai/plugin` runs into each directory the search
-/// returned, which writes `node_modules`, a `package.json` and a lockfile and
-/// makes real registry requests. Separately and earlier, the binary creates
-/// seven directories of its own under the XDG roots and the system temporary
-/// directory as its global module loads, before any configuration is read at
-/// all. Lifecycle scripts are off upstream and a directory that cannot be
+/// nothing here records them. Every directory the config search returns is
+/// created and given a `.gitignore`. Opencode then starts an asynchronous
+/// in-process Arborist installation of `@opencode-ai/plugin` there, which may
+/// write `node_modules`, a `package.json` and a lockfile and make registry
+/// requests. It is an Effect fiber, not an OS-detached child, so process-group
+/// cleanup bounds it. These writes land in the private process directory,
+/// which is removed only after the process group is confirmed gone and is
+/// retained when cleanup is uncertain. While the gateway is alive, shared ACP
+/// cleanup owns and retries that release. A hard gateway-process exit can orphan
+/// the private directory because Nessa has no durable process identity with
+/// which a later gateway could prove every prior descendant gone; new launches
+/// use fresh roots and never reclaim an uncertain one. Separately and earlier,
+/// the binary creates seven directories of its own under the XDG roots and the
+/// system temporary directory as its global module loads, before any
+/// configuration is read at all. Lifecycle scripts are off upstream and a directory that cannot be
 /// written is a no-op there, but neither of those is a switch and there is
 /// none to set: `OPENCODE_PURE` empties the plugin list and does not touch
 /// this path. Named because this section is where a reader finds out what a
@@ -174,6 +156,7 @@ impl OpencodeAcpProvider {
         audit: Arc<dyn ExecutionAudit>,
     ) -> Result<Self, AgentError> {
         config.validate()?;
+        let config = isolated_config(config)?;
         if config
             .permissions
             .decisions()
@@ -284,7 +267,7 @@ impl OpencodeAcpProvider {
     // what this policy is for — and it is the second thing to solve, with the
     // prompt, before Opencode is given a mode that acts.
 
-    fn launch_command(&self) -> Command {
+    fn launch_command(&self, private_home: &Path) -> Command {
         let mut command = Command::new(&self.config.executable);
         command
             .args(&self.config.arguments)
@@ -292,6 +275,13 @@ impl OpencodeAcpProvider {
             .env_clear()
             .envs(&self.config.environment)
             .envs(&self.config.credential_environment)
+            .env_remove("OPENCODE_CONFIG")
+            .env_remove("OPENCODE_CONFIG_CONTENT")
+            .env_remove("OPENCODE_CONFIG_DIR")
+            .env("HOME", private_home)
+            .env("XDG_CONFIG_HOME", private_home.join("config"))
+            .env("XDG_CACHE_HOME", private_home.join("cache"))
+            .env("XDG_STATE_HOME", private_home.join("state"))
             .env("OPENCODE_PERMISSION", SESSION_POLICY)
             // The workspace Opencode is pointed at is a checkout, and a
             // checkout is somebody else's text. Without this, an
@@ -319,9 +309,9 @@ impl OpencodeAcpProvider {
             // pinned build stops being offered and every session is refused
             // rather than healing itself on the next refresh. That is
             // fail-closed and the refusal names the cause, and `data/models.json`
-            // would need the same edit regardless — but no test here can go red
-            // when it happens, because the contract fixture states the offered
-            // list rather than asking a live Opencode for it.
+            // would need the same edit regardless. The opt-in pinned-binary
+            // contract asks a live Opencode for selected IDs in each auth tier;
+            // the synthetic handler remains the deterministic protocol fixture.
             .env("OPENCODE_DISABLE_MODELS_FETCH", "1")
             // The pinned release is the tested one, so a copy that moves on
             // its own is a version this profile's `initialize` check would
@@ -345,18 +335,50 @@ impl AgentProvider for OpencodeAcpProvider {
         .expect("validated model and fixed-size context fingerprint")
     }
 
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
+    }
+
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
+            let (restore, control) = request.into_parts();
             let factory = self.clone();
             acp_binding::open(
-                Arc::new(move || ProcessScope::spawn(factory.launch_command())),
+                Arc::new(move || {
+                    ProcessScope::spawn_with_private_directory(|private_home| {
+                        factory.launch_command(private_home)
+                    })
+                    .map(|(scope, _)| scope)
+                }),
                 self.config.clone(),
                 self.capabilities.clone(),
                 OpencodeProfile::new(self.capabilities.model().model_id()),
                 self.audit.clone(),
                 restore,
+                control,
             )
             .await
         })
     }
+}
+
+fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
+    let data_home = effective_data_home(&config.environment, &config.credential_environment)?;
+    for key in [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENCODE_CONFIG_DIR",
+    ] {
+        config.environment.remove(OsStr::new(key));
+        config.credential_environment.remove(OsStr::new(key));
+    }
+    config
+        .environment
+        .insert("XDG_DATA_HOME".into(), data_home.into_os_string());
+    Ok(config)
 }

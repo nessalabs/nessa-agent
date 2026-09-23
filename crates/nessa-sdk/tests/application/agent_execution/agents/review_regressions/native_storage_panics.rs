@@ -127,13 +127,22 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
         release_execution.send(()).unwrap();
         release_cleanup.send(()).unwrap();
-        let error = timeout(Duration::from_secs(2), steering)
+        let delivery = timeout(Duration::from_secs(2), steering)
             .await
             .unwrap()
             .unwrap()
-            .err()
-            .expect("panic cannot acknowledge steering success");
-        assert!(matches!(error, AgentError::Protocol(_)), "{error:?}");
+            .unwrap();
+        let original_evidence = match &delivery {
+            SteeringDelivery::Injected { evidence, .. } => evidence.clone(),
+            SteeringDelivery::Queued(_) => panic!("confirmed native injection must stay injected"),
+        };
+        assert!(matches!(
+            &delivery,
+            SteeringDelivery::Injected {
+                evidence: SteeringEvidence::Failed(failure),
+                ..
+            } if matches!(failure.storage(), Some(StorageError::Io(_)))
+        ));
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         let retry = timeout(
             Duration::from_secs(2),
@@ -141,9 +150,14 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         )
         .await
         .unwrap()
-        .err()
-        .expect("retry returns failed receipt");
-        assert_eq!(retry, error);
+        .unwrap();
+        assert!(matches!(
+            retry,
+            SteeringDelivery::Injected {
+                evidence: SteeringEvidence::Failed(_),
+                ..
+            }
+        ));
         assert_eq!(
             backend.steers.load(Ordering::SeqCst),
             usize::from(stage == InvocationStage::Injected)
@@ -154,7 +168,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             .iter()
             .find(|record| record.request.execution_id.as_str() == "steering")
             .unwrap();
-        assert_eq!(record.result, Some(Err(error)));
+        assert_eq!(record.result, None);
         assert_eq!(record.actor, actor());
         let final_event = record.scheduling.last().unwrap();
         if stage == InvocationStage::Injected {
@@ -170,6 +184,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             Err(AgentError::Closed)
         ));
         agent.close(actor()).await.unwrap();
+        reattach_after_explicit_close(&agent).await;
         assert_eq!(
             agent
                 .enqueue(input("recovered"), actor())
@@ -180,5 +195,14 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             Ok(ExecutionOutcome::Completed)
         );
         agent.close(actor()).await.unwrap();
+        drop(agent);
+        let (restored, restored_backend) = probe_with_manager(false, storage.manager().await).await;
+        let restored_delivery = restored.steer(input("steering"), actor()).await.unwrap();
+        assert!(matches!(
+            restored_delivery,
+            SteeringDelivery::Injected { evidence, .. } if evidence == original_evidence
+        ));
+        assert_eq!(restored_backend.steers.load(Ordering::SeqCst), 0);
+        restored.close(actor()).await.unwrap();
     }
 }

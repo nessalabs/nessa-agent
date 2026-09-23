@@ -4,7 +4,6 @@ use crate::application::agent_execution::sessions::{SessionManager, StorageError
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::acp::sessions::StdioMcpServer;
 use crate::infrastructure::session_storage::LocalFileStorage;
-use crate::Agent;
 
 fn provider(config: AcpConfig, model: &ModelMetadata) -> ClaudeAcpProvider {
     ClaudeAcpProvider::new(
@@ -40,7 +39,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     let storage = Arc::new(LocalFileStorage::new(&storage_path).unwrap());
     let session_id = SessionId::new("fingerprint").unwrap();
     let manager = || SessionManager::open(Some(session_id.clone()), storage.clone());
-    let agent = Agent::new(Arc::new(original), manager().await.unwrap())
+    let agent = attached_agent(Arc::new(original), manager().await.unwrap())
         .await
         .unwrap();
     agent.close(close_action()).await.unwrap();
@@ -73,8 +72,8 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
         let changed = provider(changed, &model);
         assert_ne!(changed.identity(), identity);
         assert!(matches!(
-            Agent::new(Arc::new(changed), manager().await.unwrap()).await,
-            Err(error) if !error.needs_cleanup() && matches!(error.cause(), AgentError::Storage(StorageError::IdentityMismatch))
+            attached_agent(Arc::new(changed), manager().await.unwrap()).await,
+            Err(error) if matches!(error, AgentError::Storage(StorageError::IdentityMismatch))
         ));
         assert_eq!(
             std::fs::read(root.path().join("launches")).unwrap(),
@@ -87,7 +86,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     );
     let rotated = provider(config, &model);
     assert_eq!(rotated.identity(), identity);
-    let restored = Agent::new(Arc::new(rotated), manager().await.unwrap())
+    let restored = attached_agent(Arc::new(rotated), manager().await.unwrap())
         .await
         .unwrap();
     restored.close(close_action()).await.unwrap();

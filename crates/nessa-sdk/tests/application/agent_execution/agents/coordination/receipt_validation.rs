@@ -70,7 +70,7 @@ async fn received_permission_receipt_finishes_validation_after_close() {
             .await
             .unwrap();
             let backend = Arc::new(Backend::default());
-            let agent = Agent::new(Arc::new(Provider(backend.clone())), manager)
+            let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
                 .await
                 .unwrap();
             let request = input();

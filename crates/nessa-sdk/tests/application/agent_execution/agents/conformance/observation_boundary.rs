@@ -32,6 +32,8 @@ async fn settled_observation_boundary_rejects_old_output_in_each_delivery_mode()
             bounded(backend.dispatched.notified()).await;
             backend
                 .output
+                .lock()
+                .unwrap()
                 .send(Some(ExecutionEvent::new(
                     ExecutionId::new("first").unwrap(),
                     update,
@@ -119,6 +121,8 @@ async fn settled_observation_boundary_keeps_only_correlated_trailing_cancellatio
     ] {
         backend
             .output
+            .lock()
+            .unwrap()
             .send(Some(ExecutionEvent::new(execution.clone(), update)))
             .unwrap();
     }
@@ -130,6 +134,8 @@ async fn settled_observation_boundary_keeps_only_correlated_trailing_cancellatio
     );
     backend
         .output
+        .lock()
+        .unwrap()
         .send(Some(ExecutionEvent::new(
             execution,
             ExecutionUpdate::PermissionCancelled(cancellation),
@@ -178,6 +184,8 @@ async fn buffered_stale_output_prevents_next_provider_dispatch() {
                     .store(usize::from(exhausted_budget), Ordering::SeqCst);
                 backend
                     .output
+                    .lock()
+                    .unwrap()
                     .send(Some(ExecutionEvent::new(
                         ExecutionId::new("first").unwrap(),
                         update,
@@ -219,14 +227,16 @@ impl AgentProvider for FailedPreflight {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("preflight", "fixture", "local").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("preflight").unwrap(),
                     self.backend.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(FailedPreflightEvents(self.cause)),
             })
@@ -253,7 +263,7 @@ async fn preflight_reader_failure_keeps_its_cause_without_dispatch() {
         ] {
             let storage = MemoryStorage::default();
             let backend = workflow_backend();
-            let agent = Agent::new(
+            let agent = attached_agent(
                 Arc::new(FailedPreflight {
                     backend: backend.clone(),
                     cause,

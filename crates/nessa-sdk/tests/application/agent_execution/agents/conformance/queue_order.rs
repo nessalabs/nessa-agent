@@ -36,7 +36,7 @@ async fn waiting() -> (
     Arc<WorkflowBackend>,
     MemoryStorage,
     oneshot::Sender<()>,
-    Vec<QueuedInvocation>,
+    Vec<QueueAdmission>,
 ) {
     let (agent, backend, storage) = workflow().await;
     let (release, gate) = oneshot::channel();
@@ -263,6 +263,8 @@ async fn reorder_waiting_for_evidence_leaves_live_order_and_history_agreeing() {
     storage.0.lock().unwrap().pause_save = Some((started, gate));
     backend
         .output
+        .lock()
+        .unwrap()
         .send(Some(ExecutionEvent::new(
             ExecutionId::new("running").unwrap(),
             ExecutionUpdate::Tool(ToolCallUpdate::new(
@@ -314,6 +316,8 @@ async fn close_interrupts_reorder_retention_and_leaves_the_order_unchanged() {
     storage.0.lock().unwrap().pause_save = Some((started, gate));
     backend
         .output
+        .lock()
+        .unwrap()
         .send(Some(ExecutionEvent::new(
             ExecutionId::new("running").unwrap(),
             ExecutionUpdate::Tool(ToolCallUpdate::new(
@@ -461,20 +465,43 @@ async fn panicking_reorder_persistence_fences_and_recovers_with_evidence() {
 }
 
 #[tokio::test]
-async fn failed_membership_admission_keeps_one_receipt_and_dispatches_once_on_retry() {
+async fn failed_membership_admission_retains_one_failed_receipt_without_dispatch() {
     let (agent, backend, storage) = workflow().await;
     storage.0.lock().unwrap().fail_queue = Some(QueueMutation::Admitted {
         id: ExecutionId::new("owned").unwrap(),
         kind: InvocationKind::Queued,
     });
+    let admission = agent.enqueue(request("owned"), actor()).await.unwrap();
+    let evidence = admission.evidence().clone();
     assert!(matches!(
-        agent.enqueue(request("owned"), actor()).await,
-        Err(AgentError::Storage(_))
+        &evidence,
+        AdmissionEvidence::Failed(failure) if failure.storage().is_some()
     ));
-    let receipt = agent.enqueue(request("owned"), actor()).await.unwrap();
-    bounded(receipt.wait()).await.unwrap();
-    assert_eq!(*backend.executions.lock().unwrap(), ids(&["owned"]));
-    assert_eq!(storage.snapshot().queue_history.iter().filter(|entry| matches!(&entry.mutation,QueueMutation::Admitted{id,..} if id.as_str()=="owned")).count(),1);
+    let result = bounded(admission.wait()).await;
+    assert!(result.is_err());
+
+    let retry = agent.enqueue(request("owned"), actor()).await.unwrap();
+    assert_eq!(retry.evidence(), &evidence);
+    assert_eq!(bounded(retry.wait()).await, result);
+    assert!(backend.executions.lock().unwrap().is_empty());
+    assert!(agent.queued_ids().await.is_empty());
+    let saved = storage.snapshot();
+    assert_eq!(
+        saved
+            .queue_history
+            .iter()
+            .filter(|entry| matches!(&entry.mutation, QueueMutation::Admitted { id, .. } if id.as_str() == "owned"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        saved
+            .queue_history
+            .iter()
+            .filter(|entry| matches!(&entry.mutation, QueueMutation::Removed { id, .. } if id.as_str() == "owned"))
+            .count(),
+        1
+    );
     agent.close(actor()).await.unwrap();
 }
 #[tokio::test]
@@ -484,12 +511,37 @@ async fn panicking_membership_admission_cancels_the_pending_owner_once() {
         id: ExecutionId::new("owned").unwrap(),
         kind: InvocationKind::Queued,
     });
-    assert!(agent.enqueue(request("owned"), actor()).await.is_err());
-    let receipt = agent.enqueue(request("owned"), actor()).await.unwrap();
-    assert!(bounded(receipt.wait()).await.is_err());
+    let admission = agent.enqueue(request("owned"), actor()).await.unwrap();
+    let evidence = admission.evidence().clone();
+    assert!(matches!(
+        &evidence,
+        AdmissionEvidence::Failed(failure) if failure.storage().is_some()
+    ));
+    let result = bounded(admission.wait()).await;
+    assert!(result.is_err());
+
+    let retry = agent.enqueue(request("owned"), actor()).await.unwrap();
+    assert_eq!(retry.evidence(), &evidence);
+    assert_eq!(bounded(retry.wait()).await, result);
     assert!(backend.executions.lock().unwrap().is_empty());
     assert!(agent.queued_ids().await.is_empty());
-    assert_eq!(storage.snapshot().queue_history.iter().filter(|entry| matches!(&entry.mutation,QueueMutation::Removed{id,..} if id.as_str()=="owned")).count(),1);
+    let saved = storage.snapshot();
+    assert_eq!(
+        saved
+            .queue_history
+            .iter()
+            .filter(|entry| matches!(&entry.mutation, QueueMutation::Admitted { id, .. } if id.as_str() == "owned"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        saved
+            .queue_history
+            .iter()
+            .filter(|entry| matches!(&entry.mutation, QueueMutation::Removed { id, .. } if id.as_str() == "owned"))
+            .count(),
+        1
+    );
 }
 #[tokio::test]
 async fn selected_write_failure_or_panic_never_dispatches_or_double_removes() {

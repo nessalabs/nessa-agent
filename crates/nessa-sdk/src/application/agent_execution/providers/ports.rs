@@ -2,8 +2,9 @@
 
 use super::{
     CleanupFuture, ProviderExecutionFuture, ProviderIdentity, ProviderObservationFuture,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderSession, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
+    ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+    ProviderOperationFuture, ProviderSession, ProviderSessionState, SessionCloseRequest,
+    SteeringOutcome,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::ProviderOpenFuture;
@@ -15,7 +16,7 @@ use crate::application::agent_execution::{
     },
 };
 use crate::domain::agent_execution::executions::ExecutionId;
-use crate::domain::agent_execution::sessions::ExecutionSessionId;
+use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 
 /// Confirmed cleanup of the provider attachment, independent of saved history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,13 +145,21 @@ pub struct OpenedProviderSession {
 pub trait AgentProvider: Send + Sync {
     /// Exact provider/model/context configuration used to validate restoration.
     fn identity(&self) -> ProviderIdentity;
-    /// Open a fresh context or restore exactly the supplied context. A provider
-    /// that cannot restore must return Unsupported, never silently start over.
+    /// Immutable configured model and binding capabilities available before open.
+    ///
+    /// The opened [`ProviderSession`] must report the same value. This accessor
+    /// performs no provider I/O and grants no attachment authority.
+    fn capabilities(&self) -> &EffectiveCapabilities;
+    /// Open a fresh context or restore exactly the context in `request`. A
+    /// provider that cannot restore must return Unsupported, never silently start
+    /// over. Observe its generation-bound startup control while resources are
+    /// being created, forward the first stop through the provider's existing
+    /// close owner, and keep the returned future owned until cleanup completes.
     /// On failure, return ProviderOpenError with owned cleanup whenever attachment
     /// termination is unconfirmed. Never drop resource ownership into a plain error.
     /// The caller retains that handle and its storage lease until retry confirms
     /// cleanup. A failed open must never silently attach a replacement context.
     /// A panic without a returned cleanup handle leaves cleanup unprovable; Agent
     /// retains the protective storage lease for the process lifetime in that case.
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_>;
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_>;
 }

@@ -27,6 +27,8 @@ export {
 export type {
   NessaClientConnectOptions,
   ProductConnectOptions,
+  GatewayEndpointContext,
+  GatewayEndpointSource,
 } from "./application/index.js"
 export type { NessaClientEvents } from "./application/index.js"
 export {
@@ -35,6 +37,7 @@ export {
   NessaRpcError,
   NessaProtocolCompatibilityError,
   NessaConnectionClosedError,
+  NessaEndpointDiscoveryError,
   resolveConnectOptions,
   stageAllowsDefaultUrl,
   StageConfigError,
@@ -154,6 +157,11 @@ export {
 } from "./protocol/attachment-validate.js"
 export type {
   ConversationView,
+  ConversationLifecycle,
+  ConversationLifecyclePhase,
+  ConversationStartupFailure,
+  ConversationStartupFailureCode,
+  ConversationAttachmentEvidenceFailure,
   ImageAttachment,
   LinkedFile,
   ConversationMessage,
@@ -193,4 +201,3 @@ export {
 } from "./application/conversation-mutation-error.js"
 
 export { isRetryableConnectionError } from "./application/connect-retry.js"
-export { agentOperationTimeoutMs } from "./application/agent-budgets.js"

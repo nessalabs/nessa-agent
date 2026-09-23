@@ -139,16 +139,19 @@ fn diagnostic_normalization_preserves_explicit_resource_and_audit_reports() {
         } else {
             ResourceCleanup::Unconfirmed(AgentError::Protocol("still owned".into()))
         };
+        let completion_failure = AgentError::Transport("x".repeat(MAX_BYTES)).bounded();
         let report = CleanupReport::new(
             resource.clone(),
             Err(AgentError::AfterInvocationHooks {
                 failures: Vec::new(),
                 execution_result: Box::new(Err(AgentError::Transport("x".repeat(MAX_BYTES)))),
             }),
-        );
+        )
+        .with_completion_failure(Some(AgentError::Transport("x".repeat(MAX_BYTES))));
         assert_eq!(report.resources(), &resource);
         assert_eq!(report.is_confirmed(), confirmed);
         assert_eq!(report.audit(), &Err(AgentError::DiagnosticLimit));
+        assert_eq!(report.completion_failure(), Some(&completion_failure));
         let failure = ProviderOperationFailure::new(
             AgentError::MultipleOperationFailures {
                 first_error: Box::new(AgentError::Provider {

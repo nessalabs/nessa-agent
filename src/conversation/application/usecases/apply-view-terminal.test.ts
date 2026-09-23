@@ -11,6 +11,7 @@ const providerFailure = (revision: string): ConversationView => ({
   revision,
   truncated: false,
   queueComplete: true,
+  lifecycle: { phase: "absent" },
   messages: [
     {
       executionId: "execution",
@@ -53,7 +54,7 @@ const protocolFailure = (): ConversationView => {
     messages: [
       {
         ...view.messages[0]!,
-        parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool" }],
+        parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool", noticeId: "" }],
         error: "The turn could not complete all required work.",
       },
     ],
@@ -62,6 +63,7 @@ const protocolFailure = (): ConversationView => {
         executionId: "execution",
         toolId: "tool",
         title: "Shell",
+        kind: "execute",
         status: "running",
         input: "",
         details: "partial output",

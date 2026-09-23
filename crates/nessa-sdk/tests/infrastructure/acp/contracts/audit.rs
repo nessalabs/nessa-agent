@@ -9,7 +9,10 @@ async fn explicit_close_audits_idle_and_active_contexts_once() {
     for running in [false, true] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit("stall", 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = if running {
             let active = start(&opened, "run").await;
             next(&mut opened).await;
@@ -62,7 +65,10 @@ async fn idle_close_audit_failure_is_visible_after_process_cleanup() {
             ..Default::default()
         });
         let (root, binding) = test_acp_binding_with_audit("echo", 16, audit);
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         assert_eq!(
             timeout(
                 Duration::from_secs(3),
@@ -92,7 +98,10 @@ async fn execution_deadline_audits_context_and_execution_cause() {
     let _slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("stall", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -145,7 +154,10 @@ async fn event_consumer_loss_cannot_discard_session_closure() {
     let _slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("stall", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "unobserved").await;
     next(&mut opened).await;
     drop(opened.events);
@@ -170,6 +182,104 @@ async fn event_consumer_loss_cannot_discard_session_closure() {
     assert_gone(&root, "pid");
 }
 
+struct PauseSelectedDeclineAudit {
+    accepted: RecordingAudit,
+    gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+impl ExecutionAudit for PauseSelectedDeclineAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            let selected = matches!(
+                &record,
+                ExecutionAuditRecord::ReviewDeclined(decline)
+                    if decline.delivery() == &PermissionAnswerDelivery::Selected
+            );
+            self.accepted.record(record).await?;
+            if selected {
+                let gate = self.gate.lock().unwrap().take();
+                if let Some((entered, release)) = gate {
+                    entered.send(()).unwrap();
+                    release.await.unwrap();
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn decline_publication_consumer_loss_keeps_its_cause_after_wire_delivery() {
+    let _slot = process_test_slot().await;
+    let (entered, selected_audit) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let audit = Arc::new(PauseSelectedDeclineAudit {
+        accepted: RecordingAudit::default(),
+        gate: Mutex::new(Some((entered, released))),
+    });
+    let (root, config, model) = test_acp_configuration("declined-tool", 16);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "decline-consumer-loss").await;
+
+    selected_audit.await.unwrap();
+    drop(opened.events);
+    release.send(()).unwrap();
+    assert_eq!(active.await.unwrap(), Err(AgentError::Backpressure));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    wait_for_file(&root, "permission-outcome").await;
+    let answered: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        answered,
+        serde_json::json!({"outcome":"selected","optionId":"deny-one"})
+    );
+    let declines = audit.accepted.declines.lock().unwrap();
+    assert_eq!(declines.len(), 2);
+    assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(declines[1].delivery(), &PermissionAnswerDelivery::Written);
+    assert_eq!(declines[0].id(), declines[1].id());
+    assert_eq!(declines[0].decline(), declines[1].decline());
+    drop(declines);
+    let closures = audit.accepted.closures.lock().unwrap();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(
+        closures[0].closure().execution_id().unwrap().as_str(),
+        "decline-consumer-loss"
+    );
+    assert_eq!(
+        closures[0].closure().reason(),
+        &PermissionCancellationReason::event_consumer_dropped()
+    );
+    assert_eq!(closures[0].origin(), &CancellationOrigin::Runtime);
+    drop(closures);
+    let finishes = audit.accepted.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].execution_id().as_str(), "decline-consumer-loss");
+    assert_eq!(
+        finishes[0].result(),
+        &Err(PermissionCancellationReason::event_consumer_dropped())
+    );
+    assert!(audit.accepted.records.lock().unwrap().is_empty());
+    assert_gone(&root, "pid");
+}
+
 #[tokio::test]
 async fn dropping_idle_session_handles_audits_before_event_stream_ends() {
     let _slot = process_test_slot().await;
@@ -182,7 +292,10 @@ async fn dropping_idle_session_handles_audits_before_event_stream_ends() {
         audit.clone(),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let id = opened.session.id().clone();
     drop(opened.session);
     assert_eq!(
@@ -235,7 +348,10 @@ async fn failed_session_audit_still_attempts_pending_permission_evidence() {
         audit.clone(),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -300,7 +416,10 @@ async fn every_permission_free_outcome_has_once_only_execution_evidence() {
             audit.clone(),
         )
         .unwrap();
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let session = opened.session.id().clone();
         let result = opened.session.execute(prompt("test")).await.into_result();
         assert_eq!(result.is_ok(), expected.is_ok());
@@ -365,7 +484,10 @@ async fn failed_execution_audit_prevents_success_and_still_cleans_up() {
         audit.clone(),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let ProviderExecutionReply::Finished(settlement) = opened.session.execute(prompt("test")).await
     else {
         panic!("provider was dispatched")
@@ -437,7 +559,10 @@ async fn malformed_provider_control_fails_unlimited_execution_and_audits_cleanup
             audit.clone(),
         )
         .unwrap();
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let result = timeout(
             Duration::from_secs(3),
             opened.session.execute(prompt("invalid-control")),
@@ -519,7 +644,10 @@ async fn each_bulk_cancellation_gets_its_own_audit_deadline() {
         audit.clone(),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "bulk").await;
     next(&mut opened).await;
     let mut ids = Vec::new();
@@ -585,7 +713,11 @@ async fn malformed_startup_permission_closes_the_known_idle_context() {
             audit.clone(),
         )
         .unwrap();
-        let failure = binding.open(None).await.err().unwrap();
+        let failure = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .err()
+            .unwrap();
         assert!(matches!(failure.cause(), AgentError::Protocol(_)));
         assert!(failure.cleanup().is_none());
         assert_gone(&root, "pid");

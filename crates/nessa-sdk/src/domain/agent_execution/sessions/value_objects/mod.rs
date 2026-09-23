@@ -6,6 +6,9 @@
 //! ```
 //!
 //! Arrows mean identity construction, aggregate ownership, and once-only evidence emission.
+mod attachment;
+pub use attachment::{AttachmentCause, ProviderContext, ProviderContextEvidenceError};
+
 mod identity;
 pub use identity::{ExecutionSessionId, SessionId};
 

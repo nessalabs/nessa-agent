@@ -50,7 +50,7 @@ impl InvocationHook for PausedBeforeDispatch {
             .unwrap()
             .send(())
             .unwrap();
-        self.release.lock().unwrap().recv().unwrap();
+        tokio::task::block_in_place(|| self.release.lock().unwrap().recv().unwrap());
         if self.reject {
             Err(HookError::Failed("hook stopped input".into()))
         } else {
@@ -59,7 +59,7 @@ impl InvocationHook for PausedBeforeDispatch {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn explicit_close_retains_undispatched_input_cause_actor_and_write_failure() {
     for reject_hook in [false, true] {
         for save_fault in [0, 1, 2] {
@@ -237,6 +237,17 @@ async fn previous_cleanup_cannot_cancel_a_new_input_rejected_by_its_hook() {
             invoke_control(&agent, ProviderControl::Answer).await,
             Err(AgentError::StalePermission)
         );
+        if audit_failed {
+            assert_eq!(
+                agent.invoke(input("hook-rejection"), actor()).await,
+                Err(AgentError::AuditFailure)
+            );
+            assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
+            assert!(storage.snapshot().invocations.is_empty());
+            assert_eq!(agent.close(actor()).await, Err(AgentError::AuditFailure));
+            continue;
+        }
+        recover_after_automatic_stop(&agent).await;
         agent.add_invocation_hook(Arc::new(RejectBeforeDispatch));
         assert!(matches!(
             agent.invoke(input("hook-rejection"), actor()).await,
@@ -248,12 +259,7 @@ async fn previous_cleanup_cannot_cancel_a_new_input_rejected_by_its_hook() {
             "historical cleanup did not stop this input"
         );
         assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
-        let result = agent.close(actor()).await;
-        if audit_failed {
-            assert_eq!(result, Err(AgentError::AuditFailure));
-        } else {
-            result.unwrap();
-        }
+        agent.close(actor()).await.unwrap();
     }
 }
 
@@ -352,7 +358,7 @@ async fn automatic_cancellation_evidence_survives_save_failure_and_caller_loss()
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn automatic_stop_keeps_its_first_cause_when_explicit_close_overtakes_evidence() {
     for source in [ProviderControl::Answer, ProviderControl::CancelPermission] {
         let (agent, backend, storage) = probe(false).await;

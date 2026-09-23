@@ -2,21 +2,38 @@
 //! Saved conversation history belongs to SessionManager.
 //! SDK tasks keep their work permits until recording and response delivery finish.
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
-use super::AgentError;
+pub(super) use super::attachment_evidence::CloseAttempt;
+use super::{
+    attachment_evidence::{
+        AttachmentEvidenceCompletion, AttachmentEvidenceSlot, AttachmentEvidenceTransition,
+    },
+    AgentError, AttachmentAuthorization, AttachmentFailure, AttachmentFailureCode, AttachmentPhase,
+    AttachmentRequest, AttachmentStatus, AttachmentWait,
+};
 use crate::application::agent_execution::{
+    executions::{
+        AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage, ExecutionAudit,
+        ExecutionAuditRecord,
+    },
     permissions::ActionContext,
     providers::{
-        CleanupReport, ExecutionEventStream, ProviderOperationFailure, ProviderSession,
+        CleanupReport, OperationCapabilities, ProviderOpenControl, ProviderOperationFailure,
         ProviderSessionState, SessionCloseRequest,
     },
-    sessions::{attachment::AttachmentLease, InvocationCancellationEvent, SessionStorageLease},
+    sessions::{
+        attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
+        SessionStorageLease,
+    },
 };
-use crate::domain::agent_execution::executions::{ExecutionId, SchedulingCause};
+use crate::domain::agent_execution::{
+    executions::{ExecutionId, SchedulingCause},
+    sessions::{AttachmentCause, SessionId},
+};
 #[cfg(test)]
 use std::sync::mpsc::Receiver;
 use std::{
     collections::HashMap,
-    future::Future,
+    future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
     sync::{Arc, Mutex},
@@ -39,24 +56,6 @@ pub(super) struct ControlOrigin {
     provider_generation: ProviderGeneration,
 }
 
-#[derive(Clone)]
-pub(super) struct CloseAttempt {
-    id: u64,
-    pub(super) request: SessionCloseRequest,
-    result: watch::Receiver<Option<CleanupReport>>,
-}
-impl CloseAttempt {
-    pub(super) async fn wait(mut self) -> CleanupReport {
-        loop {
-            if let Some(result) = self.result.borrow().clone() {
-                return result;
-            }
-            if self.result.changed().await.is_err() {
-                return CleanupReport::unconfirmed(AgentError::CleanupUncertain);
-            }
-        }
-    }
-}
 struct Stop {
     ticket: CloseAttempt,
     finalized: bool,
@@ -76,12 +75,15 @@ enum WorkStatus {
 }
 struct Cleanup {
     provider_generation: ProviderGeneration,
+    attempt_id: u64,
     completion: watch::Sender<Option<CleanupReport>>,
     result: watch::Receiver<Option<CleanupReport>>,
 }
 #[derive(Clone, Copy)]
 enum WorkPhase {
     Waiting,
+    // Automatic attachment failure owns final settlement for this queued input.
+    Settling,
     Active,
     // The execute future was entered; provider dispatch may still be rejected.
     Executing,
@@ -102,6 +104,51 @@ struct State {
     active: Option<(WorkGeneration, ExecutionId)>,
     next_work: u64,
     work: HashMap<u64, OwnedWork>,
+    attachment_generation: u64,
+    next_attachment_authorization: u64,
+    attachment: AttachmentState,
+    attachment_evidence_failure: Option<AttachmentFailure>,
+    attachment_evidence: Vec<AttachmentEvidenceSlot>,
+    automatic_recovery_ready: bool,
+}
+#[cfg(test)]
+struct AttachmentAuditPause {
+    stage: AttachmentAuditStage,
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+struct AttachmentAuthority {
+    id: u64,
+    work_generation: WorkGeneration,
+    attachment_generation: u64,
+    cause: AttachmentCause,
+    actor: Option<ActionContext>,
+    cancelled: watch::Sender<bool>,
+}
+enum AttachmentState {
+    Absent {
+        recorded: bool,
+    },
+    Authorized(AttachmentAuthority),
+    Abandoning {
+        generation: u64,
+        recorded: bool,
+    },
+    Starting {
+        generation: u64,
+        cause: AttachmentCause,
+        recorded: bool,
+        open_stop: watch::Sender<Option<SessionCloseRequest>>,
+    },
+    Attached {
+        generation: u64,
+        cause: AttachmentCause,
+        provider: AttachedProvider,
+    },
+    Failed {
+        failure: AttachmentFailure,
+        recorded: bool,
+    },
 }
 pub(super) struct SessionLifecycle {
     #[cfg(test)]
@@ -110,34 +157,47 @@ pub(super) struct SessionLifecycle {
     preparation_pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     #[cfg(test)]
     cleanup_started: Mutex<Option<oneshot::Sender<()>>>,
+    #[cfg(test)]
+    finalization_pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    #[cfg(test)]
+    attachment_audit_pause: Mutex<Option<AttachmentAuditPause>>,
     state: Mutex<State>,
     resource_transition: AsyncMutex<()>,
     close: watch::Sender<Option<ActionContext>>,
     stop: watch::Sender<()>,
     changed: watch::Sender<()>,
     attachment: Arc<AttachmentLease>,
-    lease: Arc<dyn SessionStorageLease>,
+    _lease: Arc<dyn SessionStorageLease>,
+    session_id: SessionId,
+    audit: Arc<dyn ExecutionAudit>,
 }
 pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
     id: u64,
-    work_generation: WorkGeneration,
-    provider_generation: ProviderGeneration,
+    binding: Mutex<(WorkGeneration, ProviderGeneration)>,
     stop: watch::Receiver<()>,
     cancellation: watch::Receiver<Option<InvocationCancellationEvent>>,
 }
+pub(super) struct AttachmentStart {
+    pub(super) generation: u64,
+    pub(super) cause: AttachmentCause,
+    pub(super) actor: Option<ActionContext>,
+    pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
+    pub(super) open_control: ProviderOpenControl,
+    pub(super) started_evidence: watch::Sender<Option<Result<(), AgentError>>>,
+}
 impl WorkPermit {
-    pub(super) fn activate(&self) {
-        if let Some(work) = self
-            .owner
-            .state
-            .lock()
-            .expect("session lifecycle")
-            .work
-            .get_mut(&self.id)
-        {
-            work.phase = WorkPhase::Active;
-        }
+    fn provider_generation_value(&self) -> ProviderGeneration {
+        self.binding.lock().expect("work binding").1
+    }
+    fn generations(&self) -> (WorkGeneration, ProviderGeneration) {
+        *self.binding.lock().expect("work binding")
+    }
+    pub(super) fn activate(&self) -> Result<(), AgentError> {
+        self.owner.activate_waiting(self)
+    }
+    pub(super) fn defer(&self) -> Result<(), AgentError> {
+        self.owner.defer_active(self)
     }
     pub(super) fn mark_execution_started(&self) {
         let mut state = self.owner.state.lock().expect("session lifecycle");
@@ -156,12 +216,13 @@ impl WorkPermit {
     }
     #[cfg(test)]
     pub(super) fn work_generation(&self) -> WorkGeneration {
-        self.work_generation
+        self.binding.lock().expect("work binding").0
     }
     pub(super) fn control_origin(&self) -> ControlOrigin {
+        let (work_generation, provider_generation) = self.generations();
         ControlOrigin {
-            work_generation: self.work_generation,
-            provider_generation: self.provider_generation,
+            work_generation,
+            provider_generation,
         }
     }
     pub(super) fn cancellation(&self) -> Option<InvocationCancellationEvent> {
@@ -183,6 +244,9 @@ impl SessionLifecycle {
     pub(super) fn new(
         attachment: Arc<AttachmentLease>,
         lease: Arc<dyn SessionStorageLease>,
+        recorded_context: bool,
+        session_id: SessionId,
+        audit: Arc<dyn ExecutionAudit>,
     ) -> Arc<Self> {
         Arc::new(Self {
             #[cfg(test)]
@@ -191,22 +255,36 @@ impl SessionLifecycle {
             preparation_pause: Mutex::new(None),
             #[cfg(test)]
             cleanup_started: Mutex::new(None),
+            #[cfg(test)]
+            finalization_pause: Mutex::new(None),
+            #[cfg(test)]
+            attachment_audit_pause: Mutex::new(None),
             resource_transition: AsyncMutex::new(()),
             state: Mutex::new(State {
                 work_generation: WorkGeneration(0),
                 provider_generation: ProviderGeneration(0),
-                provider_ready: true,
+                provider_ready: false,
                 work_status: WorkStatus::Open,
                 cleanup: None,
                 active: None,
                 next_work: 0,
                 work: HashMap::new(),
+                attachment_generation: 0,
+                next_attachment_authorization: 0,
+                attachment: AttachmentState::Absent {
+                    recorded: recorded_context,
+                },
+                attachment_evidence_failure: None,
+                attachment_evidence: Vec::new(),
+                automatic_recovery_ready: false,
             }),
             close: watch::channel(None).0,
             stop: watch::channel(()).0,
             changed: watch::channel(()).0,
             attachment,
-            lease,
+            _lease: lease,
+            session_id,
+            audit,
         })
     }
     pub(super) fn is_closed(&self) -> bool {
@@ -218,14 +296,448 @@ impl SessionLifecycle {
     pub(super) fn close_notice(&self) -> watch::Receiver<Option<ActionContext>> {
         self.close.subscribe()
     }
+    pub(super) fn attachment_status(&self) -> AttachmentStatus {
+        let state = self.state.lock().expect("session lifecycle");
+        let phase = Self::phase(&state);
+        let failure = match &state.attachment {
+            AttachmentState::Failed { failure, .. } => Some(failure.clone()),
+            _ => None,
+        };
+        AttachmentStatus::new(phase, failure, state.attachment_evidence_failure.clone())
+    }
+    fn phase(state: &State) -> AttachmentPhase {
+        match &state.attachment {
+            AttachmentState::Absent { .. } => AttachmentPhase::Absent,
+            AttachmentState::Authorized(_) | AttachmentState::Abandoning { .. } => {
+                AttachmentPhase::Waiting
+            }
+            AttachmentState::Starting { .. } => AttachmentPhase::Starting,
+            AttachmentState::Attached { .. } if state.provider_ready => AttachmentPhase::Attached,
+            AttachmentState::Attached { .. } => AttachmentPhase::Starting,
+            AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
+        }
+    }
+    pub(super) fn operation_capabilities(&self) -> OperationCapabilities {
+        let state = self.state.lock().expect("session lifecycle");
+        match &state.attachment {
+            AttachmentState::Attached { provider, .. } if state.provider_ready => {
+                provider.session.operation_capabilities()
+            }
+            _ => OperationCapabilities::default(),
+        }
+    }
+    pub(super) fn authorize_attachment(
+        self: &Arc<Self>,
+        request: AttachmentRequest,
+    ) -> Result<AttachmentAuthorization, AgentError> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        if matches!(state.work_status, WorkStatus::Open) {
+            if let Some(report) = state
+                .cleanup
+                .as_ref()
+                .and_then(|cleanup| cleanup.result.borrow().clone())
+                .filter(|report| report.is_confirmed() && report.audit().is_ok())
+            {
+                self.attachment.confirm_cleanup(&report);
+                state.cleanup = None;
+            }
+        }
+        if !matches!(state.work_status, WorkStatus::Open) || state.cleanup.is_some() {
+            return Err(AgentError::Closed);
+        }
+        let recorded = match &state.attachment {
+            AttachmentState::Absent { recorded } => *recorded,
+            AttachmentState::Failed { recorded, .. } if !self.attachment.needs_cleanup() => {
+                *recorded
+            }
+            AttachmentState::Authorized(_)
+            | AttachmentState::Abandoning { .. }
+            | AttachmentState::Starting { .. }
+            | AttachmentState::Attached { .. }
+            | AttachmentState::Failed { .. } => {
+                return Err(AgentError::AttachmentAuthorizationStale)
+            }
+        };
+        let (cause, actor) = match request {
+            AttachmentRequest::CallerRequested(actor) => (
+                if recorded {
+                    AttachmentCause::Reopen
+                } else {
+                    AttachmentCause::Initial
+                },
+                Some(actor),
+            ),
+            AttachmentRequest::AutomaticRecovery if recorded && state.automatic_recovery_ready => {
+                (AttachmentCause::AutomaticRecovery, None)
+            }
+            AttachmentRequest::AutomaticRecovery => {
+                return Err(AgentError::AttachmentAuthorizationStale)
+            }
+        };
+        let id = state.next_attachment_authorization;
+        state.next_attachment_authorization += 1;
+        let (cancelled, cancellation) = watch::channel(false);
+        state.attachment_evidence.clear();
+        let authority = AttachmentAuthority {
+            id,
+            work_generation: state.work_generation,
+            attachment_generation: state.attachment_generation,
+            cause,
+            actor: actor.clone(),
+            cancelled,
+        };
+        state.attachment = AttachmentState::Authorized(authority);
+        Ok(AttachmentAuthorization {
+            id,
+            work_generation: state.work_generation.0,
+            attachment_generation: state.attachment_generation,
+            cause,
+            actor,
+            owner: Arc::downgrade(self),
+            cancelled: cancellation,
+            consumed: false,
+        })
+    }
+    pub(super) fn start_attachment(
+        self: &Arc<Self>,
+        mut authorization: AttachmentAuthorization,
+    ) -> Result<(AttachmentStart, AttachmentWait), AgentError> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        let matches = authorization
+            .owner
+            .upgrade()
+            .is_some_and(|owner| Arc::ptr_eq(&owner, self))
+            && matches!(&state.attachment, AttachmentState::Authorized(authority)
+            if authority.id == authorization.id
+                && authority.work_generation.0 == authorization.work_generation
+                && authority.attachment_generation == authorization.attachment_generation
+                && authority.cause == authorization.cause
+                && authority.actor == authorization.actor)
+            && state.work_generation.0 == authorization.work_generation
+            && state.attachment_generation == authorization.attachment_generation
+            && matches!(state.work_status, WorkStatus::Open)
+            && state.cleanup.is_none();
+        if !matches {
+            return Err(AgentError::AttachmentAuthorizationStale);
+        }
+        authorization.consumed = true;
+        let (result, wait) = watch::channel(None);
+        let (open_stop, open_control) = watch::channel(None);
+        let (started_evidence, started_result) = watch::channel(None);
+        let attachment_generation = state.attachment_generation;
+        state.attachment_evidence.push(AttachmentEvidenceSlot {
+            generation: attachment_generation,
+            transition: AttachmentEvidenceTransition::Started,
+            result: started_result,
+        });
+        let start = AttachmentStart {
+            generation: attachment_generation,
+            cause: authorization.cause,
+            actor: authorization.actor.clone(),
+            result,
+            open_control: ProviderOpenControl::new(open_control),
+            started_evidence,
+        };
+        // Starting a replacement establishes its resource generation before
+        // provider I/O begins, so a delayed control from the retired attachment
+        // cannot report cleanup against the replacement while it is opening.
+        state.provider_generation.0 += 1;
+        state.attachment = AttachmentState::Starting {
+            generation: start.generation,
+            cause: start.cause,
+            recorded: !matches!(start.cause, AttachmentCause::Initial),
+            open_stop,
+        };
+        Ok((start, AttachmentWait { result: wait }))
+    }
+    pub(super) fn abandon_attachment_authorization(
+        self: &Arc<Self>,
+        authorization: &AttachmentAuthorization,
+    ) {
+        let (generation, recorded, cause, record, completion) = {
+            let mut state = self.state.lock().expect("session lifecycle");
+            let matching = matches!(&state.attachment, AttachmentState::Authorized(authority)
+                if authority.id == authorization.id
+                    && authority.work_generation.0 == authorization.work_generation
+                    && authority.attachment_generation == authorization.attachment_generation);
+            if !matching {
+                return;
+            }
+            if let AttachmentState::Authorized(authority) = &state.attachment {
+                authority.cancelled.send_replace(true);
+            }
+            let recorded = !matches!(authorization.cause, AttachmentCause::Initial);
+            let cause = authorization.cause;
+            state.attachment_generation += 1;
+            let generation = state.attachment_generation;
+            state.attachment = AttachmentState::Abandoning {
+                generation,
+                recorded,
+            };
+            let record = AttachmentAuditRecord::new(
+                self.session_id.clone(),
+                authorization.attachment_generation,
+                AttachmentAuditStage::Waiting,
+                AttachmentAuditStage::Absent,
+                AttachmentAuditCause::AuthorizationAbandoned,
+                authorization.actor.clone(),
+            );
+            let (completion, result) = watch::channel(None);
+            state.attachment_evidence.push(AttachmentEvidenceSlot {
+                generation: authorization.attachment_generation,
+                transition: AttachmentEvidenceTransition::AuthorizationAbandoned,
+                result,
+            });
+            self.changed.send_replace(());
+            (generation, recorded, cause, record, completion)
+        };
+        let owner = self.clone();
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            let mut state = self.state.lock().expect("session lifecycle");
+            let failure = AttachmentFailure::new(
+                AttachmentFailureCode::Audit,
+                generation,
+                cause,
+                AgentError::Protocol("attachment abandonment has no runtime".into()),
+            );
+            state.attachment_evidence_failure = Some(failure.clone());
+            if state.attachment_generation == generation
+                && matches!(state.attachment, AttachmentState::Abandoning { generation: current, .. } if current == generation)
+            {
+                state.attachment = AttachmentState::Failed { failure, recorded };
+            }
+            completion.send_replace(Some(Err(AgentError::AuditFailure)));
+            self.changed.send_replace(());
+            return;
+        };
+        runtime.spawn(async move {
+            let outcome = owner
+                .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                .await;
+            let mut state = owner.state.lock().expect("session lifecycle");
+            if state.attachment_generation == generation
+                && matches!(state.attachment, AttachmentState::Abandoning { generation: current, .. } if current == generation)
+            {
+                if let Err(error) = &outcome {
+                    let failure = AttachmentFailure::new(
+                        AttachmentFailureCode::Audit,
+                        generation,
+                        cause,
+                        error.clone(),
+                    );
+                    state.attachment_evidence_failure = Some(failure.clone());
+                    state.attachment = AttachmentState::Failed {
+                        failure,
+                        recorded,
+                    };
+                } else {
+                    state.attachment = AttachmentState::Absent { recorded };
+                }
+                owner.changed.send_replace(());
+            } else if let Err(error) = &outcome {
+                state.attachment_evidence_failure = Some(AttachmentFailure::new(
+                    AttachmentFailureCode::Audit,
+                    generation,
+                    cause,
+                    error.clone(),
+                ));
+                owner.changed.send_replace(());
+            }
+            completion.send_replace(Some(outcome));
+        });
+    }
+    pub(super) async fn record_attachment_audit(
+        &self,
+        record: ExecutionAuditRecord,
+    ) -> Result<(), AgentError> {
+        #[cfg(test)]
+        let pause = {
+            let stage = match &record {
+                ExecutionAuditRecord::Attachment(record) => Some(record.after()),
+                _ => None,
+            };
+            let mut pause = self.attachment_audit_pause.lock().unwrap();
+            if pause
+                .as_ref()
+                .is_some_and(|pause| Some(pause.stage) == stage)
+            {
+                pause.take()
+            } else {
+                None
+            }
+        };
+        #[cfg(test)]
+        if let Some(pause) = pause {
+            let _ = pause.entered.send(());
+            let _ = pause.release.await;
+        }
+        let future = catch_unwind(AssertUnwindSafe(|| self.audit.record(record)));
+        let Ok(mut future) = future else {
+            return Err(AgentError::AuditFailure);
+        };
+        let outcome = poll_fn(|context| {
+            match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+                Ok(poll) => poll.map(Some),
+                Err(payload) => {
+                    std::mem::forget(payload);
+                    Poll::Ready(None)
+                }
+            }
+        })
+        .await;
+        let dropped = catch_unwind(AssertUnwindSafe(|| drop(future))).is_ok();
+        match (outcome, dropped) {
+            (Some(result), true) => result,
+            _ => Err(AgentError::AuditFailure),
+        }
+    }
+    pub(super) fn attachment_current(&self, generation: u64) -> bool {
+        let state = self.state.lock().expect("session lifecycle");
+        state.attachment_generation == generation
+            && matches!(state.work_status, WorkStatus::Open)
+            && matches!(state.attachment, AttachmentState::Starting { generation: current, .. } if current == generation)
+    }
+    pub(super) fn attachment_published(&self, generation: u64) -> bool {
+        let state = self.state.lock().expect("session lifecycle");
+        state.attachment_generation == generation
+            && matches!(state.work_status, WorkStatus::Open)
+            && matches!(state.attachment, AttachmentState::Attached { generation: current, .. } if current == generation)
+    }
+    pub(super) async fn run_attachment<T, E>(
+        &self,
+        generation: u64,
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E>
+    where
+        E: From<AgentError>,
+    {
+        let _transition = self.resource_transition.lock().await;
+        if !self.attachment_current(generation) {
+            return Err(AgentError::Closed.into());
+        }
+        #[cfg(test)]
+        {
+            let pause = self.preparation_pause.lock().unwrap().take();
+            if let Some((entered, release)) = pause {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+        }
+        operation.await
+    }
+    pub(super) fn publish_attachment(
+        &self,
+        generation: u64,
+        attached: AttachedProvider,
+    ) -> Result<watch::Sender<Option<Result<(), AgentError>>>, Box<AttachedProvider>> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        if state.attachment_generation != generation
+            || !matches!(state.work_status, WorkStatus::Open)
+            || !matches!(state.attachment, AttachmentState::Starting { generation: current, .. } if current == generation)
+        {
+            return Err(Box::new(attached));
+        }
+        let cause = match &state.attachment {
+            AttachmentState::Starting { cause, .. } => *cause,
+            _ => unreachable!("matching starting attachment"),
+        };
+        state.provider_ready = false;
+        state.automatic_recovery_ready = false;
+        state.attachment = AttachmentState::Attached {
+            generation,
+            cause,
+            provider: attached,
+        };
+        let (completion, result) = watch::channel(None);
+        state.attachment_evidence.push(AttachmentEvidenceSlot {
+            generation,
+            transition: AttachmentEvidenceTransition::ContextPublished,
+            result,
+        });
+        self.changed.send_replace(());
+        Ok(completion)
+    }
+    pub(super) fn acknowledge_attachment_publication(&self, generation: u64) -> bool {
+        let mut state = self.state.lock().expect("session lifecycle");
+        if state.attachment_generation != generation
+            || !matches!(state.work_status, WorkStatus::Open)
+            || !matches!(state.attachment, AttachmentState::Attached { generation: current, .. } if current == generation)
+        {
+            return false;
+        }
+        state.provider_ready = true;
+        self.changed.send_replace(());
+        true
+    }
+    pub(super) fn fail_attachment(
+        &self,
+        generation: u64,
+        code: AttachmentFailureCode,
+        error: AgentError,
+        recorded_context: bool,
+    ) -> Result<Option<AttachmentEvidenceCompletion>, ()> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        if state.attachment_generation == generation
+            && matches!(state.attachment,
+                AttachmentState::Starting { generation: current, .. }
+                | AttachmentState::Attached { generation: current, .. }
+                if current == generation)
+        {
+            state.provider_ready = false;
+            let (recorded, cause) = match &state.attachment {
+                AttachmentState::Starting {
+                    recorded, cause, ..
+                } => (*recorded || recorded_context, *cause),
+                AttachmentState::Attached { cause, .. } => (true, *cause),
+                _ => unreachable!("matching starting attachment"),
+            };
+            state.attachment = AttachmentState::Failed {
+                failure: AttachmentFailure::new(code, generation, cause, error),
+                recorded,
+            };
+            let completion = if code == AttachmentFailureCode::Audit {
+                None
+            } else {
+                let (completion, result) = watch::channel(None);
+                state.attachment_evidence.push(AttachmentEvidenceSlot {
+                    generation,
+                    transition: AttachmentEvidenceTransition::Failed,
+                    result,
+                });
+                Some(completion)
+            };
+            self.changed.send_replace(());
+            Ok(completion)
+        } else {
+            Err(())
+        }
+    }
+
+    pub(super) fn retain_attachment_evidence_failure(
+        &self,
+        generation: u64,
+        cause: AttachmentCause,
+        error: AgentError,
+    ) {
+        let mut state = self.state.lock().expect("session lifecycle");
+        state.attachment_evidence_failure = Some(AttachmentFailure::new(
+            AttachmentFailureCode::Audit,
+            generation,
+            cause,
+            error,
+        ));
+        self.changed.send_replace(());
+    }
     pub(super) fn accept_work(self: &Arc<Self>) -> Result<WorkPermit, AgentError> {
         let work = self.accept_work_kind(WorkPhase::Active, false)?;
         #[cfg(test)]
         {
             let pause = self.work_admission_pause.lock().unwrap().take();
             if let Some((entered, release)) = pause {
-                entered.send(()).unwrap();
-                release.recv().unwrap();
+                tokio::task::block_in_place(|| {
+                    entered.send(()).unwrap();
+                    release.recv().unwrap();
+                });
             }
         }
         Ok(work)
@@ -244,12 +756,39 @@ impl SessionLifecycle {
     pub(super) fn accept_control(self: &Arc<Self>) -> Result<WorkPermit, AgentError> {
         self.accept_work_kind(WorkPhase::Active, true)
     }
+    pub(super) fn claim_waiting_failure(
+        &self,
+        permits: &[&WorkPermit],
+    ) -> Vec<Option<InvocationCancellationEvent>> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        permits
+            .iter()
+            .map(|permit| {
+                let work = state
+                    .work
+                    .get_mut(&permit.id)
+                    .expect("owned queued work permit");
+                if let Some(cancellation) = work.cancellation.borrow().clone() {
+                    Some(cancellation)
+                } else {
+                    assert!(matches!(work.phase, WorkPhase::Waiting));
+                    work.phase = WorkPhase::Settling;
+                    None
+                }
+            })
+            .collect()
+    }
     fn accept_work_kind(
         self: &Arc<Self>,
         phase: WorkPhase,
         control: bool,
     ) -> Result<WorkPermit, AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
+        if matches!(phase, WorkPhase::Waiting)
+            && matches!(state.attachment, AttachmentState::Failed { .. })
+        {
+            return Err(AgentError::AttachmentUnavailable(Self::phase(&state)));
+        }
         // Stated as what is accepted and then negated once, rather than as two
         // negations joined: an open session takes work, and a closing one still
         // takes the waiting kind for as long as it accepts it.
@@ -260,7 +799,7 @@ impl SessionLifecycle {
                 .cleanup
                 .as_ref()
                 .filter(|_| {
-                    matches!(&state.work_status, WorkStatus::Stopping(stop)
+                    matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
                     if matches!(stop.recovery, RecoveryPolicy::Automatic))
                 })
                 .and_then(|cleanup| {
@@ -276,8 +815,23 @@ impl SessionLifecycle {
             }
             return Err(AgentError::Closed);
         }
+        if matches!(phase, WorkPhase::Active)
+            && (!state.provider_ready
+                || !matches!(state.attachment, AttachmentState::Attached { .. }))
+        {
+            let phase = match &state.attachment {
+                AttachmentState::Absent { .. } => AttachmentPhase::Absent,
+                AttachmentState::Authorized(_) | AttachmentState::Abandoning { .. } => {
+                    AttachmentPhase::Waiting
+                }
+                AttachmentState::Starting { .. } => AttachmentPhase::Starting,
+                AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
+                AttachmentState::Attached { .. } => AttachmentPhase::Starting,
+            };
+            return Err(AgentError::AttachmentUnavailable(phase));
+        }
         if control && !state.provider_ready {
-            return Err(AgentError::Closed);
+            return Err(AgentError::AttachmentUnavailable(Self::phase(&state)));
         }
         let id = state.next_work;
         state.next_work += 1;
@@ -294,11 +848,74 @@ impl SessionLifecycle {
         Ok(WorkPermit {
             owner: self.clone(),
             id,
-            work_generation,
-            provider_generation: state.provider_generation,
+            binding: Mutex::new((work_generation, state.provider_generation)),
             stop: self.stop.subscribe(),
             cancellation: cancellation_notice,
         })
+    }
+    fn activate_waiting(&self, permit: &WorkPermit) -> Result<(), AgentError> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        if !matches!(state.work_status, WorkStatus::Open)
+            || !state.provider_ready
+            || !matches!(state.attachment, AttachmentState::Attached { .. })
+        {
+            return Err(AgentError::AttachmentUnavailable(match &state.attachment {
+                AttachmentState::Absent { .. } => AttachmentPhase::Absent,
+                AttachmentState::Authorized(_) | AttachmentState::Abandoning { .. } => {
+                    AttachmentPhase::Waiting
+                }
+                AttachmentState::Starting { .. } => AttachmentPhase::Starting,
+                AttachmentState::Attached { .. } if state.provider_ready => {
+                    AttachmentPhase::Attached
+                }
+                AttachmentState::Attached { .. } => AttachmentPhase::Starting,
+                AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
+            }));
+        }
+        let work_generation = state.work_generation;
+        let provider_generation = state.provider_generation;
+        let work = state.work.get_mut(&permit.id).ok_or(AgentError::Closed)?;
+        if !matches!(work.phase, WorkPhase::Waiting) || work.cancellation.borrow().is_some() {
+            return Err(AgentError::Closed);
+        }
+        work.work_generation = work_generation;
+        work.phase = WorkPhase::Active;
+        *permit.binding.lock().expect("work binding") = (work_generation, provider_generation);
+        Ok(())
+    }
+    fn defer_active(&self, permit: &WorkPermit) -> Result<(), AgentError> {
+        let mut state = self.state.lock().expect("session lifecycle");
+        let (work_generation, provider_generation) = permit.generations();
+        if state.work_generation != work_generation
+            || state.provider_generation != provider_generation
+            || !matches!(state.work_status, WorkStatus::Open)
+        {
+            return Err(AgentError::Closed);
+        }
+        let work = state.work.get_mut(&permit.id).ok_or(AgentError::Closed)?;
+        if !matches!(work.phase, WorkPhase::Active) || work.cancellation.borrow().is_some() {
+            return Err(AgentError::Closed);
+        }
+        work.phase = WorkPhase::Waiting;
+        Ok(())
+    }
+    pub(super) fn attached_provider(
+        &self,
+        permit: &WorkPermit,
+    ) -> Result<AttachedProvider, AgentError> {
+        let state = self.state.lock().expect("session lifecycle");
+        let (work_generation, provider_generation) = permit.generations();
+        if state.work_generation != work_generation
+            || state.provider_generation != provider_generation
+        {
+            return Err(AgentError::Closed);
+        }
+        match &state.attachment {
+            AttachmentState::Attached { provider, .. } if state.provider_ready => {
+                Ok(provider.clone())
+            }
+            _ => Err(AgentError::AttachmentUnavailable(Self::phase(&state))),
+        }
     }
     pub(super) fn active(&self) -> Option<ExecutionId> {
         self.state
@@ -340,57 +957,28 @@ impl SessionLifecycle {
         *self.cleanup_started.lock().unwrap() = Some(entered);
     }
     #[cfg(test)]
+    pub(super) fn pause_next_stop_finalization(
+        &self,
+        entered: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    ) {
+        *self.finalization_pause.lock().unwrap() = Some((entered, release));
+    }
+    #[cfg(test)]
+    pub(super) fn pause_next_attachment_audit(
+        &self,
+        stage: AttachmentAuditStage,
+        entered: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    ) {
+        *self.attachment_audit_pause.lock().unwrap() = Some(AttachmentAuditPause {
+            stage,
+            entered,
+            release,
+        });
+    }
     pub(super) fn attachment_needs_cleanup(&self) -> bool {
         self.attachment.needs_cleanup()
-    }
-    pub(super) async fn prepare(
-        &self,
-        session: ProviderSession,
-        events: Arc<AsyncMutex<Box<dyn ExecutionEventStream>>>,
-    ) -> Result<(), AgentError> {
-        let _transition = self.resource_transition.lock().await;
-        let restoring = {
-            let mut state = self.state.lock().expect("session lifecycle");
-            if !matches!(state.work_status, WorkStatus::Open) {
-                return Err(AgentError::Closed);
-            }
-            let restoring = state.cleanup.as_ref().and_then(|cleanup| {
-                cleanup
-                    .result
-                    .borrow()
-                    .as_ref()
-                    .filter(|report| report.is_confirmed())
-                    .cloned()
-            });
-            if let Some(report) = &restoring {
-                report.audit().clone()?;
-            }
-            if restoring.is_some() {
-                state.provider_ready = false;
-                state.provider_generation.0 += 1;
-                state.cleanup = None;
-            }
-            restoring
-        };
-        #[cfg(test)]
-        {
-            let pause = self.preparation_pause.lock().unwrap().take();
-            if let Some((entered, release)) = pause {
-                let _ = entered.send(());
-                let _ = release.await;
-            }
-        }
-        if let Some(report) = restoring {
-            self.attachment.confirm_cleanup(&report);
-        }
-        self.attachment
-            .arm(self.lease.clone(), session, events)
-            .await;
-        if self.is_closed() {
-            Err(AgentError::Closed)
-        } else {
-            Ok(())
-        }
     }
     /// Capture the work generation before polling a provider operation. Late failures only
     /// affect that work generation, never a restored or newly admitted provider generation.
@@ -402,14 +990,17 @@ impl SessionLifecycle {
     }
     pub(super) fn record_provider_state(
         &self,
-        work_generation: WorkGeneration,
+        permit: &WorkPermit,
         provider_state: &ProviderSessionState,
     ) {
         if matches!(provider_state, ProviderSessionState::Usable) {
             return;
         }
         let mut state = self.state.lock().expect("session lifecycle");
-        self.apply_provider_state(&mut state, work_generation, provider_state);
+        let (work_generation, provider_generation) = permit.generations();
+        if state.provider_generation == provider_generation {
+            self.apply_provider_state(&mut state, work_generation, provider_state);
+        }
     }
     // Control receipts can arrive after restoration. Return their result, but
     // apply resource effects only to the attachment that admitted the control.
@@ -428,10 +1019,11 @@ impl SessionLifecycle {
         provider_state: &ProviderSessionState,
     ) {
         let reported = matches!(provider_state, ProviderSessionState::CleanupReported(_));
-        if state.provider_generation == permit.provider_generation
-            && (state.work_generation == permit.work_generation || reported)
+        let (work_generation, provider_generation) = permit.generations();
+        if state.provider_generation == provider_generation
+            && (state.work_generation == work_generation || reported)
         {
-            self.apply_provider_state(state, permit.work_generation, provider_state);
+            self.apply_provider_state(state, work_generation, provider_state);
         }
     }
     pub(super) fn start_control_cleanup(
@@ -439,7 +1031,7 @@ impl SessionLifecycle {
         permit: &WorkPermit,
     ) -> Option<CloseAttempt> {
         let mut state = self.state.lock().expect("session lifecycle");
-        if state.provider_generation != permit.provider_generation {
+        if state.provider_generation != permit.provider_generation_value() {
             return None;
         }
         // Applying this control's failure may already have stopped its work
@@ -459,28 +1051,100 @@ impl SessionLifecycle {
                 // when a concurrent stop already advanced the work generation.
                 // Control callers checked the provider generation before this call;
                 // execution reports are serialized with provider restoration.
-                state.active = None;
-                state.provider_ready = false;
+                if Self::retire_confirmed_provider_generation(state) {
+                    state.automatic_recovery_ready = report.audit().is_ok();
+                }
+                let replacement = match &state.work_status {
+                    WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
+                        if stop.finalized
+                            && state.cleanup.as_ref().is_some_and(|cleanup| {
+                                cleanup
+                                    .result
+                                    .borrow()
+                                    .as_ref()
+                                    .is_some_and(|prior| !prior.is_confirmed())
+                            }) =>
+                    {
+                        Some(stop.ticket.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(prior) = replacement {
+                    let attempt_id = prior.attempt_id + 1;
+                    let (physical_completion, physical) = watch::channel(Some(report.clone()));
+                    state.cleanup = Some(Cleanup {
+                        provider_generation: state.provider_generation,
+                        attempt_id,
+                        completion: physical_completion,
+                        result: physical,
+                    });
+                    let mut ticket = CloseAttempt::from_physical_report(
+                        prior.id,
+                        attempt_id,
+                        prior.request.clone(),
+                        report.clone(),
+                        prior.evidence.clone(),
+                    );
+                    ticket.folded_evidence = prior.folded_evidence;
+                    let recovery = match &state.work_status {
+                        WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop) => stop.recovery,
+                        WorkStatus::Open => unreachable!("replacement requires a stop"),
+                    };
+                    state.work_status = if report.audit().is_ok() {
+                        WorkStatus::Stopping(Stop {
+                            ticket,
+                            finalized: false,
+                            recovery,
+                        })
+                    } else {
+                        WorkStatus::Blocked(Stop {
+                            ticket,
+                            finalized: false,
+                            recovery,
+                        })
+                    };
+                    self.notify_stop(state, &prior.request, report.audit().is_err());
+                    return;
+                }
+                if let Some(cleanup) = &state.cleanup {
+                    cleanup.completion.send_replace(Some(report.clone()));
+                } else {
+                    let (completion, result) = watch::channel(Some(report.clone()));
+                    state.cleanup = Some(Cleanup {
+                        provider_generation: state.provider_generation,
+                        attempt_id: 0,
+                        completion,
+                        result: result.clone(),
+                    });
+                }
+                if report.audit().is_err() && matches!(state.work_status, WorkStatus::Open) {
+                    // Physical retirement and audit acknowledgement are separate facts.
+                    // The completed report is the stop owner: every admission mode
+                    // observes the same failed acknowledgement, while an earlier
+                    // stop keeps its original request and work generation.
+                    state.work_generation.0 += 1;
+                    let attempt_id = state
+                        .cleanup
+                        .as_ref()
+                        .map_or(0, |cleanup| cleanup.attempt_id);
+                    let ticket = CloseAttempt::from_physical_report(
+                        state.work_generation.0,
+                        attempt_id,
+                        SessionCloseRequest::ExecutionFailed,
+                        report.clone(),
+                        state.attachment_evidence.clone(),
+                    );
+                    state.work_status = WorkStatus::Blocked(Stop {
+                        ticket,
+                        finalized: false,
+                        recovery: RecoveryPolicy::Automatic,
+                    });
+                }
                 self.notify_stop(
                     state,
                     &SessionCloseRequest::ExecutionFailed,
                     report.audit().is_err(),
                 );
-                if let Some(cleanup) = &state.cleanup {
-                    // Pending close I/O publishes only after its final report is
-                    // reconciled with this confirmation. Completed waiters and
-                    // retries keep observing the same shared evidence channel.
-                    if cleanup.result.borrow().is_some() {
-                        cleanup.completion.send_replace(Some(report));
-                    }
-                } else {
-                    let (completion, result) = watch::channel(Some(report));
-                    state.cleanup = Some(Cleanup {
-                        provider_generation: state.provider_generation,
-                        completion,
-                        result,
-                    });
-                }
                 return;
             }
         }
@@ -496,12 +1160,15 @@ impl SessionLifecycle {
                 ProviderSessionState::CleanupReported(report) => Some(report.clone()),
                 _ => None,
             };
-            let (_, result) = watch::channel(report);
-            let ticket = CloseAttempt {
-                id: state.work_generation.0 + 1,
-                request: SessionCloseRequest::ExecutionFailed,
-                result,
-            };
+            let report =
+                report.unwrap_or_else(|| CleanupReport::unconfirmed(AgentError::CleanupUncertain));
+            let ticket = CloseAttempt::from_physical_report(
+                state.work_generation.0 + 1,
+                0,
+                SessionCloseRequest::ExecutionFailed,
+                report,
+                state.attachment_evidence.clone(),
+            );
             state.work_generation.0 += 1;
             state.work_status = WorkStatus::Blocked(Stop {
                 ticket,
@@ -509,6 +1176,17 @@ impl SessionLifecycle {
                 recovery: RecoveryPolicy::CleanupNotStarted,
             });
             self.notify_stop(state, &SessionCloseRequest::ExecutionFailed, true);
+        }
+    }
+    fn retire_confirmed_provider_generation(state: &mut State) -> bool {
+        state.active = None;
+        state.provider_ready = false;
+        if matches!(state.attachment, AttachmentState::Attached { .. }) {
+            state.attachment_generation += 1;
+            state.attachment = AttachmentState::Absent { recorded: true };
+            true
+        } else {
+            false
         }
     }
     // Save each admitted owner's first causal stop before waking any operation.
@@ -526,7 +1204,8 @@ impl SessionLifecycle {
             actor,
         };
         for work in state.work.values_mut() {
-            if (include_waiting || !matches!(work.phase, WorkPhase::Waiting))
+            if !matches!(work.phase, WorkPhase::Settling)
+                && (include_waiting || !matches!(work.phase, WorkPhase::Waiting))
                 && work.cancellation.borrow().is_none()
             {
                 work.cancellation.send_replace(Some(cancellation.clone()));
@@ -590,10 +1269,14 @@ impl SessionLifecycle {
                 .work
                 .values()
                 .any(|work| work.work_generation == state.work_generation);
-        let existing = match &state.work_status {
-            WorkStatus::Stopping(_) if fresh_queue_stop => None,
+        let prior_stop = match &state.work_status {
             WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop) => Some(stop.ticket.clone()),
             WorkStatus::Open => None,
+        };
+        let existing = if fresh_queue_stop {
+            None
+        } else {
+            prior_stop.clone()
         };
         let recovery = match &state.work_status {
             WorkStatus::Blocked(stop) | WorkStatus::Stopping(stop)
@@ -620,7 +1303,84 @@ impl SessionLifecycle {
             .as_ref()
             .map_or(state.work_generation.0 + 1, |ticket| ticket.id);
         if existing.is_none() {
+            let closing_attachment = match &state.attachment {
+                AttachmentState::Authorized(authority) => Some((
+                    state.attachment_generation,
+                    AttachmentAuditStage::Waiting,
+                    authority.cause,
+                )),
+                AttachmentState::Starting {
+                    generation, cause, ..
+                } => Some((*generation, AttachmentAuditStage::Starting, *cause)),
+                _ => None,
+            };
             state.work_generation.0 += 1;
+            let recorded = match &state.attachment {
+                AttachmentState::Absent { recorded }
+                | AttachmentState::Abandoning { recorded, .. }
+                | AttachmentState::Starting { recorded, .. }
+                | AttachmentState::Failed { recorded, .. } => *recorded,
+                AttachmentState::Authorized(authority) => {
+                    !matches!(authority.cause, AttachmentCause::Initial)
+                }
+                AttachmentState::Attached { .. } => true,
+            };
+            let retained_failure = match &state.attachment {
+                AttachmentState::Failed { failure, .. } => Some(failure.clone()),
+                _ => None,
+            };
+            if let AttachmentState::Authorized(authority) = &state.attachment {
+                authority.cancelled.send_replace(true);
+            }
+            if let AttachmentState::Starting { open_stop, .. } = &state.attachment {
+                open_stop.send_if_modified(|current| {
+                    if current.is_none() {
+                        *current = Some(request.clone());
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+            state.attachment_generation += 1;
+            state.attachment = match retained_failure {
+                Some(failure) => AttachmentState::Failed { failure, recorded },
+                None => AttachmentState::Absent { recorded },
+            };
+            if let Some((generation, before, attachment_cause)) = closing_attachment {
+                let record = AttachmentAuditRecord::new(
+                    self.session_id.clone(),
+                    generation,
+                    before,
+                    AttachmentAuditStage::Absent,
+                    AttachmentAuditCause::Closed,
+                    match &request {
+                        SessionCloseRequest::Explicit(actor) => Some(actor.clone()),
+                        _ => None,
+                    },
+                );
+                let (completion, result) = watch::channel(None);
+                state.attachment_evidence.push(AttachmentEvidenceSlot {
+                    generation,
+                    transition: AttachmentEvidenceTransition::Closed,
+                    result,
+                });
+                let owner = self.clone();
+                tokio::spawn(async move {
+                    let outcome = owner
+                        .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                        .await;
+                    if let Err(error) = &outcome {
+                        owner.retain_attachment_evidence_failure(
+                            generation,
+                            attachment_cause,
+                            error.clone(),
+                        );
+                    }
+                    completion.send_replace(Some(outcome));
+                    owner.changed.send_replace(());
+                });
+            }
         }
         if let SessionCloseRequest::Explicit(actor) = &request {
             self.close.send_replace(Some(actor.clone()));
@@ -633,89 +1393,137 @@ impl SessionLifecycle {
             !matches!(recovery, RecoveryPolicy::Automatic),
         );
         state.provider_ready = false;
-        let shared = state.cleanup.as_ref().and_then(|cleanup| {
-            let reusable = cleanup.provider_generation == state.provider_generation
-                && match cleanup.result.borrow().as_ref() {
-                    Some(report) => report.is_confirmed(),
-                    None => cleanup.result.has_changed().is_ok(),
-                };
-            reusable.then(|| cleanup.result.clone())
-        });
-        let result = if let Some(result) = shared {
-            result
-        } else {
-            let (completion, result) = watch::channel(None);
-            let provider_generation = state.provider_generation;
-            state.cleanup = Some(Cleanup {
-                provider_generation,
-                completion: completion.clone(),
-                result: result.clone(),
+        let shared = existing.is_some()
+            && state.cleanup.as_ref().is_some_and(|cleanup| {
+                let reusable = cleanup.provider_generation == state.provider_generation
+                    && match cleanup.result.borrow().as_ref() {
+                        Some(report) => report.is_confirmed(),
+                        None => cleanup.result.has_changed().is_ok(),
+                    };
+                reusable
             });
-            let owner = self.clone();
-            tokio::spawn(async move {
-                #[cfg(test)]
-                if let Some(entered) = owner.cleanup_started.lock().unwrap().take() {
-                    let _ = entered.send(());
-                }
-                // Admission closes synchronously above. Resource ownership must
-                // wait for an in-progress restoration to arm its new attachment.
-                // Capture the cause after arm too, because arm starts a new owner.
-                let _transition = owner.resource_transition.lock().await;
-                owner.attachment.request_cleanup(request);
-                let report = owner.attachment.cleanup().await;
-                // Publish under the same state lock used by operation reports:
-                // confirmation cannot arrive between reconciliation and publication.
-                let _state = owner.state.lock().expect("session lifecycle");
-                let report = owner.attachment.reconcile_cleanup(report);
-                completion.send_replace(Some(report));
-                owner.changed.send_replace(());
-            });
-            result
-        };
+        if shared {
+            if let WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop) = &mut state.work_status {
+                stop.recovery = recovery;
+            }
+            return existing.expect("a reusable cleanup belongs to the existing stop");
+        }
+        let attempt_id = state
+            .cleanup
+            .as_ref()
+            .map_or(0, |cleanup| cleanup.attempt_id + 1);
+        let (physical_completion, physical) = watch::channel(None);
+        let (completion, result) = watch::channel(None);
+        let evidence = existing.as_ref().map_or_else(
+            || state.attachment_evidence.clone(),
+            |ticket| ticket.evidence.clone(),
+        );
         let ticket = CloseAttempt {
             id: stop_id,
+            attempt_id,
             request: first_request,
+            physical: physical.clone(),
             result,
+            completion,
+            evidence,
+            folded_evidence: existing
+                .as_ref()
+                .or(prior_stop.as_ref())
+                .map_or_else(Vec::new, |ticket| ticket.folded_evidence.clone()),
         };
+        let provider_generation = state.provider_generation;
+        state.cleanup = Some(Cleanup {
+            provider_generation,
+            attempt_id,
+            completion: physical_completion.clone(),
+            result: physical,
+        });
         state.work_status = WorkStatus::Stopping(Stop {
             ticket: ticket.clone(),
             finalized: false,
             recovery,
         });
+        let owner = self.clone();
+        let cleanup_request = ticket.request.clone();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let Some(entered) = owner.cleanup_started.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            let _transition = owner.resource_transition.lock().await;
+            owner.attachment.request_cleanup(cleanup_request);
+            let report = owner.attachment.cleanup().await;
+            let _state = owner.state.lock().expect("session lifecycle");
+            let report = owner.attachment.reconcile_cleanup(report);
+            physical_completion.send_replace(Some(report));
+            owner.changed.send_replace(());
+        });
         ticket
     }
     /// Called only after queue cancellation and evidence settlement have completed.
     /// Work permits delay reopening until every previously admitted owner retires.
-    pub(super) async fn finalize_stop(
-        &self,
-        ticket: &CloseAttempt,
-        report: &CleanupReport,
-    ) -> CleanupReport {
+    async fn finalize_stop(&self, ticket: &CloseAttempt, report: &CleanupReport) -> CleanupReport {
+        #[cfg(test)]
+        let pause = { self.finalization_pause.lock().unwrap().take() };
+        #[cfg(test)]
+        if let Some((entered, release)) = pause {
+            let _ = entered.send(());
+            let _ = release.await;
+        }
         let _transition = self.resource_transition.lock().await;
         let mut state = self.state.lock().expect("session lifecycle");
-        let current = matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop) if stop.ticket.id == ticket.id);
+        let current = matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
+            if stop.ticket.id == ticket.id && stop.ticket.attempt_id == ticket.attempt_id);
         if !current {
+            ticket.completion.send_replace(Some(report.clone()));
             return report.clone();
+        }
+        if matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
+            if stop.finalized)
+        {
+            let report = ticket
+                .result
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| report.clone());
+            // An explicit caller may join an already-finalized automatic stop and
+            // change only its recovery authority. Apply that authoritative policy
+            // under the same attempt-id fence; outstanding work owners still gate
+            // reopening in `maybe_reopen`.
+            self.maybe_reopen(&mut state);
+            return report;
         }
         // A concurrent retry or operation may have supplied newer evidence while
         // this waiter was settling work. Never republish its earlier snapshot.
-        let report = state
+        let latest = state
             .cleanup
             .as_ref()
+            .filter(|cleanup| cleanup.attempt_id == ticket.attempt_id)
             .and_then(|cleanup| cleanup.result.borrow().clone())
             .unwrap_or_else(|| report.clone());
-        let report = self.attachment.reconcile_cleanup(report);
+        let report = match report.audit() {
+            Ok(()) => latest,
+            Err(error) => latest.with_audit(Err(error.clone())),
+        };
+        let report = self.attachment.publish_final_cleanup(report);
         let stop = match &mut state.work_status {
             WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
-                if stop.ticket.id == ticket.id =>
+                if stop.ticket.id == ticket.id && stop.ticket.attempt_id == ticket.attempt_id =>
             {
                 stop
             }
             _ => return report,
         };
         stop.finalized = true;
+        let mut finalized_ticket = stop.ticket.clone();
+        for slot in &ticket.evidence {
+            let identity = (slot.generation, slot.transition);
+            if !finalized_ticket.folded_evidence.contains(&identity) {
+                finalized_ticket.folded_evidence.push(identity);
+            }
+        }
         let updated = Stop {
-            ticket: stop.ticket.clone(),
+            ticket: finalized_ticket,
             finalized: true,
             recovery: stop.recovery,
         };
@@ -724,11 +1532,14 @@ impl SessionLifecycle {
         } else {
             WorkStatus::Blocked(updated)
         };
-        if let Some(cleanup) = &state.cleanup {
-            cleanup.completion.send_replace(Some(report.clone()));
-        }
-        if report.is_confirmed() {
-            state.active = None;
+        ticket.completion.send_replace(Some(report.clone()));
+        if report.is_confirmed()
+            && state
+                .cleanup
+                .as_ref()
+                .is_some_and(|cleanup| cleanup.provider_generation == state.provider_generation)
+        {
+            Self::retire_confirmed_provider_generation(&mut state);
         }
         if !report.is_confirmed() || report.audit().is_err() {
             // Final cleanup failure removes the promised restoration boundary.
@@ -737,6 +1548,26 @@ impl SessionLifecycle {
         }
         self.maybe_reopen(&mut state);
         report
+    }
+    /// Join physical cleanup and attachment audit ownership, then publish one
+    /// common stop result. Every explicit and automatic stop uses this boundary.
+    pub(super) async fn complete_stop(&self, ticket: &CloseAttempt) -> CleanupReport {
+        let (cleanup, attachment_evidence) =
+            tokio::join!(ticket.clone().wait_physical(), ticket.wait_evidence());
+        let cleanup = match attachment_evidence {
+            Ok(()) => cleanup,
+            Err(error) => {
+                let audit = match cleanup.audit() {
+                    Ok(()) => error,
+                    Err(first_error) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(first_error.clone()),
+                        subsequent_error: Box::new(error),
+                    },
+                };
+                cleanup.with_audit(Err(audit))
+            }
+        };
+        self.finalize_stop(ticket, &cleanup).await
     }
     pub(super) fn accepts_queued(&self) -> bool {
         let state = self.state.lock().unwrap();
@@ -770,8 +1601,14 @@ impl SessionLifecycle {
             _ => false,
         };
         if ready {
+            let automatic = matches!(
+                &state.work_status,
+                WorkStatus::Stopping(stop)
+                    if matches!(stop.recovery, RecoveryPolicy::Automatic)
+            );
             state.work_status = WorkStatus::Open;
             state.active = None;
+            state.automatic_recovery_ready = automatic;
             self.close.send_replace(None);
         }
     }
@@ -816,8 +1653,9 @@ impl SessionLifecycle {
             .await
             .map_err(ProviderOperationFailure::into_error)?;
         let mut state = self.state.lock().expect("session lifecycle");
-        if state.work_generation != permit.work_generation
-            || state.provider_generation != permit.provider_generation
+        let (work_generation, provider_generation) = permit.generations();
+        if state.work_generation != work_generation
+            || state.provider_generation != provider_generation
             || !matches!(state.work_status, WorkStatus::Open)
             || state.cleanup.is_some()
         {
@@ -871,8 +1709,9 @@ impl SessionLifecycle {
         started: &mut bool,
     ) -> Poll<Result<T, ProviderOperationFailure>> {
         let mut state = self.state.lock().expect("session lifecycle");
-        let stopped = state.work_generation != permit.work_generation
-            || state.provider_generation != permit.provider_generation
+        let (work_generation, provider_generation) = permit.generations();
+        let stopped = state.work_generation != work_generation
+            || state.provider_generation != provider_generation
             || (!preparation && !state.provider_ready)
             || !matches!(state.work_status, WorkStatus::Open);
         // Never start provider work after its admission closes. Once started,

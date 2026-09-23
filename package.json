@@ -37,6 +37,7 @@
     "sdk:docs:check": "node scripts/check-sdk-docs.mjs",
     "sdk:check": "pnpm sdk:fmt:check && pnpm sdk:clippy && pnpm sdk:test && pnpm sdk:docs:check",
     "desktop:check": "node scripts/check-desktop.mjs",
+    "desktop:smoke": "node scripts/desktop/native-window-smoke.mjs",
     "mcp:check": "node scripts/check-mcp.mjs",
     "images:check": "cargo fmt -p nessa-images -- --check && cargo clippy -p nessa-images --all-targets -- -D warnings && cargo test -p nessa-images",
     "server:run": "node scripts/dev-agent-config.mjs && cargo run -p nessa-server -- server --provision-local",

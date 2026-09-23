@@ -126,10 +126,21 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
             });
             backend.closing.notified().await;
             let first_result = timeout(Duration::from_secs(2), first.wait()).await.unwrap();
-            assert!(matches!(
-                first_result,
-                Err(AgentError::Storage(StorageError::Io(_)))
-            ));
+            let mut retained = &first_result;
+            let mut storage_failures = 0;
+            while let Err(AgentError::StorageAfterExecution {
+                error: StorageError::Io(_),
+                execution_result,
+            }) = retained
+            {
+                storage_failures += 1;
+                retained = execution_result.as_ref();
+            }
+            assert_eq!(
+                storage_failures, panics,
+                "commit_first={commit_first}, drop_panics={drop_panics}, result={first_result:?}"
+            );
+            assert_eq!(retained, &Err(AgentError::Closed));
             assert_eq!(
                 timeout(Duration::from_secs(2), priority.wait())
                     .await
@@ -147,9 +158,33 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(
-                matches!(closed, Err(AgentError::StorageDuringClose { cleanup_result, .. }) if cleanup_result.is_ok())
-            );
+            match (&closed, panics) {
+                (
+                    Err(AgentError::StorageDuringClose { cleanup_result, .. }),
+                    1,
+                ) => assert!(cleanup_result.is_ok()),
+                (
+                    Err(AgentError::MultipleOperationFailures {
+                        first_error,
+                        subsequent_error,
+                    }),
+                    2,
+                ) => {
+                    assert!(matches!(
+                        first_error.as_ref(),
+                        AgentError::Storage(StorageError::Io(message))
+                            if message == "pending cancellation persistence panicked"
+                    ));
+                    assert!(matches!(
+                        subsequent_error.as_ref(),
+                        AgentError::Storage(StorageError::Io(message))
+                            if message == "pending cancellation receipt persistence panicked"
+                    ));
+                }
+                _ => panic!(
+                    "commit_first={commit_first}, drop_panics={drop_panics}, panics={panics}, close={closed:?}"
+                ),
+            }
             assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
             assert_eq!(
                 *backend.close_requests.lock().unwrap(),
@@ -180,7 +215,8 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                 first_result
             );
             // The confirmed cleanup was finalized even though close returned the
-            // storage failure; a new generation can accept work immediately.
+            // storage failure; caller-authorized reattachment opens a new generation.
+            reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 agent
                     .enqueue(input("recovered"), actor())

@@ -123,8 +123,11 @@ active; [operation capabilities](agent.md#model-capabilities-and-provider-operat
 are refreshed during restoration.
 
 `steer(request, actor)` attempts the provider's native steering operation when an
-invocation is active. `SteeringDelivery::Injected { target }` means the provider
-acknowledged the additional input for that execution. Output and settlement remain
+invocation is active. `SteeringDelivery::Injected { target, evidence }` means the provider
+acknowledged the additional input for that execution. Its `SteeringEvidence`
+separately reports whether mandatory audit and durable delivery evidence were
+acknowledged; an evidence failure does not erase the known provider acknowledgement.
+Output and settlement remain
 correlated with the original execution. The steering input has its own retained
 identity, actor, and delivery record; injection is not an independent completed
 invocation or proof of tool effects.

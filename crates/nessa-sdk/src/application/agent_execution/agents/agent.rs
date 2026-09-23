@@ -1,6 +1,13 @@
 #![deny(missing_docs)]
 
 use super::{
+    attachment::{
+        AttachmentAuthorization, AttachmentFailureCode, AttachmentRequest, AttachmentStatus,
+        AttachmentWait,
+    },
+    attachment_evidence::{
+        AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
+    },
     lifecycle::{SessionLifecycle, WorkPermit},
     scheduling::{ActiveInvocation, Scheduler},
 };
@@ -8,7 +15,9 @@ use crate::application::agent_execution::agents::{
     AgentError, AgentFuture, AgentInitializationError,
 };
 use crate::application::agent_execution::executions::{
-    limits::MAX_RETAINED_OUTPUT_EVENTS, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+    limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
+    AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest,
+    ExecutionUpdate,
 };
 use crate::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
@@ -18,11 +27,13 @@ use crate::application::agent_execution::permissions::{
     PermissionCancellation, PermissionCancellationRequest, PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream, ExecutionReportSource,
-    ObservationFailure, ObservationFailureCause, OperationCapabilities, ProviderExecutionReply,
-    ProviderSession, ProviderSessionState, SessionCloseRequest,
+    validate_configured_input, AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream,
+    ExecutionReportSource, ObservationFailure, ObservationFailureCause, OperationCapabilities,
+    ProviderExecutionReply, ProviderSessionState, SessionCloseRequest,
 };
-use crate::application::agent_execution::sessions::{SessionManager, StorageError};
+use crate::application::agent_execution::sessions::{
+    AttachmentOpenFailureSource, ProviderContext, SessionManager, StorageError,
+};
 use crate::domain::{
     agent_execution::executions::ExecutionOutcome,
     effective_capabilities::value_objects::EffectiveCapabilities,
@@ -42,9 +53,10 @@ pub struct Agent {
     pub(super) inner: Arc<Inner>,
 }
 pub(super) struct Inner {
-    pub(super) session: ProviderSession,
+    pub(super) provider: Arc<dyn AgentProvider>,
+    capabilities: EffectiveCapabilities,
+    pub(super) audit: Arc<dyn ExecutionAudit>,
     pub(super) manager: SessionManager,
-    events: Arc<Mutex<Box<dyn ExecutionEventStream>>>,
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
     updates: broadcast::Sender<ExecutionEvent>,
@@ -53,17 +65,14 @@ pub(super) struct Inner {
     pub(super) lifecycle: Arc<SessionLifecycle>,
 }
 impl Agent {
-    /// Load saved evidence and attach its provider context, or open a new context.
-    /// Opening a provider is asynchronous but does not submit a model prompt.
-    /// `provider` supplies the execution adapter; `session_manager` transfers its
-    /// exclusive storage lease into this Agent. Identity mismatch, load/save, and
-    /// provider startup failures return [`AgentInitializationError`] before an Agent
-    /// becomes available. Once polled on the Tokio runtime, initialization continues
-    /// if its caller stops waiting. Failed or abandoned attachments retain their
-    /// writer lease until cleanup is confirmed; use the error's recovery methods
-    /// when needed. Dropping the last Agent similarly supervises cleanup. Await
-    /// [`Self::close`] before drop for immediate lease release, and keep the runtime
-    /// alive until cleanup completes.
+    /// Load and validate saved evidence without opening a provider context.
+    ///
+    /// `provider` supplies immutable identity and model capabilities;
+    /// `session_manager` transfers its exclusive storage lease into this Agent;
+    /// `audit` receives mandatory attachment and scheduling evidence. Identity and
+    /// storage failures return [`AgentInitializationError`]. Provider startup is a
+    /// separate, explicitly authorized operation through
+    /// [`Self::authorize_attachment`] and [`Self::start_attachment`].
     ///
     /// # Examples
     /// A complete queued interaction after the host supplies its provider, storage,
@@ -73,10 +82,10 @@ impl Agent {
     /// ```
     /// use std::{error::Error, sync::Arc};
     /// use nessa_sdk::{Agent, application::agent_execution::{
-    ///     agents::AgentError, executions::ExecutionRequest, permissions::ActionContext,
+    ///     agents::{AgentError, AttachmentRequest}, executions::{ExecutionAudit, ExecutionRequest}, permissions::ActionContext,
     ///     providers::{AgentProvider, CloseOutcome}, sessions::{SessionManager, SessionStorage},
     /// }, domain::agent_execution::{executions::{ExecutionId, ExecutionOutcome}, prompts::{PromptText, UserMessage}}};
-    /// # async fn chat(provider: Arc<dyn AgentProvider>, storage: Arc<dyn SessionStorage>, actor: ActionContext)
+    /// # async fn chat(provider: Arc<dyn AgentProvider>, storage: Arc<dyn SessionStorage>, audit: Arc<dyn ExecutionAudit>, actor: ActionContext)
     /// # -> Result<(Result<ExecutionOutcome, AgentError>, Result<CloseOutcome, AgentError>), Box<dyn Error>> {
     /// let input = ExecutionRequest {
     ///     execution_id: ExecutionId::new("first-message")?,
@@ -85,7 +94,9 @@ impl Agent {
     ///     reserved_output_tokens: 128,
     /// };
     /// let manager = SessionManager::open(None, storage).await?;
-    /// let agent = Agent::new(provider, manager).await?;
+    /// let agent = Agent::prepare(provider, manager, audit).await?;
+    /// let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))?;
+    /// agent.start_attachment(authorization)?.wait().await?;
     /// let mut updates = agent.subscribe();
     /// let outcome = async {
     ///     let receipt = agent.enqueue(input, actor.clone()).await?;
@@ -106,67 +117,30 @@ impl Agent {
     /// # Ok((outcome, cleanup))
     /// # }
     /// ```
-    pub async fn new(
-        provider: Arc<dyn AgentProvider>,
-        session_manager: SessionManager,
-    ) -> Result<Self, AgentInitializationError> {
-        tokio::spawn(async move { Self::initialize(provider, session_manager).await })
-            .await
-            .map_err(|_| AgentInitializationError::new(AgentError::Closed, None))?
-    }
-    async fn initialize(
+    pub async fn prepare(
         provider: Arc<dyn AgentProvider>,
         mut session_manager: SessionManager,
+        audit: Arc<dyn ExecutionAudit>,
     ) -> Result<Self, AgentInitializationError> {
-        // Retain the manager outside user storage/provider futures so a panic
-        // cannot drop the host's only handle to an already-open attachment.
-        let mut initializing = Box::pin(session_manager.initialize(provider.as_ref()));
-        let result = poll_fn(|context| {
-            match catch_unwind(AssertUnwindSafe(|| initializing.as_mut().poll(context))) {
-                Ok(Poll::Pending) => Poll::Pending,
-                Ok(Poll::Ready(result)) => Poll::Ready(Some(result)),
-                Err(payload) => {
-                    std::mem::forget(payload);
-                    Poll::Ready(None)
-                }
-            }
-        })
-        .await;
-        let dropped = catch_unwind(AssertUnwindSafe(|| drop(initializing)));
-        let result = match dropped {
-            Ok(()) => result.unwrap_or(Err(AgentError::CleanupUncertain)),
-            Err(payload) => {
-                std::mem::forget(payload);
-                Err(match result {
-                    Some(Err(error)) => AgentError::OperationAndCleanupFailure {
-                        operation_error: Box::new(error),
-                        cleanup_error: Box::new(AgentError::CleanupUncertain),
-                    },
-                    _ => AgentError::CleanupUncertain,
-                })
-            }
-        };
-        let opened = match result {
-            Ok(opened) => opened,
-            Err(cause) => {
-                return Err(AgentInitializationError::new(
-                    cause,
-                    session_manager.attachment_cleanup(),
-                ))
-            }
-        };
-        let events = Arc::new(Mutex::new(opened.events));
-        session_manager.attached(events.clone()).await;
+        let context = session_manager
+            .prepare(provider.as_ref())
+            .await
+            .map_err(|cause| AgentInitializationError::new(cause, None))?;
+        let capabilities = provider.capabilities().clone();
         let lifecycle = SessionLifecycle::new(
-            session_manager.take_attachment(),
+            session_manager.attachment(),
             session_manager.protective_storage_lease(),
+            matches!(context, ProviderContext::Recorded(_)),
+            session_manager.id().clone(),
+            audit.clone(),
         );
         let (updates, _) = broadcast::channel(256);
         Ok(Self {
             inner: Arc::new(Inner {
-                session: opened.session,
+                provider,
+                capabilities,
+                audit,
                 manager: session_manager,
-                events,
                 invocation: Arc::new(Mutex::new(())),
                 hooks: RwLock::new(Vec::new()),
                 reorder: Mutex::new(()),
@@ -184,7 +158,234 @@ impl Agent {
     /// Immutable effective model limits selected when this provider was opened.
     /// Negotiated runtime operations are available through `operation_capabilities`.
     pub fn capabilities(&self) -> &EffectiveCapabilities {
-        self.inner.session.capabilities()
+        &self.inner.capabilities
+    }
+
+    /// Whether this agent still owns provider or storage resources whose
+    /// physical release has not been confirmed.
+    ///
+    /// This fact is independent of the diagnostic category returned by the
+    /// operation that attempted cleanup. Callers that report cleanup state
+    /// should use it after a failed attachment or close.
+    pub fn attachment_cleanup_pending(&self) -> bool {
+        self.inner.lifecycle.attachment_needs_cleanup()
+    }
+
+    /// Authorize one attachment attempt for the current lifecycle generation.
+    /// Dropping the returned token abandons only that exact authorization.
+    pub fn authorize_attachment(
+        &self,
+        request: AttachmentRequest,
+    ) -> Result<AttachmentAuthorization, AgentError> {
+        self.inner.lifecycle.authorize_attachment(request)
+    }
+
+    /// Synchronously install one Agent-owned attachment task.
+    ///
+    /// The returned wait handle observes settlement; dropping it does not cancel
+    /// provider startup, durable publication, or cleanup.
+    pub fn start_attachment(
+        &self,
+        authorization: AttachmentAuthorization,
+    ) -> Result<AttachmentWait, AgentError> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            AgentError::Protocol("attachment start requires a Tokio runtime".into())
+        })?;
+        let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
+        let agent = self.clone();
+        runtime.spawn(async move {
+            let started = AttachmentAuditRecord::new(
+                agent.inner.manager.id().clone(),
+                start.generation,
+                AttachmentAuditStage::Waiting,
+                AttachmentAuditStage::Starting,
+                AttachmentAuditCause::Started(start.cause),
+                start.actor.clone(),
+            );
+            let started = agent
+                .inner
+                .lifecycle
+                .record_attachment_audit(ExecutionAuditRecord::Attachment(started))
+                .await;
+            start.started_evidence.send_replace(Some(started.clone()));
+            let lifecycle = agent.inner.lifecycle.clone();
+            let provider = agent.inner.provider.clone();
+            let attempt_result = match started {
+                Ok(()) => {
+                    lifecycle
+                        .run_attachment(start.generation, async {
+                            let attached = agent
+                                .inner
+                                .manager
+                                .attach(provider.as_ref(), start.open_control)
+                                .await
+                                .map_err(|failure| {
+                                    let source = match failure.source {
+                                        AttachmentOpenFailureSource::Independent => {
+                                            AttachmentFailureSource::Independent
+                                        }
+                                        AttachmentOpenFailureSource::FailedOpenCleanup => {
+                                            AttachmentFailureSource::FailedOpenCleanup(
+                                                start.generation,
+                                            )
+                                        }
+                                    };
+                                    AttachmentAttemptFailure::new(failure.cause, source)
+                                })?;
+                            let published_evidence = lifecycle
+                                .publish_attachment(start.generation, attached)
+                                .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;
+                            let published = AttachmentAuditRecord::new(
+                                agent.inner.manager.id().clone(),
+                                start.generation,
+                                AttachmentAuditStage::Starting,
+                                AttachmentAuditStage::ContextPublished,
+                                AttachmentAuditCause::Published,
+                                start.actor.clone(),
+                            );
+                            let published_result = agent
+                                .inner
+                                .lifecycle
+                                .record_attachment_audit(ExecutionAuditRecord::Attachment(
+                                    published,
+                                ))
+                                .await;
+                            published_evidence.send_replace(Some(published_result.clone()));
+                            if let Err(error) = published_result {
+                                return Err(AttachmentAttemptFailure::new(
+                                    error,
+                                    AttachmentFailureSource::Transition(
+                                        start.generation,
+                                        AttachmentEvidenceTransition::ContextPublished,
+                                    ),
+                                ));
+                            }
+                            if !lifecycle.acknowledge_attachment_publication(start.generation) {
+                                return Err(AgentError::Closed.into());
+                            }
+                            lifecycle
+                                .attachment_published(start.generation)
+                                .then_some(())
+                                .ok_or_else(|| AgentError::Closed.into())
+                        })
+                        .await
+                }
+                Err(error) => Err(AttachmentAttemptFailure::new(
+                    error,
+                    AttachmentFailureSource::Transition(
+                        start.generation,
+                        AttachmentEvidenceTransition::Started,
+                    ),
+                )),
+            };
+            let result = if let Err(mut failure) = attempt_result {
+                let original = failure.error();
+                let code = match &original {
+                    AgentError::AuditFailure | AgentError::AuditAndCleanupFailure => {
+                        AttachmentFailureCode::Audit
+                    }
+                    AgentError::Storage(_) | AgentError::StorageInitialization { .. } => {
+                        AttachmentFailureCode::Storage
+                    }
+                    AgentError::CleanupUncertain
+                    | AgentError::OperationAndCleanupFailure { .. } => {
+                        AttachmentFailureCode::Cleanup
+                    }
+                    _ => AttachmentFailureCode::Provider,
+                };
+                let recorded_context = agent.inner.manager.has_observed_provider_context().await;
+                let transition = lifecycle.fail_attachment(
+                    start.generation,
+                    code,
+                    original.clone(),
+                    recorded_context,
+                );
+                if let Ok(failed_evidence) = transition {
+                    // Initial attachment has no runner available to own queued
+                    // receipts. Claim their first terminal cause immediately;
+                    // a concurrent close keeps any owners it already cancelled.
+                    let settlement = {
+                        let mut scheduler = agent.inner.scheduler.lock().await;
+                        agent
+                            .settle_failed_pending(&mut scheduler, original.clone())
+                            .await
+                    };
+                    if let Err(settlement_error) = settlement {
+                        failure.retain_independent(settlement_error);
+                    }
+                    if code != AttachmentFailureCode::Audit {
+                        let failed = AttachmentAuditRecord::new(
+                            agent.inner.manager.id().clone(),
+                            start.generation,
+                            AttachmentAuditStage::Starting,
+                            AttachmentAuditStage::Failed,
+                            AttachmentAuditCause::Failed,
+                            start.actor.clone(),
+                        );
+                        let failed_result = lifecycle
+                            .record_attachment_audit(ExecutionAuditRecord::Attachment(failed))
+                            .await;
+                        if let Some(completion) = failed_evidence {
+                            completion.send_replace(Some(failed_result.clone()));
+                        }
+                        if let Err(audit_error) = failed_result {
+                            lifecycle.retain_attachment_evidence_failure(
+                                start.generation,
+                                start.cause,
+                                audit_error.clone(),
+                            );
+                            failure.retain(
+                                audit_error,
+                                AttachmentFailureSource::Transition(
+                                    start.generation,
+                                    AttachmentEvidenceTransition::Failed,
+                                ),
+                            );
+                        }
+                    } else {
+                        lifecycle.retain_attachment_evidence_failure(
+                            start.generation,
+                            start.cause,
+                            original,
+                        );
+                    }
+                    // Failed pending work was already settled under the scheduler
+                    // lock above. Keep that lock available so concurrent admissions
+                    // can observe and reject this Failed attachment while its owned
+                    // resource cleanup is still running.
+                    let attempt = agent.start_shutdown(SessionCloseRequest::SessionFailed);
+                    let cleanup = lifecycle.complete_stop(&attempt).await;
+                    Err(failure.with_cleanup(&attempt, cleanup.into_result().map(|_| ())))
+                } else if code == AttachmentFailureCode::Audit {
+                    lifecycle.retain_attachment_evidence_failure(
+                        start.generation,
+                        start.cause,
+                        original,
+                    );
+                    Err(failure.error())
+                } else {
+                    Err(failure.error())
+                }
+            } else {
+                let mut scheduler = agent.inner.scheduler.lock().await;
+                agent.start_runner(&mut scheduler);
+                Ok(())
+            };
+            start.result.send_if_modified(|settled| {
+                if settled.is_some() {
+                    false
+                } else {
+                    *settled = Some(result);
+                    true
+                }
+            });
+        });
+        Ok(wait)
+    }
+
+    /// Atomically read lifecycle-owned phase and matching bounded diagnostic.
+    pub fn attachment_status(&self) -> AttachmentStatus {
+        self.inner.lifecycle.attachment_status()
     }
 
     /// Return current effective operation support without I/O or restoration.
@@ -193,7 +394,7 @@ impl Agent {
     /// reconnection is being verified; known application absences remain unsupported.
     /// This snapshot does not reserve admission or guarantee provider availability.
     pub fn operation_capabilities(&self) -> OperationCapabilities {
-        self.inner.session.operation_capabilities()
+        self.inner.lifecycle.operation_capabilities()
     }
 
     /// Register a typed callback. Registration changes apply to the next invocation;
@@ -236,6 +437,7 @@ impl Agent {
         actor: ActionContext,
     ) -> AgentFuture<'_, ExecutionOutcome> {
         Box::pin(async move {
+            validate_configured_input(&self.inner.capabilities, &input)?;
             let invocation = self
                 .inner
                 .invocation
@@ -268,6 +470,16 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let id = input.execution_id.clone();
+        // Close can retire the attachment after this invocation has acquired its
+        // work permit. Keep panic recovery's observation owner when it is still
+        // available, but never let that optional drain bypass persistence of the
+        // already accepted input.
+        let observation_events = self
+            .inner
+            .lifecycle
+            .attached_provider(work)
+            .ok()
+            .map(|attached| attached.events);
         let _observations = self.inner.manager.observe_invocation(&id);
         let mut execution = Box::pin(self.execute_invocation(input, actor, saved_index, work));
         let outcome = poll_fn(|context| {
@@ -295,7 +507,20 @@ impl Agent {
             // A storage panic can interrupt observation after the provider queued
             // its terminal event. Consume ready evidence while this invocation
             // still owns it; never let that buffer spill into the next run.
-            let mut draining = Box::pin(self.drain_ready_observations());
+            let Some(observation_events) = observation_events else {
+                if let Err(error) = cleanup.into_result() {
+                    failure = AgentError::OperationAndCleanupFailure {
+                        operation_error: Box::new(failure),
+                        cleanup_error: Box::new(error),
+                    };
+                }
+                return self
+                    .inner
+                    .manager
+                    .retain_invocation_failure(&id, failure)
+                    .await;
+            };
+            let mut draining = Box::pin(self.drain_ready_observations(&observation_events));
             let drained = poll_fn(|context| {
                 match catch_unwind(AssertUnwindSafe(|| draining.as_mut().poll(context))) {
                     Ok(poll) => poll,
@@ -341,10 +566,13 @@ impl Agent {
     // Dispatch preflight and recovery drain only immediately ready observations,
     // under the same size, ownership, history, and persistence checks as normal delivery. A provider
     // that remains ready forever cannot extend this loop beyond retention limits.
-    async fn drain_ready_observations(&self) -> Result<(), ObservationFailure> {
+    async fn drain_ready_observations(
+        &self,
+        events: &Arc<Mutex<Box<dyn ExecutionEventStream>>>,
+    ) -> Result<(), ObservationFailure> {
         let failed =
             |error| ObservationFailure::new(error, ObservationFailureCause::ExecutionFailed);
-        let mut events = self.inner.events.lock().await;
+        let mut events = events.lock().await;
         for _ in 0..MAX_RETAINED_OUTPUT_EVENTS {
             // An exhausted Tokio task budget must not hide already-buffered
             // input. The event-count and payload limits bound this ready pass.
@@ -398,6 +626,38 @@ impl Agent {
         Ok(())
     }
 
+    async fn settle_undispatched_invocation(
+        &self,
+        index: usize,
+        saved_index: Option<usize>,
+        work: &WorkPermit,
+        mut error: AgentError,
+    ) -> Result<ExecutionOutcome, AgentError> {
+        if let Err(storage) = self
+            .record_undispatched_stop(index, saved_index, work)
+            .await
+        {
+            error = AgentError::StorageAfterExecution {
+                error: storage,
+                execution_result: Box::new(Err(error)),
+            }
+            .bounded();
+        }
+        let result = Err(error);
+        let result = match self.inner.manager.finish(index, result.clone()).await {
+            Ok(()) => result,
+            Err(error) => Err(AgentError::StorageAfterExecution {
+                error,
+                execution_result: Box::new(result),
+            }),
+        };
+        if saved_index.is_none() {
+            self.inner.manager.settle_submission(index, result).await
+        } else {
+            result
+        }
+    }
+
     pub(super) async fn execute_invocation(
         &self,
         input: ExecutionRequest,
@@ -406,15 +666,30 @@ impl Agent {
         work: &WorkPermit,
     ) -> Result<ExecutionOutcome, AgentError> {
         let mut stop_notice = work.stop_notice();
-        self.inner.session.validate(&input)?;
-        let hooks = InvocationHooks::new(self.inner.hooks.read().expect("hook registry").clone());
-        let context = InvocationContext {
-            session_id: self.inner.session.id(),
-            request: &input,
-        };
+        // Configured model admission ran before the work permit was acquired.
+        // Once admitted, retain the input before any live attachment or adapter
+        // check that a concurrent close can invalidate.
         let index = match saved_index {
             Some(index) => index,
             None => self.inner.manager.begin(input.clone(), actor).await?,
+        };
+        let attached = match self.inner.lifecycle.attached_provider(work) {
+            Ok(attached) => attached,
+            Err(error) => {
+                return self
+                    .settle_undispatched_invocation(index, saved_index, work, error)
+                    .await;
+            }
+        };
+        if let Err(error) = attached.session.validate(&input) {
+            return self
+                .settle_undispatched_invocation(index, saved_index, work, error)
+                .await;
+        }
+        let hooks = InvocationHooks::new(self.inner.hooks.read().expect("hook registry").clone());
+        let context = InvocationContext {
+            session_id: attached.session.id(),
+            request: &input,
         };
         if let Err(mut error) = hooks.before(&context) {
             if let Err(storage) = self
@@ -437,29 +712,21 @@ impl Agent {
             .map_err(AgentError::bounded);
         }
         let work_generation = self.inner.lifecycle.work_generation();
-        let preparation = match self
-            .inner
-            .lifecycle
-            .prepare(self.inner.session.clone(), self.inner.events.clone())
-            .await
-        {
+        let preparation = match self.accept_preparation() {
             Err(error) => Err(error),
-            Ok(()) => match self.accept_preparation() {
-                Err(error) => Err(error),
-                Ok(admission) => {
-                    self.run_preparation(admission, async {
-                        self.inner.session.prepare_invocation().await
-                    })
-                    .await
-                }
-            },
+            Ok(admission) => {
+                self.run_preparation(admission, async {
+                    attached.session.prepare_invocation().await
+                })
+                .await
+            }
         };
         // A prior invocation can leave trailing cancellation evidence or invalid
         // output buffered. Validate it before this input gains dispatch authority
         // or reaches the provider. Ready evidence uses the same bounded path as
         // cleanup recovery; a Pending stream is not awaited here.
         let preparation = match preparation {
-            Ok(()) => match self.drain_ready_observations().await {
+            Ok(()) => match self.drain_ready_observations(&attached.events).await {
                 Ok(()) => Ok(()),
                 Err(error) => {
                     let cause = error.cause();
@@ -492,7 +759,7 @@ impl Agent {
             };
             return hooks.after(&context, settled);
         }
-        let mut events = self.inner.events.lock().await;
+        let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
             self.inner.manager.begin_dispatch(&input.execution_id);
             let _active =
@@ -501,7 +768,7 @@ impl Agent {
                     Err(error) => return ProviderExecutionReply::Rejected(error),
                 };
             work.mark_execution_started();
-            self.inner.session.execute(input.clone()).await
+            attached.session.execute(input.clone()).await
         });
         let mut stop_observed = false;
         let mut result = None;
@@ -537,7 +804,7 @@ impl Agent {
                         let cancellation = (settlement.source() == ExecutionReportSource::LocalCancellation)
                             .then(|| work.cancellation()).flatten();
                         if settlement.source() == ExecutionReportSource::LocalCancellation && cancellation.is_none() {
-                            self.inner.lifecycle.record_provider_state(work_generation, settlement.session_state());
+                            self.inner.lifecycle.record_provider_state(work, settlement.session_state());
                             let error = AgentError::Protocol("local cancellation report has no invocation stop".into());
                             let (failure, _) = self.stop_after_observation_failure(error.clone(), ObservationFailureCause::ExecutionFailed).await;
                             observation_failure = Some(failure);
@@ -545,7 +812,7 @@ impl Agent {
                             ended = true;
                             continue;
                         }
-                        self.inner.lifecycle.record_provider_state(work_generation, settlement.session_state());
+                        self.inner.lifecycle.record_provider_state(work, settlement.session_state());
                         provider_result = settlement.provider_result().cloned();
                         if let ProviderSessionState::CleanupReported(cleanup) = settlement.session_state() {
                             stop_after_ready_settlement |= !cleanup.is_confirmed();
@@ -752,9 +1019,7 @@ impl Agent {
 
     async fn shutdown_after_failure(&self, request: SessionCloseRequest) -> CleanupReport {
         let attempt = self.start_shutdown(request);
-        let cleanup = attempt.clone().wait().await;
-        let _scheduler = self.inner.scheduler.lock().await;
-        self.inner.lifecycle.finalize_stop(&attempt, &cleanup).await
+        self.inner.lifecycle.complete_stop(&attempt).await
     }
 
     /// Resolve the identified pending review using its offered option and verified
@@ -778,12 +1043,19 @@ impl Agent {
             let admission = agent.accept_control().map_err(|error| {
                 PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
             })?;
+            let attached = agent
+                .inner
+                .lifecycle
+                .attached_provider(&admission)
+                .map_err(|error| {
+                    PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
+                })?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
             tokio::spawn(async move {
                 let resolution = agent
                     .run_control_observed(admission.clone(), async {
-                        agent.inner.session.answer_permission(answer).await
+                        attached.session.answer_permission(answer).await
                     })
                     .await
                     .map_err(|failure| {
@@ -833,12 +1105,13 @@ impl Agent {
         let agent = self.clone();
         Box::pin(async move {
             let admission = agent.accept_control()?;
+            let attached = agent.inner.lifecycle.attached_provider(&admission)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
             tokio::spawn(async move {
                 let cancellation = agent
                     .run_control(admission.clone(), async {
-                        agent.inner.session.cancel_permission(request).await
+                        attached.session.cancel_permission(request).await
                     })
                     .await?;
                 agent

@@ -824,11 +824,14 @@ export function hasNativeHost(): boolean {
 }
 
 /** Load only the bundled chat credential from native private storage. */
-export async function loadAssignedSurfaceCredential(stage: string): Promise<string> {
+export async function loadAssignedSurfaceCredential(
+  stage: string,
+  url: string,
+): Promise<string> {
   if (!inTauri) throw new Error("A native host is required for local credential storage")
   const { invoke } = await import("@tauri-apps/api/core")
   try {
-    return await invoke<string>("load_surface_credential", { stage })
+    return await invoke<string>("load_surface_credential", { stage, url })
   } catch (error) {
     // Tauri serializes command failures rather than constructing JS Errors.
     // Preserve only the native boundary's safe message, never arbitrary payloads.
@@ -843,6 +846,31 @@ export async function loadAssignedSurfaceCredential(stage: string): Promise<stri
       typeof message === "string" && message.trim()
         ? message
         : "Could not load the desktop gateway credential.",
+      { cause: error },
+    )
+  }
+}
+
+/** Resolve the private endpoint publication through the native host. */
+export async function loadAssignedGatewayEndpoint(
+  stage: string,
+): Promise<string | undefined> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  try {
+    return (await invoke<string | null>("load_gateway_endpoint", { stage })) ?? undefined
+  } catch (error) {
+    if (error instanceof Error) throw error
+    const message =
+      typeof error === "string"
+        ? error
+        : error && typeof error === "object" && "message" in error
+          ? error.message
+          : undefined
+    throw new Error(
+      typeof message === "string" && message.trim()
+        ? message
+        : "Could not verify the desktop gateway endpoint.",
       { cause: error },
     )
   }

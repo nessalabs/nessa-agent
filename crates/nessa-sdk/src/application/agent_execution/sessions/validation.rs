@@ -1,7 +1,7 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
 use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, SessionSnapshot,
-    StorageError,
+    StorageError, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
@@ -10,8 +10,10 @@ use crate::application::agent_execution::executions::{
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
 use crate::domain::agent_execution::{
-    executions::{ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage},
-    permissions::{PermissionRequest, PermissionStateView},
+    executions::{
+        ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+    },
+    permissions::{PermissionRequest, PermissionStateView, ReviewDeclineStage},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -37,6 +39,41 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         calls.set((full + 1, history));
     });
     let _ = super::queue_validation::replay(snapshot)?;
+    if snapshot.invocations.len() > SessionSnapshot::MAX_INVOCATIONS {
+        return Err(corrupt("retained invocation history exceeds session limit"));
+    }
+    snapshot
+        .provider_context
+        .validate_evidence(
+            snapshot
+                .invocations
+                .iter()
+                .any(|invocation| !invocation.events.is_empty()),
+            snapshot
+                .invocations
+                .iter()
+                .any(|invocation| invocation.provider_report.is_some()),
+            snapshot.invocations.iter().any(|invocation| {
+                invocation.scheduling.iter().any(|event| {
+                    matches!(
+                        event.stage,
+                        InvocationStage::Running | InvocationStage::Injected
+                    )
+                })
+            }),
+            snapshot.invocations.iter().any(|invocation| {
+                invocation.target_event_offset.is_some()
+                    || invocation
+                        .scheduling
+                        .iter()
+                        .any(|event| event.target.is_some())
+            }),
+            snapshot
+                .queue_history
+                .iter()
+                .any(|record| matches!(&record.mutation, QueueMutation::Selected { .. })),
+        )
+        .map_err(corrupt)?;
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
     let mut event_counts = HashMap::new();
     for invocation in &snapshot.invocations {
@@ -106,6 +143,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         super::retention::validate(snapshot, invocation).map_err(corrupt)?;
         let mut reviews = HashMap::new();
         let mut review_ids = HashSet::new();
+        let mut declines = HashMap::new();
         for event in &invocation.events {
             match event.update() {
                 ExecutionUpdate::Tool(tool) => {
@@ -142,7 +180,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                     validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
                     validate_observation_id(record.request().tool_id().as_str())
                         .map_err(corrupt)?;
-                    if record.session_id() != &snapshot.provider_session_id
+                    if snapshot.provider_context.recorded() != Some(record.session_id())
                         || record.request().execution_id() != event.execution_id()
                     {
                         return Err(corrupt(
@@ -160,6 +198,29 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                         return Err(corrupt(
                             "cancellation differs from the original permission request",
                         ));
+                    }
+                }
+                ExecutionUpdate::ReviewDeclined(observation) => {
+                    match declines.get(observation.id()) {
+                        None if observation.stage() == ReviewDeclineStage::Selected => {
+                            declines.insert(observation.id(), observation);
+                        }
+                        Some(selected)
+                            if selected.advance(observation.stage()).as_ref()
+                                == Ok(observation) =>
+                        {
+                            declines.insert(observation.id(), observation);
+                        }
+                        None => {
+                            return Err(corrupt(
+                                "declined review delivery has no preceding local selection",
+                            ))
+                        }
+                        Some(_) => {
+                            return Err(corrupt(
+                                "declined review identity is repeated or changes its decision",
+                            ))
+                        }
                     }
                 }
                 _ => {}
@@ -181,6 +242,25 @@ pub(super) fn invocation_history(
     });
     if let Some(result) = &invocation.result {
         validate_local_result(invocation, result)?;
+    }
+    if matches!(
+        &invocation.acknowledgement,
+        SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: None
+        }
+    ) {
+        return Err(corrupt(
+            "failed submission acknowledgement has no failed boundary",
+        ));
+    }
+    if let SubmissionAcknowledgement::Failed { audit, storage } = &invocation.acknowledgement {
+        if let Some(error) = audit {
+            error.validate_retained_size()?;
+        }
+        if let Some(error) = storage {
+            error.validate_retained_size()?;
+        }
     }
     let mut history = InvocationHistory::new(
         invocation.request.execution_id.clone(),

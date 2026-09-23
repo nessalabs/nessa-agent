@@ -354,7 +354,7 @@ mod gateway {
     }
 
     #[tokio::test]
-    async fn disconnect_keeps_admitted_open_and_capacity_until_it_finishes() {
+    async fn disconnect_keeps_admitted_open_after_request_capacity_is_released() {
         let (service, provider, _, _) =
             conversation_support::fixture(ConversationLimits::default());
         let state = chat_state().with_conversations(Arc::new(service));
@@ -373,7 +373,10 @@ mod gateway {
         timeout(Duration::from_secs(1), provider.opening.notified())
             .await
             .unwrap();
-        assert_eq!(state.requests.available_permits(), 127);
+        let created = response(&mut peer).await;
+        assert_eq!(created["id"], "create");
+        assert_eq!(created["ok"], true);
+        assert_eq!(state.requests.available_permits(), 128);
         // The provider's opening future is blocked, but this socket remains responsive.
         send_command(&peer, "health", "server.health", json!({}));
         assert_eq!(response(&mut peer).await["id"], "health");
@@ -384,8 +387,8 @@ mod gateway {
             .unwrap();
         assert_eq!(
             state.requests.available_permits(),
-            127,
-            "disconnect must not release an admitted task's capacity"
+            128,
+            "durable creation releases request capacity before provider startup"
         );
         release.send(()).unwrap();
         let second = chat_session(&state, "owner-panel").await;
@@ -412,7 +415,7 @@ mod gateway {
     }
 
     #[tokio::test]
-    async fn sixteen_blocked_reads_leave_socket_capacity_for_controls() {
+    async fn reads_during_startup_return_without_consuming_control_capacity() {
         let (service, provider, _, _) =
             conversation_support::fixture(ConversationLimits::default());
         let state = chat_state().with_conversations(Arc::new(service));
@@ -431,6 +434,7 @@ mod gateway {
         timeout(Duration::from_secs(1), provider.opening.notified())
             .await
             .unwrap();
+        assert_eq!(response(&mut peer).await["id"], "create");
         for n in 0..15 {
             send_command(
                 &peer,
@@ -439,18 +443,14 @@ mod gateway {
                 json!({"conversationId":id}),
             );
         }
-        timeout(Duration::from_secs(1), async {
-            while state.requests.available_permits() != 112 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        for n in 0..15 {
+            let read = response(&mut peer).await;
+            assert_eq!(read["id"], format!("read-{n}"));
+            assert_eq!(read["ok"], true);
+        }
+        assert_eq!(state.requests.available_permits(), 128);
         send_command(&peer, "full", "server.health", json!({}));
-        assert_eq!(
-            response(&mut peer).await["error"]["code"],
-            "temporarily_unavailable"
-        );
+        assert_eq!(response(&mut peer).await["id"], "full");
         // An unrelated missing conversation proves the control is dispatched,
         // without waiting for this deliberately blocked provider context.
         send_command(
@@ -464,7 +464,7 @@ mod gateway {
         assert_eq!(control["error"]["code"], "conversation_not_found");
         drop(peer.input);
         task.await.unwrap();
-        assert_eq!(state.requests.available_permits(), 112);
+        assert_eq!(state.requests.available_permits(), 128);
         release.send(()).unwrap();
         timeout(Duration::from_secs(1), async {
             while state.requests.available_permits() != 128 {

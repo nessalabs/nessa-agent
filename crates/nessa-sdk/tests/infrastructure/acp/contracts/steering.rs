@@ -28,7 +28,13 @@ async fn steering_session(mode: &str) -> (TempDir, OpenedProviderSession) {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    (root, provider.open(None).await.unwrap())
+    (
+        root,
+        provider
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap(),
+    )
 }
 
 #[tokio::test]
@@ -243,7 +249,10 @@ async fn steering_has_a_deadline_even_when_execution_has_none() {
         audit.clone(),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "first").await;
     next(&mut opened).await;
     let session = opened.session.clone();

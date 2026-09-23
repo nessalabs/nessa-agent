@@ -32,14 +32,16 @@ impl AgentProvider for ReadyProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("ready", "test", "test").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("ready").unwrap(),
                     self.backend.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ReadyEvents(self.polls.clone(), self.backend.clone())),
             })
@@ -81,7 +83,7 @@ async fn rejected_foreign_ready_output_stops_after_its_first_cleanup() {
     let backend = Arc::new(ReadyBackend::default());
     let polls = Arc::new(AtomicUsize::new(0));
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ReadyProvider {
             backend: backend.clone(),
             polls: polls.clone(),

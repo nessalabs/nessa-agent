@@ -33,6 +33,10 @@ examples.
   the `src-tauri` host, and how dependencies are injected.
 - [One current contract](CODING_STANDARDS.md#one-current-contract) — no
   compatibility shims, aliases, or version bumps without an explicit request.
+- [Numbering a decision record](docs/adr/README.md#numbering-open-the-issue-first)
+  — open the issue first; the record takes its number. Anything significant
+  enough to need an ADR, a design document, or a branch of its own gets an issue
+  before it gets a branch.
 - [Rust imports and type names](CODING_STANDARDS.md#rust-imports-and-type-names)
   — applies to generated code through its generator, not by hand.
 

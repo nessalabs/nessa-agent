@@ -15,7 +15,7 @@ fn bounded_snapshot(tool_text: &str, review_text: &str) -> SessionSnapshot {
         arguments_json: "{}".into(),
     };
     let cancellation = PermissionCancellation::from_record(
-        value.provider_session_id.clone(),
+        value.provider_context.recorded().unwrap().clone(),
         cancelled_request(
             PermissionRequest::new(
                 review.clone(),

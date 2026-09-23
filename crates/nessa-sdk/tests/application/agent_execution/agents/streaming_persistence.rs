@@ -31,14 +31,16 @@ impl AgentProvider for TextProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("batch", "batch", "test").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("batch").unwrap(),
                     self.backend.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TextStream {
                     chunks: self.chunks.lock().unwrap().take().unwrap(),
@@ -79,7 +81,7 @@ impl StreamingTest {
                 started_sender.send_replace(true);
             }
         });
-        let agent = Agent::new(
+        let agent = attached_agent(
             Arc::new(TextProvider {
                 backend: backend.clone(),
                 chunks: Mutex::new(Some(receiver)),

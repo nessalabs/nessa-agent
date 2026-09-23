@@ -241,10 +241,12 @@ async fn complete_retained_review_is_required_for_answers_and_cancellations() {
                 );
             }
             agent.close(close_action()).await.unwrap();
-            assert_eq!(
-                *backend.closes.lock().unwrap(),
-                vec![SessionCloseRequest::Explicit(close_action())]
-            );
+            let expected_close = if change == ReviewChange::Original {
+                SessionCloseRequest::Explicit(close_action())
+            } else {
+                SessionCloseRequest::ExecutionFailed
+            };
+            assert_eq!(*backend.closes.lock().unwrap(), vec![expected_close]);
         }
     }
 }
@@ -316,7 +318,7 @@ async fn contradictory_receipt_never_hides_cleanup_or_audit_failure() {
             assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
             assert_eq!(
                 *backend.closes.lock().unwrap(),
-                vec![SessionCloseRequest::Explicit(close_action())]
+                vec![SessionCloseRequest::ExecutionFailed]
             );
             *backend.cleanup.lock().unwrap() =
                 CleanupReport::confirmed(CloseOutcome { forced: false });

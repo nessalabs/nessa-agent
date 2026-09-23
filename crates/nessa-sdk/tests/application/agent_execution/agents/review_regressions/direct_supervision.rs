@@ -61,7 +61,7 @@ async fn caller_loss_after_dispatch_keeps_native_target_and_settlement() {
     );
     assert!(
         matches!(agent.steer(input("correction"), actor()).await.unwrap(),
-        SteeringDelivery::Injected { target } if target.as_str() == "active")
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "active")
     );
     let next = agent.enqueue(input("next"), actor()).await.unwrap();
     assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
@@ -82,7 +82,9 @@ async fn close_settles_direct_invocation_without_polling_its_waiter() {
     let storage = MemoryStorage::default();
     let mut provider = TestProvider::new();
     Arc::get_mut(&mut provider).unwrap().wait_for_close = true;
-    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
+    let agent = attached_agent(provider, storage.manager().await)
+        .await
+        .unwrap();
     let mut events = agent.subscribe();
     let mut waiting = agent.invoke(input("suspended"), actor());
     poll_fn(|context| {
@@ -201,7 +203,7 @@ async fn settlement_storage_panic_preserves_already_observed_provider_success() 
     let manager = SessionManager::open(None, Arc::new(PanicOnSettlementStorage(storage.clone())))
         .await
         .unwrap();
-    let agent = Agent::new(TestProvider::new(), manager).await.unwrap();
+    let agent = attached_agent(TestProvider::new(), manager).await.unwrap();
     let result = agent.invoke(input("settlement-panic"), actor()).await;
     assert!(
         matches!(&result, Err(AgentError::ExecutionObservation { error, execution_result: Some(outcome) })

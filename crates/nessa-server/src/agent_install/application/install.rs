@@ -69,7 +69,8 @@ impl std::error::Error for InstallFailure {}
 ///
 /// ```text
 /// installed already at the pinned version? -> done, nothing downloaded
-/// download -> hash -> the release accepts the hash -> publish
+/// download (bounded by the pinned length) -> hash -> the release accepts the
+///     hash -> publish
 ///                                    \-> rejected: discard, install nothing
 /// ```
 ///
@@ -78,7 +79,9 @@ impl std::error::Error for InstallFailure {}
 /// written to the runtime directory, not read for an entry, not consulted for
 /// its version. That ordering is the only thing standing between a replaced
 /// download and an executable Nessa will launch, which is why it is in the use
-/// case rather than left to an adapter to remember.
+/// case rather than left to an adapter to remember. It holds whatever shape the
+/// release has: a release that installs seven files is verified once, as the
+/// one archive it arrived in, before the first of them is written.
 ///
 /// The three middle steps share one open file — see [`StagedArchive`], which
 /// also states where that holds and where it would not — so "the bytes that
@@ -170,7 +173,11 @@ impl InstallAgentRuntime<'_> {
         staged: &mut StagedArchive,
     ) -> Result<PathBuf, InstallFailure> {
         self.source
-            .download(release.archive_url().as_str(), staged)
+            .download(
+                release.archive_url().as_str(),
+                release.archive_size().bytes(),
+                staged,
+            )
             .map_err(InstallFailure::Download)?;
         let digest = self.store.digest(staged).map_err(InstallFailure::Store)?;
         release.accept(&digest).map_err(InstallFailure::Rejected)?;

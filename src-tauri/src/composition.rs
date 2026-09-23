@@ -42,10 +42,13 @@ use crate::attachments::{
     self, AttachmentTickets, ChosenFiles, ContentTypes, DragBoard, FilePicker, Readiness,
 };
 use crate::gateway::{self, application::Gateway};
+use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
-use crate::surface_credential::{SurfaceCredential, SurfaceCredentials};
+use crate::surface_credential::{
+    service_namespace_from_environment, SurfaceCredential, SurfaceCredentials,
+};
 #[cfg(desktop)]
 use crate::updater::{self, ReleaseSource};
 
@@ -65,6 +68,8 @@ pub struct HostDependencies {
     pub shortcuts: Arc<dyn ShortcutStore>,
     /// The bundled surface's native credential.
     pub credential: Arc<dyn SurfaceCredentials>,
+    /// Health-correlated endpoint source bound to the same service namespace.
+    pub endpoint: Arc<GatewayEndpointAccess>,
     /// Where the person chooses files to attach: the operating system's own
     /// file dialog, which the webview has no way of putting on screen itself.
     pub picker: Arc<dyn FilePicker>,
@@ -122,6 +127,7 @@ impl HostDependencies {
     /// gateway registers; reading the environment again here could disagree.
     pub fn assemble(app: &AppHandle, stage: String) -> tauri::Result<Self> {
         let config_root = local_data::config_root(app, &stage);
+        let service_namespace = service_namespace_from_environment(&stage);
 
         // A development build has no staged runtime to register, exactly as
         // before: the branch is on the profile, not on whether a path exists.
@@ -145,7 +151,14 @@ impl HostDependencies {
         Ok(Self {
             settings: Arc::new(SettingsFile::at(config_root.clone())),
             shortcuts: Arc::new(ShortcutsFile::at(config_root)),
-            credential: Arc::new(SurfaceCredential::from_environment(stage)),
+            credential: Arc::new(SurfaceCredential::for_namespace(
+                service_namespace.clone(),
+                stage.clone(),
+            )),
+            endpoint: Arc::new(GatewayEndpointAccess::new(
+                stage,
+                gateway_endpoint::infrastructure::endpoint_discovery(service_namespace),
+            )),
             picker: attachments::file_picker(app),
             files: attachments::chosen_files(),
             types: attachments::content_types(),

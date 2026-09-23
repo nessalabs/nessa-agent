@@ -25,9 +25,9 @@ use nessa_sdk::{
                 AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
                 ExecutionReport, ObservationFailure, OpenedProviderSession,
                 ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationCapabilities,
-                ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
-                ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
+                ProviderObservationFuture, ProviderOpenFuture, ProviderOpenRequest,
+                ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+                ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
             },
         },
         dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
@@ -52,7 +52,7 @@ use nessa_sdk::{
     infrastructure::session_storage::InMemoryStorage,
 };
 
-struct AcceptingAudit;
+pub(crate) struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
     fn record(
         &self,
@@ -62,7 +62,7 @@ impl ExecutionAudit for AcceptingAudit {
     }
 }
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -164,6 +164,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) answer_failure: Mutex<Option<(AgentError, PermissionSelectionState)>>,
     pub(crate) close_calls: AtomicUsize,
     pub(crate) close_failure: Mutex<Option<AgentError>>,
+    pub(crate) close_reports: Mutex<VecDeque<CleanupReport>>,
+    pub(crate) close_finished: Notify,
     pub(crate) close_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
@@ -224,14 +226,27 @@ pub(crate) fn image_fixture(
     Arc<MemoryRepository>,
     Arc<InMemoryStorage>,
 ) {
+    image_fixture_with_model(image_input, image_input, attachments)
+}
+
+pub(crate) fn image_fixture_with_model(
+    image_input: bool,
+    model_images: bool,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
+) -> (
+    ConversationService,
+    Arc<ProviderFactory>,
+    Arc<MemoryRepository>,
+    Arc<InMemoryStorage>,
+) {
     let provider = Arc::new(ProviderFactory::default());
     provider.image_input.store(image_input, Ordering::SeqCst);
-    provider.model_images.store(image_input, Ordering::SeqCst);
+    provider.model_images.store(model_images, Ordering::SeqCst);
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -256,6 +271,7 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
             AgentId::Claude,
             ConversationAgent {
                 provider,
+                execution_audit: Arc::new(AcceptingAudit),
                 reserved_output_tokens: 4096,
                 readiness: None,
             },
@@ -277,7 +293,7 @@ pub(crate) fn fixture(
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider.clone()))),
+            agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -291,16 +307,32 @@ pub(crate) fn fixture(
     .unwrap();
     (service, provider, repository, storage)
 }
-pub(crate) struct Provider(pub(crate) Arc<ProviderFactory>);
+pub(crate) struct Provider {
+    factory: Arc<ProviderFactory>,
+    configured_capabilities: EffectiveCapabilities,
+}
+impl Provider {
+    pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
+        let configured_capabilities = capabilities(factory.model_images.load(Ordering::SeqCst));
+        Self {
+            factory,
+            configured_capabilities,
+        }
+    }
+}
 impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gateway-test", "test", "test").unwrap()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.configured_capabilities
+    }
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
-            self.0.open_calls.fetch_add(1, Ordering::SeqCst);
-            self.0.opening.notify_one();
-            let gate = self.0.open_gate.lock().unwrap().take();
+            let (restore, _control) = request.into_parts();
+            self.factory.open_calls.fetch_add(1, Ordering::SeqCst);
+            self.factory.opening.notify_one();
+            let gate = self.factory.open_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
@@ -311,15 +343,14 @@ impl AgentProvider for Provider {
                         ExecutionSessionId::new(uuid::Uuid::new_v4().to_string()).unwrap()
                     }),
                     Arc::new(Backend {
-                        factory: self.0.clone(),
+                        factory: self.factory.clone(),
                         sender: Mutex::new(Some(sender)),
                     }),
-                    capabilities(self.0.model_images.load(Ordering::SeqCst)),
-                    Arc::new(AcceptingAudit),
+                    self.configured_capabilities.clone(),
                 ),
                 events: Box::new(Events {
                     receiver,
-                    factory: self.0.clone(),
+                    factory: self.factory.clone(),
                 }),
             })
         })
@@ -516,14 +547,27 @@ impl ProviderSessionBackend for Backend {
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
-            if let Some(error) = self.factory.close_failure.lock().unwrap().clone() {
-                return CleanupReport::unconfirmed(error);
-            }
-            CleanupReport::confirmed(CloseOutcome { forced: false })
+            let report = self
+                .factory
+                .close_reports
+                .lock()
+                .unwrap()
+                .pop_front()
+                .or_else(|| {
+                    self.factory
+                        .close_failure
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .map(CleanupReport::unconfirmed)
+                })
+                .unwrap_or_else(|| CleanupReport::confirmed(CloseOutcome { forced: false }));
+            self.factory.close_finished.notify_one();
+            report
         })
     }
 }
-fn capabilities(image_input: bool) -> EffectiveCapabilities {
+pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
     let text = ModalitiesDto {
         text: true,
         image: false,
