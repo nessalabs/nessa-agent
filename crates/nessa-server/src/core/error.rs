@@ -10,6 +10,7 @@
 use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
+use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
 use std::fmt;
 use std::io::{self, ErrorKind};
 
@@ -25,7 +26,7 @@ pub enum RunError {
     /// than flattened into `Authentication`, because it is the one setup
     /// failure the desktop host reports in its own words, and it learns which
     /// failure this was from the exit code this variant chooses.
-    Registry(LocalStoreError),
+    Registry(RegistryFailure),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
     /// Invalid or unavailable configured agent provider.
@@ -45,6 +46,63 @@ pub enum RunError {
     /// `None` means shutdown never reported at all — unknown, which is its own
     /// fact and not the same as a reported failure.
     Shutdown(Option<ConversationError>),
+}
+
+impl RunError {
+    pub(crate) fn registry(
+        primary: LocalStoreError,
+        audit: Option<CredentialRegistryAuditError>,
+    ) -> Self {
+        Self::Registry(RegistryFailure::new(primary, audit))
+    }
+}
+
+/// A failed registry open and the independent result of auditing its refusal.
+///
+/// The store failure remains primary. Audit delivery can fail beside it but
+/// never replaces what was refused or changes ending policy.
+#[derive(Debug)]
+pub struct RegistryFailure {
+    primary: LocalStoreError,
+    audit: Option<CredentialRegistryAuditError>,
+}
+
+impl RegistryFailure {
+    pub(crate) fn new(
+        primary: LocalStoreError,
+        audit: Option<CredentialRegistryAuditError>,
+    ) -> Self {
+        Self { primary, audit }
+    }
+
+    pub(crate) fn primary(&self) -> &LocalStoreError {
+        &self.primary
+    }
+}
+
+impl From<LocalStoreError> for RegistryFailure {
+    fn from(primary: LocalStoreError) -> Self {
+        Self::new(primary, None)
+    }
+}
+
+impl fmt::Display for RegistryFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.primary)?;
+        if let Some(audit) = &self.audit {
+            write!(
+                formatter,
+                "; credential registry refusal audit was not recorded: {audit}"
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RegistryFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.primary)
+    }
 }
 
 impl fmt::Display for RunError {
