@@ -1,7 +1,7 @@
 //! Decode-pass read counts distinguish early bounds from post-allocation validation.
 use super::{read, Loaded};
 use crate::application::agent_execution::agents::ProviderDiagnostic;
-use crate::application::agent_execution::sessions::StorageError;
+use crate::application::agent_execution::sessions::{SessionSnapshot, StorageError};
 use crate::domain::agent_execution::{
     prompts::{LinkedFile, UserMessage},
     sessions::SessionId,
@@ -130,7 +130,7 @@ fn provider_diagnostic_is_required_and_bounded_before_owned_decode() {
 }
 
 #[test]
-fn valid_large_tool_string_and_many_invocation_changes_remain_loadable() {
+fn valid_large_tool_string_remains_loadable() {
     let mut value = record();
     value["invocations"][0]["events"] = json!([{
         "execution_id":"active", "update":{"Tool":{
@@ -141,19 +141,35 @@ fn valid_large_tool_string_and_many_invocation_changes_remain_loadable() {
         load(encoded(&value)).0.is_ok(),
         "tool fields use their 32MiB aggregate budget, not the message chunk limit"
     );
+}
+
+#[test]
+fn invocation_history_accepts_its_exact_bound_and_refuses_one_more() {
+    assert_eq!(SessionSnapshot::MAX_INVOCATIONS, 1024);
+    let mut value = record();
     let mut changes = Vec::new();
-    for index in 0..4097 {
+    for index in 0..=SessionSnapshot::MAX_INVOCATIONS {
         let mut change = record()["invocations"][0].clone();
         change["index"] = json!(index);
         change["metadata"]["execution_id"] = json!(format!("execution-{index}"));
         changes.push(change);
     }
+    let overflow = changes.pop().unwrap();
     value["invocation_count"] = json!(changes.len());
     value["invocations"] = Value::Array(changes);
     let loaded = load(encoded(&value))
         .0
-        .expect("sequential history is not capped at per-invocation collection limits");
-    assert_eq!(loaded.snapshot.unwrap().invocations.len(), 4097);
+        .expect("the complete retained history bound must remain loadable");
+    assert_eq!(
+        loaded.snapshot.unwrap().invocations.len(),
+        SessionSnapshot::MAX_INVOCATIONS
+    );
+    value["invocations"].as_array_mut().unwrap().push(overflow);
+    value["invocation_count"] = json!(SessionSnapshot::MAX_INVOCATIONS + 1);
+    assert!(matches!(
+        load(encoded(&value)).0,
+        Err(StorageError::Corrupt(_))
+    ));
 }
 
 #[test]

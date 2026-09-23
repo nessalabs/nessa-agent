@@ -57,7 +57,7 @@ pub struct SessionSnapshot {
 }
 impl SessionSnapshot {
     /// Maximum durable invocation records retained by one conversation.
-    pub const MAX_INVOCATIONS: usize = 4096;
+    pub const MAX_INVOCATIONS: usize = 1024;
 }
 
 /// One queue membership decision, recorded in global scheduler order.
