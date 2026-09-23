@@ -1,10 +1,12 @@
 //! Private local storage shared by native adapters. No authentication policy lives here.
 //! Existing unsafe files are rejected, never silently repaired.
 use std::{
+    ffi::OsString,
     fs::File,
     io,
     path::{Component, Path, PathBuf},
 };
+mod retained_directory;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -19,12 +21,26 @@ pub use platform::{
     remove_file_beneath, replace, replace_beneath, sync_directory, sync_directory_beneath,
     verify_directory, verify_file,
 };
+pub use retained_directory::{
+    PrivateDirectory, PrivateDirectoryEntries, PrivateDirectoryEntry, PrivateDirectoryTempFile,
+    PrivateFileIdentity, PrivateFileType, PrivatePublicationFailure, PrivatePublicationStage,
+    PublishedPrivateFile,
+};
 // One owner: a temporary file is published by the type that reserved it, so
 // that nothing can publish a name it did not create privately first.
 pub(crate) use platform::publish_new;
 
 const TEMPORARY_PREFIX: &str = ".nessa-";
 const TEMPORARY_SUFFIX: &str = ".tmp";
+
+fn temporary_name() -> io::Result<OsString> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|error| io::Error::other(error.to_string()))?;
+    let random: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(OsString::from(format!(
+        "{TEMPORARY_PREFIX}{random}{TEMPORARY_SUFFIX}"
+    )))
+}
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
@@ -125,10 +141,7 @@ impl PrivateTempFile {
     pub fn new_in(parent: &Path) -> io::Result<Self> {
         verify_directory(parent)?;
         for _ in 0..10 {
-            let mut random = [0u8; 16];
-            getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
-            let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
-            let path = parent.join(format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}"));
+            let path = parent.join(temporary_name()?);
             match platform::open_temporary(&path) {
                 Ok(file) => {
                     return Ok(Self {
@@ -150,10 +163,7 @@ impl PrivateTempFile {
     /// Reserve a private temporary file within `directory`, relative to a trusted root.
     pub fn new_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
         for _ in 0..10 {
-            let mut random = [0u8; 16];
-            getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
-            let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
-            let relative = directory.join(format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}"));
+            let relative = directory.join(temporary_name()?);
             match platform::open_temporary_beneath(root, &relative) {
                 Ok(file) => {
                     return Ok(Self {

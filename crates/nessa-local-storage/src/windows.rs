@@ -21,6 +21,10 @@ use windows_sys::Win32::{
     Storage::FileSystem::*,
     System::Threading::*,
 };
+mod retained_directory;
+pub(crate) use retained_directory::{
+    validate_native_name, RetainedDirectory, RetainedDirectoryEntries,
+};
 
 struct LocalAllocation(*mut c_void);
 impl Drop for LocalAllocation {
