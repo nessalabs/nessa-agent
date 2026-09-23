@@ -294,7 +294,10 @@ fn restored_recovery_rejects_both_confirmation_state_contradictions() {
         } else {
             RecoveryFailureEvidence::new(
                 InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publication"),
-                None,
+                Some(InstallFailureEvidence::capture(
+                    InstallFailureKind::Unwritable,
+                    "withdrawal",
+                )),
                 None,
                 Some(cleanup),
             )
@@ -324,7 +327,11 @@ fn restored_recovery_rejects_both_confirmation_state_contradictions() {
         } else {
             "unconfirmed recovery requires a confirmation failure"
         };
-        assert!(fixture_failure.detail().contains(expected));
+        assert!(
+            fixture_failure.detail().contains(expected),
+            "unexpected direct restoration refusal: {}",
+            fixture_failure.detail()
+        );
         let encoded = serde_json::to_vec(&stored).unwrap();
         let retained =
             PrivateDirectory::open_beneath(root.path(), std::path::Path::new("audit")).unwrap();
@@ -347,7 +354,11 @@ fn restored_recovery_rejects_both_confirmation_state_contradictions() {
 
         let failure = audit.record(next).unwrap_err();
         assert_eq!(failure.stage(), AuditFailureStage::ReadJournal);
-        assert!(failure.detail().contains(expected));
+        assert!(
+            failure.detail().contains(expected),
+            "unexpected journal restoration refusal: {}",
+            failure.detail()
+        );
     }
 }
 
