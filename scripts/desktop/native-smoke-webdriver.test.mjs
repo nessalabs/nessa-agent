@@ -103,6 +103,7 @@ test("a session failure aborts and settles application observation before return
         events.push("session failed")
         throw failure
       },
+      claimSession: () => assert.fail("a failed session cannot be claimed"),
       observeApplication: pendingUntilAborted(events, "application"),
     }),
     failure,
@@ -121,6 +122,7 @@ test("an application failure aborts and settles session creation before returnin
   await assert.rejects(
     observeWebdriverStartup({
       createSession: pendingUntilAborted(events, "session"),
+      claimSession: () => assert.fail("an aborted session cannot be claimed"),
       observeApplication: async () => {
         events.push("application failed")
         throw failure
@@ -131,14 +133,59 @@ test("an application failure aborts and settles session creation before returnin
   assert.deepEqual(events, ["application failed", "session aborted", "session settled"])
 })
 
-test("successful startup returns both independently observed facts", async () => {
-  assert.deepEqual(
+test("a created session is claimed before a later application failure", async () => {
+  const failure = new Error("application PID disappeared")
+  let claimed
+  await assert.rejects(
+    observeWebdriverStartup({
+      createSession: async () => ({ sessionId: "session" }),
+      claimSession: (session) => {
+        claimed = session
+      },
+      observeApplication: async () => {
+        await Promise.resolve()
+        throw failure
+      },
+    }),
+    failure,
+  )
+  assert.deepEqual(claimed, { sessionId: "session" })
+})
+
+test("a session acknowledged after application failure is still claimed", async () => {
+  const events = []
+  const failure = new Error("application PID never appeared")
+  let finishSession
+  const startup = observeWebdriverStartup({
+    createSession: () =>
+      new Promise((resolve) => {
+        finishSession = () => resolve({ sessionId: "late-session" })
+      }),
+    claimSession: (session) => events.push(`claimed ${session.sessionId}`),
+    observeApplication: async () => {
+      events.push("application failed")
+      throw failure
+    },
+  })
+
+  while (!finishSession) await Promise.resolve()
+  await Promise.resolve()
+  finishSession()
+  await assert.rejects(startup, failure)
+  assert.deepEqual(events, ["application failed", "claimed late-session"])
+})
+
+test("successful startup claims the session and returns the application fact", async () => {
+  const claimed = []
+  assert.equal(
     await observeWebdriverStartup({
       createSession: async () => ({ sessionId: "session" }),
+      claimSession: (session) => claimed.push(session),
       observeApplication: async () => 4321,
     }),
-    { session: { sessionId: "session" }, application: 4321 },
+    4321,
   )
+  assert.deepEqual(claimed, [{ sessionId: "session" }])
 })
 
 test("panel readiness requires the rendered connection contract", () => {

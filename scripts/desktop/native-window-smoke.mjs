@@ -404,6 +404,10 @@ try {
           signal: AbortSignal.any([interruption.signal, signal]),
         },
       ),
+    claimSession: (created) => {
+      assert.ok(created?.sessionId, "WebDriver did not return a session id")
+      session = created.sessionId
+    },
     observeApplication: async (signal) => {
       const pid = await eventually(
         "application launch during WebDriver session creation",
@@ -420,9 +424,7 @@ try {
       return pid
     },
   })
-  appPid = startup.application
-  session = startup.session.sessionId
-  assert.ok(session, "WebDriver did not return a session id")
+  appPid = startup
   markPhase("WebDriver session ready", `session=${session}`)
 
   windows = { errors: [] }

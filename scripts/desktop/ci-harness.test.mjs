@@ -92,7 +92,10 @@ test("nothing in a release is built or published before the key pairing gate", (
   // builds, and must stay in its demanding mode — its default when no key is
   // reachable is a *skip*, which in a release would read as a pass.
   const workflow = readFileSync(".github/workflows/release.yml", "utf8")
-  assert.match(workflow, /cargo test -p nessa-app --test updater_key_pairing/)
+  assert.match(
+    workflow,
+    /^\s*- run: cargo test -p nessa-app --test updater_key_pairing --no-default-features\s*$/m,
+  )
   assert.match(workflow, /NESSA_REQUIRE_UPDATER_KEY_PAIRING: "1"/)
   assert.match(workflow, /needs: \[version, updater-key\]/)
   assert.match(workflow, /needs: \[version, build\]/)
