@@ -1,7 +1,7 @@
 mod opening;
 
 use super::support::*;
-use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
+use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 use nessa_sdk::{
     application::agent_execution::providers::OperationCapabilities,
     infrastructure::session_storage::InMemoryStorage, Agent,
@@ -122,7 +122,7 @@ impl AgentProvider for TestProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(

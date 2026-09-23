@@ -1,5 +1,5 @@
 //! Restored diagnostics are bounded before retention and provider attachment.
-use super::custom_storage::assert_custom_retention_admission;
+use super::custom_storage::{assert_custom_retention_admission, assert_moved_retention_admission};
 use super::*;
 
 #[tokio::test]
@@ -85,7 +85,11 @@ async fn acknowledgement_errors_are_bounded_before_custom_storage_clone() {
         }
         let mut value = snapshot("acknowledgement-error-limits");
         value.invocations[0].acknowledgement = acknowledgement(case);
-        assert_custom_retention_admission(value, false).await;
+        if case == 2 {
+            assert_moved_retention_admission(value, false).await;
+        } else {
+            assert_custom_retention_admission(value, false).await;
+        }
     }
 }
 

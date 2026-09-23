@@ -259,7 +259,13 @@ cleanup continue.
 If close wins before `provider.open` is polled, no provider starts. If it wins
 while open is pending, the Agent-owned attachment task continues awaiting the
 operation; it does not drop the future, because initialization may continue
-independently.
+independently. The lifecycle publishes its first exact `SessionCloseRequest`
+through a private, generation-bound `ProviderOpenControl`. A provider can use
+that signal to finish startup through its existing cleanup owner, but the signal
+does not transfer ownership or permit the SDK to abandon the open future. A
+provider that does not observe startup control remains owned until its normal
+startup budget returns a result. Losing a control sender without a published
+request invents no stop cause.
 An eventual session is closed without enabling the runner. An initialization
 error with cleanup ownership remains attached to the Agent until retry confirms
 release. If open and close are ready in one poll, close is checked before

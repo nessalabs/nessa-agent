@@ -23,7 +23,10 @@ async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() 
             audit.clone(),
         )
         .unwrap();
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "byte-budget").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -117,7 +120,10 @@ async fn protocol_failures_and_output_overflow_close_owned_scope() {
         "flood",
     ] {
         let (root, binding) = test_acp_binding(mode, 2);
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let result = timeout(
             Duration::from_secs(3),
             opened.session.execute(prompt("test")),
@@ -158,7 +164,10 @@ async fn maps_terminal_reasons_and_rejects_client_execution_requests() {
         ("unknown-request", ExecutionOutcome::Completed),
     ] {
         let (root, binding) = test_acp_binding(mode, 16);
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         assert_eq!(
             opened
                 .session
@@ -183,7 +192,10 @@ async fn idle_binding_failures_are_visible_to_the_event_consumer() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("idle-config-change", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert!(matches!(
         opened
             .events
@@ -225,7 +237,10 @@ async fn terminal_delivery_failure_is_reported_by_both_prompt_and_event_reader()
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("echo", 1, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let ProviderExecutionReply::Finished(settlement) = opened.session.execute(prompt("full")).await
     else {
         panic!("provider was dispatched")
@@ -323,7 +338,10 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
             audit.clone(),
         )
         .unwrap();
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let mut request = prompt("blocked-write");
         request.user_message =
             UserMessage::text_only(PromptText::new("x".repeat(2 * 1024 * 1024)).unwrap());
@@ -379,7 +397,10 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
 async fn acp_message_id_is_retained_for_each_streamed_fragment() {
     let _slot = process_test_slot().await;
     let (_root, binding) = test_acp_binding("message-identities", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let ProviderExecutionReply::Finished(report) = opened.session.execute(prompt("hello")).await
     else {
         panic!("dispatched")
@@ -418,7 +439,10 @@ async fn an_agent_frame_over_the_inbound_ceiling_fails_although_the_host_writes_
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let mut large = prompt("large");
     let text = "x".repeat(64 * 1024);
     large.user_message = UserMessage::text_only(PromptText::new(&text).unwrap());

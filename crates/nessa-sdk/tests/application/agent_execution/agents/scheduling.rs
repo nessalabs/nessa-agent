@@ -50,7 +50,7 @@ impl AgentProvider for TestProvider {
         capabilities()
     }
 
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
     }
 }

@@ -25,9 +25,9 @@ use nessa_sdk::{
                 AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
                 ExecutionReport, ObservationFailure, OpenedProviderSession,
                 ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationCapabilities,
-                ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
-                ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
+                ProviderObservationFuture, ProviderOpenFuture, ProviderOpenRequest,
+                ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+                ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
             },
         },
         dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
@@ -327,8 +327,9 @@ impl AgentProvider for Provider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.configured_capabilities
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
+            let (restore, _control) = request.into_parts();
             self.factory.open_calls.fetch_add(1, Ordering::SeqCst);
             self.factory.opening.notify_one();
             let gate = self.factory.open_gate.lock().unwrap().take();

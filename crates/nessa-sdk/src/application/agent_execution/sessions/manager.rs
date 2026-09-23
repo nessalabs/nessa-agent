@@ -12,7 +12,7 @@ use crate::application::agent_execution::{
     permissions::ActionContext,
     providers::{
         AgentProvider, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
-        ProviderSession,
+        ProviderOpenControl, ProviderOpenRequest, ProviderSession,
     },
     tools::ToolReviewInput,
 };
@@ -211,6 +211,7 @@ impl SessionManager {
     pub(crate) async fn attach(
         &self,
         provider: &dyn AgentProvider,
+        control: ProviderOpenControl,
     ) -> Result<AttachedProvider, AgentError> {
         let snapshot = self
             .evidence
@@ -220,7 +221,9 @@ impl SessionManager {
             .clone()
             .expect("prepared session evidence");
         let restore = snapshot.provider_context.recorded().cloned();
-        let opening = catch_unwind(AssertUnwindSafe(|| provider.open(restore.clone())));
+        let opening = catch_unwind(AssertUnwindSafe(|| {
+            provider.open(ProviderOpenRequest::new(restore.clone(), control))
+        }));
         let mut opening = match opening {
             Ok(opening) => opening,
             Err(payload) => {

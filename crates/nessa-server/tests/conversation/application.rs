@@ -26,7 +26,7 @@ use nessa_sdk::{
         permissions::PermissionSelectionState,
         providers::{
             AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
-            ProviderOpenError, ProviderOpenFuture,
+            ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
         },
         sessions::{
             SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
@@ -1118,11 +1118,11 @@ impl AgentProvider for FailOnceProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.delegate.capabilities()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Deadline)) })
         } else {
-            self.delegate.open(restore)
+            self.delegate.open(request)
         }
     }
 }
@@ -1193,7 +1193,7 @@ impl AgentProvider for UncertainOpenProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
             Err(ProviderOpenError::with_cleanup(
@@ -1628,11 +1628,11 @@ impl AgentProvider for StartupDeadlineOnceProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.delegate.capabilities()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             Box::pin(async { Err(ProviderOpenError::no_resources(startup_deadline())) })
         } else {
-            self.delegate.open(restore)
+            self.delegate.open(request)
         }
     }
 }
@@ -1707,7 +1707,7 @@ impl AgentProvider for UncertainStartupDeadlineProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
             Err(ProviderOpenError::with_cleanup(

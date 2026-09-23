@@ -21,7 +21,10 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         .map(move |attribution| (allow, attribution))
     }) {
         let (root, binding) = test_acp_binding("permission", 16);
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested {
@@ -138,7 +141,10 @@ async fn provider_cancellation_retires_only_the_matching_permission() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested { id: remaining, .. } = next(&mut opened).await
@@ -213,7 +219,10 @@ async fn close_cancels_pending_permission_before_cleanup() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -313,7 +322,10 @@ async fn cancellation_audit_failure_is_reported_after_process_cleanup() {
         ..Default::default()
     });
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
@@ -338,7 +350,10 @@ async fn dropping_the_event_reader_retains_cancellation_in_the_audit() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
@@ -385,7 +400,10 @@ async fn pending_reviews_retain_their_execution_end_cause_in_the_audit() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
@@ -447,7 +465,10 @@ async fn provider_error_cannot_hide_a_failed_cancellation_audit() {
     config.kill_timeout = Duration::from_secs(30);
     let binding =
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
@@ -504,7 +525,10 @@ async fn custom_guard_cancellation_preserves_its_reason_actor_and_review() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
@@ -587,7 +611,10 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
         ..Default::default()
     });
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
@@ -666,7 +693,10 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
 
         // The call is observed. Refusing the frame hid the tool as well as
@@ -740,7 +770,10 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
         ..RecordingAudit::default()
     });
     let (root, binding) = test_acp_binding_with_audit("declined-tool", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert_eq!(
@@ -790,7 +823,10 @@ async fn a_refusal_that_cannot_be_written_keeps_its_decision_and_its_delivery_fa
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("declined-write-failure", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert_eq!(
@@ -834,7 +870,10 @@ async fn a_refusal_failing_to_write_and_to_record_preserves_both_causes() {
         ..RecordingAudit::default()
     });
     let (root, binding) = test_acp_binding_with_audit("declined-write-failure", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert_eq!(
@@ -883,7 +922,10 @@ async fn a_declared_name_is_recorded_as_a_claim_and_does_not_decide_the_refusal(
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("declined-divergent-name", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     let (_, notice, delivery) = declined_updates(&mut opened).await;

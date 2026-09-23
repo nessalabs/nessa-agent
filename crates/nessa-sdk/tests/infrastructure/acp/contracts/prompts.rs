@@ -19,7 +19,10 @@ async fn system_instructions_are_configured_once_and_each_execution_sends_only_n
         .unwrap();
     let binding = binding.with_system_prompt(system_prompt.clone());
     assert_eq!(binding.system_prompt(), Some(&system_prompt));
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session_id = opened.session.id().clone();
     for message in ["first user message", "second user message"] {
         assert_eq!(

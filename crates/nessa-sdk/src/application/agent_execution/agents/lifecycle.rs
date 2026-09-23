@@ -13,8 +13,8 @@ use crate::application::agent_execution::{
     },
     permissions::ActionContext,
     providers::{
-        CleanupReport, OperationCapabilities, ProviderOperationFailure, ProviderSessionState,
-        SessionCloseRequest,
+        CleanupReport, OperationCapabilities, ProviderOpenControl, ProviderOperationFailure,
+        ProviderSessionState, SessionCloseRequest,
     },
     sessions::{
         attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
@@ -146,6 +146,7 @@ enum AttachmentState {
         cause: AttachmentCause,
         recorded: bool,
         result: watch::Sender<Option<Result<(), AgentError>>>,
+        open_stop: watch::Sender<Option<SessionCloseRequest>>,
     },
     Attached {
         generation: u64,
@@ -186,6 +187,7 @@ pub(super) struct AttachmentStart {
     pub(super) cause: AttachmentCause,
     pub(super) actor: Option<ActionContext>,
     pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
+    pub(super) open_control: ProviderOpenControl,
 }
 impl WorkPermit {
     fn provider_generation_value(&self) -> ProviderGeneration {
@@ -415,11 +417,13 @@ impl SessionLifecycle {
         }
         authorization.consumed = true;
         let (result, wait) = watch::channel(None);
+        let (open_stop, open_control) = watch::channel(None);
         let start = AttachmentStart {
             generation: state.attachment_generation,
             cause: authorization.cause,
             actor: authorization.actor.clone(),
             result: result.clone(),
+            open_control: ProviderOpenControl::new(open_control),
         };
         // Starting a replacement establishes its resource generation before
         // provider I/O begins, so a delayed control from the retired attachment
@@ -430,6 +434,7 @@ impl SessionLifecycle {
             cause: start.cause,
             recorded: !matches!(start.cause, AttachmentCause::Initial),
             result,
+            open_stop,
         };
         Ok((start, AttachmentWait { result: wait }))
     }
@@ -1165,8 +1170,15 @@ impl SessionLifecycle {
             if let AttachmentState::Authorized(authority) = &state.attachment {
                 authority.cancelled.send_replace(true);
             }
-            if let AttachmentState::Starting { result, .. } = &state.attachment {
-                result.send_replace(Some(Err(AgentError::Closed)));
+            if let AttachmentState::Starting { open_stop, .. } = &state.attachment {
+                open_stop.send_if_modified(|current| {
+                    if current.is_none() {
+                        *current = Some(request.clone());
+                        true
+                    } else {
+                        false
+                    }
+                });
             }
             state.attachment_generation += 1;
             state.attachment = match retained_failure {

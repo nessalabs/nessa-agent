@@ -48,7 +48,10 @@ async fn fixture(
     config.execution_timeout = None;
     let binding =
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -595,7 +598,10 @@ async fn failed_answer_drains_a_distinct_admitted_cancellation_before_bulk_close
             audit.clone(),
         )
         .unwrap();
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let mut ids = Vec::new();
@@ -723,7 +729,10 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
             audit.clone(),
         )
         .unwrap();
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let mut decisions = Vec::new();

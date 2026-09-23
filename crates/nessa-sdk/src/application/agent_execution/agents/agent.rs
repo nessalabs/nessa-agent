@@ -210,7 +210,11 @@ impl Agent {
                 Ok(()) => {
                     lifecycle
                         .run_attachment(start.generation, async {
-                            let attached = agent.inner.manager.attach(provider.as_ref()).await?;
+                            let attached = agent
+                                .inner
+                                .manager
+                                .attach(provider.as_ref(), start.open_control)
+                                .await?;
                             lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AgentError::Closed)?;

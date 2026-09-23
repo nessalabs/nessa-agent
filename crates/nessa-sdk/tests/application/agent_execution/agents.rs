@@ -14,7 +14,7 @@ use nessa_sdk::application::agent_execution::sessions::QueueHistoryRecord;
 use nessa_sdk::application::agent_execution::{
     agents::Agent,
     hooks::{HookError, InvocationContext, InvocationHook},
-    providers::{ProviderIdentity, ProviderOpenFuture},
+    providers::{ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest},
 };
 use nessa_sdk::domain::agent_execution::executions::QueueMutation;
 use std::time::Duration;
@@ -230,7 +230,8 @@ impl AgentProvider for TestProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let (restore, _control) = request.into_parts();
         Box::pin(async move {
             self.calls.opens.lock().unwrap().push(restore.clone());
             let id =

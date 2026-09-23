@@ -1,6 +1,6 @@
 //! Deterministic invocation admission, dispatch, steering, and cleanup interleavings.
 //! Retry tests share these gated providers through the retries module.
-use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
+use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 mod retries;
 use super::{agents::MemoryStorage, support::*};
 use nessa_sdk::application::agent_execution::hooks::{
@@ -42,7 +42,7 @@ impl AgentProvider for GatedFactory {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (sender, receiver) = mpsc::unbounded_channel();
             let (closing, _) = watch::channel(false);

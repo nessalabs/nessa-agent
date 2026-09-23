@@ -110,7 +110,7 @@ struct Backend {
     cleanup_started: StateMutex<Option<oneshot::Sender<()>>>,
     cleanup_finished: StateMutex<Option<oneshot::Sender<()>>>,
 }
-struct IdleEvents;
+struct ExhaustedEvents;
 impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
@@ -118,7 +118,7 @@ impl AgentProvider for Provider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let text = ModalitiesDto {
                 text: true,
@@ -156,7 +156,7 @@ impl AgentProvider for Provider {
                     self.0.clone(),
                     capabilities,
                 ),
-                events: Box::new(IdleEvents),
+                events: Box::new(ExhaustedEvents),
             })
         })
     }
@@ -168,9 +168,9 @@ impl AgentProvider for RecoveryOpenFailureProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.inner.capabilities()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         if self.opens.fetch_add(1, Ordering::SeqCst) == 0 {
-            self.inner.open(restore)
+            self.inner.open(request)
         } else {
             Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
         }
@@ -255,9 +255,9 @@ impl ProviderSessionBackend for Backend {
         })
     }
 }
-impl ExecutionEventStream for IdleEvents {
+impl ExecutionEventStream for ExhaustedEvents {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
-        Box::pin(std::future::pending())
+        Box::pin(async { Ok(None) })
     }
 }
 async fn agent() -> Agent {
@@ -274,6 +274,7 @@ async fn agent_with_backend() -> (Agent, Arc<Backend>) {
     (agent, backend)
 }
 async fn reattach(agent: &Agent) {
+    agent.close(actor()).await.unwrap();
     let authorization = agent
         .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
         .unwrap();

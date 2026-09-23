@@ -197,7 +197,7 @@ impl AgentProvider for PanickingProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         if matches!(self.0, OpenPanic::Construct) {
             panic!("open construction panic");
         }
@@ -211,7 +211,7 @@ impl AgentProvider for NoResourcesProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
     }
 }
@@ -234,7 +234,7 @@ impl AgentProvider for GatedFailedOpenProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             Err(ProviderOpenError::with_cleanup(
                 AgentError::Closed,
@@ -250,14 +250,14 @@ impl AgentProvider for GatedOpenProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.inner.capabilities()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         let release = self.release.lock().unwrap().take();
         Box::pin(async move {
             self.entered.notify_one();
             if let Some(release) = release {
                 let _ = release.await;
             }
-            self.inner.open(restore).await
+            self.inner.open(request).await
         })
     }
 }
@@ -284,7 +284,7 @@ impl AgentProvider for PanickingCleanupProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (_, events) = mpsc::unbounded_channel();
             Ok(OpenedProviderSession {

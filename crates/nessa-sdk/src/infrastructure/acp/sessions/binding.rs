@@ -22,10 +22,11 @@ use crate::application::agent_execution::permissions::{
 use crate::application::agent_execution::providers::{
     CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ImageInputRefusal,
     ObservationFailure, ObservationFailureCause, OpenedProviderSession, ProviderCleanup,
-    ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture, ProviderOpenError,
-    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
-    ResourceCleanup, SessionCloseRequest, SteeringOutcome,
+    ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture,
+    ProviderOpenControl, ProviderOpenError, ProviderOperationCapabilities,
+    ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult, ProviderSession,
+    ProviderSessionBackend, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
+    SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
@@ -44,6 +45,16 @@ use tokio::{
 pub(crate) type ProcessFactory =
     Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
 
+fn combine_failure(first: AgentError, second: Option<AgentError>) -> AgentError {
+    match second {
+        Some(second) if second != first => AgentError::MultipleOperationFailures {
+            first_error: Box::new(first),
+            subsequent_error: Box::new(second),
+        },
+        _ => first,
+    }
+}
+
 pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     process: ProcessFactory,
     config: AcpConfig,
@@ -51,6 +62,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
     restore: Option<ExecutionSessionId>,
+    mut open_control: ProviderOpenControl,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     config.validate().map_err(|cause| {
         // Validation runs before allocation and returns only Configuration/Unsupported.
@@ -68,16 +80,42 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         permission_sequence: Arc::new(AtomicU64::new(0)),
     };
     let (mut generation, initial_events) = factory.start(restore)?;
-    // A cancelled open drops this generation and requests its process cleanup.
-    let session_id = match generation.ready().await {
+    let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
+    let session_id = match ready {
         Ok(id) => id,
         Err(cause) => {
             let completed = completion(generation.completion.clone()).await;
-            return Err(match completed {
-                Ok(completed) if completed.cleanup.is_confirmed() => {
-                    ProviderOpenError::no_resources(cause)
+            let (cause, confirmed) = match completed {
+                Ok(completed) => {
+                    let cleanup = completed.cleanup.clone();
+                    let cleanup_error = cleanup.clone().into_result().err();
+                    let actual = completed
+                        .failure
+                        .or_else(|| cleanup.operation_failure().cloned());
+                    let cause = if stop_selected {
+                        combine_failure(
+                            AgentError::Closed,
+                            cleanup_error
+                                .or(actual)
+                                .or_else(|| (cause != AgentError::Closed).then_some(cause)),
+                        )
+                    } else {
+                        combine_failure(cause, cleanup_error.or(actual))
+                    };
+                    (cause, cleanup.is_confirmed())
                 }
-                _ => ProviderOpenError::with_cleanup(cause, generation.recovery.clone()),
+                Err(error) => (
+                    AgentError::MultipleOperationFailures {
+                        first_error: Box::new(cause),
+                        subsequent_error: Box::new(error),
+                    },
+                    false,
+                ),
+            };
+            return Err(if confirmed {
+                ProviderOpenError::no_resources(cause)
+            } else {
+                ProviderOpenError::with_cleanup(cause, generation.recovery.clone())
             });
         }
     };
@@ -250,6 +288,65 @@ impl Generation {
                 .delivery = FailureDelivery::Reported;
         }
         result
+    }
+    async fn ready_during_open(
+        &mut self,
+        control: &mut ProviderOpenControl,
+    ) -> (Result<ExecutionSessionId, AgentError>, bool) {
+        let close_requested = self.close_requested.clone();
+        let startup = self.startup.as_mut().expect("generation startup pending");
+        let mut control_available = true;
+        let mut stop_selected = false;
+        let result = loop {
+            if let Some(request) = control.requested() {
+                close_requested.send_if_modified(|current| {
+                    if current.is_none() {
+                        *current = Some(request.clone());
+                        true
+                    } else {
+                        false
+                    }
+                });
+                stop_selected = true;
+                break startup.await;
+            }
+            tokio::select! {
+                biased;
+                request = control.wait(), if control_available => {
+                    match request {
+                        Some(request) => {
+                            close_requested.send_if_modified(|current| {
+                                if current.is_none() {
+                                    *current = Some(request.clone());
+                                    true
+                                } else {
+                                    false
+                                }
+                            });
+                            stop_selected = true;
+                            break startup.await;
+                        }
+                        None => control_available = false,
+                    }
+                }
+                result = &mut *startup => break result,
+            }
+        };
+        self.startup = None;
+        let result = result.unwrap_or(Err(AgentError::Closed));
+        let result = if stop_selected && result.is_ok() {
+            Err(AgentError::Closed)
+        } else {
+            result
+        };
+        if result.is_err() {
+            self.pending_events.take();
+            self.observations
+                .lock()
+                .expect("generation observation lock")
+                .delivery = FailureDelivery::Reported;
+        }
+        (result, stop_selected)
     }
     fn publish_events(&mut self) {
         if let Some((permit, events)) = self.pending_events.take() {

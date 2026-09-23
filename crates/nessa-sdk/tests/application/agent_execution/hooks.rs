@@ -4,7 +4,7 @@ use nessa_sdk::application::agent_execution::hooks::{
     AfterInvocation, AfterInvocationEvent, BeforeInvocation, HookError, HookFailure,
     InvocationContext, InvocationHook,
 };
-use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
+use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 use nessa_sdk::application::agent_execution::{agents::Agent, providers::ProviderIdentity};
 use std::{future::poll_fn, task::Poll, time::Duration};
 use tokio::sync::{watch, Notify};
@@ -95,7 +95,8 @@ impl AgentProvider for HookProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let (restore, _control) = request.into_parts();
         Box::pin(async move {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
@@ -547,7 +548,7 @@ impl AgentProvider for ObservationFailureProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let backend = Arc::new(RecordingSession {
                 prompts: AtomicUsize::new(0),

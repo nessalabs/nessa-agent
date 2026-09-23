@@ -3,7 +3,7 @@ use super::*;
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentFuture, AttachmentRequest},
     executions::{ExecutionAudit, ExecutionAuditRecord},
-    providers::{AgentProvider, ProviderOpenError, ProviderOpenFuture},
+    providers::{AgentProvider, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest},
 };
 use nessa_sdk::application::dto::{ModalitiesDto, ModelMetadataDto};
 use nessa_sdk::domain::{
@@ -58,7 +58,7 @@ impl AgentProvider for OpeningProbe {
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         self.opens.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
             Err(ProviderOpenError::no_resources(AgentError::Unsupported(

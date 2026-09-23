@@ -10,7 +10,10 @@ async fn runtime_failure_close_uses_the_authoritative_execution_correlation() {
             16,
             audit.clone(),
         );
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = if state == "active" {
             let active = start(&opened, "execution").await;
             assert!(matches!(
@@ -90,8 +93,14 @@ async fn isolated_bindings_and_close_during_streaming() {
     let _process_slot = process_test_slot().await;
     let (root_a, a) = test_acp_binding("stall", 16);
     let (root_b, b) = test_acp_binding("echo", 16);
-    let mut a = a.open(None).await.unwrap();
-    let mut b = b.open(None).await.unwrap();
+    let mut a = a
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let mut b = b
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&a, "long").await;
     next(&mut a).await;
     assert_eq!(
@@ -123,7 +132,10 @@ async fn isolated_bindings_and_close_during_streaming() {
 async fn prompt_deadline_and_dropped_handles_cleanup() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("stall", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened.session.execute(prompt("test")).await.into_result(),
         Err(AgentError::Deadline)
@@ -136,7 +148,10 @@ async fn prompt_deadline_and_dropped_handles_cleanup() {
         .unwrap();
     assert_gone(&root, "pid");
     let (root, binding) = test_acp_binding("echo", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     drop(opened);
     wait_until_gone(&root, "pid").await;
 }
@@ -145,7 +160,10 @@ async fn prompt_deadline_and_dropped_handles_cleanup() {
 async fn force_closes_a_term_resistant_parent_and_reaps_its_child() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("ignore-stop", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "long").await;
     assert_eq!(
         next(&mut opened).await,
@@ -171,7 +189,10 @@ async fn force_closes_a_term_resistant_parent_and_reaps_its_child() {
 async fn known_completion_wins_a_later_close_without_rewriting_the_result() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("echo", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "done").await;
     assert_eq!(
         next(&mut opened).await,
@@ -191,7 +212,11 @@ async fn known_completion_wins_a_later_close_without_rewriting_the_result() {
 async fn cancelling_open_cleans_up_a_process_that_never_initializes() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("startup-stall", 16);
-    let opening = tokio::spawn(async move { binding.open(None).await });
+    let opening = tokio::spawn(async move {
+        binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+    });
     wait_for_file(&root, "pid").await;
     opening.abort();
     let _ = opening.await;
@@ -202,7 +227,10 @@ async fn cancelling_open_cleans_up_a_process_that_never_initializes() {
 async fn dropping_only_the_event_reader_closes_unobservable_execution() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("stall", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "long").await;
     next(&mut opened).await;
     drop(opened.events);
@@ -228,7 +256,10 @@ async fn unlimited_prompt_survives_a_day_and_still_accepts_close() {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "long-running").await;
     assert_eq!(
         next(&mut opened).await,
@@ -258,7 +289,10 @@ async fn dropping_session_handles_records_the_cause_without_a_client_actor() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -298,7 +332,10 @@ async fn late_session_updates_during_close_do_not_change_output_or_cancelled_set
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("late-tool-close", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "closing-with-inflight-tool").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert_eq!(
@@ -374,7 +411,10 @@ async fn requested_failure_shutdown_preserves_typed_error_and_exact_finish_cause
                 ..Default::default()
             });
             let (root, binding) = test_acp_binding_with_audit("stall", 16, audit.clone());
-            let mut opened = binding.open(None).await.unwrap();
+            let mut opened = binding
+                .open(ProviderOpenRequest::without_startup_control(None))
+                .await
+                .unwrap();
             let active = start(&opened, "execution").await;
             next(&mut opened).await;
             let close = opened.session.shutdown(request.clone()).await.into_result();
@@ -455,7 +495,10 @@ async fn consumer_loss_after_explicit_close_retains_both_causes_and_finishes_onc
             audit.clone(),
         )
         .unwrap();
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let context = opened.session.id().clone();
         let active = start(&opened, "independent-reader-loss").await;
         assert!(matches!(
@@ -549,7 +592,10 @@ async fn execution_failure_close_then_provider_completion_preserves_original_clo
     let _slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("complete-on-stop", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "execution").await;
     assert!(matches!(
         next(&mut opened).await,

@@ -286,7 +286,10 @@ fn pause_cancelled_provider() -> (
 async fn cancelled_generation_is_sealed_while_terminal_audit_is_pending() {
     let _slot = process_test_slot().await;
     let (root, provider, waiting, release) = pause_cancelled_provider();
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let first = start(&opened, "cancelled-first").await;
     waiting.await.unwrap();
     let mut second = opened.session.execute(prompt("next-after-cancellation"));
@@ -751,7 +754,7 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
         ));
         assert_eq!(
             &invocation.acknowledgement,
-            &SubmissionAcknowledgement::Acknowledged
+            &SubmissionAcknowledgement::Pending
         );
     }
     assert_eq!(

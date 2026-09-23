@@ -40,7 +40,10 @@ mod steering;
 pub use close::SessionCloseRequest;
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
-pub use open::{ProviderCleanup, ProviderOpenError, ProviderOpenFuture};
+pub use open::{
+    ProviderCleanup, ProviderOpenControl, ProviderOpenError, ProviderOpenFuture,
+    ProviderOpenRequest,
+};
 pub use operations::{
     CompactionReportingCapability, ElicitationForwardingCapability, IncomingElicitationCapability,
     ModelSwitchReportingCapability, NativeHookSuppressionCapability, OperationCapabilities,

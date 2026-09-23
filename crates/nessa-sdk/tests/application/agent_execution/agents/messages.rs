@@ -213,7 +213,8 @@ impl AgentProvider for ImageProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let (restore, _control) = request.into_parts();
         Box::pin(async move {
             let id =
                 restore.unwrap_or_else(|| ExecutionSessionId::new("provider-context").unwrap());

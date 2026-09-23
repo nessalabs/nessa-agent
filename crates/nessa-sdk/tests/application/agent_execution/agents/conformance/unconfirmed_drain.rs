@@ -20,9 +20,9 @@ impl AgentProvider for ReadyOutputProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
-            let mut opened = WorkflowProvider(self.backend.clone()).open(restore).await?;
+            let mut opened = WorkflowProvider(self.backend.clone()).open(request).await?;
             opened.events = Box::new(ReadyOutput {
                 backend: self.backend.clone(),
                 _original: opened.events,

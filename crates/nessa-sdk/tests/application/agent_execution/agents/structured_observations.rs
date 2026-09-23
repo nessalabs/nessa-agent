@@ -28,7 +28,7 @@ impl AgentProvider for PayloadProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         capabilities_ref()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let started = Arc::new(AtomicUsize::new(0));
             Ok(OpenedProviderSession {

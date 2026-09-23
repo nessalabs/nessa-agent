@@ -7,7 +7,10 @@ use crate::domain::agent_execution::tools::ToolContent;
 async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("echo", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened.session.capabilities().model().model_id(),
         "exact-fixture-model"
@@ -65,7 +68,10 @@ async fn instructions_reach_codex_through_its_own_configuration() {
     assert_eq!(binding.system_prompt(), Some(&prompt_text));
     // The launch configuration is asserted inside the handler; reaching a
     // completed prompt is how this side learns it was accepted.
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -88,7 +94,10 @@ async fn instructions_reach_codex_through_its_own_configuration() {
 async fn a_shell_command_arrives_with_its_output_and_without_its_terminal_pointer() {
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_codex_binding("terminal-command", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "run the tests").await;
     let ExecutionUpdate::Tool(started) = next(&mut opened).await else {
         panic!("expected the command");
@@ -123,7 +132,10 @@ async fn a_shell_command_arrives_with_its_output_and_without_its_terminal_pointe
 async fn an_approval_with_no_arguments_still_reaches_the_host_with_what_codex_said() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("file-change-permission", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "edit the config").await;
     let ExecutionUpdate::PermissionRequested {
         id, input, options, ..
@@ -189,7 +201,7 @@ async fn a_session_is_refused_rather_than_run_half_configured() {
         let (root, binding) = test_codex_binding(mode, 16);
         assert_eq!(
             binding
-                .open(None)
+                .open(ProviderOpenRequest::without_startup_control(None))
                 .await
                 .err()
                 .map(|failure| failure.cause().clone()),
@@ -208,7 +220,7 @@ async fn a_refused_model_stops_before_the_approval_mode_is_touched() {
     let (root, binding) = test_codex_binding("model-refused", 16);
     assert_eq!(
         binding
-            .open(None)
+            .open(ProviderOpenRequest::without_startup_control(None))
             .await
             .err()
             .map(|failure| failure.cause().clone())
@@ -237,7 +249,7 @@ async fn a_codex_nothing_has_signed_in_refuses_its_session_and_is_reported_as_co
     let (root, binding) = test_codex_binding("not-signed-in", 16);
     assert_eq!(
         binding
-            .open(None)
+            .open(ProviderOpenRequest::without_startup_control(None))
             .await
             .err()
             .map(|failure| failure.cause().clone())
@@ -306,7 +318,10 @@ async fn codex_reporting_its_configuration_while_it_is_being_configured_is_not_a
     // the session dies during startup over a provider telling the truth.
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("startup-update-configuring", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -329,7 +344,10 @@ async fn codex_reporting_its_configuration_while_it_is_being_configured_is_not_a
 async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("echo", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     // The fixture advertises `_meta.steering.supported` because the pinned
     // adapter does. What it does not implement is the contract that goes with
     // it: a steer arriving with no live turn is answered by starting a turn of
@@ -357,7 +375,10 @@ async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
 async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("echo", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -378,7 +399,10 @@ async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
     // The path every Codex conversation takes on every gateway restart, and the
     // one place the two-step configuration is applied over a provider state
     // this runtime did not just create.
-    let restored = binding.open(Some(id)).await.unwrap();
+    let restored = binding
+        .open(ProviderOpenRequest::without_startup_control(Some(id)))
+        .await
+        .unwrap();
     assert_eq!(
         restored
             .session
@@ -413,7 +437,10 @@ async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
 async fn a_refused_codex_approval_is_the_answer_codex_is_given() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_codex_binding("file-change-permission", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "edit the config").await;
     let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
         panic!("expected permission");
@@ -465,7 +492,10 @@ async fn a_codex_approval_the_audit_cannot_record_is_never_given_to_codex() {
     });
     let binding =
         CodexAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "edit the config").await;
     let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
         panic!("expected permission");

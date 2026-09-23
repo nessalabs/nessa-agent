@@ -12,7 +12,7 @@ use nessa_sdk::application::agent_execution::executions::{
 };
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ProviderCleanup, ProviderIdentity,
-    ProviderOpenError, ProviderOpenFuture, SessionCloseRequest,
+    ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, SessionCloseRequest,
 };
 use nessa_sdk::application::agent_execution::sessions::{
     ProviderContext, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
@@ -159,10 +159,7 @@ impl AgentProvider for OpenFailureProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.inner.capabilities()
     }
-    fn open(
-        &self,
-        _restore: Option<nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId>,
-    ) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             Err(ProviderOpenError::with_cleanup(
                 AgentError::Protocol("provider open failed".into()),
@@ -178,10 +175,7 @@ impl AgentProvider for OpenNoResourcesProvider {
     fn capabilities(&self) -> &EffectiveCapabilities {
         self.0.capabilities()
     }
-    fn open(
-        &self,
-        _restore: Option<nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId>,
-    ) -> ProviderOpenFuture<'_> {
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Err(ProviderOpenError::no_resources(AgentError::Protocol(
                 "provider open failed".into(),
