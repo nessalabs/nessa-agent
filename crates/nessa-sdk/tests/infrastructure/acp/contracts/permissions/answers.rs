@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 struct AnswerAudit {
     records: Mutex<Vec<ExecutionAuditRecord>>,
     reject_call: Option<usize>,
+    reject_calls: Vec<usize>,
     stall_call: Option<usize>,
     pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
 }
@@ -27,7 +28,7 @@ impl ExecutionAudit for AnswerAudit {
             if self.stall_call == Some(call) {
                 return std::future::pending().await;
             }
-            if self.reject_call == Some(call) {
+            if self.reject_call == Some(call) || self.reject_calls.contains(&call) {
                 return Err(AgentError::AuditFailure);
             }
             Ok(())
@@ -89,6 +90,21 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             }
         })
         .collect()
+}
+
+fn count_error(error: &AgentError, expected: &AgentError) -> usize {
+    match error {
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        }
+        | AgentError::OperationAndCleanupFailure {
+            operation_error: first_error,
+            cleanup_error: subsequent_error,
+        } => count_error(first_error, expected) + count_error(subsequent_error, expected),
+        error if error == expected => 1,
+        _ => 0,
+    }
 }
 
 #[tokio::test]
@@ -276,10 +292,49 @@ async fn failed_answer_write_and_failed_delivery_audit_preserve_both_errors() {
         .await;
     assert!(report.is_confirmed());
     assert_eq!(report.audit(), &Err(AgentError::AuditFailure));
-    assert_eq!(report.operation_failure(), Some(&failure));
+    assert_eq!(report.operation_failure(), Some(delivery_error.as_ref()));
     let expected = report.into_result().unwrap_err();
     assert_eq!(active.await.unwrap(), Err(expected));
     assert_eq!(answers(&audit).len(), 2);
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn mixed_permission_delivery_and_late_closure_audits_remain_distinct() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(AnswerAudit {
+        reject_calls: vec![2, 3],
+        ..Default::default()
+    });
+    let (root, opened, active, answer) = fixture("permission-write-failure", audit.clone()).await;
+    let answer_error = opened
+        .session
+        .answer_permission(answer)
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap_err();
+    assert!(matches!(
+        answer_error,
+        AgentError::PermissionAnswerDeliveryAndAuditFailure { .. }
+    ));
+    let report = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert!(report.is_confirmed());
+    assert_eq!(
+        count_error(
+            report.audit().as_ref().unwrap_err(),
+            &AgentError::AuditFailure
+        ),
+        2
+    );
+    assert!(matches!(
+        report.operation_failure(),
+        Some(AgentError::Transport(_))
+    ));
+    let final_error = active.await.unwrap().unwrap_err();
+    assert_eq!(count_error(&final_error, &AgentError::AuditFailure), 1);
     assert_gone(&root, "pid");
 }
 

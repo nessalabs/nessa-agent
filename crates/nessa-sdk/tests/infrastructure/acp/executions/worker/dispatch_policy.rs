@@ -258,7 +258,10 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                         .await
                         .unwrap();
                 }
-                let failure = worker.drive(&mut execution).await;
+                let failure = worker
+                    .drive(&mut execution)
+                    .await
+                    .map_err(WorkerFailure::into_error);
                 worker
                     .scope
                     .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -311,7 +314,10 @@ async fn valid_ready_burst_larger_than_batch_preserves_prompt_dispatch() {
         ))
         .await
         .unwrap();
-    let failure = worker.drive(&mut execution).await;
+    let failure = worker
+        .drive(&mut execution)
+        .await
+        .map_err(WorkerFailure::into_error);
     worker
         .scope
         .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -376,7 +382,10 @@ async fn close_interrupts_ready_policy_backlog_without_dispatching_pending_promp
             ))
             .await
             .unwrap();
-        let failure = worker.drive(&mut execution).await;
+        let failure = worker
+            .drive(&mut execution)
+            .await
+            .map_err(WorkerFailure::into_error);
         worker
             .scope
             .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -499,7 +508,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
             })
             .await;
             tokio::time::advance(limit).await;
-            drive.await
+            drive.await.map_err(WorkerFailure::into_error)
         };
         tokio::time::resume();
         worker
@@ -642,7 +651,10 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
         );
         assert_eq!(worker.sequence, 0);
         assert_eq!(
-            worker.drive(&mut execution).await,
+            worker
+                .drive(&mut execution)
+                .await
+                .map_err(WorkerFailure::into_error),
             Err(if deadline {
                 AgentError::Deadline
             } else {

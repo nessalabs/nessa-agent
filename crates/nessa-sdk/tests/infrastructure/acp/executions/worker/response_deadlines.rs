@@ -201,7 +201,11 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
         tokio::time::resume();
         audit.reject.store(reject_audit, Ordering::SeqCst);
         let completed = worker
-            .finish(&mut Some(execution), Err(AgentError::Deadline), &mut None)
+            .finish(
+                &mut Some(execution),
+                Err(AgentError::Deadline.into()),
+                &mut None,
+            )
             .await;
         assert!(completed.cleanup.is_confirmed());
         assert_eq!(
@@ -342,7 +346,7 @@ async fn shutdown_grace_preserves_explicit_cause_past_old_steering_deadline() {
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
-    assert_eq!(result, Ok(()));
+    assert!(result.is_ok());
     assert_eq!(worker.cancellation_cause, Some(cause));
     assert!(elapsed >= Duration::from_millis(20) && elapsed <= Duration::from_millis(21));
 }

@@ -1,7 +1,7 @@
 //! Explicit provider facts survive storage without decoding diagnostic error shapes.
 use super::{
-    corrupt,
     errors::{Outcome, SavedError},
+    tools::corrupt,
 };
 use crate::application::agent_execution::{
     providers::{

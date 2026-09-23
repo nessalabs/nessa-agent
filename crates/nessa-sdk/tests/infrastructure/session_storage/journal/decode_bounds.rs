@@ -73,6 +73,39 @@ fn encoded(value: &Value) -> Vec<u8> {
     bytes
 }
 
+fn finalized_provider_report(projection: Value) -> Value {
+    json!({"ProviderFinalized":{
+        "result":null,
+        "resources":{"Ok":false},
+        "completion_failure":null,
+        "projection":projection
+    }})
+}
+
+#[test]
+fn finalized_recipe_shape_and_aggregate_are_rejected_before_owned_restoration() {
+    let mut malformed = record();
+    malformed["invocations"][0]["metadata"]["provider_report"] =
+        finalized_provider_report(json!(["OperationOverflow", {"Operation":"Deadline"}]));
+    assert!(matches!(
+        load(encoded(&malformed)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+
+    let mut oversized = record();
+    oversized["invocations"][0]["metadata"]["provider_report"] =
+        finalized_provider_report(Value::Array(vec![json!("Audit"); 259]));
+    oversized["invocations"][0]["metadata"]["user_message"] = json!("tail".repeat(1024 * 1024));
+    let bytes = encoded(&oversized);
+    let length = bytes.len();
+    let (result, decoded) = load(bytes);
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded < length,
+        "finalized recipe aggregate was fully owned before rejection: {decoded}/{length}"
+    );
+}
+
 #[test]
 fn oversized_provider_field_is_rejected_before_reading_its_owned_payload() {
     // Put the attack field first and a valid, huge remainder after it. The initial

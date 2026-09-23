@@ -2,12 +2,22 @@
 use super::*;
 use crate::application::agent_execution::providers::{
     CleanupReport, CloseOutcome, ExecutionReport, FinalizedExecutionProjection,
-    FinalizedFailureComponent, ProviderSessionState, ResourceCleanup,
+    FinalizedFailureComponent, ProviderIdentity, ProviderSessionState, ResourceCleanup,
+};
+use crate::application::agent_execution::{
+    executions::{ExecutionRequest, SubmissionMode},
+    permissions::ActionContext,
+    sessions::storage::{
+        InvocationCancellationEvent, InvocationRecord, ProviderContext, SessionSnapshot,
+        SessionStorage, SubmissionAcknowledgement,
+    },
 };
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome},
-    sessions::ExecutionSessionId,
+    executions::{ExecutionId, ExecutionOutcome, SchedulingCause},
+    prompts::{PromptText, UserMessage},
+    sessions::{ExecutionSessionId, SessionId},
 };
+use crate::infrastructure::session_storage::InMemoryStorage;
 
 #[test]
 fn cleanup_confirmation_is_independent_of_every_primary_and_audit_error() {
@@ -252,6 +262,94 @@ fn provider_result_coverage_does_not_remint_the_same_failure_as_an_operation() {
     assert_eq!(coverage, vec![provider_fact]);
     assert!(!facts.coverage_has_operation(&coverage));
     assert!(facts.finalize().components().is_empty());
+}
+
+#[test]
+fn finalized_recipe_normalization_is_idempotent_and_rejects_malformed_overflow_order() {
+    let oversized = AgentError::Transport("x".repeat(2 * 1024 * 1024));
+    let once =
+        FinalizedExecutionProjection::new(vec![FinalizedFailureComponent::Operation(oversized)])
+            .unwrap();
+    let twice = FinalizedExecutionProjection::new(once.components().to_vec()).unwrap();
+    assert_eq!(once, twice);
+    assert!(FinalizedExecutionProjection::new(vec![
+        FinalizedFailureComponent::OperationOverflow,
+        FinalizedFailureComponent::Operation(AgentError::Deadline),
+    ])
+    .is_err());
+    assert!(FinalizedExecutionProjection::new(vec![
+        FinalizedFailureComponent::AuditOverflow,
+        FinalizedFailureComponent::AuditOverflow,
+    ])
+    .is_err());
+}
+
+#[tokio::test]
+async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
+    for local in [false, true] {
+        let projection = FinalizedExecutionProjection::new(vec![
+            FinalizedFailureComponent::Operation(AgentError::Deadline),
+            FinalizedFailureComponent::Audit,
+        ])
+        .unwrap();
+        let report = if local {
+            ExecutionReport::finalized_local_cancellation(
+                ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+                None,
+                projection,
+            )
+        } else {
+            ExecutionReport::finalized_provider(
+                Some(Ok(ExecutionOutcome::Completed)),
+                ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+                None,
+                projection,
+            )
+        };
+        let session_id = SessionId::new(if local {
+            "finalized-local"
+        } else {
+            "finalized-provider"
+        })
+        .unwrap();
+        let execution_id = ExecutionId::new("execution").unwrap();
+        let actor = ActionContext::new("user", "test", "invoke").unwrap();
+        let snapshot = SessionSnapshot {
+            queue_history: Vec::new(),
+            id: session_id.clone(),
+            provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("provider-context").unwrap(),
+            ),
+            invocations: vec![InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id,
+                    user_message: UserMessage::text_only(PromptText::new("input").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: actor.clone(),
+                acknowledgement: SubmissionAcknowledgement::Acknowledged,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: Some(report.clone()),
+                local_cancellation: local.then_some(InvocationCancellationEvent {
+                    cause: SchedulingCause::SessionClosed,
+                    actor: Some(actor),
+                }),
+                local_outcome: None,
+                result: Some(report.clone().into_result()),
+            }],
+        };
+        let storage = InMemoryStorage::new();
+        let lease = storage.open(session_id).await.unwrap();
+        lease.save(snapshot).await.unwrap();
+        let restored = lease.load().await.unwrap().unwrap();
+        assert_eq!(restored.invocations[0].provider_report, Some(report));
+    }
 }
 
 #[test]
