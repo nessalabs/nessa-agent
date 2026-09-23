@@ -2026,3 +2026,7 @@ impl Agent {
         .map_err(|_| AgentError::Closed)?
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/agents/scheduling.rs"]
+mod tests;
