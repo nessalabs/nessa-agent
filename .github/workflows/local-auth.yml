@@ -139,6 +139,10 @@ jobs:
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       - run: cargo fmt --all -- --check
+      # This pure shared domain is small enough to report denied warnings
+      # before its tests without paying a second workspace compile.
+      - run: cargo clippy -p nessa-agent-credentials --all-targets -- -D warnings
+      - run: cargo test -p nessa-agent-credentials
       # Test before lint, here and in the matrix below, and it is worth saying
       # why because the intuitive order is the other one. Reporting a
       # `-D warnings` failure first would be better if it were free, and it is
