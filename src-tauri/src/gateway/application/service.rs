@@ -101,9 +101,25 @@ impl AttemptReceipt {
 }
 
 struct StartupProgress {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     lifecycle: Arc<Mutex<Lifecycle>>,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     attempt: Arc<AttemptReceipt>,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     events: Arc<dyn GatewayStartupEvents>,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     audit: Arc<dyn GatewayReconciliationAudit>,
     intent: Arc<Mutex<Option<GatewayReconciliationIntent>>>,
     history: Arc<Mutex<Vec<ReconciliationHistoryFact>>>,
@@ -269,6 +285,7 @@ impl Gateway {
         .await
     }
 
+    #[cfg(test)]
     pub async fn configuration_changed(&self, surface: BundledSurface) -> Result<(), GatewayError> {
         self.reconcile(evidence(
             ReconciliationCause::ClaudeConfigurationChanged,

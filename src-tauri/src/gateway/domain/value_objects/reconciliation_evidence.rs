@@ -73,6 +73,13 @@ impl ReconciliationEvidence {
         self.cause
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn initiator(&self) -> ReconciliationInitiator {
         self.initiator
     }
@@ -103,6 +110,13 @@ impl ReconciliationCorrelation {
         }
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -170,14 +184,35 @@ impl ReconciliationTarget {
         })
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn service(&self) -> &str {
         &self.service
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn runtime_fingerprint(&self) -> &str {
         &self.runtime_fingerprint
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn service_generation(&self) -> &str {
         &self.service_generation
     }
@@ -218,10 +253,24 @@ impl ReconciliationIncarnation {
         &self.runtime_instance
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn process_id(&self) -> u32 {
         self.process_id
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn port(&self) -> u16 {
         self.port
     }
@@ -281,9 +330,20 @@ impl ReconciliationAttemptRecord {
             origin,
         })
     }
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(
+            dead_code,
+            reason = "the native audit adapter is supported only on macOS"
+        )
+    )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         &self.correlation
     }
+    #[expect(
+        dead_code,
+        reason = "origin evidence is retained for equality and audit review"
+    )]
     pub fn origin(&self) -> &ReconciliationRequestRecord {
         &self.origin
     }
@@ -298,6 +358,10 @@ pub struct ReconciliationIntentRecord {
 }
 
 impl ReconciliationIntentRecord {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn new(
         attempt: ReconciliationAttemptRecord,
         target: ReconciliationTarget,
@@ -315,6 +379,10 @@ impl ReconciliationIntentRecord {
             before,
         })
     }
+    #[expect(
+        dead_code,
+        reason = "attempt evidence is retained for equality and audit review"
+    )]
     pub fn attempt(&self) -> &ReconciliationAttemptRecord {
         &self.attempt
     }
@@ -324,26 +392,36 @@ impl ReconciliationIntentRecord {
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.before.as_ref()
     }
-    pub fn validate_confirmed(
-        &self,
-        after: &ReconciliationIncarnation,
-    ) -> Result<(), ReconciliationConsistencyError> {
-        if after.target() == &self.target {
-            Ok(())
-        } else {
-            Err(ReconciliationConsistencyError::ConfirmedTargetMismatch)
-        }
-    }
 }
 
 /// One ordered native decision or confirmed external fact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconciliationHistoryFact {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     RetirementAcknowledged,
     OldServiceUnloaded,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     ServiceDefinitionPublished,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     ServiceDefinitionDurable,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     BootstrapCommandRequested,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     BootstrapCommandCompleted,
     BootstrapCommandSucceeded,
 }
@@ -490,6 +568,10 @@ impl ReconciliationOutcomeRecord {
             disposition,
         }
     }
+    #[expect(
+        dead_code,
+        reason = "intent evidence is retained for equality and audit review"
+    )]
     pub fn intent(&self) -> &ReconciliationIntentRecord {
         &self.intent
     }
@@ -511,6 +593,10 @@ impl PendingReconciliation {
     pub fn new(attempt: ReconciliationAttemptRecord) -> Self {
         Self { attempt }
     }
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "pending attempt inspection is test-only")
+    )]
     pub fn attempt(&self) -> &ReconciliationAttemptRecord {
         &self.attempt
     }
@@ -523,8 +609,11 @@ impl PendingReconciliation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconciliationConsistencyError {
     EqualRequestAndAttempt,
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     PriorServiceMismatch,
-    ConfirmedTargetMismatch,
 }
 
 impl Display for ReconciliationConsistencyError {
@@ -535,9 +624,6 @@ impl Display for ReconciliationConsistencyError {
             }
             Self::PriorServiceMismatch => {
                 "gateway reconciliation intent disagrees with its prior service"
-            }
-            Self::ConfirmedTargetMismatch => {
-                "gateway reconciliation outcome disagrees with admitted target"
             }
         })
     }
@@ -733,10 +819,6 @@ mod tests {
             7420,
         )
         .unwrap();
-        assert_eq!(
-            intent.validate_confirmed(&after),
-            Err(ReconciliationConsistencyError::ConfirmedTargetMismatch)
-        );
         let rejected = ReconciliationOutcomeRecord::assess(
             intent.clone(),
             vec![

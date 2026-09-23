@@ -164,8 +164,20 @@ pub trait GatewayStartupEvents: Send + Sync {
 /// Healthy verification never calls this port. A native adapter calls it before
 /// it fences, retires, unloads, or replaces the ready process.
 pub trait GatewayReconciliationProgress: Send + Sync {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     fn readiness_invalidated(&self);
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError>;
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     fn history_observed(&self, fact: ReconciliationHistoryFact);
 }
 
@@ -182,6 +194,10 @@ impl GatewayReconciliationRequest {
         }
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
     }
@@ -212,6 +228,10 @@ impl GatewayReconciliationAttempt {
         Ok(Self { record, origin })
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
     }
@@ -238,6 +258,10 @@ pub struct GatewayReconciliationIntent {
 }
 
 impl GatewayReconciliationIntent {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn new(
         attempt: GatewayReconciliationAttempt,
         target: ReconciliationTarget,
@@ -252,14 +276,26 @@ impl GatewayReconciliationIntent {
         Ok(Self { record, attempt })
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
         &self.attempt
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn target(&self) -> &ReconciliationTarget {
         self.record.target()
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.record.before()
     }
@@ -350,10 +386,18 @@ impl GatewayReconciliationOutcome {
         }
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
         self.intent.attempt()
     }
 
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn intent(&self) -> &GatewayReconciliationIntent {
         &self.intent
     }
@@ -362,6 +406,10 @@ impl GatewayReconciliationOutcome {
         &self.effect
     }
 
+    #[expect(
+        dead_code,
+        reason = "the validated record stays attached to the application outcome for audit review"
+    )]
     pub fn record(&self) -> &ReconciliationOutcomeRecord {
         &self.record
     }
@@ -369,6 +417,10 @@ impl GatewayReconciliationOutcome {
 
 /// Durable audit boundary for caller coalescing and native reconciliation.
 pub trait GatewayReconciliationAudit: Send + Sync {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
 
     fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
