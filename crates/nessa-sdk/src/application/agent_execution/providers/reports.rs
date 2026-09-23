@@ -23,7 +23,7 @@ pub struct CleanupReport {
     resources: ResourceCleanup,
     audit: Result<(), AgentError>,
     operation_failure: Option<AgentError>,
-    completion_failure: Option<AgentError>,
+    completion_failure: Option<Box<AgentError>>,
 }
 impl CleanupReport {
     /// Record actual `resources` and independent `audit` acknowledgement.
@@ -64,14 +64,14 @@ impl CleanupReport {
     pub fn with_resources(self, resources: ResourceCleanup) -> Self {
         Self::new(resources, self.audit)
             .with_operation_failure(self.operation_failure)
-            .with_completion_failure(self.completion_failure)
+            .with_completion_failure(self.completion_failure.map(|error| *error))
     }
     /// Replace audit acknowledgement while preserving physical cleanup and the
     /// initiating operation diagnostic.
     pub fn with_audit(self, audit: Result<(), AgentError>) -> Self {
         Self::new(self.resources, audit)
             .with_operation_failure(self.operation_failure)
-            .with_completion_failure(self.completion_failure)
+            .with_completion_failure(self.completion_failure.map(|error| *error))
     }
     /// Preserve the initiating operation diagnostic alongside cleanup and audit.
     pub fn with_operation_failure(mut self, failure: Option<AgentError>) -> Self {
@@ -89,11 +89,11 @@ impl CleanupReport {
     /// cleanup future panics. The confirmed physical fact remains authoritative,
     /// while callers still observe the supervision failure.
     pub fn completion_failure(&self) -> Option<&AgentError> {
-        self.completion_failure.as_ref()
+        self.completion_failure.as_deref()
     }
     /// Preserve a failure from supervising this cleanup attempt.
     pub fn with_completion_failure(mut self, failure: Option<AgentError>) -> Self {
-        self.completion_failure = failure.map(AgentError::bounded);
+        self.completion_failure = failure.map(|error| Box::new(error.bounded()));
         self
     }
     /// Return the result of this cleanup attempt.
@@ -115,7 +115,7 @@ impl CleanupReport {
         } = self;
         let cleanup = match (resources, audit) {
             (ResourceCleanup::Confirmed(outcome), Ok(())) => match completion_failure {
-                Some(error) => return Err(error),
+                Some(error) => return Err(*error),
                 None => return Ok(outcome),
             },
             (ResourceCleanup::Confirmed(_), Err(error))
@@ -130,7 +130,7 @@ impl CleanupReport {
         let cleanup = match completion_failure {
             Some(completion_error) => AgentError::OperationAndCleanupFailure {
                 operation_error: Box::new(cleanup),
-                cleanup_error: Box::new(completion_error),
+                cleanup_error: completion_error,
             },
             None => cleanup,
         };
