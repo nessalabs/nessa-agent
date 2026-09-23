@@ -1,11 +1,12 @@
 use super::*;
 use crate::agent_install::application::{
-    AuditAcknowledgement, AuditFailureStage, PublicationCleanupFailure, RollbackChange,
+    AuditAcknowledgement, AuditFailureStage, Publication, PublicationCleanupFailure,
+    PublishFailure, RollbackChange,
 };
 use crate::agent_install::domain::{
-    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallTransitionError,
-    InstallTransitionKind, Libc, RecoveryState, ReleasePlatform, ReleaseRequirements,
-    RollbackState, RuntimeArtifact,
+    ArchiveDigest, InstallFailureEvidence, InstallFailureKind, InstallRequest,
+    InstallTransitionError, InstallTransitionKind, Libc, RecoveryState, ReleasePlatform,
+    ReleaseRequirements, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install::infrastructure::DurableInstallAudit;
 use crate::agent_install_test_support::{
