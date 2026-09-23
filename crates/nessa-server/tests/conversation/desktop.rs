@@ -42,7 +42,7 @@ fn runtime_archive(release: &PinnedRelease) -> Vec<u8> {
     header.set_entry_type(tar::EntryType::Regular);
     header.set_cksum();
     builder
-        .append_data(&mut header, release.executable().as_str(), body.as_slice())
+        .append_data(&mut header, release.launch().as_str(), body.as_slice())
         .expect("append runtime to archive");
     builder
         .into_inner()
@@ -365,7 +365,7 @@ fn a_verified_current_install_becomes_the_exact_desktop_launch() {
         .find(|candidate| {
             candidate.version() != release.version()
                 || candidate.archive_digest() != release.archive_digest()
-                || candidate.executable() != release.executable()
+                || candidate.launch() != release.launch()
         })
         .expect("OpenCode pins more than one artifact");
     let other_path = publish_runtime(&data, &other);
@@ -435,7 +435,7 @@ fn an_install_record_for_another_pin_is_not_injected() {
         .find(|candidate| {
             candidate.version() != preferred.version()
                 || candidate.archive_digest() != preferred.archive_digest()
-                || candidate.executable() != preferred.executable()
+                || candidate.launch() != preferred.launch()
         })
         .expect("OpenCode pins more than one artifact");
     let mismatched_path = publish_runtime(&data, &mismatch);

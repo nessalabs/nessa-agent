@@ -832,9 +832,19 @@ context and the published protocol schema must agree on (`agreement.rs`).
 ## Installing an agent runtime
 
 `crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
-machine at the version Nessa has tested. Claude and Codex are expected to be
-installed already; Opencode is the one Nessa fetches, because it is the agent a
-first-time user can reach with nothing signed in.
+machine at the version Nessa has tested. All three agents are pinned, and
+`install-agent` fetches and verifies any of them; Opencode is the only one that
+is also *launched* from what was fetched, because the desktop still resolves
+Claude and Codex inside the bundle. Their pins cover macOS on Apple silicon and
+no other platform, which is where the 467 MB was measured and the only archives
+anybody has listed. That split was once
+explained by Opencode being the agent a first-time user could reach with nothing
+signed in, and that turned out to be false — its free models are refused outside
+OpenCode's own application, so all three want the person's own account. What is
+left of the reason applies to every agent equally: telling somebody to go and
+install something before they can use Nessa is the thing this context exists to
+avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
+fetch all three and ship none.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
 which is the identity in this context and is constrained to what can also be a
@@ -864,7 +874,8 @@ network) and `RuntimeStore` (this machine's disk), whose `StagedArchive` carries
 an open file rather than a path, so the bytes that are measured are the bytes
 that are unpacked.
 
-`infrastructure/` holds the three outside things: `pinned_releases.rs` reads
+`infrastructure/` holds the three outside things — the pins, the network and
+the disk, one module each. `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
 what is beside the binary, and is also the one boundary that reads *the
 machine* — `host_platform()` builds a `HostPlatform` from the compiler's own
@@ -884,7 +895,17 @@ private to its owner like everything else there.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases
-that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-opencode.mjs` regenerates
+The domain says what a release *is*: `pinned_release.rs` holds the pin, and
+`release_contents.rs` holds the set of files it installs — each one an
+`ArchivePath` with a `FileRole` of `Launch`, `Helper` or `Document`, exactly one
+of them the launch. That set is why one install path serves an agent that ships
+a single binary and one that ships four programs plus the tools they call.
+`ArchiveSize` bounds the download against the size the pin measured. Composition
+reads the store at every start through `composition/installed_launch.rs`, which
+answers with a launch or with nothing, and never with a path it wrote down
+earlier.
+
+that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-agents.mjs` regenerates
 the pin file by downloading and hashing every platform's archive. Tests under
 `tests/agent_install/` split the domain's rules, the ordering, the two adapters
 and the command's output.
