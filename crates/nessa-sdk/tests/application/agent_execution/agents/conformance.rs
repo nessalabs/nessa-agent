@@ -268,6 +268,32 @@ async fn workflow_from_storage(
         .unwrap();
     (agent, backend, storage)
 }
+async fn reattach_after_explicit_close(agent: &Agent) {
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
+}
+async fn recover_after_automatic_stop(agent: &Agent) {
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
+}
 fn workflow_backend() -> Arc<WorkflowBackend> {
     let (output, receiver) = mpsc::unbounded_channel();
     Arc::new(WorkflowBackend {
@@ -338,6 +364,7 @@ async fn invocation_modes_keep_owned_work_and_real_settlement_after_waiter_loss_
                 "retry cannot redispatch"
             );
         }
+        reattach_after_explicit_close(&agent).await;
         assert_eq!(
             bounded(agent.invoke(request("resumed"), actor())).await,
             Ok(ExecutionOutcome::Completed)
@@ -379,7 +406,8 @@ async fn invocation_modes_follow_explicit_resource_status_independently_of_error
             assert_eq!(settlement.session_state(), &attachment);
             *backend.execution_fault.lock().unwrap() = None;
             // CleanupRequired initially fences dispatch, but this conforming
-            // backend confirms owned cleanup and audit before the result returns.
+            // backend confirms owned cleanup and audit before recovery is authorized.
+            recover_after_automatic_stop(&agent).await;
             assert_eq!(
                 bounded(agent.invoke(request("recovered"), actor())).await,
                 Ok(ExecutionOutcome::Completed)
@@ -498,6 +526,7 @@ async fn invocation_modes_retain_provider_settlement_when_its_save_panics() {
             }
             assert_eq!(backend.executions.lock().unwrap().len(), 1);
             bounded(agent.close(actor())).await.unwrap();
+            reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 bounded(agent.invoke(request("recovered"), actor())).await,
                 Ok(ExecutionOutcome::Completed)

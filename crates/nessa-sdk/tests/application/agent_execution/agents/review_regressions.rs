@@ -52,7 +52,7 @@ struct Probe {
     close_gate: Mutex<Option<oneshot::Receiver<()>>>,
     preparing: Notify,
     prepare_gate: Mutex<Option<oneshot::Receiver<()>>>,
-    sender: mpsc::UnboundedSender<ExecutionEvent>,
+    sender: Mutex<mpsc::UnboundedSender<ExecutionEvent>>,
     executions: AtomicUsize,
     steers: AtomicUsize,
 }
@@ -69,13 +69,18 @@ impl AgentProvider for ProbeFactory {
     }
     fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            let receiver = self.receiver.lock().unwrap().take().unwrap_or_else(|| {
+                let (sender, receiver) = mpsc::unbounded_channel();
+                *self.backend.sender.lock().unwrap() = sender;
+                receiver
+            });
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("review").unwrap(),
                     self.backend.clone(),
                     capabilities(),
                 ),
-                events: Box::new(TestEvents(self.receiver.lock().unwrap().take().unwrap())),
+                events: Box::new(TestEvents(receiver)),
             })
         })
     }
@@ -113,18 +118,22 @@ impl ProviderSessionBackend for Probe {
         })
     }
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+        // Each operation retains the output generation current when the provider
+        // accepted it. A later recovery cannot redirect delayed old output into
+        // the replacement attachment's stream.
+        let sender = self.sender.lock().unwrap().clone();
         Box::pin(async move {
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     self.executions.fetch_add(1, Ordering::SeqCst);
                     self.executing.notify_one();
                     if let Some(update) = self.early_output.lock().unwrap().take() {
-                        self.sender
+                        sender
                             .send(ExecutionEvent::new(input.execution_id.clone(), update))
                             .unwrap();
                     }
                     if !self.suppress_terminal.load(Ordering::SeqCst) {
-                        self.sender
+                        sender
                             .send(ExecutionEvent::new(
                                 input.execution_id.clone(),
                                 ExecutionUpdate::Finished(if self.contradictory {
@@ -136,7 +145,7 @@ impl ProviderSessionBackend for Probe {
                             .unwrap();
                     }
                     if self.duplicate_terminal.load(Ordering::SeqCst) {
-                        self.sender
+                        sender
                             .send(ExecutionEvent::new(
                                 input.execution_id.clone(),
                                 ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -144,7 +153,7 @@ impl ProviderSessionBackend for Probe {
                             .unwrap();
                     }
                     if let Some(update) = self.late_output.lock().unwrap().clone() {
-                        self.sender
+                        sender
                             .send(ExecutionEvent::new(input.execution_id.clone(), update))
                             .unwrap();
                     }
@@ -292,7 +301,7 @@ async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Ag
         close_gate: Mutex::new(None),
         preparing: Notify::new(),
         prepare_gate: Mutex::new(None),
-        sender,
+        sender: Mutex::new(sender),
         executions: AtomicUsize::new(0),
         steers: AtomicUsize::new(0),
     });
@@ -306,6 +315,48 @@ async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Ag
     .await
     .unwrap();
     (agent, backend)
+}
+async fn reattach_after_explicit_close(agent: &Agent) {
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
+}
+async fn recover_after_automatic_stop(agent: &Agent) {
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
+}
+
+#[tokio::test]
+async fn recovered_probe_does_not_route_retired_generation_output_to_the_replacement() {
+    let (agent, backend, _) = probe(false).await;
+    let retired_sender = backend.sender.lock().unwrap().clone();
+    agent.close(actor()).await.unwrap();
+    reattach_after_explicit_close(&agent).await;
+
+    assert!(retired_sender
+        .send(ExecutionEvent::new(
+            ExecutionId::new("retired-generation").unwrap(),
+            ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+        ))
+        .is_err());
+    agent.close(actor()).await.unwrap();
 }
 fn input(id: &str) -> ExecutionRequest {
     ExecutionRequest {
@@ -611,6 +662,7 @@ async fn execution_cleanup_uncertainty_blocks_all_admission_including_wrapped_er
         *backend.execution_error.lock().unwrap() = None;
         *backend.execution_attachment.lock().unwrap() = ProviderSessionState::Usable;
         backend.execution_rejected.store(false, Ordering::SeqCst);
+        reattach_after_explicit_close(&agent).await;
         agent.invoke(input("recovered"), actor()).await.unwrap();
     }
 }
@@ -873,6 +925,7 @@ async fn wrapped_errors_with_confirmed_cleanup_do_not_latch_admission_closed() {
         *backend.execution_error.lock().unwrap() = None;
         *backend.execution_attachment.lock().unwrap() = ProviderSessionState::Usable;
         backend.execution_rejected.store(false, Ordering::SeqCst);
+        recover_after_automatic_stop(&agent).await;
         assert_eq!(
             agent.invoke(input("next-safe-input"), actor()).await,
             Ok(ExecutionOutcome::Completed)
@@ -1169,6 +1222,7 @@ async fn provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_
             agent.close(actor()).await.unwrap();
             *backend.control_error.lock().unwrap() = None;
             *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
+            reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 agent.invoke(input("recovered"), actor()).await,
                 Ok(ExecutionOutcome::Completed)
@@ -1207,6 +1261,7 @@ async fn provider_controls_with_confirmed_cleanup_do_not_latch_admission() {
             assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
             *backend.control_error.lock().unwrap() = None;
             *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
+            recover_after_automatic_stop(&agent).await;
             assert_eq!(
                 agent.invoke(input("available"), actor()).await,
                 Ok(ExecutionOutcome::Completed)
@@ -1267,6 +1322,9 @@ async fn permission_control_waiter_loss_does_not_lose_cleanup_uncertainty() {
                 ));
                 assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
                 agent.close(actor()).await.unwrap();
+                reattach_after_explicit_close(&agent).await;
+            } else {
+                recover_after_automatic_stop(&agent).await;
             }
             assert_eq!(
                 agent.invoke(input("available"), actor()).await,
@@ -1365,6 +1423,8 @@ async fn queued_observations_are_rejected_before_persistence_or_publication() {
         let queued = agent.enqueue(input("undispatched"), actor()).await.unwrap();
         backend
             .sender
+            .lock()
+            .unwrap()
             .send(ExecutionEvent::new(queued.id().clone(), update))
             .unwrap();
         backend.closing.notified().await;
@@ -1414,6 +1474,8 @@ async fn late_observations_keep_their_dispatched_owner_after_caller_loss() {
     assert!(abandoned.await.unwrap_err().is_cancelled());
     backend
         .sender
+        .lock()
+        .unwrap()
         .send(ExecutionEvent::new(
             ExecutionId::new("abandoned").unwrap(),
             ExecutionUpdate::Message(MessageChunk::text("late evidence")),
@@ -1421,6 +1483,8 @@ async fn late_observations_keep_their_dispatched_owner_after_caller_loss() {
         .unwrap();
     backend
         .sender
+        .lock()
+        .unwrap()
         .send(ExecutionEvent::new(
             ExecutionId::new("abandoned").unwrap(),
             ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -1460,6 +1524,8 @@ async fn admission_rejection_does_not_authorize_late_provider_output() {
     ));
     backend
         .sender
+        .lock()
+        .unwrap()
         .send(ExecutionEvent::new(
             ExecutionId::new("rejected").unwrap(),
             ExecutionUpdate::Message(MessageChunk::text("fabricated late output")),
@@ -1587,6 +1653,8 @@ async fn caller_loss_after_rejection_cannot_leave_observation_authority_behind_a
     drop(first);
     backend
         .sender
+        .lock()
+        .unwrap()
         .send(ExecutionEvent::new(
             ExecutionId::new("rejected-before-caller-loss").unwrap(),
             ExecutionUpdate::Message(MessageChunk::text("fabricated rejected output")),
@@ -1710,6 +1778,8 @@ async fn failure_and_explicit_close_share_cleanup_while_native_steering_is_waiti
         }
         backend
             .sender
+            .lock()
+            .unwrap()
             .send(ExecutionEvent::new(
                 ExecutionId::new("active").unwrap(),
                 ExecutionUpdate::Message(MessageChunk::text("invalid output after terminal")),
@@ -1771,6 +1841,7 @@ async fn failure_and_explicit_close_share_cleanup_while_native_steering_is_waiti
         );
         assert_eq!(backend.executions.load(Ordering::SeqCst), 1);
         drop(control_release);
+        reattach_after_explicit_close(&agent).await;
         agent.invoke(input("restored"), actor()).await.unwrap();
         agent.close(actor()).await.unwrap();
         assert_eq!(
@@ -1814,6 +1885,7 @@ async fn concurrent_close_waiters_share_cleanup_even_when_the_first_waiter_is_dr
         *backend.close_requests.lock().unwrap(),
         vec![SessionCloseRequest::Explicit(actor())]
     );
+    reattach_after_explicit_close(&agent).await;
     agent
         .invoke(input("new-close-generation"), actor())
         .await
@@ -1859,6 +1931,8 @@ async fn message_chunks_are_bounded_before_snapshot_copy_and_publication() {
             };
             backend
                 .sender
+                .lock()
+                .unwrap()
                 .send(ExecutionEvent::new(
                     ExecutionId::new("chunk").unwrap(),
                     ExecutionUpdate::Message(chunk),
@@ -1897,6 +1971,8 @@ async fn message_chunks_are_bounded_before_snapshot_copy_and_publication() {
                 );
                 backend
                     .sender
+                    .lock()
+                    .unwrap()
                     .send(ExecutionEvent::new(
                         ExecutionId::new("chunk").unwrap(),
                         ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -1963,6 +2039,7 @@ async fn explicit_recovery_ignores_historical_operation_error_when_cleanup_succe
         agent.close(actor()).await,
         Ok(CloseOutcome { forced: false })
     );
+    reattach_after_explicit_close(&agent).await;
     assert_eq!(
         agent.invoke(input("recovered"), actor()).await,
         Ok(ExecutionOutcome::Completed)
