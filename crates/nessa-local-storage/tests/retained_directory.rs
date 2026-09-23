@@ -1,6 +1,6 @@
 use nessa_local_storage::{
-    create_directory, create_private_directory_tree_beneath, OpenMode, PrivateDirectory,
-    PrivateFileType, PrivatePublicationStage, is_private_temporary_name,
+    create_directory, create_private_directory_tree_beneath, is_private_temporary_name, OpenMode,
+    PrivateDirectory, PrivateFileType, PrivatePublicationStage,
 };
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;

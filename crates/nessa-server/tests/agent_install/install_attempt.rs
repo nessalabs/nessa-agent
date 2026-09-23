@@ -4,7 +4,7 @@ use crate::agent_install::domain::{
     InstallTransitionKind, RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{
-    OTHER_DIGEST, PINNED_DIGEST, agent, platform, release, request,
+    agent, platform, release, request, OTHER_DIGEST, PINNED_DIGEST,
 };
 
 fn artifact(version: &str, digest: &str) -> RuntimeArtifact {
@@ -103,11 +103,9 @@ fn incomplete_recovery_rejects_a_target_reported_as_restored_without_ending_the_
             InstallTransitionError::TargetReportedRestored
         ))
     );
-    assert!(
-        attempt
-            .rolled_back(RollbackState::NoInstalledRuntime)
-            .is_ok()
-    );
+    assert!(attempt
+        .rolled_back(RollbackState::NoInstalledRuntime)
+        .is_ok());
 }
 
 #[test]

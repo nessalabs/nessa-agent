@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use flate2::read::MultiGzDecoder;
 use nessa_local_storage::{
-    OpenMode, PrivateTempFile, create_directory, create_directory_beneath, open_beneath,
-    remove_directory_beneath, remove_file_beneath, sync_directory_beneath,
+    create_directory, create_directory_beneath, open_beneath, remove_directory_beneath,
+    remove_file_beneath, sync_directory_beneath, OpenMode, PrivateTempFile,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

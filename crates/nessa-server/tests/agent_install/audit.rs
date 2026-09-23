@@ -9,7 +9,7 @@ use crate::agent_install::{
     },
 };
 use crate::agent_install_test_support::{
-    OTHER_DIGEST, PINNED_DIGEST, agent, platform, release, request, temporary_root,
+    agent, platform, release, request, temporary_root, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
 use std::sync::{Arc, Barrier};
@@ -624,11 +624,10 @@ fn nested_audit_directory_is_created_beneath_the_trusted_root() {
     .unwrap();
     let (_, started) = InstallAttempt::start(agent(), target(), request());
     audit.record(started).unwrap();
-    assert!(
-        root.path()
-            .join("audit/agent-install/00000000000000000001.json")
-            .is_file()
-    );
+    assert!(root
+        .path()
+        .join("audit/agent-install/00000000000000000001.json")
+        .is_file());
 }
 
 #[cfg(unix)]

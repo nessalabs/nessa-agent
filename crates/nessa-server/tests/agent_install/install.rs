@@ -8,11 +8,11 @@ use crate::agent_install::domain::{
 };
 use crate::agent_install::infrastructure::DurableInstallAudit;
 use crate::agent_install_test_support::{
-    FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST, RecordingAudit, agent, audit, host,
-    host_of, platform, release, release_needing, request, temporary_root,
+    agent, audit, host, host_of, platform, release, release_needing, request, temporary_root,
+    FakeSource, FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 struct BlockingAudit {
@@ -562,11 +562,9 @@ fn a_new_install_records_one_correlated_legal_sequence() {
             InstallTransitionKind::Installed,
         ]
     );
-    assert!(
-        records
-            .iter()
-            .all(|record| record.request().request_id() == "install-request-1")
-    );
+    assert!(records
+        .iter()
+        .all(|record| record.request().request_id() == "install-request-1"));
 }
 
 #[test]
