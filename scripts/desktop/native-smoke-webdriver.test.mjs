@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { JSDOM } from "jsdom"
 import test from "node:test"
 
 import {
@@ -169,20 +168,55 @@ test("panel readiness requires the rendered connection contract", () => {
     assert.equal(nativePanelReady(observation), false, JSON.stringify(observation))
 })
 
-test("the page observation reads the connection from the empty transcript", () => {
-  const dom = new JSDOM(
-    `<title>Nessa</title><body><main data-nessa-root>
-      <div aria-label="New conversation transcript, 0 sent">
-        <p class="nessa-text-3">Connected</p>
-      </div>
-    </main></body>`,
-    { url: "tauri://localhost/index.html?surface=main", runScripts: "outside-only" },
-  )
-  const root = dom.window.document.querySelector("[data-nessa-root]")
-  root.getBoundingClientRect = () => ({ width: 400, height: 320 })
-  dom.window.document.body.innerText = "Nessa Connected"
+function pageElement({ width, height, textContent = "" }) {
+  return {
+    textContent,
+    style: { display: "block", visibility: "visible" },
+    getBoundingClientRect: () => ({ width, height }),
+  }
+}
 
-  const observation = new dom.window.Function(nativePanelObservationScript)()
+function observePage({ root, fallback, status, width, height }) {
+  const transcript = status
+    ? { querySelector: (selector) => (selector === "p.nessa-text-3" ? status : null) }
+    : null
+  const document = {
+    title: "Nessa",
+    readyState: "complete",
+    body: { innerText: "Nessa Connected" },
+    querySelector: (selector) =>
+      ({
+        "[data-nessa-root]": root,
+        "[data-nessa-load-fallback]": fallback,
+        '[aria-label$=" transcript, 0 sent"]': transcript,
+      })[selector] ?? null,
+  }
+  return new Function(
+    "document",
+    "location",
+    "URL",
+    "getComputedStyle",
+    "innerWidth",
+    "innerHeight",
+    nativePanelObservationScript,
+  )(
+    document,
+    { href: "tauri://localhost/index.html?surface=main" },
+    URL,
+    (element) => element.style,
+    width,
+    height,
+  )
+}
+
+test("the page observation reads the root, status, surface, and viewport", () => {
+  const observation = observePage({
+    root: pageElement({ width: 400, height: 320 }),
+    fallback: null,
+    status: pageElement({ width: 20, height: 10, textContent: "Connected" }),
+    width: 1440,
+    height: 900,
+  })
 
   assert.equal(observation.url, "tauri://localhost/index.html?surface=main")
   assert.equal(observation.surface, "main")
@@ -191,4 +225,26 @@ test("the page observation reads the connection from the empty transcript", () =
   assert.equal(observation.root.height, 320)
   assert.equal(observation.fallback.present, false)
   assert.equal(observation.bodyText, "Nessa Connected")
+  assert.deepEqual(observation.viewport, { width: 1440, height: 900 })
+})
+
+test("the page observation retains a fallback when root and status are absent", () => {
+  const observation = observePage({
+    root: null,
+    fallback: pageElement({
+      width: 320,
+      height: 320,
+      textContent: "Loading Nessa… If this stays on screen",
+    }),
+    status: null,
+    width: 400,
+    height: 320,
+  })
+
+  assert.deepEqual(observation.root, { present: false })
+  assert.equal(observation.fallback.present, true)
+  assert.equal(observation.fallback.width, 320)
+  assert.match(observation.fallback.text, /Loading Nessa/)
+  assert.equal(observation.connectionText, null)
+  assert.deepEqual(observation.viewport, { width: 400, height: 320 })
 })
