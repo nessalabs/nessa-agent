@@ -145,7 +145,16 @@ impl CompositionRoot {
                 addr: listen_addr.clone(),
                 source,
             })?;
-        let bound_address = listener.local_addr().map_err(RunError::Serve)?;
+        let bound_address = listener.local_addr().map_err(|error| {
+            tracing::error!(
+                operation = "read bound listener address",
+                error.kind = ?error.kind(),
+                error.raw_os_code = ?error.raw_os_error(),
+                error = %error,
+                "gateway listener inspection failed",
+            );
+            RunError::Serve(error)
+        })?;
         let endpoint_identity = EndpointIdentity::new(
             desktop_identity
                 .as_ref()

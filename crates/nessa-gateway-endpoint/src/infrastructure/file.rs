@@ -50,9 +50,11 @@ impl EndpointPublication for FileEndpointPublication {
     fn publish(&self, advertisement: &GatewayEndpointAdvertisement) -> io::Result<()> {
         let endpoint = advertisement.endpoint();
         let managed = advertisement.managed();
-        nessa_local_storage::create_directory_beneath(&self.root, &self.directory)?;
+        nessa_local_storage::create_directory_beneath(&self.root, &self.directory)
+            .map_err(|error| publication_failed("create endpoint directory", error))?;
         let mut file =
-            nessa_local_storage::PrivateTempFile::new_beneath(&self.root, &self.directory)?;
+            nessa_local_storage::PrivateTempFile::new_beneath(&self.root, &self.directory)
+                .map_err(|error| publication_failed("create endpoint temporary file", error))?;
         let record = EndpointRecord {
             web_socket_url: endpoint.web_socket_url(),
             endpoint_instance: endpoint.identity().instance().to_owned(),
@@ -62,11 +64,27 @@ impl EndpointPublication for FileEndpointPublication {
             runtime_instance: managed.map(|value| value.endpoint().instance().to_owned()),
             runtime_process_id: managed.map(|value| value.endpoint().process_id()),
         };
-        serde_json::to_writer(file.as_file_mut(), &record)?;
-        file.as_file().sync_all()?;
-        file.persist_beneath(&self.directory.join(ENDPOINT_FILE))?;
+        serde_json::to_writer(file.as_file_mut(), &record)
+            .map_err(|error| publication_failed("write endpoint record", io::Error::from(error)))?;
+        file.as_file()
+            .sync_all()
+            .map_err(|error| publication_failed("sync endpoint temporary file", error))?;
+        file.persist_beneath(&self.directory.join(ENDPOINT_FILE))
+            .map_err(|error| publication_failed("replace endpoint record", error))?;
         nessa_local_storage::sync_directory_beneath(&self.root, &self.directory)
+            .map_err(|error| publication_failed("sync endpoint directory", error))
     }
+}
+
+fn publication_failed(operation: &'static str, error: io::Error) -> io::Error {
+    tracing::error!(
+        operation,
+        error.kind = ?error.kind(),
+        error.raw_os_code = ?error.raw_os_error(),
+        error = %error,
+        "gateway endpoint publication failed",
+    );
+    error
 }
 
 /// Private endpoint record plus bounded unauthenticated health correlation.
@@ -283,6 +301,11 @@ fn parse_health(bytes: &[u8]) -> Option<HealthIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        error::Error,
+        fmt,
+        sync::{Arc, Mutex, PoisonError},
+    };
 
     fn endpoint(web_socket_url: &str) -> GatewayEndpoint {
         GatewayEndpoint::new(
@@ -303,6 +326,104 @@ mod tests {
                 advertisement_address(&endpoint(url)).unwrap(),
                 expected.parse::<SocketAddr>().unwrap()
             );
+        }
+    }
+
+    #[test]
+    fn publication_failure_names_its_operation_and_keeps_os_evidence() {
+        let captured = Capture(Arc::new(Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .finish();
+        let temporary = tempfile::tempdir().unwrap();
+        let missing_root = temporary.path().join("missing-root");
+        let publication = FileEndpointPublication::new(missing_root, "logs".into());
+        let endpoint = endpoint("ws://127.0.0.1:9137");
+        let advertisement = GatewayEndpointAdvertisement::new(endpoint, None).unwrap();
+
+        let error = tracing::subscriber::with_default(subscriber, || {
+            publication.publish(&advertisement).unwrap_err()
+        });
+        let output = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        assert!(error.raw_os_error().is_some());
+        assert!(
+            output.contains("gateway endpoint publication failed"),
+            "{output}"
+        );
+        assert!(
+            output.contains("operation=\"create endpoint directory\""),
+            "{output}"
+        );
+        assert!(output.contains("error.kind=NotFound"), "{output}");
+        assert!(output.contains("error.raw_os_code=Some("), "{output}");
+    }
+
+    #[test]
+    fn publication_failure_returns_the_original_error_source() {
+        let error = io::Error::new(ErrorKind::PermissionDenied, SourceRoot(SourceMarker));
+        let returned = publication_failed("replace endpoint record", error);
+
+        assert_eq!(returned.kind(), ErrorKind::PermissionDenied);
+        assert!(returned
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<SourceRoot>())
+            .is_some());
+        assert!(Error::source(&returned)
+            .and_then(|source| source.downcast_ref::<SourceMarker>())
+            .is_some());
+    }
+
+    #[derive(Debug)]
+    struct SourceRoot(SourceMarker);
+
+    impl fmt::Display for SourceRoot {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("source root")
+        }
+    }
+
+    impl Error for SourceRoot {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[derive(Debug)]
+    struct SourceMarker;
+
+    impl fmt::Display for SourceMarker {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("source marker")
+        }
+    }
+
+    impl Error for SourceMarker {}
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Capture {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self {
+            self.clone()
         }
     }
 }
