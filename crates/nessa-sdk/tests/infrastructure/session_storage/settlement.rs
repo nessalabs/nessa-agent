@@ -141,7 +141,7 @@ async fn confirmed_cleanup_supervision_failure_survives_restoration() {
         value.invocations[0].result = Some(Err(AgentError::CleanupUncertain));
         value.invocations[0].local_cancellation = Some(InvocationCancellationEvent {
             cause: SchedulingCause::SessionClosed,
-            actor: None,
+            actor: Some(ActionContext::new("closer", "test", "close").unwrap()),
         });
         value.invocations[0].provider_report =
             Some(ExecutionReport::cancelled_locally(report.clone()));

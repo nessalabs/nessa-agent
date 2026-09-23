@@ -1,38 +1,50 @@
 //! Combine operation, teardown audit, and process cleanup evidence without precedence loss.
 use crate::application::agent_execution::{
-    agents::AgentError, executions::ExecutionController, providers::SessionCloseRequest,
+    agents::AgentError,
+    executions::ExecutionController,
+    providers::{FinalizedExecutionProjection, FinalizedFailureComponent, SessionCloseRequest},
 };
 use crate::domain::agent_execution::permissions::PermissionCancellationReason;
 
 const MAX_RETAINED_CATEGORY_FACTS: usize = 128;
-const MAX_PROJECTED_CATEGORY_FACTS: usize = 32;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct AuditAttemptId(pub(super) u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct FactId(u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct OperationEffectId {
-    pub(super) sequence: u64,
-    pub(super) phase: OperationEffectPhase,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct EffectCorrelation(pub(super) u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OperationEffectPhase {
     Worker,
-    PermissionDelivery,
+    PermissionDelivery(EffectCorrelation),
     EventDelivery,
     Teardown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TerminalFailureSource {
-    Audit,
-    Operation,
+pub(super) enum AuditEffectPhase {
+    Lifecycle,
+    Cancellation,
+    PermissionSelection,
+    PermissionDelivery(EffectCorrelation),
 }
 
-struct FailureFact<I> {
-    id: I,
-    error: AgentError,
+enum SettlementFact {
+    ProviderResult {
+        id: FactId,
+    },
+    Audit {
+        id: FactId,
+        phase: AuditEffectPhase,
+    },
+    Operation {
+        id: FactId,
+        phase: OperationEffectPhase,
+        error: AgentError,
+    },
+    AuditOverflow,
+    OperationOverflow,
 }
 
 /// Bounded diagnostic evidence for one worker generation's terminal settlement.
@@ -40,76 +52,188 @@ struct FailureFact<I> {
 /// The two categories reserve independent budgets so saturation can never turn
 /// an audit failure into operation evidence or hide an independent operation.
 pub(super) struct SettlementFacts {
-    audits: Vec<FailureFact<AuditAttemptId>>,
-    operations: Vec<FailureFact<OperationEffectId>>,
+    facts: Vec<SettlementFact>,
+    next_id: u64,
+    audit_count: usize,
+    operation_count: usize,
     audit_overflow: bool,
     operation_overflow: bool,
 }
 impl SettlementFacts {
     pub(super) fn new() -> Self {
         Self {
-            audits: Vec::new(),
-            operations: Vec::new(),
+            facts: Vec::new(),
+            next_id: 0,
+            audit_count: 0,
+            operation_count: 0,
             audit_overflow: false,
             operation_overflow: false,
         }
     }
-    pub(super) fn record_audit(&mut self, id: AuditAttemptId) {
-        if self.audits.iter().any(|fact| fact.id == id) || self.audit_overflow {
-            return;
-        }
-        if self.audits.len() == MAX_RETAINED_CATEGORY_FACTS {
-            self.audit_overflow = true;
-            return;
-        }
-        self.audits.push(FailureFact {
-            id,
-            error: AgentError::AuditFailure,
-        });
+    fn next_id(&mut self) -> FactId {
+        let id = FactId(self.next_id);
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("one worker cannot exhaust failure fact identities");
+        id
     }
-    pub(super) fn record_operation(&mut self, id: OperationEffectId, error: AgentError) {
-        if self.operations.iter().any(|fact| fact.id == id) || self.operation_overflow {
-            return;
+    pub(super) fn cursor(&self) -> u64 {
+        self.next_id
+    }
+    pub(super) fn coverage_since(&self, cursor: u64) -> Vec<FactId> {
+        self.facts
+            .iter()
+            .filter_map(|fact| match fact {
+                SettlementFact::ProviderResult { id }
+                | SettlementFact::Audit { id, .. }
+                | SettlementFact::Operation { id, .. }
+                    if id.0 >= cursor =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    pub(super) fn record_audit(&mut self, phase: AuditEffectPhase) -> Option<FactId> {
+        if self.audit_overflow {
+            return None;
         }
-        if self.operations.len() == MAX_RETAINED_CATEGORY_FACTS {
+        if self.audit_count == MAX_RETAINED_CATEGORY_FACTS {
+            self.audit_overflow = true;
+            self.facts.push(SettlementFact::AuditOverflow);
+            return None;
+        }
+        let id = self.next_id();
+        self.audit_count += 1;
+        self.facts.push(SettlementFact::Audit { id, phase });
+        Some(id)
+    }
+    pub(super) fn record_provider_result(&mut self) -> FactId {
+        let id = self.next_id();
+        self.facts.push(SettlementFact::ProviderResult { id });
+        id
+    }
+    pub(super) fn record_operation(
+        &mut self,
+        phase: OperationEffectPhase,
+        error: AgentError,
+    ) -> Option<FactId> {
+        if self.operation_overflow {
+            return None;
+        }
+        if self.operation_count == MAX_RETAINED_CATEGORY_FACTS {
             self.operation_overflow = true;
-            return;
+            self.facts.push(SettlementFact::OperationOverflow);
+            return None;
         }
-        self.operations.push(FailureFact {
+        let id = self.next_id();
+        self.operation_count += 1;
+        self.facts.push(SettlementFact::Operation {
             id,
+            phase,
             error: error.bounded(),
         });
+        Some(id)
     }
-    pub(super) fn audit_result(&self) -> Result<(), AgentError> {
-        Self::project(&self.audits, self.audit_overflow).map_or(Ok(()), Err)
+    pub(super) fn contains(&self, id: FactId) -> bool {
+        self.facts.iter().any(|fact| match fact {
+            SettlementFact::ProviderResult { id: fact_id }
+            | SettlementFact::Audit { id: fact_id, .. }
+            | SettlementFact::Operation { id: fact_id, .. } => *fact_id == id,
+            SettlementFact::AuditOverflow | SettlementFact::OperationOverflow => false,
+        })
     }
-    pub(super) fn operation_failure(&self) -> Option<AgentError> {
-        Self::project(&self.operations, self.operation_overflow)
+    pub(super) fn coverage_has_operation(&self, coverage: &[FactId]) -> bool {
+        self.facts.iter().any(|fact| match fact {
+            SettlementFact::Operation { id, .. } => coverage.contains(id),
+            _ => false,
+        })
     }
-    fn project<I>(facts: &[FailureFact<I>], overflow: bool) -> Option<AgentError> {
-        let retained = MAX_PROJECTED_CATEGORY_FACTS
-            - usize::from(overflow || facts.len() >= MAX_PROJECTED_CATEGORY_FACTS);
-        let mut errors = facts
+    pub(super) fn finalize(self) -> FinalizedExecutionProjection {
+        let paired = self
+            .facts
             .iter()
-            .take(retained)
-            .map(|fact| fact.error.clone())
-            .collect::<Vec<_>>();
-        if overflow || facts.len() > retained {
-            errors.push(AgentError::DiagnosticLimit);
-        }
-        Self::balanced(&errors).map(AgentError::bounded)
-    }
-    fn balanced(errors: &[AgentError]) -> Option<AgentError> {
-        match errors {
-            [] => None,
-            [error] => Some(error.clone()),
-            errors => {
-                let middle = errors.len() / 2;
-                Some(AgentError::MultipleOperationFailures {
-                    first_error: Box::new(Self::balanced(&errors[..middle])?),
-                    subsequent_error: Box::new(Self::balanced(&errors[middle..])?),
+            .filter_map(|fact| match fact {
+                SettlementFact::Operation {
+                    phase: OperationEffectPhase::PermissionDelivery(correlation),
+                    ..
+                } => Some(*correlation),
+                _ => None,
+            })
+            .filter(|correlation| {
+                self.facts.iter().any(|fact| {
+                    matches!(
+                        fact,
+                        SettlementFact::Audit {
+                            phase: AuditEffectPhase::PermissionDelivery(candidate),
+                            ..
+                        } if candidate == correlation
+                    )
                 })
-            }
+            })
+            .collect::<Vec<_>>();
+        let components = self
+            .facts
+            .into_iter()
+            .filter_map(|fact| match fact {
+                SettlementFact::Operation {
+                    phase: OperationEffectPhase::PermissionDelivery(correlation),
+                    error,
+                    ..
+                } if paired.contains(&correlation) => {
+                    Some(FinalizedFailureComponent::PermissionDeliveryAndAudit {
+                        delivery_error: error,
+                    })
+                }
+                SettlementFact::Operation { error, .. } => {
+                    Some(FinalizedFailureComponent::Operation(error))
+                }
+                SettlementFact::ProviderResult { .. } => None,
+                SettlementFact::Audit {
+                    phase: AuditEffectPhase::PermissionDelivery(correlation),
+                    ..
+                } if paired.contains(&correlation) => None,
+                SettlementFact::Audit { .. } => Some(FinalizedFailureComponent::Audit),
+                SettlementFact::AuditOverflow => Some(FinalizedFailureComponent::AuditOverflow),
+                SettlementFact::OperationOverflow => {
+                    Some(FinalizedFailureComponent::OperationOverflow)
+                }
+            })
+            .collect();
+        FinalizedExecutionProjection::new(components)
+            .expect("bounded worker facts always form a valid finalized projection")
+    }
+}
+
+/// A terminal error and the exact already-recorded facts it represents.
+pub(super) struct WorkerFailure {
+    error: AgentError,
+    coverage: Vec<FactId>,
+}
+impl WorkerFailure {
+    pub(super) fn new(error: AgentError, coverage: impl IntoIterator<Item = FactId>) -> Self {
+        Self {
+            error,
+            coverage: coverage.into_iter().collect(),
+        }
+    }
+    pub(super) fn into_error(self) -> AgentError {
+        self.error
+    }
+    pub(super) fn validate(&self, facts: &SettlementFacts) {
+        assert!(self.coverage.iter().all(|id| facts.contains(*id)));
+    }
+    pub(super) fn coverage(&self) -> &[FactId] {
+        &self.coverage
+    }
+}
+impl From<AgentError> for WorkerFailure {
+    fn from(error: AgentError) -> Self {
+        Self {
+            error,
+            coverage: Vec::new(),
         }
     }
 }

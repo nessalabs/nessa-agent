@@ -105,9 +105,7 @@ async fn blocked_worker(
         deferred_outcome: None,
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
-        audit_sequence: 0,
-        operation_sequence: 0,
-        terminal_failure_source: None,
+        correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
     };
     (worker, execution, receiver)

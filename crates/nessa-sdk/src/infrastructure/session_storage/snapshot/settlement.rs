@@ -1,8 +1,15 @@
 //! Explicit provider facts survive storage without decoding diagnostic error shapes.
-use super::errors::{Outcome, SavedError};
-use crate::application::agent_execution::providers::{
-    CleanupReport, CloseOutcome, ExecutionReport, ExecutionReportSource, ProviderSessionState,
-    ResourceCleanup,
+use super::{
+    corrupt,
+    errors::{Outcome, SavedError},
+};
+use crate::application::agent_execution::{
+    providers::{
+        CleanupReport, CloseOutcome, ExecutionReport, ExecutionReportSource,
+        FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,
+        ProviderSessionState, ResourceCleanup,
+    },
+    sessions::StorageError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +22,26 @@ pub(super) enum Settlement {
         attachment: Attachment,
     },
     LocalCancellation(Cleanup),
+    ProviderFinalized {
+        result: Option<Result<Outcome, SavedError>>,
+        resources: Result<bool, SavedError>,
+        completion_failure: Option<SavedError>,
+        projection: Vec<FinalizedComponent>,
+    },
+    LocalCancellationFinalized {
+        resources: Result<bool, SavedError>,
+        completion_failure: Option<SavedError>,
+        projection: Vec<FinalizedComponent>,
+    },
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum FinalizedComponent {
+    Operation(SavedError),
+    Audit,
+    PermissionDeliveryAndAudit { delivery_error: SavedError },
+    OperationOverflow,
+    AuditOverflow,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,10 +61,7 @@ pub(super) struct Cleanup {
 impl From<CleanupReport> for Cleanup {
     fn from(value: CleanupReport) -> Self {
         Self {
-            resources: match value.resources() {
-                ResourceCleanup::Confirmed(outcome) => Ok(outcome.forced),
-                ResourceCleanup::Unconfirmed(error) => Err(error.clone().into()),
-            },
+            resources: encode_resources(value.resources()),
             audit: value.audit().clone().map_err(Into::into),
             operation_failure: value.operation_failure().cloned().map(Into::into),
             completion_failure: value.completion_failure().cloned().map(Into::into),
@@ -47,10 +71,7 @@ impl From<CleanupReport> for Cleanup {
 impl From<Cleanup> for CleanupReport {
     fn from(value: Cleanup) -> Self {
         Self::new(
-            match value.resources {
-                Ok(forced) => ResourceCleanup::Confirmed(CloseOutcome { forced }),
-                Err(error) => ResourceCleanup::Unconfirmed(error.into()),
-            },
+            decode_resources(value.resources),
             value.audit.map_err(Into::into),
         )
         .with_operation_failure(value.operation_failure.map(Into::into))
@@ -77,17 +98,44 @@ impl From<Attachment> for ProviderSessionState {
 }
 impl From<ExecutionReport> for Settlement {
     fn from(value: ExecutionReport) -> Self {
-        match value.source() {
+        if let Some((source, resources, completion_failure, projection)) = value.finalized_parts() {
+            let resources = encode_resources(resources);
+            let completion_failure = completion_failure.cloned().map(Into::into);
+            let projection = projection
+                .components()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect();
+            return match source {
+                FinalizedExecutionSource::Provider(result) => Self::ProviderFinalized {
+                    result: result
+                        .clone()
+                        .map(|result| result.map(Into::into).map_err(Into::into)),
+                    resources,
+                    completion_failure,
+                    projection,
+                },
+                FinalizedExecutionSource::LocalCancellation => Self::LocalCancellationFinalized {
+                    resources,
+                    completion_failure,
+                    projection,
+                },
+            };
+        }
+        let (result, source, failure, attachment) = value
+            .independent_parts()
+            .expect("non-finalized report has independent authority");
+        match source {
             ExecutionReportSource::Provider => Self::Provider {
-                result: value
-                    .provider_result()
+                result: result
                     .cloned()
                     .map(|result| result.map(Into::into).map_err(Into::into)),
-                failure: value.failure().cloned().map(Into::into),
-                attachment: value.session_state().clone().into(),
+                failure: failure.cloned().map(Into::into),
+                attachment: attachment.clone().into(),
             },
             ExecutionReportSource::LocalCancellation => {
-                let ProviderSessionState::CleanupReported(report) = value.session_state() else {
+                let ProviderSessionState::CleanupReported(report) = attachment else {
                     unreachable!("local cancellation constructor retains its cleanup report")
                 };
                 Self::LocalCancellation(report.clone().into())
@@ -95,9 +143,11 @@ impl From<ExecutionReport> for Settlement {
         }
     }
 }
-impl From<Settlement> for ExecutionReport {
-    fn from(value: Settlement) -> Self {
-        match value {
+impl TryFrom<Settlement> for ExecutionReport {
+    type Error = StorageError;
+
+    fn try_from(value: Settlement) -> Result<Self, Self::Error> {
+        Ok(match value {
             Settlement::Provider {
                 result,
                 failure,
@@ -108,6 +158,75 @@ impl From<Settlement> for ExecutionReport {
                 attachment.into(),
             ),
             Settlement::LocalCancellation(report) => Self::cancelled_locally(report.into()),
+            Settlement::ProviderFinalized {
+                result,
+                resources,
+                completion_failure,
+                projection,
+            } => Self::finalized_provider(
+                result.map(|result| result.map(Into::into).map_err(Into::into)),
+                decode_resources(resources),
+                completion_failure.map(Into::into),
+                decode_projection(projection)?,
+            ),
+            Settlement::LocalCancellationFinalized {
+                resources,
+                completion_failure,
+                projection,
+            } => Self::finalized_local_cancellation(
+                decode_resources(resources),
+                completion_failure.map(Into::into),
+                decode_projection(projection)?,
+            ),
+        })
+    }
+}
+
+impl From<FinalizedFailureComponent> for FinalizedComponent {
+    fn from(value: FinalizedFailureComponent) -> Self {
+        match value {
+            FinalizedFailureComponent::Operation(error) => Self::Operation(error.into()),
+            FinalizedFailureComponent::Audit => Self::Audit,
+            FinalizedFailureComponent::PermissionDeliveryAndAudit { delivery_error } => {
+                Self::PermissionDeliveryAndAudit {
+                    delivery_error: delivery_error.into(),
+                }
+            }
+            FinalizedFailureComponent::OperationOverflow => Self::OperationOverflow,
+            FinalizedFailureComponent::AuditOverflow => Self::AuditOverflow,
         }
     }
+}
+impl From<FinalizedComponent> for FinalizedFailureComponent {
+    fn from(value: FinalizedComponent) -> Self {
+        match value {
+            FinalizedComponent::Operation(error) => Self::Operation(error.into()),
+            FinalizedComponent::Audit => Self::Audit,
+            FinalizedComponent::PermissionDeliveryAndAudit { delivery_error } => {
+                Self::PermissionDeliveryAndAudit {
+                    delivery_error: delivery_error.into(),
+                }
+            }
+            FinalizedComponent::OperationOverflow => Self::OperationOverflow,
+            FinalizedComponent::AuditOverflow => Self::AuditOverflow,
+        }
+    }
+}
+fn encode_resources(resources: &ResourceCleanup) -> Result<bool, SavedError> {
+    match resources {
+        ResourceCleanup::Confirmed(outcome) => Ok(outcome.forced),
+        ResourceCleanup::Unconfirmed(error) => Err(error.clone().into()),
+    }
+}
+fn decode_resources(resources: Result<bool, SavedError>) -> ResourceCleanup {
+    match resources {
+        Ok(forced) => ResourceCleanup::Confirmed(CloseOutcome { forced }),
+        Err(error) => ResourceCleanup::Unconfirmed(error.into()),
+    }
+}
+fn decode_projection(
+    projection: Vec<FinalizedComponent>,
+) -> Result<FinalizedExecutionProjection, StorageError> {
+    FinalizedExecutionProjection::new(projection.into_iter().map(Into::into).collect())
+        .map_err(corrupt)
 }

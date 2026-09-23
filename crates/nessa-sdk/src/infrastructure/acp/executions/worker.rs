@@ -11,8 +11,8 @@ use super::super::{
 use super::{
     event_queue::{EventSender, QueueError},
     failure::{
-        execution_finish_failure, requested_close_reason, retain_admitted_failure, AuditAttemptId,
-        OperationEffectId, OperationEffectPhase, SettlementFacts, TerminalFailureSource,
+        execution_finish_failure, requested_close_reason, retain_admitted_failure,
+        AuditEffectPhase, EffectCorrelation, OperationEffectPhase, SettlementFacts, WorkerFailure,
     },
     prompt_content::{content_blocks, ImageBlocks},
     steering::{self, PendingSteering},
@@ -297,9 +297,7 @@ struct Worker<P> {
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
     settlement_facts: SettlementFacts,
-    audit_sequence: u64,
-    operation_sequence: u64,
-    terminal_failure_source: Option<TerminalFailureSource>,
+    correlation_sequence: u64,
     failure_cause: ObservationFailureCause,
 }
 
@@ -351,12 +349,11 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         deferred_outcome: None,
         provider_result: None,
         settlement_facts: SettlementFacts::new(),
-        audit_sequence: 0,
-        operation_sequence: 0,
-        terminal_failure_source: None,
+        correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
     };
     let mut execution = None;
+    let startup_cursor = worker.settlement_facts.cursor();
     let startup = catch_worker_panic(worker.startup(restore, &mut execution)).await;
     let mut ready = Some(ready);
     let result = match startup {
@@ -375,19 +372,29 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
                     .unwrap_or(SessionCloseRequest::SessionHandlesDropped);
                 worker.cancellation_cause =
                     Some((requested_close_reason(&request, false), request.origin()));
-                Err(AgentError::Closed)
+                Err(worker.cover_failure(
+                    worker.settlement_facts.cursor(),
+                    OperationEffectPhase::Teardown,
+                    AgentError::Closed,
+                ))
             } else {
                 catch_worker_panic(worker.drive(execution)).await
             }
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            Err(worker.cover_failure(startup_cursor, OperationEffectPhase::Worker, error))
+        }
     };
+    let result = result
+        .map_err(|failure| worker.ensure_failure_covered(OperationEffectPhase::Worker, failure));
     // Worker, controller and reply ownership stay outside every caught phase.
     let mut execution_reply = None;
-    let completed = catch_worker_panic(async {
-        Ok(worker
-            .finish(&mut execution, result, &mut execution_reply)
-            .await)
+    let completed: Result<WorkerResult, AgentError> = catch_worker_panic(async {
+        Ok::<WorkerResult, AgentError>(
+            worker
+                .finish(&mut execution, result, &mut execution_reply)
+                .await,
+        )
     })
     .await;
     let WorkerResult {
@@ -411,13 +418,18 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
                 Err(error) => ResourceCleanup::Unconfirmed(error),
             };
             worker.retain_operation(OperationEffectPhase::Worker, error.clone());
-            let cleanup = CleanupReport::new(resources, worker.settlement_facts.audit_result())
-                .with_operation_failure(worker.settlement_facts.operation_failure());
-            let settlement = ExecutionReport::new(
+            let projection =
+                std::mem::replace(&mut worker.settlement_facts, SettlementFacts::new()).finalize();
+            let settlement = ExecutionReport::finalized_provider(
                 worker.provider_result.take(),
+                resources,
                 None,
-                ProviderSessionState::CleanupReported(cleanup.clone()),
+                projection,
             );
+            let ProviderSessionState::CleanupReported(cleanup) = settlement.session_state() else {
+                unreachable!("finalized worker panic always reports cleanup")
+            };
+            let cleanup = cleanup.clone();
             WorkerResult {
                 failure: settlement.clone().into_result().err(),
                 cleanup,
@@ -465,24 +477,24 @@ struct WorkerResult {
 }
 
 // Poll a borrowed worker phase so unwinding cannot take its process or receipts.
-async fn catch_worker_panic<T>(
-    operation: impl Future<Output = Result<T, AgentError>>,
-) -> Result<T, AgentError> {
+async fn catch_worker_panic<T, E>(operation: impl Future<Output = Result<T, E>>) -> Result<T, E>
+where
+    E: From<AgentError>,
+{
     let mut operation = Box::pin(operation);
     let result = poll_fn(|context| {
         match catch_unwind(AssertUnwindSafe(|| operation.as_mut().poll(context))) {
             Ok(poll) => poll,
             Err(_) => Poll::Ready(Err(AgentError::Protocol(
                 "ACP worker phase panicked".into(),
-            ))),
+            )
+            .into())),
         }
     })
     .await;
     match catch_unwind(AssertUnwindSafe(|| drop(operation))) {
         Ok(()) => result,
-        Err(_) => Err(AgentError::Protocol(
-            "ACP worker phase drop panicked".into(),
-        )),
+        Err(_) => Err(AgentError::Protocol("ACP worker phase drop panicked".into()).into()),
     }
 }
 
@@ -490,7 +502,7 @@ impl<P: AcpProfile> Worker<P> {
     async fn finish(
         &mut self,
         execution: &mut Option<ExecutionController>,
-        result: Result<(), AgentError>,
+        result: Result<(), WorkerFailure>,
         execution_reply: &mut Option<ExecutionReply>,
     ) -> WorkerResult {
         // No command may enter a generation that has left its drive loop. The final
@@ -498,17 +510,13 @@ impl<P: AcpProfile> Worker<P> {
         self.commands.close();
         let local_cancellation = self.closing && result.is_ok() && self.provider_result.is_none();
         self.begin_shutdown_grace();
-        let mut failure = result.err();
-        let initial_source = self.terminal_failure_source;
-        if let Some(error) = failure.clone() {
-            if initial_source.is_none() {
-                self.retain_operation(OperationEffectPhase::Worker, error);
-            }
-        }
-        self.terminal_failure_source = None;
-        if self.closing
-            && (failure.is_none() || initial_source == Some(TerminalFailureSource::Audit))
-        {
+        let initial_has_operation = result.as_ref().err().is_some_and(|failure| {
+            failure.validate(&self.settlement_facts);
+            self.settlement_facts
+                .coverage_has_operation(failure.coverage())
+        });
+        let mut failure = result.err().map(WorkerFailure::into_error);
+        if self.closing && !initial_has_operation {
             failure = match self
                 .cancellation_cause
                 .as_ref()
@@ -523,10 +531,13 @@ impl<P: AcpProfile> Worker<P> {
                 Some(
                     PermissionCancellationReasonView::ExecutionFailed
                     | PermissionCancellationReasonView::SessionFailed,
-                ) => Some(AgentError::Closed),
+                ) => {
+                    let error = AgentError::Closed;
+                    self.retain_operation(OperationEffectPhase::Teardown, error.clone());
+                    Some(error)
+                }
                 _ => failure,
             };
-            self.terminal_failure_source = None;
         }
         self.closing = true;
         if let Some(execution) = execution.as_mut() {
@@ -543,11 +554,11 @@ impl<P: AcpProfile> Worker<P> {
                     (reason, CancellationOrigin::Runtime)
                 })
                 .clone();
+            let cursor = self.settlement_facts.cursor();
             if let Err(error) = self.drain_admitted_permissions(execution).await {
-                if self.terminal_failure_source.is_none() {
-                    self.retain_operation(OperationEffectPhase::Teardown, error.clone());
-                }
-                self.terminal_failure_source = None;
+                let error = self
+                    .cover_failure(cursor, OperationEffectPhase::Teardown, error)
+                    .into_error();
                 failure = Some(retain_admitted_failure(failure, error));
             }
             // The drive loop may have already closed this same generation and then
@@ -565,17 +576,16 @@ impl<P: AcpProfile> Worker<P> {
             };
             match closure {
                 Ok(records) => {
+                    let cursor = self.settlement_facts.cursor();
                     if let Err(error) = self.record_lifecycle(records).await {
-                        if self.terminal_failure_source.is_none() {
-                            self.retain_operation(OperationEffectPhase::Teardown, error.clone());
-                            failure = Some(retain_admitted_failure(failure, error));
-                        }
-                        self.terminal_failure_source = None;
+                        let error = self
+                            .cover_failure(cursor, OperationEffectPhase::Teardown, error)
+                            .into_error();
+                        failure = Some(retain_admitted_failure(failure, error));
                     }
                 }
                 Err(error) => {
                     self.retain_operation(OperationEffectPhase::Teardown, error.clone());
-                    self.terminal_failure_source = None;
                     failure = Some(retain_admitted_failure(failure, error));
                 }
             }
@@ -607,12 +617,12 @@ impl<P: AcpProfile> Worker<P> {
                 .map(|outcome| execution.finished_event(&active.execution_id, *outcome));
             match execution.finish_execution(&active.execution_id, domain_result) {
                 Ok(records) => {
+                    let cursor = self.settlement_facts.cursor();
                     if let Err(error) = self.record_lifecycle(records).await {
-                        if self.terminal_failure_source.is_none() {
-                            self.retain_operation(OperationEffectPhase::Teardown, error.clone());
-                            failure = Some(retain_admitted_failure(failure, error));
-                        }
-                        self.terminal_failure_source = None;
+                        let error = self
+                            .cover_failure(cursor, OperationEffectPhase::Teardown, error)
+                            .into_error();
+                        failure = Some(retain_admitted_failure(failure, error));
                     }
                 }
                 Err(error) => {
@@ -620,7 +630,6 @@ impl<P: AcpProfile> Worker<P> {
                     if let Some(error) = execution_finish_failure(execution, failure.clone(), error)
                     {
                         self.retain_operation(OperationEffectPhase::Teardown, retained);
-                        self.terminal_failure_source = None;
                         failure = Some(error);
                     }
                 }
@@ -630,7 +639,6 @@ impl<P: AcpProfile> Worker<P> {
                     event.map(|event| event.and_then(|event| self.emit(event)))
                 {
                     self.retain_operation(OperationEffectPhase::EventDelivery, error.clone());
-                    self.terminal_failure_source = None;
                     failure = Some(error);
                 }
             }
@@ -639,18 +647,22 @@ impl<P: AcpProfile> Worker<P> {
             Ok(outcome) => ResourceCleanup::Confirmed(outcome),
             Err(error) => ResourceCleanup::Unconfirmed(error),
         };
-        let operation_failure = self.settlement_facts.operation_failure();
-        let cleanup = CleanupReport::new(resources, self.settlement_facts.audit_result())
-            .with_operation_failure(operation_failure);
-        let settlement = if local_cancellation && cleanup.is_confirmed() && failure.is_none() {
-            ExecutionReport::cancelled_locally(cleanup.clone())
+        let projection =
+            std::mem::replace(&mut self.settlement_facts, SettlementFacts::new()).finalize();
+        let settlement = if local_cancellation {
+            ExecutionReport::finalized_local_cancellation(resources, None, projection)
         } else {
-            ExecutionReport::new(
+            ExecutionReport::finalized_provider(
                 self.provider_result.take(),
+                resources,
                 None,
-                ProviderSessionState::CleanupReported(cleanup.clone()),
+                projection,
             )
         };
+        let ProviderSessionState::CleanupReported(cleanup) = settlement.session_state() else {
+            unreachable!("finalized worker settlement always reports cleanup")
+        };
+        let cleanup = cleanup.clone();
         let published_failure = if execution_reply.is_some() {
             settlement.clone().into_result().err()
         } else {
@@ -960,7 +972,7 @@ impl<P: AcpProfile> Worker<P> {
         content_blocks(message, images)
     }
 
-    async fn drive(&mut self, execution: &mut ExecutionController) -> Result<(), AgentError> {
+    async fn drive(&mut self, execution: &mut ExecutionController) -> Result<(), WorkerFailure> {
         enum Input {
             Close,
             Command(Option<Command>),
@@ -983,6 +995,7 @@ impl<P: AcpProfile> Worker<P> {
             };
             match input {
                 Input::Close | Input::Command(None) => {
+                    let cursor = self.settlement_facts.cursor();
                     self.closing = true;
                     self.begin_shutdown_grace();
                     let request = self
@@ -994,15 +1007,36 @@ impl<P: AcpProfile> Worker<P> {
                         requested_close_reason(&request, execution.active_execution_id().is_some());
                     let origin = request.origin();
                     self.cancellation_cause = Some((reason.clone(), origin.clone()));
-                    self.drain_admitted_permissions(execution).await?;
+                    if let Err(error) = self.drain_admitted_permissions(execution).await {
+                        return Err(self.cover_failure(
+                            cursor,
+                            OperationEffectPhase::Teardown,
+                            error,
+                        ));
+                    }
                     let records = match self.active.as_ref() {
                         Some(active) => {
                             execution.close_execution(&active.execution_id, reason, origin)
                         }
                         _ => execution.close(reason, origin),
-                    }?;
-                    self.record_lifecycle(records).await?;
-                    self.send_cancellation(execution.id().as_str()).await?;
+                    }
+                    .map_err(|error| {
+                        self.cover_failure(cursor, OperationEffectPhase::Teardown, error)
+                    })?;
+                    if let Err(error) = self.record_lifecycle(records).await {
+                        return Err(self.cover_failure(
+                            cursor,
+                            OperationEffectPhase::Teardown,
+                            error,
+                        ));
+                    }
+                    if let Err(error) = self.send_cancellation(execution.id().as_str()).await {
+                        return Err(self.cover_failure(
+                            cursor,
+                            OperationEffectPhase::Teardown,
+                            error,
+                        ));
+                    }
                     if self.active.is_none() {
                         return Ok(());
                     }
@@ -1012,7 +1046,12 @@ impl<P: AcpProfile> Worker<P> {
                         PermissionCancellationReason::event_consumer_dropped(),
                         CancellationOrigin::Runtime,
                     ));
-                    return Err(AgentError::Backpressure);
+                    let cursor = self.settlement_facts.cursor();
+                    return Err(self.cover_failure(
+                        cursor,
+                        OperationEffectPhase::EventDelivery,
+                        AgentError::Backpressure,
+                    ));
                 }
                 Input::Deadline => {
                     return if self.closing {
@@ -1023,18 +1062,42 @@ impl<P: AcpProfile> Worker<P> {
                             PermissionCancellationReason::deadline_exceeded(),
                             CancellationOrigin::Runtime,
                         ));
-                        Err(AgentError::Deadline)
+                        let cursor = self.settlement_facts.cursor();
+                        Err(self.cover_failure(
+                            cursor,
+                            OperationEffectPhase::Worker,
+                            AgentError::Deadline,
+                        ))
                     };
                 }
                 Input::Command(Some(command)) => {
-                    self.command(execution, command).await?;
+                    let cursor = self.settlement_facts.cursor();
+                    if let Err(error) = self.command(execution, command).await {
+                        return Err(self.cover_failure(
+                            cursor,
+                            OperationEffectPhase::Worker,
+                            error,
+                        ));
+                    }
                     if self.deferred_outcome.is_some() {
                         return Ok(());
                     }
                 }
                 Input::Message(message) => {
-                    self.message(execution, message?, self.current_deadline())
-                        .await?;
+                    let cursor = self.settlement_facts.cursor();
+                    let message = message.map_err(|error| {
+                        self.cover_failure(cursor, OperationEffectPhase::Worker, error)
+                    })?;
+                    if let Err(error) = self
+                        .message(execution, message, self.current_deadline())
+                        .await
+                    {
+                        return Err(self.cover_failure(
+                            cursor,
+                            OperationEffectPhase::Worker,
+                            error,
+                        ));
+                    }
                     if self.deferred_outcome.is_some() || (self.closing && self.active.is_none()) {
                         return Ok(());
                     }
@@ -1454,7 +1517,11 @@ impl<P: AcpProfile> Worker<P> {
             .send(permission_wire::permission_cancel(&wire_id))
             .await;
         if let Err(error) = &delivery {
-            self.retain_operation(OperationEffectPhase::PermissionDelivery, error.clone());
+            let correlation = self.next_correlation();
+            self.retain_operation(
+                OperationEffectPhase::PermissionDelivery(correlation),
+                error.clone(),
+            );
         }
         let _ = reply.send(delivery.clone().map(|()| record).map_err(|error| {
             ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
@@ -1483,8 +1550,13 @@ impl<P: AcpProfile> Worker<P> {
                 return Ok(());
             }
         };
+        let correlation = self.next_correlation();
         if let Err(error) = self
-            .record_answer(resolution.clone(), PermissionAnswerDelivery::Selected)
+            .record_answer(
+                resolution.clone(),
+                PermissionAnswerDelivery::Selected,
+                correlation,
+            )
             .await
         {
             let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
@@ -1501,13 +1573,19 @@ impl<P: AcpProfile> Worker<P> {
         let response = permission_wire::selected(&wire_id, option_id.as_str());
         let result = self.send(response).await;
         if let Err(error) = &result {
-            self.retain_operation(OperationEffectPhase::PermissionDelivery, error.clone());
+            self.retain_operation(
+                OperationEffectPhase::PermissionDelivery(correlation),
+                error.clone(),
+            );
         }
         let delivery = match &result {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
         };
-        if let Err(error) = self.record_answer(resolution.clone(), delivery).await {
+        if let Err(error) = self
+            .record_answer(resolution.clone(), delivery, correlation)
+            .await
+        {
             let error = match result {
                 Err(delivery_error) => AgentError::PermissionAnswerDeliveryAndAuditFailure {
                     delivery_error: Box::new(delivery_error),
@@ -1633,6 +1711,7 @@ impl<P: AcpProfile> Worker<P> {
             // Keep the reply until teardown has recorded pending cancellations.
             let error = provider_failure("prompt", error);
             self.provider_result = Some(Err(error.clone()));
+            self.settlement_facts.record_provider_result();
             return Err(error);
         }
         let result = wire::outcome(
@@ -1975,11 +2054,15 @@ impl<P: AcpProfile> Worker<P> {
                 delivery,
             ))
         };
+        let correlation = self.next_correlation();
         // The decision is evidence before the wire sees it. An unrecordable
         // decision still has to reach the agent, so the refusal is sent either
         // way and the audit failure is reported after it.
         let decided = self
-            .record_audit(record(PermissionAnswerDelivery::Selected))
+            .record_audit(
+                record(PermissionAnswerDelivery::Selected),
+                AuditEffectPhase::PermissionSelection,
+            )
             .await;
         let response = match rejection_option(params, &self.config.permissions) {
             Some(option) => permission_wire::selected(&wire_id, &option),
@@ -1992,6 +2075,12 @@ impl<P: AcpProfile> Worker<P> {
         self.declined = Some(wire_id);
         publication.begin_write();
         let delivery = self.send_before(response, response_deadline).await;
+        if let Err(error) = &delivery {
+            self.retain_operation(
+                OperationEffectPhase::PermissionDelivery(correlation),
+                error.clone(),
+            );
+        }
         let observed = match &delivery {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
@@ -2005,7 +2094,12 @@ impl<P: AcpProfile> Worker<P> {
         // The caller-visible fact follows the observed write immediately. A
         // slow or cancelled final audit must not relabel a confirmed write as
         // unconfirmed through the publication guard's drop fallback.
-        let written = self.record_audit(record(observed)).await;
+        let written = self
+            .record_audit(
+                record(observed),
+                AuditEffectPhase::PermissionDelivery(correlation),
+            )
+            .await;
         // Three ways this can fail and three different things a reader needs to
         // know, so a transport cause is never replaced by a generic audit one.
         // An answered review keeps them apart the same way.
@@ -2024,18 +2118,48 @@ impl<P: AcpProfile> Worker<P> {
         let notice = event_publication_result(&mut self.cancellation_cause, final_notice);
         combine_decline_result(result, notice)
     }
-    fn retain_operation(&mut self, phase: OperationEffectPhase, error: AgentError) {
-        let id = OperationEffectId {
-            sequence: self.operation_sequence,
-            phase,
-        };
-        self.operation_sequence = self.operation_sequence.wrapping_add(1);
-        self.settlement_facts.record_operation(id, error);
-        self.terminal_failure_source = Some(TerminalFailureSource::Operation);
+    fn next_correlation(&mut self) -> EffectCorrelation {
+        let correlation = EffectCorrelation(self.correlation_sequence);
+        self.correlation_sequence = self
+            .correlation_sequence
+            .checked_add(1)
+            .expect("one worker cannot exhaust effect correlations");
+        correlation
     }
-    async fn record_audit(&mut self, record: ExecutionAuditRecord) -> Result<(), AgentError> {
-        let id = AuditAttemptId(self.audit_sequence);
-        self.audit_sequence = self.audit_sequence.wrapping_add(1);
+    fn retain_operation(&mut self, phase: OperationEffectPhase, error: AgentError) {
+        let _ = self.settlement_facts.record_operation(phase, error);
+    }
+    fn cover_failure(
+        &mut self,
+        cursor: u64,
+        phase: OperationEffectPhase,
+        error: AgentError,
+    ) -> WorkerFailure {
+        let mut coverage = self.settlement_facts.coverage_since(cursor);
+        if coverage.is_empty() {
+            if let Some(id) = self.settlement_facts.record_operation(phase, error.clone()) {
+                coverage.push(id);
+            }
+        }
+        WorkerFailure::new(error, coverage)
+    }
+    fn ensure_failure_covered(
+        &mut self,
+        phase: OperationEffectPhase,
+        failure: WorkerFailure,
+    ) -> WorkerFailure {
+        failure.validate(&self.settlement_facts);
+        if failure.coverage().is_empty() {
+            self.cover_failure(self.settlement_facts.cursor(), phase, failure.into_error())
+        } else {
+            failure
+        }
+    }
+    async fn record_audit(
+        &mut self,
+        record: ExecutionAuditRecord,
+        phase: AuditEffectPhase,
+    ) -> Result<(), AgentError> {
         let result = catch_worker_panic(async {
             // The trait call itself may panic before returning its future.
             timeout(self.config.shutdown_grace, self.audit.record(record))
@@ -2044,8 +2168,7 @@ impl<P: AcpProfile> Worker<P> {
         })
         .await;
         if result.is_err() {
-            self.settlement_facts.record_audit(id);
-            self.terminal_failure_source = Some(TerminalFailureSource::Audit);
+            let _ = self.settlement_facts.record_audit(phase);
             Err(AgentError::AuditFailure)
         } else {
             Ok(())
@@ -2055,13 +2178,19 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         resolution: PermissionResolution,
         delivery: PermissionAnswerDelivery,
+        correlation: EffectCorrelation,
     ) -> Result<(), AgentError> {
         let execution_id = resolution.request().execution_id().clone();
         let permission_id = resolution.request().id().clone();
         let session_id = resolution.session_id().clone();
+        let phase = if delivery == PermissionAnswerDelivery::Selected {
+            AuditEffectPhase::PermissionSelection
+        } else {
+            AuditEffectPhase::PermissionDelivery(correlation)
+        };
         let record = PermissionAnswerRecord::new(resolution, delivery);
         match self
-            .record_audit(ExecutionAuditRecord::Answered(record))
+            .record_audit(ExecutionAuditRecord::Answered(record), phase)
             .await
         {
             Ok(()) => Ok(()),
@@ -2081,7 +2210,11 @@ impl<P: AcpProfile> Worker<P> {
             match record {
                 ExecutionAuditRecord::Cancelled(record) => permissions.push(record),
                 record => {
-                    if self.record_audit(record).await.is_err() {
+                    if self
+                        .record_audit(record, AuditEffectPhase::Lifecycle)
+                        .await
+                        .is_err()
+                    {
                         tracing::error!("execution lifecycle audit delivery failed");
                         failure = Some(AgentError::AuditFailure);
                     }
@@ -2105,7 +2238,10 @@ impl<P: AcpProfile> Worker<P> {
         // delivery opportunity of a different durable record.
         for record in &records {
             if self
-                .record_audit(ExecutionAuditRecord::Cancelled(record.clone()))
+                .record_audit(
+                    ExecutionAuditRecord::Cancelled(record.clone()),
+                    AuditEffectPhase::Cancellation,
+                )
                 .await
                 .is_err()
             {

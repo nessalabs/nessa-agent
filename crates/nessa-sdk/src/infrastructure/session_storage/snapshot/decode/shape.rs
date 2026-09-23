@@ -39,6 +39,8 @@ pub(super) enum Shape {
     Event,
     Update,
     Scheduling,
+    FinalizedComponents,
+    FinalizedComponent,
     Acknowledgement,
     FailedAcknowledgement,
     StorageError,
@@ -89,6 +91,9 @@ impl Shape {
             (Change, "metadata") => Metadata,
             (Change, "events") => Events,
             (Change, "scheduling") => Scheduling,
+            (_, "projection") => FinalizedComponents,
+            (FinalizedComponent, "Operation") => Error,
+            (FinalizedComponent, "PermissionDeliveryAndAudit") => Generic,
             (Metadata, "acknowledgement") => Acknowledgement,
             (Acknowledgement, "Failed") => FailedAcknowledgement,
             (FailedAcknowledgement, "audit") => Error,
@@ -162,6 +167,7 @@ impl Shape {
             Self::Files => Self::FileLink,
             Self::Changes => Self::Change,
             Self::Events => Self::Event,
+            Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
             Self::Reorders => Self::Reorder,
             Self::QueueEntries => Self::QueueEntry,
@@ -188,6 +194,8 @@ impl Shape {
             Self::Options => LARGE_STRING / size_of::<PermissionOption>(),
             // Valid scheduling histories have at most three transitions.
             Self::Scheduling => 3,
+            // Two categories retain at most 128 facts and one sticky marker each.
+            Self::FinalizedComponents => 258,
             // Each collection element occupies retained storage. The per-change
             // structural budget below also applies to nested/empty elements.
             _ => 4 * 1024 * 1024,

@@ -10,7 +10,7 @@ use crate::application::agent_execution::{
         limits::validate_observation_id, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
         SubmissionMode,
     },
-    providers::ProviderIdentity,
+    providers::{ExecutionReport, ProviderIdentity},
     sessions::storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
 };
 use crate::domain::{
@@ -312,7 +312,10 @@ impl Metadata {
             acknowledgement: self.acknowledgement.into(),
             events: Vec::new(),
             scheduling: Vec::new(),
-            provider_report: self.provider_report.map(Into::into),
+            provider_report: self
+                .provider_report
+                .map(ExecutionReport::try_from)
+                .transpose()?,
             local_cancellation: self
                 .local_cancellation
                 .map(InvocationCancellation::decode)
