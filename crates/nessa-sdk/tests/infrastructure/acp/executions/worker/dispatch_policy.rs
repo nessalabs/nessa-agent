@@ -295,7 +295,7 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
         deadline: None,
     });
     let observation = ReviewDeclineObservation::selected(
-        ReviewDeclineId::new("prefill").unwrap(),
+        ReviewDeclineId::new("1").unwrap(),
         ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
     );
     for _ in 0..15 {
@@ -354,7 +354,7 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
     let (reply, _result) = oneshot::channel();
     worker.active = Some(ActiveExecution {
         id: 8,
-        execution_id,
+        execution_id: execution_id.clone(),
         reply,
         deadline: None,
     });
@@ -385,7 +385,8 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
     }
     assert_eq!(worker.permissions.len(), MAX_RETAINED_CATEGORY_FACTS);
     let records = controller
-        .close(
+        .close_execution(
+            &execution_id,
             PermissionCancellationReason::session_closed(),
             CancellationOrigin::Runtime,
         )
