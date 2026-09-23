@@ -613,8 +613,10 @@ paths remain current until the coordinated TODO updates all consumers.
 ## Browser sessions
 
 `crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`
-coordinates an opaque credential binding and its asynchronous storage port, `domain/value_objects/`
-owns the rolling idle lifetime used to validate every stored session, and `adapters/`
+coordinates current-origin admission and its asynchronous storage port,
+`domain/value_objects/` owns immutable authoritative session state, the exact
+structurally validated HTTP(S) origin, and the rolling idle lifetime used to
+validate every stored session, and `adapters/`
 implements the bounded session journal with filesystem work on the blocking pool
 (and memory test adapter), and `entrypoint/http.rs` translates cookies and requests.
 Tests under `tests/browser_session/` cover lifetime, persistence, and HTTP boundaries. Its module map
