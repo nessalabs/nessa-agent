@@ -99,12 +99,46 @@ async fn a_full_notice_queue_retains_truthful_selection_and_reports_final_loss()
     );
     assert!(events.recv().await.is_none());
     assert_eq!(
-        combine_decline_result(Err(AgentError::AuditFailure), Err(QueueError::Full)),
+        combine_decline_result(Err(AgentError::AuditFailure), Err(AgentError::Backpressure)),
         Err(AgentError::MultipleOperationFailures {
             first_error: Box::new(AgentError::AuditFailure),
             subsequent_error: Box::new(AgentError::Backpressure),
         })
     );
+}
+
+#[test]
+fn event_publication_distinguishes_closed_from_full_and_preserves_an_earlier_cause() {
+    let mut full_cause = None;
+    assert_eq!(
+        event_publication_result(&mut full_cause, Err(QueueError::Full)),
+        Err(AgentError::Backpressure)
+    );
+    assert_eq!(full_cause, None, "an open full queue is not consumer loss");
+
+    let mut closed_cause = None;
+    assert_eq!(
+        event_publication_result(&mut closed_cause, Err(QueueError::Closed)),
+        Err(AgentError::Backpressure)
+    );
+    assert_eq!(
+        closed_cause,
+        Some((
+            PermissionCancellationReason::event_consumer_dropped(),
+            CancellationOrigin::Runtime,
+        ))
+    );
+
+    let established = (
+        PermissionCancellationReason::deadline_exceeded(),
+        CancellationOrigin::Runtime,
+    );
+    let mut earlier_cause = Some(established.clone());
+    assert_eq!(
+        event_publication_result(&mut earlier_cause, Err(QueueError::Closed)),
+        Err(AgentError::Backpressure)
+    );
+    assert_eq!(earlier_cause, Some(established));
 }
 
 #[tokio::test]

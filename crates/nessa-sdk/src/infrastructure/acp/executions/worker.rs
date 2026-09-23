@@ -213,18 +213,34 @@ impl Drop for DeclineNoticePublication {
 }
 fn combine_decline_result(
     result: Result<(), AgentError>,
-    notice: Result<(), QueueError>,
+    notice: Result<(), AgentError>,
 ) -> Result<(), AgentError> {
     match (result, notice) {
         (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(QueueError::Closed | QueueError::Full)) => Err(AgentError::Backpressure),
+        (Ok(()), Err(error)) => Err(error),
         (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(QueueError::Closed | QueueError::Full)) => {
-            Err(AgentError::MultipleOperationFailures {
-                first_error: Box::new(error),
-                subsequent_error: Box::new(AgentError::Backpressure),
-            })
+        (Err(error), Err(notice_error)) => Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(error),
+            subsequent_error: Box::new(notice_error),
+        }),
+    }
+}
+/// Retain the lifecycle fact a closed event queue proves before returning its
+/// caller-facing diagnostic. A full queue is still open and proves no closure.
+fn event_publication_result(
+    cancellation_cause: &mut Option<(PermissionCancellationReason, CancellationOrigin)>,
+    result: Result<(), QueueError>,
+) -> Result<(), AgentError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(QueueError::Closed) => {
+            cancellation_cause.get_or_insert((
+                PermissionCancellationReason::event_consumer_dropped(),
+                CancellationOrigin::Runtime,
+            ));
+            Err(AgentError::Backpressure)
         }
+        Err(QueueError::Full) => Err(AgentError::Backpressure),
     }
 }
 struct Worker<P> {
@@ -1627,17 +1643,8 @@ impl<P: AcpProfile> Worker<P> {
         Ok(())
     }
     fn emit(&mut self, event: ExecutionEvent) -> Result<(), AgentError> {
-        match self.events.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(QueueError::Closed) => {
-                self.cancellation_cause.get_or_insert((
-                    PermissionCancellationReason::event_consumer_dropped(),
-                    CancellationOrigin::Runtime,
-                ));
-                Err(AgentError::Backpressure)
-            }
-            Err(QueueError::Full) => Err(AgentError::Backpressure),
-        }
+        let result = self.events.try_send(event);
+        event_publication_result(&mut self.cancellation_cause, result)
     }
     fn check_session(
         &self,
@@ -1973,7 +1980,7 @@ impl<P: AcpProfile> Worker<P> {
         };
         // A successful final publication necessarily retried and published the
         // selection first, so an earlier full queue has recovered.
-        let notice = final_notice;
+        let notice = event_publication_result(&mut self.cancellation_cause, final_notice);
         combine_decline_result(result, notice)
     }
     async fn record_audit(&mut self, record: ExecutionAuditRecord) -> Result<(), AgentError> {
