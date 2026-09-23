@@ -280,10 +280,23 @@ enum ExecutionReportState {
     Finalized(FinalizedExecutionReport),
 }
 
+type IndependentExecutionParts<'a> = (
+    Option<&'a Result<ExecutionOutcome, AgentError>>,
+    ExecutionReportSource,
+    Option<&'a AgentError>,
+    &'a ProviderSessionState,
+);
+type FinalizedExecutionParts<'a> = (
+    &'a FinalizedExecutionSource,
+    &'a ResourceCleanup,
+    Option<&'a AgentError>,
+    &'a FinalizedExecutionProjection,
+);
+
 /// Provider result and any separate delivery or audit failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReport {
-    state: ExecutionReportState,
+    state: Box<ExecutionReportState>,
 }
 impl ExecutionReport {
     /// Retain the actual provider result (None if unknown), independent failure,
@@ -294,12 +307,12 @@ impl ExecutionReport {
         session_state: ProviderSessionState,
     ) -> Self {
         Self {
-            state: ExecutionReportState::Independent {
+            state: Box::new(ExecutionReportState::Independent {
                 source: ExecutionReportSource::Provider,
                 provider_result: provider_result.map(|result| result.map_err(AgentError::bounded)),
                 failure: failure.map(AgentError::bounded),
                 session_state,
-            },
+            }),
         }
     }
     /// Build a provider settlement from one validated finalized recipe.
@@ -311,11 +324,13 @@ impl ExecutionReport {
     ) -> Self {
         let provider_result = provider_result.map(|result| result.map_err(AgentError::bounded));
         Self {
-            state: ExecutionReportState::Finalized(FinalizedExecutionReport::new(
-                FinalizedExecutionSource::Provider(provider_result),
-                physical,
-                completion_failure,
-                projection,
+            state: Box::new(ExecutionReportState::Finalized(
+                FinalizedExecutionReport::new(
+                    FinalizedExecutionSource::Provider(provider_result),
+                    physical,
+                    completion_failure,
+                    projection,
+                ),
             )),
         }
     }
@@ -326,24 +341,19 @@ impl ExecutionReport {
         projection: FinalizedExecutionProjection,
     ) -> Self {
         Self {
-            state: ExecutionReportState::Finalized(FinalizedExecutionReport::new(
-                FinalizedExecutionSource::LocalCancellation,
-                physical,
-                completion_failure,
-                projection,
+            state: Box::new(ExecutionReportState::Finalized(
+                FinalizedExecutionReport::new(
+                    FinalizedExecutionSource::LocalCancellation,
+                    physical,
+                    completion_failure,
+                    projection,
+                ),
             )),
         }
     }
     /// Internal finalized authority for current storage encoding.
-    pub(crate) fn finalized_parts(
-        &self,
-    ) -> Option<(
-        &FinalizedExecutionSource,
-        &ResourceCleanup,
-        Option<&AgentError>,
-        &FinalizedExecutionProjection,
-    )> {
-        let ExecutionReportState::Finalized(report) = &self.state else {
+    pub(crate) fn finalized_parts(&self) -> Option<FinalizedExecutionParts<'_>> {
+        let ExecutionReportState::Finalized(report) = self.state.as_ref() else {
             return None;
         };
         Some((
@@ -353,20 +363,13 @@ impl ExecutionReport {
             &report.projection,
         ))
     }
-    pub(crate) fn independent_parts(
-        &self,
-    ) -> Option<(
-        Option<&Result<ExecutionOutcome, AgentError>>,
-        ExecutionReportSource,
-        Option<&AgentError>,
-        &ProviderSessionState,
-    )> {
+    pub(crate) fn independent_parts(&self) -> Option<IndependentExecutionParts<'_>> {
         let ExecutionReportState::Independent {
             provider_result,
             source,
             failure,
             session_state,
-        } = &self.state
+        } = self.state.as_ref()
         else {
             return None;
         };
@@ -385,17 +388,17 @@ impl ExecutionReport {
     /// Unconfirmed cleanup still projects an error; local intent never confirms termination.
     pub fn cancelled_locally(report: CleanupReport) -> Self {
         Self {
-            state: ExecutionReportState::Independent {
+            state: Box::new(ExecutionReportState::Independent {
                 provider_result: None,
                 failure: None,
                 session_state: ProviderSessionState::CleanupReported(report),
                 source: ExecutionReportSource::LocalCancellation,
-            },
+            }),
         }
     }
     /// Whether local cancellation settled the invocation without a provider response.
     pub fn source(&self) -> ExecutionReportSource {
-        match &self.state {
+        match self.state.as_ref() {
             ExecutionReportState::Independent { source, .. } => *source,
             ExecutionReportState::Finalized(report) => match &report.source {
                 FinalizedExecutionSource::Provider(_) => ExecutionReportSource::Provider,
@@ -407,7 +410,7 @@ impl ExecutionReport {
     }
     /// Result actually observed from the provider, or None when unknown.
     pub fn provider_result(&self) -> Option<&Result<ExecutionOutcome, AgentError>> {
-        match &self.state {
+        match self.state.as_ref() {
             ExecutionReportState::Independent {
                 provider_result, ..
             } => provider_result.as_ref(),
@@ -419,21 +422,21 @@ impl ExecutionReport {
     }
     /// Independent observation, delivery, or audit failure.
     pub fn failure(&self) -> Option<&AgentError> {
-        match &self.state {
+        match self.state.as_ref() {
             ExecutionReportState::Independent { failure, .. } => failure.as_ref(),
             ExecutionReportState::Finalized(report) => report.failure.as_ref(),
         }
     }
     /// Explicit provider session status when settlement was published.
     pub fn session_state(&self) -> &ProviderSessionState {
-        match &self.state {
+        match self.state.as_ref() {
             ExecutionReportState::Independent { session_state, .. } => session_state,
             ExecutionReportState::Finalized(report) => &report.session_state,
         }
     }
     /// Consumer projection retaining a known outcome alongside secondary failure.
     pub fn into_result(self) -> Result<ExecutionOutcome, AgentError> {
-        let (provider_result, source, failure, session_state) = match self.state {
+        let (provider_result, source, failure, session_state) = match *self.state {
             ExecutionReportState::Independent {
                 provider_result,
                 source,
