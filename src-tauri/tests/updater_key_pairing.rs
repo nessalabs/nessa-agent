@@ -42,7 +42,7 @@
 //! ```text
 //! TAURI_SIGNING_PRIVATE_KEY_PATH=~/.nessa-signing/updater.key \
 //! TAURI_SIGNING_PRIVATE_KEY_PASSWORD= \
-//!   cargo test -p nessa-app --test updater_key_pairing
+//!   cargo test -p nessa-app --test updater_key_pairing --no-default-features
 //! ```
 //!
 //! Without those variables there is no key on the machine, and an ordinary

@@ -51,10 +51,17 @@ const settle = async (start) => {
   }
 }
 
-/** Own both observations required for a launched WebDriver session. */
-export async function observeWebdriverStartup({ createSession, observeApplication }) {
+/** Observe startup while handing a created session immediately to its cleanup owner. */
+export async function observeWebdriverStartup({
+  createSession,
+  claimSession,
+  observeApplication,
+}) {
   const controller = new AbortController()
-  const session = settle(() => createSession(controller.signal))
+  const session = settle(async () => {
+    const created = await createSession(controller.signal)
+    claimSession(created)
+  })
   const application = settle(() => observeApplication(controller.signal))
   const labelled = [
     session.then((result) => ({ owner: "session", result })),
@@ -74,9 +81,7 @@ export async function observeWebdriverStartup({ createSession, observeApplicatio
     throw second.error
   }
 
-  return first.owner === "session"
-    ? { session: first.result.value, application: second.value }
-    : { session: second.value, application: first.result.value }
+  return first.owner === "session" ? second.value : first.result.value
 }
 
 /** One labelled WebDriver request with a lifecycle-specific, bounded budget. */

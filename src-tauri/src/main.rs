@@ -157,7 +157,7 @@ fn main() {
                 // setup has sized and bound the configured panel. The static
                 // document remains visible if the application bundle cannot
                 // replace its loading fallback.
-                #[cfg(debug_assertions)]
+                #[cfg(all(debug_assertions, feature = "custom-protocol"))]
                 if let Some(window) = app.get_webview_window(panel::MAIN_WINDOW) {
                     if let Err(error) = panel::show(&window, &settings) {
                         eprintln!("[nessa] could not reveal the debug panel: {error}");
