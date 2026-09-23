@@ -155,10 +155,12 @@ test("a created session is claimed before a later application failure", async ()
 test("a session acknowledged after application failure is still claimed", async () => {
   const events = []
   const failure = new Error("application PID never appeared")
+  let sessionSignal
   let finishSession
   const startup = observeWebdriverStartup({
-    createSession: () =>
+    createSession: (signal) =>
       new Promise((resolve) => {
+        sessionSignal = signal
         finishSession = () => resolve({ sessionId: "late-session" })
       }),
     claimSession: (session) => events.push(`claimed ${session.sessionId}`),
@@ -168,11 +170,41 @@ test("a session acknowledged after application failure is still claimed", async 
     },
   })
 
-  while (!finishSession) await Promise.resolve()
-  await Promise.resolve()
+  assert.ok(sessionSignal)
+  await new Promise((resolve) => {
+    if (sessionSignal.aborted) resolve()
+    else sessionSignal.addEventListener("abort", resolve, { once: true })
+  })
+  assert.equal(sessionSignal.aborted, true)
+  assert.equal(sessionSignal.reason, failure)
   finishSession()
   await assert.rejects(startup, failure)
   assert.deepEqual(events, ["application failed", "claimed late-session"])
+})
+
+test("a claim failure cannot erase a session already transferred to its owner", async () => {
+  const events = []
+  const failure = new Error("session owner rejected its shape")
+  let claimed
+
+  await assert.rejects(
+    observeWebdriverStartup({
+      createSession: async () => ({ sessionId: "owned-session" }),
+      claimSession: (session) => {
+        claimed = session
+        events.push("session claimed")
+        throw failure
+      },
+      observeApplication: pendingUntilAborted(events, "application"),
+    }),
+    failure,
+  )
+  assert.deepEqual(claimed, { sessionId: "owned-session" })
+  assert.deepEqual(events, [
+    "session claimed",
+    "application aborted",
+    "application settled",
+  ])
 })
 
 test("successful startup claims the session and returns the application fact", async () => {
