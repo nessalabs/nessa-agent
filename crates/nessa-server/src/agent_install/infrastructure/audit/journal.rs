@@ -486,7 +486,7 @@ fn publication_failure(
     AuditFailure::new(
         stage,
         format!("storage publication failed at {storage_stage:?}: {detail}"),
-        published.then(|| AuditRecordEvidence::IncomingPublished(logical_record)),
+        published.then_some(AuditRecordEvidence::IncomingPublished(logical_record)),
         cleanup,
     )
 }

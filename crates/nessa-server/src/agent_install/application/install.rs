@@ -58,22 +58,47 @@ pub enum InstallFailure {
     /// install effects. A new user invocation needs a new request identity;
     /// an audit failure is retried through [`InstallAgentRuntime::retry_audit`].
     AttemptReused(InstallRequest),
-    /// Durable evidence was not acknowledged. `operation` preserves an
-    /// installation failure that happened too, and `runtime_state` retains
-    /// exactly what was established before the audit attempt.
-    Audit {
-        operation: Option<Box<InstallFailure>>,
-        runtime_state: RuntimeStateEvidence,
-        /// The exact event whose acknowledgement is safe to retry.
-        pending: InstallTransition,
-        failure: AuditFailure,
-    },
+    /// Durable evidence was not acknowledged. The boxed evidence preserves an
+    /// installation failure that happened too and the exact runtime state and
+    /// transition established before the audit attempt.
+    Audit(Box<AuditDeliveryFailure>),
     /// Publication failed and its cleanup also failed. The original operation
     /// and cleanup failures remain separate facts.
     Recovery {
         operation: StoreFailure,
         cleanup: Box<PublicationCleanupFailure>,
     },
+}
+
+/// Typed install and runtime facts retained when audit delivery fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditDeliveryFailure {
+    operation: Option<Box<InstallFailure>>,
+    runtime_state: RuntimeStateEvidence,
+    pending: InstallTransition,
+    failure: AuditFailure,
+}
+
+impl AuditDeliveryFailure {
+    /// Return the install failure that also occurred, when there was one.
+    pub fn operation(&self) -> Option<&InstallFailure> {
+        self.operation.as_deref()
+    }
+
+    /// Return the installed state established before audit delivery.
+    pub fn runtime_state(&self) -> &RuntimeStateEvidence {
+        &self.runtime_state
+    }
+
+    /// Return the exact transition that is safe to redeliver.
+    pub fn pending(&self) -> &InstallTransition {
+        &self.pending
+    }
+
+    /// Return why durable acknowledgement failed.
+    pub fn failure(&self) -> &AuditFailure {
+        &self.failure
+    }
 }
 
 /// Installed-state evidence retained when audit acknowledgement fails.
@@ -106,21 +131,21 @@ impl fmt::Display for InstallFailure {
                 "install request {} has already begun",
                 request.request_id()
             ),
-            Self::Audit {
-                operation,
-                runtime_state,
-                pending: _,
-                failure,
-            } => {
-                if let Some(operation) = operation {
-                    write!(f, "{operation}; install audit was not committed: {failure}")
-                } else if *runtime_state == RuntimeStateEvidence::TargetInstalled {
+            Self::Audit(evidence) => {
+                if let Some(operation) = &evidence.operation {
                     write!(
                         f,
-                        "the runtime was installed, but its audit record was not committed: {failure}"
+                        "{operation}; install audit was not committed: {}",
+                        evidence.failure
+                    )
+                } else if evidence.runtime_state == RuntimeStateEvidence::TargetInstalled {
+                    write!(
+                        f,
+                        "the runtime was installed, but its audit record was not committed: {}",
+                        evidence.failure
                     )
                 } else {
-                    write!(f, "install audit was not committed: {failure}")
+                    write!(f, "install audit was not committed: {}", evidence.failure)
                 }
             }
             Self::Recovery { operation, cleanup } => {
@@ -271,14 +296,14 @@ impl InstallAgentRuntime<'_> {
                         .replaced(previous.clone())
                         .map_err(InstallFailure::Evidence)?,
                 };
-                self.audit
-                    .record(transition.clone())
-                    .map_err(|failure| InstallFailure::Audit {
+                self.audit.record(transition.clone()).map_err(|failure| {
+                    InstallFailure::Audit(Box::new(AuditDeliveryFailure {
                         operation: None,
                         runtime_state: RuntimeStateEvidence::TargetInstalled,
                         pending: transition,
                         failure,
-                    })?;
+                    }))
+                })?;
                 Ok(publication.executable().to_owned())
             }
             Err(publish) => {
@@ -327,14 +352,14 @@ impl InstallAgentRuntime<'_> {
     }
 
     fn audit(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, InstallFailure> {
-        self.audit
-            .record(transition.clone())
-            .map_err(|failure| InstallFailure::Audit {
+        self.audit.record(transition.clone()).map_err(|failure| {
+            InstallFailure::Audit(Box::new(AuditDeliveryFailure {
                 operation: None,
                 runtime_state: RuntimeStateEvidence::Unchanged,
                 pending: transition,
                 failure,
-            })
+            }))
+        })
     }
 
     /// Retry only the durable acknowledgement retained by an audit failure.
@@ -344,11 +369,11 @@ impl InstallAgentRuntime<'_> {
         &self,
         failure: &InstallFailure,
     ) -> Result<AuditAcknowledgement, AuditRetryError> {
-        let InstallFailure::Audit { pending, .. } = failure else {
+        let InstallFailure::Audit(evidence) = failure else {
             return Err(AuditRetryError::NotPending);
         };
         self.audit
-            .record(pending.clone())
+            .record(evidence.pending.clone())
             .map_err(AuditRetryError::Failed)
     }
 }
@@ -416,12 +441,12 @@ fn with_audit_failure(
     pending: InstallTransition,
     failure: AuditFailure,
 ) -> InstallFailure {
-    InstallFailure::Audit {
+    InstallFailure::Audit(Box::new(AuditDeliveryFailure {
         operation: Some(Box::new(operation)),
         runtime_state,
         pending,
         failure,
-    }
+    }))
 }
 
 #[cfg(test)]

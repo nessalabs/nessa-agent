@@ -10,7 +10,8 @@
 mod install;
 mod ports;
 pub use install::{
-    AuditRetryError, InstallAgentRuntime, InstallFailure, InstalledRuntime, RuntimeStateEvidence,
+    AuditDeliveryFailure, AuditRetryError, InstallAgentRuntime, InstallFailure, InstalledRuntime,
+    RuntimeStateEvidence,
 };
 pub use ports::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, AuditRecordEvidence,

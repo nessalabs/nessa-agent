@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
 
 use crate::agent_install::application::{
-    Publication, PublicationChange, PublicationCleanupFailure, PublicationRecovery, PublishFailure,
-    RollbackChange, RuntimeStore, StagedArchive, StoreFailure,
+    Publication, PublicationChange, PublicationCleanupFailure, PublishFailure, RollbackChange,
+    RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, FileRole, PinnedRelease, ReleaseContents, ReleaseFile,
@@ -223,6 +223,15 @@ impl InstallationRecord {
 /// previous answer or the new one, never a half of either.
 pub struct ManagedRuntimes {
     root: PathBuf,
+}
+
+struct PublicationRecoveryContext<'a> {
+    agent: &'a AgentName,
+    written: &'a [PathBuf],
+    previous_record: Option<&'a InstallationRecord>,
+    previous_artifact: Option<RuntimeArtifact>,
+    failure: StoreFailure,
+    lock: File,
 }
 
 impl ManagedRuntimes {
@@ -894,20 +903,16 @@ impl ManagedRuntimes {
     /// reachable on a disk that has run out part-way through an install.
     fn recover_publication(
         &self,
-        agent: &AgentName,
-        release: &PinnedRelease,
-        written: &[PathBuf],
-        previous_record: Option<&InstallationRecord>,
-        previous_artifact: Option<RuntimeArtifact>,
-        failure: StoreFailure,
+        recovery: PublicationRecoveryContext<'_>,
         durable: impl Fn(&Path) -> io::Result<()> + Copy,
         withdraw: impl Fn(&[PathBuf]) -> Result<(), StoreFailure> + Copy,
-        lock: File,
     ) -> PublishFailure {
-        let withdrawal = withdraw(written).err();
-        let restoration = self.restore_record(agent, previous_record, durable).err();
-        let (rollback, confirmation) = match self.recorded_artifact(agent) {
-            Ok(confirmed) if confirmed == previous_artifact => {
+        let withdrawal = withdraw(recovery.written).err();
+        let restoration = self
+            .restore_record(recovery.agent, recovery.previous_record, durable)
+            .err();
+        let (rollback, confirmation) = match self.recorded_artifact(recovery.agent) {
+            Ok(confirmed) if confirmed == recovery.previous_artifact => {
                 let rollback = match confirmed {
                     Some(artifact) => RollbackChange::Restored(artifact),
                     None => RollbackChange::NoInstalledRuntime,
@@ -923,11 +928,16 @@ impl ManagedRuntimes {
             Err(error) => (None, Some(error)),
         };
         match PublicationCleanupFailure::new(withdrawal, restoration, confirmation) {
-            Some(cleanup) => PublishFailure::incomplete(failure, rollback, cleanup, Box::new(lock)),
+            Some(cleanup) => PublishFailure::incomplete(
+                recovery.failure,
+                rollback,
+                cleanup,
+                Box::new(recovery.lock),
+            ),
             None => PublishFailure::rolled_back(
-                failure,
+                recovery.failure,
                 rollback.expect("successful recovery confirms a rollback state"),
-                Box::new(lock),
+                Box::new(recovery.lock),
             ),
         }
     }
@@ -990,28 +1000,30 @@ impl ManagedRuntimes {
             self.unpack(agent, release, staged, MAXIMUM_UNPACKED_BYTES, &mut written)
         {
             return Err(self.recover_publication(
-                agent,
-                release,
-                &written,
-                previous_record.as_ref(),
-                previous_artifact,
-                failure,
+                PublicationRecoveryContext {
+                    agent,
+                    written: &written,
+                    previous_record: previous_record.as_ref(),
+                    previous_artifact,
+                    failure,
+                    lock,
+                },
                 durable,
                 withdraw,
-                lock,
             ));
         }
         if let Err(failure) = self.settle(agent, release, durable) {
             return Err(self.recover_publication(
-                agent,
-                release,
-                &written,
-                previous_record.as_ref(),
-                previous_artifact,
-                failure,
+                PublicationRecoveryContext {
+                    agent,
+                    written: &written,
+                    previous_record: previous_record.as_ref(),
+                    previous_artifact,
+                    failure,
+                    lock,
+                },
                 durable,
                 withdraw,
-                lock,
             ));
         }
 

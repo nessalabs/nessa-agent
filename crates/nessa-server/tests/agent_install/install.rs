@@ -642,10 +642,8 @@ fn audit_failure_after_verification_is_visible_and_prevents_publication() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            runtime_state: RuntimeStateEvidence::Unchanged,
-            ..
-        }
+        InstallFailure::Audit(ref evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::Unchanged
     ));
     assert!(store.published().is_empty());
     assert_eq!(store.discarded().len(), 1);
@@ -673,10 +671,8 @@ fn audit_failure_at_started_prevents_install_effects() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            runtime_state: RuntimeStateEvidence::Unchanged,
-            ..
-        }
+        InstallFailure::Audit(ref evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::Unchanged
     ));
     assert!(source.requested().is_empty());
     assert!(store.published().is_empty());
@@ -758,10 +754,8 @@ fn audit_failure_at_replaced_reports_the_new_runtime_and_prior_evidence() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            runtime_state: RuntimeStateEvidence::TargetInstalled,
-            ..
-        }
+        InstallFailure::Audit(ref evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::TargetInstalled
     ));
     assert_eq!(audit.records().last().unwrap().previous(), Some(&previous));
 }
@@ -790,12 +784,9 @@ fn audit_failure_at_rollback_preserves_the_publication_failure() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            operation: Some(inner),
-            runtime_state: RuntimeStateEvidence::NoInstalledRuntime,
-            ..
-        }
-            if *inner == InstallFailure::Store(operation)
+        InstallFailure::Audit(ref evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::NoInstalledRuntime
+                && evidence.operation() == Some(&InstallFailure::Store(operation))
     ));
 }
 
@@ -883,11 +874,9 @@ fn incomplete_recovery_retains_the_confirmed_prior_artifact() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            operation: Some(_),
-            runtime_state: RuntimeStateEvidence::Restored(ref artifact),
-            ..
-        } if artifact == &previous
+        InstallFailure::Audit(ref evidence)
+            if evidence.operation().is_some()
+                && evidence.runtime_state() == &RuntimeStateEvidence::Restored(previous.clone())
     ));
     let transition = audit.records().pop().unwrap();
     assert!(matches!(
@@ -932,23 +921,17 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
     )
     .unwrap_err();
 
-    let InstallFailure::Audit {
-        operation: Some(audited_operation),
-        runtime_state,
-        failure: audit_failure,
-        ..
-    } = failure
-    else {
+    let InstallFailure::Audit(evidence) = failure else {
         panic!("incomplete recovery and audit failure were not retained");
     };
-    assert_eq!(runtime_state, RuntimeStateEvidence::Unconfirmed);
-    assert_eq!(audit_failure.detail(), "sink refused");
+    assert_eq!(evidence.runtime_state(), &RuntimeStateEvidence::Unconfirmed);
+    assert_eq!(evidence.failure().detail(), "sink refused");
     assert_eq!(
-        *audited_operation,
-        InstallFailure::Recovery {
+        evidence.operation(),
+        Some(&InstallFailure::Recovery {
             operation,
             cleanup: Box::new(cleanup_evidence),
-        }
+        })
     );
     let transition = audit.records().pop().unwrap();
     let (state, failures) = transition.recovery().unwrap();
@@ -986,10 +969,8 @@ fn audit_failure_after_publication_reports_the_runtime_as_installed() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            runtime_state: RuntimeStateEvidence::TargetInstalled,
-            ..
-        }
+        InstallFailure::Audit(ref evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::TargetInstalled
     ));
     assert_eq!(store.published(), ["opencode"]);
     assert_eq!(store.discarded().len(), 1);
@@ -1016,11 +997,9 @@ fn audit_failure_preserves_digest_rejection_and_cleanup() {
 
     assert!(matches!(
         failure,
-        InstallFailure::Audit {
-            operation: Some(operation),
-            runtime_state: RuntimeStateEvidence::Unchanged,
-            ..
-        } if matches!(*operation, InstallFailure::Rejected(_))
+        InstallFailure::Audit(ref evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::Unchanged
+                && matches!(evidence.operation(), Some(InstallFailure::Rejected(_)))
     ));
     assert!(store.published().is_empty());
     assert_eq!(store.discarded().len(), 1);
@@ -1060,10 +1039,8 @@ fn successful_publication_lease_spans_a_failing_audit_and_then_releases() {
         release.send(()).unwrap();
         assert!(matches!(
             install.join().unwrap(),
-            Err(InstallFailure::Audit {
-                runtime_state: RuntimeStateEvidence::TargetInstalled,
-                ..
-            })
+            Err(InstallFailure::Audit(ref evidence))
+                if evidence.runtime_state() == &RuntimeStateEvidence::TargetInstalled
         ));
         dropped.recv_timeout(Duration::from_secs(5)).unwrap();
     });
@@ -1160,11 +1137,9 @@ fn uncertain_recovery_lease_spans_failing_audit_and_then_releases() {
         release.send(()).unwrap();
         assert!(matches!(
             install.join().unwrap(),
-            Err(InstallFailure::Audit {
-                operation: Some(_),
-                runtime_state: RuntimeStateEvidence::Unconfirmed,
-                ..
-            })
+            Err(InstallFailure::Audit(ref evidence))
+                if evidence.operation().is_some()
+                    && evidence.runtime_state() == &RuntimeStateEvidence::Unconfirmed
         ));
         dropped.recv_timeout(Duration::from_secs(5)).unwrap();
     });

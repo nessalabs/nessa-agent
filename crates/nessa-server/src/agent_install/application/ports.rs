@@ -185,6 +185,11 @@ pub enum AuditRecordEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditFailure {
     stage: AuditFailureStage,
+    context: Box<AuditFailureContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuditFailureContext {
     detail: String,
     record: Option<AuditRecordEvidence>,
     semantic_conflict: Option<InstallAttemptError>,
@@ -201,10 +206,12 @@ impl AuditFailure {
     ) -> Self {
         Self {
             stage,
-            detail,
-            record,
-            semantic_conflict: None,
-            cleanup,
+            context: Box::new(AuditFailureContext {
+                detail,
+                record,
+                semantic_conflict: None,
+                cleanup,
+            }),
         }
     }
 
@@ -217,10 +224,12 @@ impl AuditFailure {
     ) -> Self {
         Self {
             stage,
-            detail,
-            record,
-            semantic_conflict: Some(conflict),
-            cleanup: None,
+            context: Box::new(AuditFailureContext {
+                detail,
+                record,
+                semantic_conflict: Some(conflict),
+                cleanup: None,
+            }),
         }
     }
 
@@ -231,22 +240,22 @@ impl AuditFailure {
 
     /// Return the primary failure detail.
     pub fn detail(&self) -> &str {
-        &self.detail
+        &self.context.detail
     }
 
     /// Return publication or conflict evidence for a physical record, if known.
     pub fn record(&self) -> Option<&AuditRecordEvidence> {
-        self.record.as_ref()
+        self.context.record.as_ref()
     }
 
     /// Return the domain admission error when semantic reconciliation failed.
     pub fn semantic_conflict_kind(&self) -> Option<InstallAttemptError> {
-        self.semantic_conflict
+        self.context.semantic_conflict
     }
 
     /// Return an independent reservation-cleanup failure.
     pub fn cleanup(&self) -> Option<&str> {
-        self.cleanup.as_deref()
+        self.context.cleanup.as_deref()
     }
 }
 
@@ -255,9 +264,9 @@ impl fmt::Display for AuditFailure {
         write!(
             formatter,
             "audit failed at {:?}: {}",
-            self.stage, self.detail
+            self.stage, self.context.detail
         )?;
-        if let Some(cleanup) = &self.cleanup {
+        if let Some(cleanup) = &self.context.cleanup {
             write!(formatter, "; reservation cleanup also failed: {cleanup}")?;
         }
         Ok(())

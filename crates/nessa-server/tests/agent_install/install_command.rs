@@ -6,7 +6,7 @@ use crate::agent_install::application::{InstalledRuntime, StoreFailure};
 use crate::agent_install::domain::{
     ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, PinnedRelease, ReleaseVersion,
 };
-use crate::agent_install_test_support::{installs, temporary_root};
+use crate::agent_install_test_support::{installs, request, temporary_root};
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -71,7 +71,7 @@ fn installs_from_inside_the_runtime() {
             // the task outside `block_on` would be a different thing entirely —
             // `spawn_blocking` needs a runtime context to be called at all.
             let root = root.path().to_owned();
-            tokio::task::spawn_blocking(move || install(&opencode(), &root)).await
+            tokio::task::spawn_blocking(move || install(&opencode(), &root, &request())).await
         })
         .expect("the installer finishes")
         .expect("the pinned release installs");
@@ -88,7 +88,8 @@ fn an_agent_nessa_does_not_install_is_named_as_such() {
     // more: all three agents Nessa drives are pinned.
     let root = temporary_root();
     let unknown = AgentName::parse("gemini").expect("a plain agent name");
-    let failure = install(&unknown, root.path()).expect_err("gemini is not installed by nessa");
+    let failure =
+        install(&unknown, root.path(), &request()).expect_err("gemini is not installed by nessa");
     assert!(
         failure.to_string().contains("not an agent nessa installs"),
         "unhelpful message: {failure}"
@@ -117,7 +118,7 @@ fn an_agent_with_no_build_for_this_machine_is_told_so() {
 fn nothing_is_written_for_an_agent_with_no_release() {
     let root = temporary_root();
     let unknown = AgentName::parse("gemini").expect("a plain agent name");
-    let _ = install(&unknown, root.path());
+    let _ = install(&unknown, root.path(), &request());
     assert!(
         !root.path().join("gemini").exists(),
         "a refused install left a directory behind"

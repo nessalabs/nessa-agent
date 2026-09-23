@@ -189,13 +189,12 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::AttemptReused(_) => {
             format!("{failure}; retry retained audit evidence or begin a new invocation")
         }
-        InstallFailure::Audit {
-            runtime_state: RuntimeStateEvidence::Unchanged,
-            ..
-        } => {
+        InstallFailure::Audit(evidence)
+            if evidence.runtime_state() == &RuntimeStateEvidence::Unchanged =>
+        {
             format!("{failure}; no unaudited runtime was reported as installed")
         }
-        InstallFailure::Audit { .. } => failure.to_string(),
+        InstallFailure::Audit(_) => failure.to_string(),
     }
 }
 
