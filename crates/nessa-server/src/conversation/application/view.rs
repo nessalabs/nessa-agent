@@ -338,8 +338,8 @@ pub struct ConversationRuntime {
     pub workspace: String,
 }
 
-/// Ordered provider observations, addressed by their retained execution-local offset.
-#[derive(Clone, Debug, Serialize)]
+/// Ordered provider output and local notices at their retained execution-local offsets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPart {
     #[serde(skip_serializing_if = "Option::is_none")]

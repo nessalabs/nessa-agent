@@ -1,9 +1,10 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::Projection, ConversationAgentFeatures, ConversationCaller,
-    ConversationCapabilities, ConversationDependencies, ConversationLimits,
-    ConversationMessageStatus, ConversationPendingMode, ConversationService,
-    PermissionDenialSupport, SubmissionMode, SubmittedMessage,
+    projection::{Projection, MAX_TEXT},
+    ConversationAgentFeatures, ConversationCaller, ConversationCapabilities,
+    ConversationDependencies, ConversationLimits, ConversationMessageStatus,
+    ConversationPendingMode, ConversationService, PermissionDenialSupport, SubmissionMode,
+    SubmittedMessage,
 };
 use crate::{
     conversation::domain::ConversationId,

@@ -586,7 +586,7 @@ it("renders distinct Nessa notices in observation order without turning them int
     { key: "notice:2", notice: "Nessa declined the same review again." },
     { key: "assistant:4", text: "Done" },
   ])
-  expect(transcript.events.filter((event) => event.payload.type === "permission_denied")).toEqual(
-    [],
-  )
+  expect(
+    transcript.events.filter((event) => event.payload.type === "permission_denied"),
+  ).toEqual([])
 })

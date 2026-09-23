@@ -39,7 +39,8 @@ function nullableRawText(raw: Record<string, JsonValue>, key: string): string | 
 function localNotice(raw: JsonValue): { id: string; text: string } | undefined {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return undefined
   const value = raw.localNotice
-  if (value === null || Array.isArray(value) || typeof value !== "object") return undefined
+  if (value === null || Array.isArray(value) || typeof value !== "object")
+    return undefined
   if (!Object.hasOwn(value, "id") || !Object.hasOwn(value, "text")) return undefined
   return typeof value.id === "string" && typeof value.text === "string"
     ? { id: value.id, text: value.text }
@@ -50,7 +51,8 @@ function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | u
     ({ payload, raw }) =>
       ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
         payload.type,
-      ) || (payload.type === "unknown" && localNotice(raw) !== undefined),
+      ) ||
+      (payload.type === "unknown" && localNotice(raw) !== undefined),
   )
   if (productEvents.length === 0) return undefined
   const facts = productEvents.map(({ raw }) => {

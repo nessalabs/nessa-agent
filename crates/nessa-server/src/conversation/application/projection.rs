@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 const MAX_MESSAGES: usize = 24;
-const MAX_TEXT: usize = 8192;
+pub(super) const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_VIEW_BYTES: usize = 60_000;
