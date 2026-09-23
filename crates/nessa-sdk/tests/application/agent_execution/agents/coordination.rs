@@ -139,7 +139,6 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::channel,
         Arc, Mutex as StateMutex,
     },
     task::Poll,
@@ -605,7 +604,7 @@ async fn close_after_work_admission_preserves_input_and_closer_before_handoff() 
     for caller_lost in [false, true] {
         let (agent, backend) = agent_with_backend().await;
         let (entered, accepted) = oneshot::channel();
-        let (release, waiting) = channel();
+        let (release, waiting) = oneshot::channel();
         agent
             .inner
             .lifecycle

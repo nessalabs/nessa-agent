@@ -452,6 +452,12 @@ impl Agent {
                 // The task, not its waiter, owns the slot and the attachment.
                 let _invocation = invocation;
                 let _work = work;
+                #[cfg(test)]
+                agent
+                    .inner
+                    .lifecycle
+                    .wait_for_work_admission_release()
+                    .await;
                 agent.supervise_invocation(input, actor, None, &_work).await
             })
             .await
