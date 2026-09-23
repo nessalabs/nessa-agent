@@ -123,10 +123,23 @@ case "$1" in
 esac
 `,
       pnpm: `#!/bin/sh
+for _ in $(seq 1 500); do
+  [ -f "$NESSA_TEST_EVENTS.first-health-check" ] && break
+  sleep 0.01
+done
+[ -f "$NESSA_TEST_EVENTS.first-health-check" ] || exit 1
 printf 'pnpm %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
+touch "$NESSA_TEST_EVENTS.gateway-started"
+while :; do sleep 1; done
 `,
       curl: `#!/bin/sh
-printf 'curl %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
+if [ -f "$NESSA_TEST_EVENTS.gateway-started" ]; then
+  printf 'curl ready %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
+  exit 0
+fi
+printf 'curl not-ready %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
+touch "$NESSA_TEST_EVENTS.first-health-check"
+exit 1
 `,
       just: `#!/bin/sh
 printf 'just %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
@@ -139,6 +152,8 @@ printf 'just %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
     }
     const run = (status) => {
       writeFileSync(events, "")
+      rmSync(`${events}.first-health-check`, { force: true })
+      rmSync(`${events}.gateway-started`, { force: true })
       return spawnSync(realJust, ["start", "dev"], {
         encoding: "utf8",
         env: {
@@ -155,12 +170,25 @@ printf 'just %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
     const failedCalls = readFileSync(events, "utf8")
     assert.match(failedCalls, /preflight\.mjs/)
     assert.doesNotMatch(failedCalls, /pnpm server:run/)
+    assert.doesNotMatch(failedCalls, /curl /)
 
     const succeeded = run(0)
     assert.equal(succeeded.status, 0, succeeded.stderr)
-    const calls = readFileSync(events, "utf8")
-    assert.ok(calls.indexOf("preflight.mjs") < calls.indexOf("pnpm server:run"))
-    assert.ok(calls.indexOf("pnpm server:run") < calls.indexOf("curl "))
+    const calls = readFileSync(events, "utf8").trim().split("\n")
+    const preflight = calls.findIndex((call) => call.includes("preflight.mjs"))
+    const firstHealthCheck = calls.findIndex((call) => call.startsWith("curl "))
+    const gatewayStarted = calls.indexOf("pnpm server:run")
+    const gatewayReady = calls.findIndex((call) => call.startsWith("curl ready "))
+    const uiStarted = calls.indexOf("just dev")
+    assert.ok(preflight >= 0 && preflight < firstHealthCheck)
+    assert.ok(
+      calls
+        .slice(firstHealthCheck, gatewayStarted)
+        .some((call) => call.startsWith("curl not-ready ")),
+      "the first health check did not exercise the startup gate",
+    )
+    assert.ok(gatewayStarted >= 0 && gatewayStarted < gatewayReady)
+    assert.ok(gatewayReady >= 0 && gatewayReady < uiStarted)
   },
 )
 
