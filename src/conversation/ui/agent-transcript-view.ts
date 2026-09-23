@@ -150,13 +150,16 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
     }
     if (payload.type === "assistant_text" || payload.type === "tool_call_started")
       thought()
-    // The final answer is the only text that stays in the conversation.
+    // The final answer is the only text that stays in the conversation. What
+    // the agent said on the way is Markdown, where an indented code block or
+    // a trailing hard break is meaning: whitespace decides whether it counts,
+    // and is never cut from it. (A thought is plain text, and is trimmed.)
     if (
       payload.type === "assistant_text" &&
       event.id !== finalEvent?.id &&
       payload.text.trim()
     )
-      steps.push({ key: event.id, text: payload.text.trim() })
+      steps.push({ key: event.id, text: payload.text })
     if (payload.type === "tool_call_started") {
       const tool = tools.find((tool) => tool.callId === payload.callId)
       if (tool) steps.push({ key: event.id, tool })

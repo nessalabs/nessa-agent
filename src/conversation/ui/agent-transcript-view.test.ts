@@ -624,3 +624,27 @@ it("keys the answer on the turn, so the bubble is not remounted as the turn goes
     view("Here it is.", [said, { ...said, offset: 1, text: "Here it is." }]),
   )
 })
+
+it("keeps interim Markdown exactly as written, boundary whitespace included", () => {
+  // Four leading spaces make a code block; two trailing make a hard break.
+  const said = "    const x = 1\nline one  \n"
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "Done.",
+        status: "completed",
+        parts: [
+          { offset: 0, kind: "text", text: said, messageId: "said", toolId: "" },
+          { offset: 1, kind: "text", text: "Done.", messageId: "answer", toolId: "" },
+        ],
+      },
+    ],
+    [],
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  expect(row.content[0]?.work).toEqual([{ key: expect.any(String), text: said }])
+})
