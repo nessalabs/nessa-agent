@@ -602,8 +602,16 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
         panic!("storage failure and provider result must remain distinct: {record:?}");
     };
     assert_eq!(storage_error, "selected decline persistence rejected");
+    let Err(AgentError::ExecutionObservation {
+        error: observation_error,
+        execution_result: Some(observed_provider_result),
+    }) = execution_result.as_ref()
+    else {
+        panic!("local observation failure and provider result must remain distinct: {record:?}");
+    };
+    assert_eq!(observation_error.as_ref(), &AgentError::Closed);
     assert_eq!(
-        execution_result.as_ref(),
+        observed_provider_result.as_ref(),
         &record
             .provider_report
             .as_ref()

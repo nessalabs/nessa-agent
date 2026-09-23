@@ -74,11 +74,20 @@ pub struct ReviewDeclineRecord {
 impl ReviewDeclineRecord {
     /// Record that `decline` was decided for `execution_id` within `session_id`.
     ///
+    /// The constructor consumes the provider `session_id`, owning `execution_id`,
+    /// execution-scoped decline `id`, immutable `decline`, and observed
+    /// `delivery` stage. It performs no I/O and cannot fail because each domain
+    /// value was validated before reaching this application boundary.
+    ///
     /// `delivery` describes this binding's own progress — [`Selected`] before a
     /// response is written, then [`Written`] or [`Failed`] once the write has
     /// been observed. It never claims the provider accepted the refusal or that
     /// the tool did not run; an agent that is told no has still been told
     /// something, and what it does next is its own.
+    ///
+    /// The audit producer must emit `Selected` first and reuse the same `id` and
+    /// `decline` for the later delivery record; this immutable record preserves
+    /// that correlation but does not read prior audit history itself.
     ///
     /// [`Selected`]: PermissionAnswerDelivery::Selected
     /// [`Written`]: PermissionAnswerDelivery::Written

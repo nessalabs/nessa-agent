@@ -21,8 +21,14 @@ pub struct ReviewDeclineId(Box<str>);
 impl ReviewDeclineId {
     /// Restore or construct a checked session-local sequence identity.
     ///
-    /// Decimal text from `1` through `u64::MAX` is accepted. Keeping this shape
-    /// bounded makes live and saved observations use the same identity contract.
+    /// `value` is consumed and retained as compact owned text. Decimal text from
+    /// `1` through `u64::MAX` is accepted. Keeping this shape bounded makes live
+    /// and saved observations use the same identity contract. Construction
+    /// performs no I/O and does not establish a provider or permission identity.
+    ///
+    /// Returns [`ExecutionError::InvalidReviewDeclineId`] when `value` is empty,
+    /// zero, signed, non-decimal, non-canonical, longer than 20 bytes, or outside
+    /// the positive `u64` range.
     pub fn new(value: impl Into<String>) -> Result<Self, ExecutionError> {
         let value = value.into();
         if value.is_empty()
@@ -114,6 +120,12 @@ pub struct ReviewDeclineObservation {
 
 impl ReviewDeclineObservation {
     /// Create the first observation for one local refusal.
+    ///
+    /// Consumes the execution-scoped `id` and immutable `decline`, retaining
+    /// both under [`ReviewDeclineStage::Selected`]. This performs no I/O and
+    /// makes no response-write or provider-acknowledgement claim. A history must
+    /// retain this selection before admitting a successor from
+    /// [`advance`](Self::advance).
     pub fn selected(id: ReviewDeclineId, decline: ReviewDecline) -> Self {
         Self {
             id,
@@ -122,14 +134,26 @@ impl ReviewDeclineObservation {
         }
     }
 
-    /// Restore one individually valid stage; history validation must pair a
-    /// final stage with its preceding selection through [`advance`](Self::advance).
+    /// Restore one individually valid observation from checked constituent values.
+    ///
+    /// Consumes `id`, `decline`, and `stage` without performing I/O. This
+    /// constructor deliberately does not assert that a final stage had a saved
+    /// predecessor; restoration history must pair it with the preceding
+    /// selection by calling [`advance`](Self::advance) and comparing the result.
     pub fn restore(id: ReviewDeclineId, decline: ReviewDecline, stage: ReviewDeclineStage) -> Self {
         Self { id, decline, stage }
     }
 
     /// Produce the one allowed replacement: the same refusal advancing from
     /// selection to a final local write fact.
+    ///
+    /// `stage` must be one of the three final write stages. The returned value
+    /// clones the selected observation's identity and decline; `self` remains
+    /// unchanged. This performs no I/O and establishes only local write
+    /// evidence, never provider acknowledgement or tool behavior.
+    ///
+    /// Returns [`ExecutionError::InvalidReviewDeclineTransition`] when `self`
+    /// is already final or `stage` is [`ReviewDeclineStage::Selected`].
     pub fn advance(&self, stage: ReviewDeclineStage) -> Result<Self, ExecutionError> {
         if self.stage != ReviewDeclineStage::Selected || stage == ReviewDeclineStage::Selected {
             return Err(ExecutionError::InvalidReviewDeclineTransition);
@@ -175,9 +199,14 @@ impl ReviewDecline {
 
     /// Restore exact retained evidence without silently dropping a corrupt label.
     ///
-    /// Live construction may omit an unusable provider claim so a refusal can
-    /// always be recorded. Saved evidence has already claimed that a label was
-    /// retained; an invalid saved label is corruption and must be rejected.
+    /// Consumes the saved optional provider `tool` claim and `reason`. Live
+    /// construction may omit an unusable provider claim so a refusal can always
+    /// be recorded. Saved evidence has already claimed that a label was retained;
+    /// an invalid saved label is corruption and must be rejected. This performs
+    /// no I/O and preserves valid text exactly in compact owned storage.
+    ///
+    /// Returns [`ExecutionError::InvalidReviewDeclineToolName`] when a present
+    /// label is empty, exceeds 128 UTF-8 bytes, or contains a control character.
     pub fn restore(
         tool: Option<String>,
         reason: ReviewDeclineReason,
