@@ -10,6 +10,7 @@ export const PORTABLE_RUST_PACKAGES = Object.freeze([
   "nessa-sdk",
   "nessa-auth",
   "nessa-local-storage",
+  "nessa-gateway-endpoint",
   "nessa-images",
   "nessa-mcp",
 ])

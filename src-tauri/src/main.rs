@@ -5,6 +5,7 @@ mod attachments;
 mod composition;
 mod diagnostics;
 mod gateway;
+mod gateway_endpoint;
 mod host;
 mod links;
 mod local_data;
@@ -61,6 +62,7 @@ fn main() {
             panel::chosen_agent,
             panel::reveal_setup_window,
             surface_credential::load_surface_credential,
+            gateway_endpoint::entrypoint::command::load_gateway_endpoint,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
             updater::available_update,

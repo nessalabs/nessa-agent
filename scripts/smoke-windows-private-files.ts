@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   NessaPrivateFileUnavailableError,
+  NessaPrivateFileUnsafeError,
   windowsPrivateFile,
 } from "../packages/nessa-client/src/transport/windows-private-file.js"
 import { LocalFileCredentialSource } from "../packages/nessa-client/src/transport/local-credential-source.js"
@@ -38,19 +39,16 @@ try {
   )
   const alias = join(root, "alias")
   await link(file, alias)
-  await assert.rejects(windowsPrivateFile("read", file), NessaPrivateFileUnavailableError)
+  await assert.rejects(windowsPrivateFile("read", file), NessaPrivateFileUnsafeError)
   await rm(alias)
   const change = spawnSync("icacls.exe", [file, "/grant", "*S-1-1-0:R"], {
     encoding: "utf8",
   })
   assert.equal(change.status, 0, "could not make broad ACL fixture")
-  await assert.rejects(windowsPrivateFile("read", file), NessaPrivateFileUnavailableError)
+  await assert.rejects(windowsPrivateFile("read", file), NessaPrivateFileUnsafeError)
   const inherited = join(root, "inherited")
   await writeFile(inherited, "fixture")
-  await assert.rejects(
-    windowsPrivateFile("read", inherited),
-    NessaPrivateFileUnavailableError,
-  )
+  await assert.rejects(windowsPrivateFile("read", inherited), NessaPrivateFileUnsafeError)
   console.log(
     "Windows Node ACL creation, loading, hard-link and broad/inherited ACL rejection passed",
   )

@@ -29,6 +29,7 @@ export {
   type ChosenAgent,
   loadChosenAgent,
   loadAssignedSurfaceCredential,
+  loadAssignedGatewayEndpoint,
   flushCompositor,
   onFocusComposer,
   onLinkNotOpened,

@@ -293,6 +293,24 @@ name at a time. Unix syncs each parent before descent and the final leaf before
 success. Windows revalidates the anchored tree because it has no directory-fsync
 equivalent; sinks flush record files and use write-through moves separately.
 
+`crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
+identity, application publication/discovery ports, and private-file adapters.
+Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
+validates the listener and process identity, while `advertisement.rs` enforces
+agreement between that endpoint and optional desktop-managed identity. Tests
+mirror those responsibilities under `tests/domain/value_objects/`.
+File adapters require an already-created, current-user-private data root and
+resolve the stage and instance namespace beneath that root without following
+links. Server credential provisioning establishes that root on a new install;
+an existing permissive or redirected root is refused.
+Server composition publishes the actual listener address atomically beside
+`gateway.log`; local Rust clients accept it only when every identity field agrees
+with a bounded unauthenticated `/health` response. This correlation rejects stale
+and mismatched listeners but is not authentication. `nessa-server` and the desktop
+host compose the shared ports without depending on one another, and the Node
+client is held to the same canonical record by the cross-runtime fixture in
+`protocol/fixtures/gateway-endpoint.json`.
+
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or
 compresses it to PNG or JPEG, or says by type why it could not. It knows nothing

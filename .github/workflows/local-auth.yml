@@ -283,6 +283,11 @@ jobs:
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
+      # Endpoint file publication crosses the platform-specific local-storage
+      # adapters, so each OS gives a different answer. Lint this new crate before
+      # its tests; the existing package group below retains its measured order.
+      - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
+      - run: cargo test -p nessa-gateway-endpoint
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
