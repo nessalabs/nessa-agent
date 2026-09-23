@@ -31,7 +31,7 @@ use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
-use crate::infrastructure::process::ProcessScope;
+use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex},
     time::Duration,
@@ -41,7 +41,8 @@ use tokio::{
     time::Instant,
 };
 
-pub(crate) type ProcessFactory = Arc<dyn Fn() -> Result<ProcessScope, AgentError> + Send + Sync>;
+pub(crate) type ProcessFactory =
+    Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
 
 pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     process: ProcessFactory,
@@ -67,11 +68,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         audit,
         permission_sequence: Arc::new(AtomicU64::new(0)),
     };
-    let (mut generation, initial_events) = factory.start(restore).map_err(|cause| {
-        // This private factory returns only ProcessScope::spawn Transport errors;
-        // it transfers a scope only on success, before the worker is started.
-        ProviderOpenError::no_resources(cause)
-    })?;
+    let (mut generation, initial_events) = factory.start(restore)?;
     // A cancelled open drops this generation and requests its process cleanup.
     let session_id = match generation.ready().await {
         Ok(id) => id,
@@ -121,10 +118,25 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(
         &self,
         restore: Option<ExecutionSessionId>,
-    ) -> Result<(Generation, EventStream), AgentError> {
+    ) -> Result<(Generation, EventStream), ProviderOpenError> {
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities::default());
-        let scope = (self.process)()?;
+        let scope = match (self.process)() {
+            Ok(scope) => scope,
+            Err(failure) => {
+                let (cause, recovery) = failure.into_parts();
+                return Err(match recovery {
+                    Some(directory) => ProviderOpenError::with_cleanup(
+                        cause,
+                        Arc::new(ProcessCleanup::retaining_directory(
+                            self.config.clone(),
+                            directory,
+                        )),
+                    ),
+                    None => ProviderOpenError::no_resources(cause),
+                });
+            }
+        };
         let (commands, receiver) = mpsc::channel(16);
         let (close_requested, close_receiver) = watch::channel(None);
         let (finished, completion) = watch::channel(None);
@@ -151,6 +163,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         Ok((
             Generation {
                 recovery,
+                restoration: None,
                 commands,
                 close_requested,
                 completion: completion.clone(),
@@ -187,6 +200,7 @@ struct GenerationObservations {
 
 struct Generation {
     recovery: Arc<ProcessCleanup>,
+    restoration: Option<Arc<RestorationRecovery>>,
     commands: mpsc::Sender<Command>,
     close_requested: watch::Sender<Option<SessionCloseRequest>>,
     completion: watch::Receiver<Option<Completion>>,
@@ -197,14 +211,25 @@ struct Generation {
     pending_events: Option<(mpsc::OwnedPermit<EventStream>, EventStream)>,
     observations: Arc<ControlMutex<GenerationObservations>>,
 }
-struct Control {
-    recovery: Arc<ProcessCleanup>,
-    close_requested: watch::Sender<Option<SessionCloseRequest>>,
-    completion: watch::Receiver<Option<Completion>>,
+enum Control {
+    Generation {
+        recovery: Arc<ProcessCleanup>,
+        close_requested: watch::Sender<Option<SessionCloseRequest>>,
+        completion: watch::Receiver<Option<Completion>>,
+    },
+    Restoration(Arc<RestorationRecovery>),
+}
+struct RestorationRecovery {
+    cause: AgentError,
+    cleanup: Arc<dyn ProviderCleanup>,
+}
+struct LiveGenerationFailure {
+    cause: AgentError,
+    state: Option<Box<ProviderSessionState>>,
 }
 impl Generation {
     fn control(&self) -> Control {
-        Control {
+        Control::Generation {
             recovery: self.recovery.clone(),
             close_requested: self.close_requested.clone(),
             completion: self.completion.clone(),
@@ -246,6 +271,30 @@ impl Generation {
         self.close_requested.borrow().is_some()
             || self.completion.borrow().is_some()
             || self.commands.is_closed()
+    }
+}
+impl RestorationRecovery {
+    async fn retry(&self) -> CleanupReport {
+        self.cleanup
+            .retry_cleanup()
+            .await
+            .with_operation_failure(Some(self.cause.clone()))
+    }
+
+    fn failure(&self, state: ProviderSessionState) -> LiveGenerationFailure {
+        LiveGenerationFailure {
+            cause: self.cause.clone(),
+            state: Some(Box::new(state)),
+        }
+    }
+
+    fn operation_failure(&self, state: ProviderSessionState) -> ProviderOperationFailure {
+        ProviderOperationFailure::new(self.cause.clone(), state)
+    }
+}
+impl From<AgentError> for LiveGenerationFailure {
+    fn from(cause: AgentError) -> Self {
+        Self { cause, state: None }
     }
 }
 impl Drop for Generation {
@@ -297,17 +346,17 @@ struct AcpSession<P> {
     image_budget: Arc<Semaphore>,
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
-    async fn live_generation(&self) -> Result<MutexGuard<'_, Generation>, AgentError> {
+    async fn live_generation(&self) -> Result<MutexGuard<'_, Generation>, LiveGenerationFailure> {
         let close_activity = self.close_activity.subscribe();
         let mut generation = self.generation.lock().await;
         if close_activity.has_changed().unwrap_or(true) {
-            return Err(AgentError::Closed);
+            return Err(AgentError::Closed.into());
         }
         if generation.startup.is_some() && !generation.stopped() {
             let restored = generation.ready().await?;
             if restored != self.id {
                 generation.pending_events.take();
-                return Err(AgentError::Protocol("restored a different session".into()));
+                return Err(AgentError::Protocol("restored a different session".into()).into());
             }
             generation.publish_events();
         }
@@ -333,8 +382,15 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 if !reported {
                     // Preparation must surface an idle failure before a restored
                     // worker can accept the caller's next prompt.
-                    return Err(error);
+                    return Err(error.into());
                 }
+            }
+            if let Some(recovery) = generation.restoration.clone() {
+                let report = recovery.retry().await;
+                if !report.is_confirmed() {
+                    return Err(recovery.failure(ProviderSessionState::CleanupReported(report)));
+                }
+                generation.restoration = None;
             }
             // Reserve the reader before starting another process. A dropped consumer
             // or an undrained sequence of generations cannot create hidden workers.
@@ -348,9 +404,25 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
             {
                 let mut control = self.control.lock().expect("session control lock");
                 if close_activity.has_changed().unwrap_or(true) {
-                    return Err(AgentError::Closed);
+                    return Err(AgentError::Closed.into());
                 }
-                let (next, events) = self.factory.start(Some(self.id.clone()))?;
+                let (next, events) = match self.factory.start(Some(self.id.clone())) {
+                    Ok(started) => started,
+                    Err(failure) => {
+                        let (cause, cleanup) = failure.into_parts();
+                        if let Some(cleanup) = cleanup {
+                            let recovery = Arc::new(RestorationRecovery {
+                                cause: cause.clone(),
+                                cleanup,
+                            });
+                            let failure = recovery.failure(ProviderSessionState::CleanupRequired);
+                            generation.restoration = Some(recovery.clone());
+                            *control = Control::Restoration(recovery);
+                            return Err(failure);
+                        }
+                        return Err(cause.into());
+                    }
+                };
                 generation
                     .observations
                     .lock()
@@ -365,12 +437,12 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
             let restored = generation.ready().await?;
             if restored != self.id {
                 generation.pending_events.take();
-                return Err(AgentError::Protocol("restored a different session".into()));
+                return Err(AgentError::Protocol("restored a different session".into()).into());
             }
             generation.publish_events();
         }
         if close_activity.has_changed().unwrap_or(true) || generation.stopped() {
-            return Err(AgentError::Closed);
+            return Err(AgentError::Closed.into());
         }
         Ok(generation)
     }
@@ -575,18 +647,35 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     }
     fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         Box::pin(async move {
-            let (receiver, recovery) = {
+            enum CloseTarget {
+                Generation(watch::Receiver<Option<Completion>>, Arc<ProcessCleanup>),
+                Restoration(Arc<RestorationRecovery>),
+            }
+            let target = {
                 let control = self.control.lock().expect("session control lock");
                 self.close_activity.send_replace(());
-                control.close_requested.send_if_modified(|current| {
-                    if current.is_none() {
-                        *current = Some(request.clone());
-                        true
-                    } else {
-                        false
+                match &*control {
+                    Control::Generation {
+                        recovery,
+                        close_requested,
+                        completion,
+                    } => {
+                        close_requested.send_if_modified(|current| {
+                            if current.is_none() {
+                                *current = Some(request.clone());
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        CloseTarget::Generation(completion.clone(), recovery.clone())
                     }
-                });
-                (control.completion.clone(), control.recovery.clone())
+                    Control::Restoration(recovery) => CloseTarget::Restoration(recovery.clone()),
+                }
+            };
+            let (receiver, recovery) = match target {
+                CloseTarget::Generation(receiver, recovery) => (receiver, recovery),
+                CloseTarget::Restoration(recovery) => return recovery.retry().await,
             };
             let completed = match completion(receiver).await {
                 Ok(completed) => completed,
@@ -665,8 +754,15 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
             .map(Some)
             .map_err(|_| AgentError::Busy)
     }
-    async fn operation_failure(&self, error: AgentError) -> ProviderOperationFailure {
+    async fn operation_failure(&self, failure: LiveGenerationFailure) -> ProviderOperationFailure {
+        if let Some(state) = failure.state {
+            return ProviderOperationFailure::new(failure.cause, *state);
+        }
+        let error = failure.cause;
         let generation = self.generation.lock().await;
+        if let Some(recovery) = generation.restoration.as_ref() {
+            return recovery.operation_failure(ProviderSessionState::CleanupRequired);
+        }
         let completed = generation.completion.borrow().clone();
         let disposition = match completed {
             Some(completed) => {
@@ -783,3 +879,7 @@ impl ExecutionEventStream for Events {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/acp/sessions/restoration_recovery.rs"]
+mod restoration_recovery_tests;

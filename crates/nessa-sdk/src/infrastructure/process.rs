@@ -1,6 +1,8 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::CloseOutcome;
-use std::{process::Stdio, time::Duration};
+#[cfg(all(test, unix))]
+use std::{collections::VecDeque, sync::Mutex};
+use std::{fmt, io, path::Path, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::AsyncReadExt,
     process::{Child, ChildStdin, ChildStdout, Command},
@@ -21,11 +23,190 @@ pub(crate) struct ProcessScope {
     stderr: Option<JoinHandle<()>>,
     forced: bool,
     outcome: Option<CloseOutcome>,
+    retained_directory: Option<RetainedDirectory>,
     #[cfg(all(test, unix))]
     fail_next_cleanup: bool,
     #[cfg(all(test, unix))]
     cleanup_confirmation: Option<oneshot::Sender<CloseOutcome>>,
 }
+
+pub(crate) struct ProcessStartFailure {
+    cause: AgentError,
+    recovery: Option<RetainedDirectory>,
+}
+
+pub(crate) struct RetainedDirectory {
+    state: DirectoryRelease,
+    releaser: Arc<dyn DirectoryReleaser>,
+    #[cfg(all(test, unix))]
+    cleanup_confirmation: Option<oneshot::Sender<()>>,
+}
+
+enum DirectoryRelease {
+    Retained(PathBuf),
+    Releasing {
+        path: PathBuf,
+        task: JoinHandle<io::Result<()>>,
+    },
+}
+
+trait DirectoryReleaser: Send + Sync {
+    fn start(&self, path: PathBuf) -> JoinHandle<io::Result<()>>;
+}
+
+#[cfg(all(test, unix))]
+pub(crate) struct DirectoryCleanupStep {
+    started: oneshot::Sender<PathBuf>,
+    release: oneshot::Receiver<io::Result<()>>,
+}
+
+#[cfg(all(test, unix))]
+impl DirectoryCleanupStep {
+    pub(crate) fn new(
+        started: oneshot::Sender<PathBuf>,
+        release: oneshot::Receiver<io::Result<()>>,
+    ) -> Self {
+        Self { started, release }
+    }
+}
+
+#[cfg(all(test, unix))]
+struct ScriptedDirectoryReleaser(Mutex<VecDeque<DirectoryCleanupStep>>);
+
+#[cfg(all(test, unix))]
+impl DirectoryReleaser for ScriptedDirectoryReleaser {
+    fn start(&self, path: PathBuf) -> JoinHandle<io::Result<()>> {
+        let step = self
+            .0
+            .lock()
+            .expect("scripted directory cleanup lock")
+            .pop_front()
+            .expect("one scripted step per cleanup attempt");
+        tokio::spawn(async move {
+            let _ = step.started.send(path.clone());
+            step.release.await.map_err(|_| {
+                io::Error::new(io::ErrorKind::Interrupted, "cleanup release was dropped")
+            })??;
+            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
+                .await
+                .map_err(io::Error::other)?
+        })
+    }
+}
+
+struct FilesystemDirectoryReleaser;
+
+impl DirectoryReleaser for FilesystemDirectoryReleaser {
+    fn start(&self, path: PathBuf) -> JoinHandle<io::Result<()>> {
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
+    }
+}
+
+impl ProcessStartFailure {
+    fn with_recovery(cause: AgentError, recovery: RetainedDirectory) -> Self {
+        Self {
+            cause,
+            recovery: Some(recovery),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (AgentError, Option<RetainedDirectory>) {
+        (self.cause, self.recovery)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn observe_confirmed_cleanup(&mut self, confirmation: oneshot::Sender<()>) {
+        if let Some(directory) = self.recovery.as_mut() {
+            directory.observe_confirmed_cleanup(confirmation);
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn script_directory_cleanup(&mut self, steps: Vec<DirectoryCleanupStep>) {
+        let directory = self
+            .recovery
+            .as_mut()
+            .expect("scripted cleanup requires a retained directory");
+        directory.releaser = Arc::new(ScriptedDirectoryReleaser(Mutex::new(steps.into())));
+    }
+}
+
+impl fmt::Debug for ProcessStartFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProcessStartFailure")
+            .field("cause", &self.cause)
+            .field("cleanup_pending", &self.recovery.is_some())
+            .finish()
+    }
+}
+
+impl From<AgentError> for ProcessStartFailure {
+    fn from(cause: AgentError) -> Self {
+        Self {
+            cause,
+            recovery: None,
+        }
+    }
+}
+
+impl RetainedDirectory {
+    fn with_releaser(path: PathBuf, releaser: Arc<dyn DirectoryReleaser>) -> Self {
+        Self {
+            state: DirectoryRelease::Retained(path),
+            releaser,
+            #[cfg(all(test, unix))]
+            cleanup_confirmation: None,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        match &self.state {
+            DirectoryRelease::Retained(path) | DirectoryRelease::Releasing { path, .. } => path,
+        }
+    }
+
+    pub(crate) async fn release(&mut self, budget: Duration) -> Result<(), AgentError> {
+        if let DirectoryRelease::Retained(path) = &self.state {
+            let path = path.clone();
+            let task = self.releaser.start(path.clone());
+            self.state = DirectoryRelease::Releasing { path, task };
+        }
+        let result = {
+            let DirectoryRelease::Releasing { task, .. } = &mut self.state else {
+                unreachable!("retained directory is either waiting or releasing")
+            };
+            timeout(budget, task).await
+        };
+        match result {
+            Ok(Ok(Ok(()))) => {
+                #[cfg(all(test, unix))]
+                if let Some(confirmation) = self.cleanup_confirmation.take() {
+                    let _ = confirmation.send(());
+                }
+                Ok(())
+            }
+            Ok(Ok(Err(error))) if error.kind() == io::ErrorKind::NotFound => {
+                #[cfg(all(test, unix))]
+                if let Some(confirmation) = self.cleanup_confirmation.take() {
+                    let _ = confirmation.send(());
+                }
+                Ok(())
+            }
+            Ok(Ok(Err(_))) | Ok(Err(_)) => {
+                self.state = DirectoryRelease::Retained(self.path().to_path_buf());
+                Err(AgentError::CleanupUncertain)
+            }
+            Err(_) => Err(AgentError::CleanupUncertain),
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    fn observe_confirmed_cleanup(&mut self, confirmation: oneshot::Sender<()>) {
+        self.cleanup_confirmation = Some(confirmation);
+    }
+}
+
 impl ProcessScope {
     pub fn spawn(mut command: Command) -> Result<Self, AgentError> {
         command
@@ -61,12 +242,43 @@ impl ProcessScope {
             stderr: Some(stderr),
             forced: false,
             outcome: None,
+            retained_directory: None,
             #[cfg(all(test, unix))]
             fail_next_cleanup: false,
             #[cfg(all(test, unix))]
             cleanup_confirmation: None,
         })
     }
+
+    /// Spawn a process with a fresh private directory retained until confirmed cleanup.
+    ///
+    /// The builder receives the directory only while constructing the command;
+    /// callers cannot attach an arbitrary path to this process's cleanup authority.
+    pub(crate) fn spawn_with_private_directory(
+        build: impl FnOnce(&Path) -> Command,
+    ) -> Result<(Self, PathBuf), ProcessStartFailure> {
+        Self::spawn_with_private_directory_using(build, Arc::new(FilesystemDirectoryReleaser))
+    }
+
+    fn spawn_with_private_directory_using(
+        build: impl FnOnce(&Path) -> Command,
+        releaser: Arc<dyn DirectoryReleaser>,
+    ) -> Result<(Self, PathBuf), ProcessStartFailure> {
+        let directory = tempfile::Builder::new()
+            .prefix("nessa-agent-")
+            .tempdir()
+            .map_err(|error| AgentError::Transport(error.to_string()))?;
+        let path = directory.path().to_path_buf();
+        let retained = RetainedDirectory::with_releaser(directory.keep(), releaser);
+        match Self::spawn(build(&path)) {
+            Ok(mut scope) => {
+                scope.retained_directory = Some(retained);
+                Ok((scope, path))
+            }
+            Err(cause) => Err(ProcessStartFailure::with_recovery(cause, retained)),
+        }
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn fail_next_cleanup(&mut self) {
         self.fail_next_cleanup = true;
@@ -86,6 +298,7 @@ impl ProcessScope {
         kill_timeout: Duration,
     ) -> Result<CloseOutcome, AgentError> {
         if let Some(outcome) = self.outcome {
+            self.release_retained_directory(kill_timeout).await?;
             return Ok(outcome);
         }
         #[cfg(all(test, unix))]
@@ -124,7 +337,23 @@ impl ProcessScope {
         if let Some(confirmation) = self.cleanup_confirmation.take() {
             let _ = confirmation.send(outcome);
         }
+        self.release_retained_directory(kill_timeout).await?;
         Ok(outcome)
+    }
+
+    async fn release_retained_directory(&mut self, budget: Duration) -> Result<(), AgentError> {
+        let Some(directory) = self.retained_directory.as_mut() else {
+            return Ok(());
+        };
+        directory.release(budget).await?;
+        self.retained_directory = None;
+        Ok(())
+    }
+
+    pub(crate) fn retained_directory_path(&self) -> Option<&Path> {
+        self.retained_directory
+            .as_ref()
+            .map(RetainedDirectory::path)
     }
     async fn wait_scope(&mut self, budget: Duration) -> bool {
         let end = Instant::now() + budget;
@@ -187,3 +416,7 @@ fn signal_group(_: u32, _: bool) -> Result<(), AgentError> {
 fn group_exists(_: u32) -> Result<bool, AgentError> {
     Err(AgentError::CleanupUncertain)
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/infrastructure/process.rs"]
+mod tests;

@@ -167,7 +167,7 @@ impl AgentProvider for CodexAcpProvider {
         Box::pin(async move {
             let factory = self.clone();
             acp_binding::open(
-                Arc::new(move || ProcessScope::spawn(factory.launch_command())),
+                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into)),
                 self.config.clone(),
                 self.capabilities.clone(),
                 CodexProfile::new(self.capabilities.model().model_id()),
