@@ -253,19 +253,12 @@ impl ReconciliationIncarnation {
         &self.runtime_instance
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(
-            dead_code,
-            reason = "the native audit adapter is supported only on macOS"
-        )
-    )]
     pub fn process_id(&self) -> u32 {
         self.process_id
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
+        not(target_os = "macos"),
         expect(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
@@ -512,7 +505,7 @@ impl ReconciliationValidationFacts {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
+        not(target_os = "macos"),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn history_complete(&self) -> bool {
@@ -536,7 +529,7 @@ impl ReconciliationValidationFacts {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
+        not(target_os = "macos"),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn physical_report_agrees(&self) -> bool {
@@ -760,6 +753,10 @@ impl ReconciliationOutcomeRecord {
         }
     }
 
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
     pub fn physical(&self) -> &ReconciliationPhysicalRecord {
         &self.physical
     }

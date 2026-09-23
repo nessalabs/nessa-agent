@@ -482,7 +482,7 @@ impl GatewayReconciliationOutcome {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
+        not(target_os = "macos"),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn physical(&self) -> &ReconciliationPhysicalRecord {
@@ -498,7 +498,7 @@ impl GatewayReconciliationOutcome {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
+        not(target_os = "macos"),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn validation(&self) -> &ReconciliationValidationFacts {
