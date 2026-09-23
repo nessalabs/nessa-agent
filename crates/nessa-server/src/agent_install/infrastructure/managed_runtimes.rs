@@ -559,23 +559,12 @@ impl ManagedRuntimes {
     /// afterwards so the rename itself survives, which also makes durable the
     /// version directory created a moment earlier.
     ///
-    /// The rename is before that sync, and the sync can fail, so a failed
-    /// install consumes the record of whatever was installed before it. The
-    /// caller withdraws the new executable and reports the failure, which is
-    /// honest about this call; what it cannot undo is the previous record,
-    /// which this rename replaced. What is left is the previous runtime's
-    /// bytes — around a hundred and fifty megabytes for Opencode — named by
-    /// nothing. Nothing afterwards misbehaves: `installed` derives the path
-    /// from the pin and answers "not installed" either way, and the next
-    /// install unpacks it again over the same directory.
-    ///
-    /// It is written down rather than fixed because fixing it is the same
-    /// decision as the audit port. Reading the prior record before the rename
-    /// and putting it back in the rollback would restore the before-state; it
-    /// would also make "replaced" and "rolled back" two things the store knows
-    /// and has nowhere to say, which is what that port is for. Whichever way
-    /// that goes, the prior record has to be read before this rename rather
-    /// than after it, so it is the same edit either way.
+    /// The rename precedes that sync, so a sync failure can occur after this
+    /// record replaced the prior one. Publication keeps the validated prior
+    /// record and artifact while holding the same per-agent lease, withdraws
+    /// only files written by this attempt, restores that prior record, and
+    /// re-reads installed state. The caller receives withdrawal, restoration,
+    /// and confirmation failures as separate typed facts.
     fn record(
         &self,
         agent: &AgentName,
@@ -677,11 +666,9 @@ impl ManagedRuntimes {
     /// four of them behind is worse than one that leaves none, because the four
     /// are enough for the next install to rename over and not enough to run.
     ///
-    /// Best effort on purpose, and the reason it returns nothing: the caller
-    /// already has a failure to report, and it is the one worth reporting. A
-    /// second one about the clean-up would replace the cause with its
-    /// consequence. What cannot be removed is logged, so that a directory
-    /// holding an unrecorded runtime is at least explainable.
+    /// Every removal is attempted. Failures are accumulated and returned as
+    /// cleanup evidence beside the original publication cause rather than
+    /// replacing it or being reduced to logs.
     fn withdraw(
         &self,
         agent: &AgentName,
@@ -944,7 +931,8 @@ impl ManagedRuntimes {
     }
 
     /// Publish one complete multi-file runtime while retaining its lock through
-    /// the caller's audit acknowledgement.
+    /// the caller's immediate audit attempt. Returning an audit error drops the
+    /// lease before any later redelivery.
     fn publish_durably(
         &self,
         agent: &AgentName,

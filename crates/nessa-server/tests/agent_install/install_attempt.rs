@@ -84,8 +84,8 @@ fn incomplete_recovery_rejects_a_target_reported_as_restored_without_ending_the_
         InstallTransitionKind::Verified
     );
     let failures = RecoveryFailureEvidence::new(
-        InstallFailureEvidence::new(InstallFailureKind::Unwritable, "publish"),
-        Some(InstallFailureEvidence::new(
+        InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publish"),
+        Some(InstallFailureEvidence::capture(
             InstallFailureKind::Unwritable,
             "withdrawal",
         )),
@@ -113,13 +113,103 @@ fn incomplete_recovery_rejects_a_target_reported_as_restored_without_ending_the_
 #[test]
 fn incomplete_recovery_requires_at_least_one_cleanup_failure() {
     let failure = RecoveryFailureEvidence::new(
-        InstallFailureEvidence::new(InstallFailureKind::Unwritable, "publish"),
+        InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publish"),
         None,
         None,
         None,
     );
 
     assert_eq!(failure, Err(InstallTransitionError::MissingCleanupFailure));
+}
+
+#[test]
+fn failure_evidence_bounds_utf8_without_changing_restored_truncation_metadata() {
+    let exact = "é".repeat(InstallFailureEvidence::MAX_DETAIL_BYTES / 2);
+    let captured = InstallFailureEvidence::capture(InstallFailureKind::Unreadable, &exact);
+    assert_eq!(captured.detail(), exact);
+    assert!(!captured.truncated());
+
+    let oversized = format!("{exact}é");
+    let captured = InstallFailureEvidence::capture(InstallFailureKind::Unreadable, &oversized);
+    assert_eq!(
+        captured.detail().len(),
+        InstallFailureEvidence::MAX_DETAIL_BYTES
+    );
+    assert!(captured.truncated());
+    assert_eq!(
+        InstallFailureEvidence::restore(
+            captured.kind(),
+            captured.detail().to_owned(),
+            captured.truncated(),
+        ),
+        Ok(captured)
+    );
+    assert_eq!(
+        InstallFailureEvidence::restore(
+            InstallFailureKind::Unreadable,
+            "x".repeat(InstallFailureEvidence::MAX_DETAIL_BYTES + 1),
+            false,
+        ),
+        Err(InstallTransitionError::FailureDetailTooLong)
+    );
+}
+
+#[test]
+fn incomplete_recovery_confirmation_fact_must_agree_with_its_state() {
+    let target = artifact("1.18.31", PINNED_DIGEST);
+    let publication = InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publish");
+    let cleanup = InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "cleanup");
+    let confirmed_with_failure = RecoveryFailureEvidence::new(
+        publication.clone(),
+        Some(cleanup.clone()),
+        None,
+        Some(cleanup.clone()),
+    )
+    .unwrap();
+    let unconfirmed_without_failure =
+        RecoveryFailureEvidence::new(publication.clone(), Some(cleanup.clone()), None, None)
+            .unwrap();
+
+    for (state, failures, expected) in [
+        (
+            RecoveryState::Confirmed(RollbackState::NoInstalledRuntime),
+            confirmed_with_failure,
+            InstallTransitionError::ConfirmedWithConfirmationFailure,
+        ),
+        (
+            RecoveryState::Unconfirmed,
+            unconfirmed_without_failure,
+            InstallTransitionError::UnconfirmedWithoutConfirmationFailure,
+        ),
+    ] {
+        let (mut attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
+        attempt.verified().unwrap();
+        assert_eq!(
+            attempt.recovery_incomplete(state, failures),
+            Err(InstallAttemptError::Contradictory(expected))
+        );
+    }
+
+    for (state, failures) in [
+        (
+            RecoveryState::Confirmed(RollbackState::NoInstalledRuntime),
+            RecoveryFailureEvidence::new(
+                publication.clone(),
+                Some(cleanup.clone()),
+                Some(cleanup.clone()),
+                None,
+            )
+            .unwrap(),
+        ),
+        (
+            RecoveryState::Unconfirmed,
+            RecoveryFailureEvidence::new(publication, None, None, Some(cleanup)).unwrap(),
+        ),
+    ] {
+        let (mut attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
+        attempt.verified().unwrap();
+        assert!(attempt.recovery_incomplete(state, failures).is_ok());
+    }
 }
 
 #[test]

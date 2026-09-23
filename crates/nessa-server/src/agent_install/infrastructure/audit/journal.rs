@@ -13,7 +13,7 @@ use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{
     OpenMode, PrivateDirectory, PrivateDirectoryTempFile, PrivateFileType,
     PrivatePublicationFailure, PrivatePublicationStage, PublishedPrivateFile,
-    create_private_directory_tree_beneath,
+    create_private_directory_tree_beneath, is_private_temporary_name,
 };
 use uuid::Uuid;
 
@@ -28,6 +28,7 @@ use crate::agent_install::{
 };
 
 const LOCK_NAME: &str = "audit.lock";
+const MAX_AUDIT_RECORD_BYTES: usize = 64 * 1024;
 
 /// Private host audit storage for agent-runtime installation transitions.
 pub struct DurableInstallAudit {
@@ -106,13 +107,9 @@ impl DurableInstallAudit {
             .map_err(|error| audit_failure(AuditFailureStage::AcquireLock, error))?;
         self.verify_authority(&current_lock)?;
 
-        let mut journal = scan_journal(&self.directory)?;
+        let mut journal = scan_journal(&self.directory, &transition)?;
         self.verify_authority(&current_lock)?;
-        if let Some(existing) = journal
-            .records
-            .iter()
-            .find(|record| record.transition.event_identity() == transition.event_identity())
-        {
+        if let Some(existing) = journal.candidate.as_ref() {
             if existing.transition != transition {
                 let conflict = if existing.transition.agent() != transition.agent()
                     || existing.transition.target() != transition.target()
@@ -160,6 +157,12 @@ impl DurableInstallAudit {
         let mut encoded = serde_json::to_vec(&stored)
             .map_err(|error| audit_failure(AuditFailureStage::WriteRecord, error))?;
         encoded.push(b'\n');
+        if encoded.len() > MAX_AUDIT_RECORD_BYTES {
+            return Err(audit_failure(
+                AuditFailureStage::WriteRecord,
+                "encoded audit record exceeds its byte limit",
+            ));
+        }
 
         let mut reservation = self
             .directory
@@ -209,11 +212,14 @@ struct ScannedRecord {
 
 struct Journal {
     next_sequence: u64,
-    records: Vec<ScannedRecord>,
     attempts: Vec<InstallAttempt>,
+    candidate: Option<ScannedRecord>,
 }
 
-fn scan_journal(directory: &PrivateDirectory) -> Result<Journal, AuditFailure> {
+fn scan_journal(
+    directory: &PrivateDirectory,
+    incoming: &InstallTransition,
+) -> Result<Journal, AuditFailure> {
     let entries = directory
         .entries()
         .map_err(|error| audit_failure(AuditFailureStage::ReadJournal, error))?;
@@ -223,6 +229,15 @@ fn scan_journal(directory: &PrivateDirectory) -> Result<Journal, AuditFailure> {
         if entry.name() == OsStr::new(LOCK_NAME) {
             if entry.file_type() != PrivateFileType::RegularFile {
                 return Err(journal_failure("the audit lock is not a regular file"));
+            }
+            continue;
+        }
+        if is_private_temporary_name(entry.name()) {
+            if entry.file_type() != PrivateFileType::RegularFile {
+                return Err(journal_failure(format!(
+                    "private reservation entry {:?} is not a regular file",
+                    entry.name()
+                )));
             }
             continue;
         }
@@ -239,8 +254,9 @@ fn scan_journal(directory: &PrivateDirectory) -> Result<Journal, AuditFailure> {
         names.push((canonical_sequence(name)?, entry.name().to_owned()));
     }
     names.sort_by_key(|(sequence, _)| *sequence);
-    let mut records = Vec::with_capacity(names.len());
     let mut attempts = Vec::new();
+    let mut candidate = None;
+    let record_count = names.len();
     for (index, (sequence, name)) in names.into_iter().enumerate() {
         let expected = u64::try_from(index).unwrap_or(u64::MAX) + 1;
         if sequence != expected {
@@ -261,21 +277,23 @@ fn scan_journal(directory: &PrivateDirectory) -> Result<Journal, AuditFailure> {
             AuditFailureStage::ReadJournal,
         )?;
         let published = stored.published(&transition, &name)?;
-        records.push(ScannedRecord {
-            name,
-            stored,
-            transition,
-            published,
-        });
+        if transition.event_identity() == incoming.event_identity() {
+            candidate = Some(ScannedRecord {
+                name,
+                stored,
+                transition,
+                published,
+            });
+        }
     }
-    let next_sequence = u64::try_from(records.len())
+    let next_sequence = u64::try_from(record_count)
         .ok()
         .and_then(|last| last.checked_add(1))
         .ok_or_else(|| journal_failure("audit sequence exhausted"))?;
     Ok(Journal {
         next_sequence,
-        records,
         attempts,
+        candidate,
     })
 }
 
@@ -348,8 +366,15 @@ fn read_stored(file: &mut File, name: &OsStr, sequence: u64) -> Result<StoredRec
     file.rewind()
         .map_err(|error| audit_failure(AuditFailureStage::ReadJournal, error))?;
     let mut encoded = Vec::new();
-    file.read_to_end(&mut encoded)
+    file.take((MAX_AUDIT_RECORD_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)
         .map_err(|error| audit_failure(AuditFailureStage::ReadJournal, error))?;
+    if encoded.len() > MAX_AUDIT_RECORD_BYTES {
+        return Err(journal_failure(format!(
+            "audit record {:?} exceeds its byte limit",
+            name
+        )));
+    }
     let stored: StoredRecord = serde_json::from_slice(&encoded)
         .map_err(|error| journal_failure(format!("invalid audit record {:?}: {error}", name)))?;
     if stored.sequence != sequence {

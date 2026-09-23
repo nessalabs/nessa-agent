@@ -119,6 +119,7 @@ struct StoredRecoveryFailures {
 struct StoredFailure {
     kind: StoredFailureKind,
     detail: String,
+    truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -366,10 +367,19 @@ impl From<&RecoveryFailureEvidence> for StoredRecoveryFailures {
 impl StoredRecoveryFailures {
     fn restore(&self) -> Result<RecoveryFailureEvidence, AuditFailure> {
         RecoveryFailureEvidence::new(
-            self.publication.restore(),
-            self.withdrawal.as_ref().map(StoredFailure::restore),
-            self.restoration.as_ref().map(StoredFailure::restore),
-            self.confirmation.as_ref().map(StoredFailure::restore),
+            self.publication.restore()?,
+            self.withdrawal
+                .as_ref()
+                .map(StoredFailure::restore)
+                .transpose()?,
+            self.restoration
+                .as_ref()
+                .map(StoredFailure::restore)
+                .transpose()?,
+            self.confirmation
+                .as_ref()
+                .map(StoredFailure::restore)
+                .transpose()?,
         )
         .map_err(record_failure)
     }
@@ -385,13 +395,14 @@ impl From<&InstallFailureEvidence> for StoredFailure {
                 InstallFailureKind::MalformedArchive => StoredFailureKind::MalformedArchive,
             },
             detail: value.detail().to_owned(),
+            truncated: value.truncated(),
         }
     }
 }
 
 impl StoredFailure {
-    fn restore(&self) -> InstallFailureEvidence {
-        InstallFailureEvidence::new(
+    fn restore(&self) -> Result<InstallFailureEvidence, AuditFailure> {
+        InstallFailureEvidence::restore(
             match self.kind {
                 StoredFailureKind::Unwritable => InstallFailureKind::Unwritable,
                 StoredFailureKind::Unreadable => InstallFailureKind::Unreadable,
@@ -399,7 +410,9 @@ impl StoredFailure {
                 StoredFailureKind::MalformedArchive => InstallFailureKind::MalformedArchive,
             },
             self.detail.clone(),
+            self.truncated,
         )
+        .map_err(record_failure)
     }
 }
 

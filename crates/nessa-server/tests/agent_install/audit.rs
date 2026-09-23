@@ -2,8 +2,10 @@ use super::*;
 use crate::agent_install::{
     application::{AuditAcknowledgement, AuditFailureStage, AuditRecordEvidence},
     domain::{
-        ArchiveDigest, InstallAttempt, InstallAttemptError, InstallEventIdentity, InstallEventSlot,
-        InstallRequest, RuntimeArtifact,
+        ArchiveDigest, ArchivePath, FileRole, InstallAttempt, InstallAttemptError,
+        InstallEventIdentity, InstallEventSlot, InstallFailureEvidence, InstallFailureKind,
+        InstallRequest, RecoveryFailureEvidence, RecoveryState, ReleaseContents, ReleaseFile,
+        ReleaseVersion, RollbackState, RuntimeArtifact,
     },
 };
 use crate::agent_install_test_support::{
@@ -94,6 +96,69 @@ fn exact_replay_after_later_evidence_resyncs_the_original_record_without_append(
 }
 
 #[test]
+fn abandoned_private_reservation_is_preserved_while_append_and_replay_stay_contiguous() {
+    let root = temporary_root();
+    let directory_path = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "interrupted_reservation_child"])
+        .env("NESSA_AUDIT_RESERVATION_ROOT", root.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let reservation_name = std::fs::read_to_string(root.path().join("reservation-name")).unwrap();
+    let cleanup_failure_orphan = ".nessa-ffffffffffffffffffffffffffffffff.tmp";
+    std::fs::write(
+        directory_path.join(cleanup_failure_orphan),
+        b"reservation whose cleanup failed",
+    )
+    .unwrap();
+    let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
+
+    assert_eq!(
+        audit.record(started.clone()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    assert_eq!(
+        audit.record(attempt.verified().unwrap()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    assert_eq!(
+        audit.record(started).unwrap(),
+        AuditAcknowledgement::Replayed
+    );
+
+    assert!(directory_path.join(reservation_name).is_file());
+    assert_eq!(
+        std::fs::read(directory_path.join(cleanup_failure_orphan)).unwrap(),
+        b"reservation whose cleanup failed"
+    );
+    assert_eq!(json_records(&directory_path).len(), 2);
+    assert!(directory_path.join("00000000000000000001.json").is_file());
+    assert!(directory_path.join("00000000000000000002.json").is_file());
+}
+
+#[test]
+#[ignore = "subprocess helper invoked by abandoned_private_reservation_is_preserved"]
+fn interrupted_reservation_child() {
+    let Some(root) = std::env::var_os("NESSA_AUDIT_RESERVATION_ROOT") else {
+        return;
+    };
+    let directory =
+        PrivateDirectory::open_beneath(std::path::Path::new(&root), std::path::Path::new("audit"))
+            .unwrap();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"interrupted").unwrap();
+    reservation.as_file().sync_all().unwrap();
+    std::fs::write(
+        std::path::Path::new(&root).join("reservation-name"),
+        reservation.name().to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    std::process::exit(0);
+}
+
+#[test]
 fn post_publish_ack_failure_retries_to_one_physical_record() {
     let root = temporary_root();
     let directory = root.path().join("audit");
@@ -119,6 +184,154 @@ fn post_publish_ack_failure_retries_to_one_physical_record() {
         AuditAcknowledgement::Replayed
     );
     assert_eq!(json_records(&directory).len(), 1);
+}
+
+#[test]
+fn truncated_failure_evidence_roundtrips_and_replays_with_retained_bytes() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
+    audit.record(started).unwrap();
+    audit.record(attempt.verified().unwrap()).unwrap();
+    let detail = "é".repeat(InstallFailureEvidence::MAX_DETAIL_BYTES);
+    let publication = InstallFailureEvidence::capture(InstallFailureKind::Unwritable, &detail);
+    let confirmation = InstallFailureEvidence::capture(InstallFailureKind::Unreadable, &detail);
+    let failures =
+        RecoveryFailureEvidence::new(publication, None, None, Some(confirmation)).unwrap();
+    let recovery = attempt
+        .recovery_incomplete(RecoveryState::Unconfirmed, failures)
+        .unwrap();
+
+    assert_eq!(
+        audit.record(recovery.clone()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    let encoded = std::fs::read(directory.join("00000000000000000003.json")).unwrap();
+    assert!(encoded.len() < MAX_AUDIT_RECORD_BYTES);
+    let stored: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(
+        stored["transition"]["facts"]["failures"]["publication"]["detail"]
+            .as_str()
+            .unwrap()
+            .len(),
+        InstallFailureEvidence::MAX_DETAIL_BYTES
+    );
+    assert_eq!(
+        stored["transition"]["facts"]["failures"]["publication"]["truncated"],
+        true
+    );
+
+    let reopened = audit_at(root.path());
+    assert_eq!(
+        reopened.record(recovery).unwrap(),
+        AuditAcknowledgement::Replayed
+    );
+    assert_eq!(json_records(&directory).len(), 3);
+}
+
+#[test]
+fn oversized_persisted_failure_detail_is_rejected_instead_of_normalized() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
+    audit.record(started).unwrap();
+    audit.record(attempt.verified().unwrap()).unwrap();
+    let failures = RecoveryFailureEvidence::new(
+        InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publication"),
+        None,
+        None,
+        Some(InstallFailureEvidence::capture(
+            InstallFailureKind::Unreadable,
+            "confirmation",
+        )),
+    )
+    .unwrap();
+    audit
+        .record(
+            attempt
+                .recovery_incomplete(RecoveryState::Unconfirmed, failures)
+                .unwrap(),
+        )
+        .unwrap();
+    let record_path = directory.join("00000000000000000003.json");
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    stored["transition"]["facts"]["failures"]["publication"]["detail"] = "x"
+        .repeat(InstallFailureEvidence::MAX_DETAIL_BYTES + 1)
+        .into();
+    std::fs::write(&record_path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    let (_, next) = InstallAttempt::start(
+        agent(),
+        target(),
+        InstallRequest::new("unix:501", "next").unwrap(),
+    );
+
+    let failure = audit.record(next).unwrap_err();
+    assert_eq!(failure.stage(), AuditFailureStage::ReadJournal);
+    assert!(failure.detail().contains("exceeds its byte limit"));
+}
+
+#[test]
+fn restored_recovery_rejects_both_confirmation_state_contradictions() {
+    for confirmed in [true, false] {
+        let root = temporary_root();
+        let directory = root.path().join("audit");
+        let audit = audit_at(root.path());
+        let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
+        audit.record(started).unwrap();
+        audit.record(attempt.verified().unwrap()).unwrap();
+        let cleanup = InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "cleanup");
+        let failures = if confirmed {
+            RecoveryFailureEvidence::new(
+                InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publication"),
+                Some(cleanup),
+                None,
+                None,
+            )
+            .unwrap()
+        } else {
+            RecoveryFailureEvidence::new(
+                InstallFailureEvidence::capture(InstallFailureKind::Unwritable, "publication"),
+                None,
+                None,
+                Some(cleanup),
+            )
+            .unwrap()
+        };
+        let state = if confirmed {
+            RecoveryState::Confirmed(RollbackState::NoInstalledRuntime)
+        } else {
+            RecoveryState::Unconfirmed
+        };
+        audit
+            .record(attempt.recovery_incomplete(state, failures).unwrap())
+            .unwrap();
+        let record_path = directory.join("00000000000000000003.json");
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+        if confirmed {
+            let publication = stored["transition"]["facts"]["failures"]["publication"].clone();
+            stored["transition"]["facts"]["failures"]["confirmation"] = publication;
+        } else {
+            stored["transition"]["facts"]["failures"]["confirmation"] = serde_json::Value::Null;
+        }
+        std::fs::write(&record_path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let (_, next) = InstallAttempt::start(
+            agent(),
+            target(),
+            InstallRequest::new("unix:501", "next").unwrap(),
+        );
+
+        let failure = audit.record(next).unwrap_err();
+        assert_eq!(failure.stage(), AuditFailureStage::ReadJournal);
+        assert!(failure.detail().contains(if confirmed {
+            "confirmed recovery cannot contain a confirmation failure"
+        } else {
+            "unconfirmed recovery requires a confirmation failure"
+        }));
+    }
 }
 
 #[test]
@@ -239,6 +452,80 @@ fn corrupt_or_non_regular_entries_stop_reconciliation() {
         audit.record(started).unwrap_err().stage(),
         AuditFailureStage::ReadJournal
     );
+}
+
+#[test]
+fn temporary_near_misses_and_non_regular_matching_names_are_refused() {
+    for name in [
+        ".nessa-0123456789abcdef0123456789abcdeg.tmp",
+        ".nessa-0123456789abcdef0123456789abcdef0.tmp",
+    ] {
+        let root = temporary_root();
+        let directory = root.path().join("audit");
+        let audit = audit_at(root.path());
+        std::fs::write(directory.join(name), b"orphan").unwrap();
+        let (_, started) = InstallAttempt::start(agent(), target(), request());
+        assert_eq!(
+            audit.record(started).unwrap_err().stage(),
+            AuditFailureStage::ReadJournal
+        );
+    }
+
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    std::fs::create_dir(directory.join(".nessa-0123456789abcdef0123456789abcdef.tmp")).unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+    assert_eq!(
+        audit.record(started).unwrap_err().stage(),
+        AuditFailureStage::ReadJournal
+    );
+}
+
+#[test]
+fn oversized_record_is_refused_by_the_bounded_reader_before_decode() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    std::fs::write(
+        directory.join("00000000000000000001.json"),
+        vec![b' '; MAX_AUDIT_RECORD_BYTES + 1],
+    )
+    .unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+
+    let failure = audit.record(started).unwrap_err();
+    assert_eq!(failure.stage(), AuditFailureStage::ReadJournal);
+    assert!(failure.detail().contains("exceeds its byte limit"));
+}
+
+#[test]
+fn writer_refuses_an_encoded_record_over_its_reader_limit_before_reservation() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let files = std::iter::once(ReleaseFile::new(
+        ArchivePath::parse("launch").unwrap(),
+        FileRole::Launch,
+    ))
+    .chain((0..1_500).map(|index| {
+        ReleaseFile::new(
+            ArchivePath::parse(&format!("document-{index:04}-{}", "x".repeat(24))).unwrap(),
+            FileRole::Document,
+        )
+    }))
+    .collect();
+    let oversized_target = RuntimeArtifact::new(
+        ReleaseVersion::parse("1.18.31").unwrap(),
+        ArchiveDigest::parse(PINNED_DIGEST).unwrap(),
+        ReleaseContents::new(files).unwrap(),
+    );
+    let (_, started) = InstallAttempt::start(agent(), oversized_target, request());
+
+    let failure = audit.record(started).unwrap_err();
+    assert_eq!(failure.stage(), AuditFailureStage::WriteRecord);
+    assert!(json_records(&directory).is_empty());
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
 }
 
 #[cfg(unix)]

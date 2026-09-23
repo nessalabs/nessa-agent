@@ -3,14 +3,16 @@ use crate::agent_install::application::{
     AuditAcknowledgement, AuditFailureStage, PublicationCleanupFailure, RollbackChange,
 };
 use crate::agent_install::domain::{
-    InstallTransitionKind, Libc, RecoveryState, ReleasePlatform, ReleaseRequirements,
-    RollbackState, RuntimeArtifact,
+    InstallRequest, InstallTransitionKind, Libc, RecoveryState, ReleasePlatform,
+    ReleaseRequirements, RollbackState, RuntimeArtifact,
 };
+use crate::agent_install::infrastructure::DurableInstallAudit;
 use crate::agent_install_test_support::{
     FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST, RecordingAudit, agent, audit, host,
-    host_of, platform, release, release_needing, request,
+    host_of, platform, release, release_needing, request, temporary_root,
 };
-use std::sync::{Mutex, mpsc};
+use nessa_auth::application::ports::Clock;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 struct BlockingAudit {
@@ -21,6 +23,37 @@ struct BlockingAudit {
 }
 
 struct FailOnceAudit(Mutex<bool>);
+
+struct FixedClock;
+
+impl Clock for FixedClock {
+    fn unix_milliseconds(&self) -> u64 {
+        42
+    }
+}
+
+struct CommitTerminalThenFailOnceAudit {
+    durable: DurableInstallAudit,
+    failed: Mutex<bool>,
+}
+
+impl InstallAudit for CommitTerminalThenFailOnceAudit {
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        let terminal = transition.kind() == InstallTransitionKind::Installed;
+        let acknowledgement = self.durable.record(transition)?;
+        let mut failed = self.failed.lock().unwrap();
+        if terminal && !*failed {
+            *failed = true;
+            return Err(AuditFailure::new(
+                AuditFailureStage::AcknowledgeRecord,
+                "injected failure after durable commit".into(),
+                None,
+                None,
+            ));
+        }
+        Ok(acknowledgement)
+    }
+}
 
 impl InstallAudit for FailOnceAudit {
     fn record(&self, _transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
@@ -726,6 +759,74 @@ fn retained_pending_transition_can_be_redelivered_without_repeating_install_effe
     );
     assert!(source.requested().is_empty());
     assert!(store.published().is_empty());
+}
+
+#[test]
+fn later_install_is_journaled_before_earlier_terminal_redelivery_with_both_identities() {
+    let store_root = tempfile::tempdir().unwrap();
+    let audit_root = temporary_root();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(store_root.path());
+    let audit = CommitTerminalThenFailOnceAudit {
+        durable: DurableInstallAudit::new(
+            audit_root.path(),
+            std::path::Path::new("audit"),
+            Arc::new(FixedClock),
+        )
+        .unwrap(),
+        failed: Mutex::new(false),
+    };
+    let install = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    };
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let earlier = InstallRequest::new("unix:501", "earlier").unwrap();
+    let failure = install
+        .execute(&agent(), &pinned, &host(), &earlier)
+        .unwrap_err();
+    let later = InstallRequest::new("unix:501", "later").unwrap();
+    install.execute(&agent(), &pinned, &host(), &later).unwrap();
+    assert_eq!(
+        install.retry_audit(&failure),
+        Ok(AuditAcknowledgement::Replayed)
+    );
+
+    let directory = audit_root.path().join("audit");
+    let mut records = std::fs::read_dir(directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    records.sort();
+    let identities = records
+        .iter()
+        .map(|path| {
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            (
+                record["sequence"].as_u64().unwrap(),
+                record["event"]["requestId"].as_str().unwrap().to_owned(),
+                record["event"]["slot"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities,
+        vec![
+            (1, "earlier".into(), "started".into()),
+            (2, "earlier".into(), "verification_outcome".into()),
+            (3, "earlier".into(), "completion_outcome".into()),
+            (4, "later".into(), "started".into()),
+            (5, "later".into(), "verification_outcome".into()),
+            (6, "later".into(), "completion_outcome".into()),
+        ]
+    );
 }
 
 #[test]

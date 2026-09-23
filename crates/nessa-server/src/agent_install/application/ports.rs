@@ -287,8 +287,10 @@ pub enum PublicationChange {
     Replaced(RuntimeArtifact),
 }
 
-/// Keeps the store's per-agent publication authority until audit delivery has
-/// completed. Implementations normally own the publication lock handle.
+/// Keeps the store's per-agent publication authority through the immediate
+/// audit attempt. An error return drops the lease; a later bounded redelivery
+/// can therefore be observed after another install. Implementations normally
+/// own the publication lock handle.
 pub trait PublicationLease: Send {}
 
 impl<T: Send> PublicationLease for T {}

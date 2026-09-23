@@ -985,10 +985,17 @@ reopens and re-syncs the original immutable record under the same authority;
 conflicting facts are rejected without claiming the incoming event was
 published. The adapter syncs each record and the journal directory before
 acknowledging it, and refuses corrupt, non-regular, non-canonical, or
-discontinuous entries rather than appending past them. Observation time is
-descriptive; the durable sequence and domain before/after chain establish
-order. Directory sync is unavailable on Windows, so its power-loss guarantee
-remains limited to the storage primitive's documented file behavior there.
+discontinuous entries rather than appending past them. Regular files with the
+storage primitive's exact private-reservation syntax are preserved and ignored:
+the syntax is not provenance, and the journal neither promotes nor deletes an
+abandoned reservation, so those files can consume disk until separate cleanup
+is designed. Sequence and observation time describe journal observation order,
+not domain causality. An audit error drops the runtime publication lease after
+the immediate delivery attempt, so a later install can be observed before the
+earlier transition is redelivered; stable event identity and the domain history
+remain authoritative. Directory sync is unavailable on Windows, so its
+power-loss guarantee remains limited to the storage primitive's documented file
+behavior there.
 The stable lock excludes every cooperating writer. On Unix it does not protect
 the check/effect interval inside the journal leaf from a malicious process
 running as the same user and deliberately ignoring that advisory lock; detected

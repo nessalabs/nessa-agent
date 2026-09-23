@@ -307,6 +307,7 @@ impl InstallAgentRuntime<'_> {
                 Ok(publication.executable().to_owned())
             }
             Err(publish) => {
+                let publication_evidence = failure_evidence(publish.failure());
                 let operation = InstallFailure::Store(publish.failure().clone());
                 let (transition, runtime_state, outcome) = match publish.recovery() {
                     PublicationRecovery::NotRequired => return Err(operation),
@@ -327,7 +328,7 @@ impl InstallAgentRuntime<'_> {
                             .as_ref()
                             .map(runtime_state)
                             .unwrap_or(RuntimeStateEvidence::Unconfirmed);
-                        let failures = recovery_failures(publish.failure(), cleanup);
+                        let failures = recovery_failures(publication_evidence, cleanup);
                         let transition = attempt
                             .recovery_incomplete(state, failures)
                             .map_err(InstallFailure::Evidence)?;
@@ -413,11 +414,11 @@ fn runtime_state(rollback: &RollbackChange) -> RuntimeStateEvidence {
 }
 
 fn recovery_failures(
-    publication: &StoreFailure,
+    publication: InstallFailureEvidence,
     cleanup: &PublicationCleanupFailure,
 ) -> RecoveryFailureEvidence {
     RecoveryFailureEvidence::new(
-        failure_evidence(publication),
+        publication,
         cleanup.withdrawal().map(failure_evidence),
         cleanup.restoration().map(failure_evidence),
         cleanup.confirmation().map(failure_evidence),
@@ -432,7 +433,7 @@ fn failure_evidence(failure: &StoreFailure) -> InstallFailureEvidence {
         StoreFailure::IncompleteArchive(detail) => (InstallFailureKind::IncompleteArchive, detail),
         StoreFailure::MalformedArchive(detail) => (InstallFailureKind::MalformedArchive, detail),
     };
-    InstallFailureEvidence::new(kind, detail.clone())
+    InstallFailureEvidence::capture(kind, detail)
 }
 
 fn with_audit_failure(

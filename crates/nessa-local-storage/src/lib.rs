@@ -1,7 +1,7 @@
 //! Private local storage shared by native adapters. No authentication policy lives here.
 //! Existing unsafe files are rejected, never silently repaired.
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs::File,
     io,
     path::{Component, Path, PathBuf},
@@ -32,6 +32,26 @@ pub(crate) use platform::publish_new;
 
 const TEMPORARY_PREFIX: &str = ".nessa-";
 const TEMPORARY_SUFFIX: &str = ".tmp";
+
+/// Return whether a native name has the exact syntax used for private reservations.
+///
+/// A match proves syntax only. It does not prove that this process created the
+/// entry or that the entry is safe to open, publish, or remove.
+pub fn is_private_temporary_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let Some(random) = name
+        .strip_prefix(TEMPORARY_PREFIX)
+        .and_then(|name| name.strip_suffix(TEMPORARY_SUFFIX))
+    else {
+        return false;
+    };
+    random.len() == 32
+        && random
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 fn temporary_name() -> io::Result<OsString> {
     let mut random = [0u8; 16];

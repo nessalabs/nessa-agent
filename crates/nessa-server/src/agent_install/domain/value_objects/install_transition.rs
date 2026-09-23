@@ -182,14 +182,37 @@ pub enum InstallFailureKind {
 pub struct InstallFailureEvidence {
     kind: InstallFailureKind,
     detail: String,
+    truncated: bool,
 }
 
 impl InstallFailureEvidence {
-    pub fn new(kind: InstallFailureKind, detail: impl Into<String>) -> Self {
+    /// Maximum UTF-8 bytes retained from one installation failure detail.
+    pub const MAX_DETAIL_BYTES: usize = 4 * 1024;
+
+    /// Capture bounded evidence from a live failure without first cloning its detail.
+    pub fn capture(kind: InstallFailureKind, detail: &str) -> Self {
+        let end = utf8_prefix_end(detail, Self::MAX_DETAIL_BYTES);
         Self {
             kind,
-            detail: detail.into(),
+            detail: detail[..end].to_owned(),
+            truncated: end < detail.len(),
         }
+    }
+
+    /// Restore persisted evidence without changing its retained detail or truncation fact.
+    pub fn restore(
+        kind: InstallFailureKind,
+        detail: String,
+        truncated: bool,
+    ) -> Result<Self, InstallTransitionError> {
+        if detail.len() > Self::MAX_DETAIL_BYTES {
+            return Err(InstallTransitionError::FailureDetailTooLong);
+        }
+        Ok(Self {
+            kind,
+            detail,
+            truncated,
+        })
     }
 
     pub fn kind(&self) -> InstallFailureKind {
@@ -199,6 +222,18 @@ impl InstallFailureEvidence {
     pub fn detail(&self) -> &str {
         &self.detail
     }
+
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+fn utf8_prefix_end(value: &str, maximum: usize) -> usize {
+    let mut end = value.len().min(maximum);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 /// The remaining installed state after cleanup did not fully succeed.
@@ -306,7 +341,16 @@ impl InstallTransition {
                 verify_restored_target(&target, rollback)?;
                 InstallTransitionKind::RolledBack
             }
-            InstallTransitionFacts::RecoveryIncomplete { state, .. } => {
+            InstallTransitionFacts::RecoveryIncomplete { state, failures } => {
+                match (state, failures.confirmation()) {
+                    (RecoveryState::Confirmed(_), Some(_)) => {
+                        return Err(InstallTransitionError::ConfirmedWithConfirmationFailure);
+                    }
+                    (RecoveryState::Unconfirmed, None) => {
+                        return Err(InstallTransitionError::UnconfirmedWithoutConfirmationFailure);
+                    }
+                    _ => {}
+                }
                 if let RecoveryState::Confirmed(rollback) = state {
                     verify_restored_target(&target, rollback)?;
                 }
@@ -394,6 +438,9 @@ pub enum InstallTransitionError {
     UnchangedReplacement,
     TargetReportedRestored,
     MissingCleanupFailure,
+    FailureDetailTooLong,
+    ConfirmedWithConfirmationFailure,
+    UnconfirmedWithoutConfirmationFailure,
 }
 
 impl fmt::Display for InstallTransitionError {
@@ -403,6 +450,13 @@ impl fmt::Display for InstallTransitionError {
             Self::UnchangedReplacement => "an artifact cannot replace itself",
             Self::TargetReportedRestored => "a rolled-back target cannot be the restored runtime",
             Self::MissingCleanupFailure => "incomplete recovery requires a cleanup failure",
+            Self::FailureDetailTooLong => "stored install failure detail exceeds its byte limit",
+            Self::ConfirmedWithConfirmationFailure => {
+                "confirmed recovery cannot contain a confirmation failure"
+            }
+            Self::UnconfirmedWithoutConfirmationFailure => {
+                "unconfirmed recovery requires a confirmation failure"
+            }
         })
     }
 }
