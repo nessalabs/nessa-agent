@@ -4,7 +4,7 @@
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, mpsc::Sender};
+use std::sync::{mpsc::Sender, Mutex};
 
 use crate::agent_install::application::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
@@ -482,7 +482,9 @@ impl RuntimeStore for FakeStore {
                 )
             })
             .map_err(|failure| match self.recovery.clone() {
-                PublicationRecovery::NotRequired => PublishFailure::unchanged(failure),
+                PublicationRecovery::NotRequired => {
+                    PublishFailure::unchanged(failure, lease(self.lease_drop.clone()))
+                }
                 PublicationRecovery::RolledBack(rollback) => {
                     PublishFailure::rolled_back(failure, rollback, lease(self.lease_drop.clone()))
                 }

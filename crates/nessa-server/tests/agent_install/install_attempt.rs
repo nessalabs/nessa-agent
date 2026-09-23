@@ -150,6 +150,42 @@ fn failure_evidence_bounds_utf8_without_changing_restored_truncation_metadata() 
         ),
         Err(InstallTransitionError::FailureDetailTooLong)
     );
+
+    for (retained_bytes, next_scalar) in [
+        (InstallFailureEvidence::MAX_DETAIL_BYTES, "x"),
+        (InstallFailureEvidence::MAX_DETAIL_BYTES - 1, "é"),
+        (InstallFailureEvidence::MAX_DETAIL_BYTES - 2, "€"),
+        (InstallFailureEvidence::MAX_DETAIL_BYTES - 3, "🦀"),
+    ] {
+        let input = format!("{}{next_scalar}", "x".repeat(retained_bytes));
+        let captured = InstallFailureEvidence::capture(InstallFailureKind::Unreadable, &input);
+        assert_eq!(captured.detail().len(), retained_bytes);
+        assert!(captured.truncated());
+        assert_eq!(
+            InstallFailureEvidence::restore(captured.kind(), captured.detail().to_owned(), true,),
+            Ok(captured)
+        );
+    }
+
+    for invalid in [
+        String::new(),
+        "x".repeat(InstallFailureEvidence::MAX_DETAIL_BYTES - 4),
+    ] {
+        assert_eq!(
+            InstallFailureEvidence::restore(InstallFailureKind::Unreadable, invalid, true),
+            Err(InstallTransitionError::InvalidTruncatedFailureDetail)
+        );
+    }
+    for valid in [
+        String::new(),
+        "x".repeat(InstallFailureEvidence::MAX_DETAIL_BYTES),
+    ] {
+        let restored =
+            InstallFailureEvidence::restore(InstallFailureKind::Unreadable, valid.clone(), false)
+                .unwrap();
+        assert_eq!(restored.detail(), valid);
+        assert!(!restored.truncated());
+    }
 }
 
 #[test]

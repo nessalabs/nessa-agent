@@ -424,11 +424,11 @@ pub struct PublishFailure {
 }
 
 impl PublishFailure {
-    pub fn unchanged(failure: StoreFailure) -> Self {
+    pub fn unchanged(failure: StoreFailure, lease: Box<dyn PublicationLease>) -> Self {
         Self {
             failure,
             recovery: Box::new(PublicationRecovery::NotRequired),
-            _lease: Box::new(()),
+            _lease: lease,
         }
     }
 
@@ -463,6 +463,11 @@ impl PublishFailure {
 
     pub fn recovery(&self) -> &PublicationRecovery {
         self.recovery.as_ref()
+    }
+
+    /// Consume the failure without cloning its diagnostic, recovery facts, or lease.
+    pub fn into_parts(self) -> (StoreFailure, PublicationRecovery, Box<dyn PublicationLease>) {
+        (self.failure, *self.recovery, self._lease)
     }
 }
 

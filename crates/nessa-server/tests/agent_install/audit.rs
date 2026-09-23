@@ -562,6 +562,54 @@ fn writer_refuses_an_encoded_record_over_its_reader_limit_before_reservation() {
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
 }
 
+#[test]
+fn bounded_encoder_stops_lazy_serialization_before_visiting_all_input() {
+    use serde::ser::SerializeSeq;
+    use std::{cell::Cell, rc::Rc};
+
+    struct CountedSequence {
+        visits: Rc<Cell<usize>>,
+        total: usize,
+    }
+
+    impl serde::Serialize for CountedSequence {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let mut sequence = serializer.serialize_seq(Some(self.total))?;
+            for _ in 0..self.total {
+                self.visits.set(self.visits.get() + 1);
+                sequence.serialize_element(&"x".repeat(256))?;
+            }
+            sequence.end()
+        }
+    }
+
+    let visits = Rc::new(Cell::new(0));
+    let value = CountedSequence {
+        visits: visits.clone(),
+        total: 10_000,
+    };
+    let failure = encode_record(&value).unwrap_err();
+
+    assert_eq!(failure.stage(), AuditFailureStage::WriteRecord);
+    assert!(failure.detail().contains("exceeds its byte limit"));
+    assert!(visits.get() < value.total);
+}
+
+#[test]
+fn bounded_encoder_counts_the_newline_inside_its_fixed_capacity() {
+    let exact = encode_record(&"x".repeat(MAX_AUDIT_RECORD_BYTES - 3)).unwrap();
+    assert_eq!(exact.as_slice().len(), MAX_AUDIT_RECORD_BYTES);
+    assert_eq!(exact.capacity(), MAX_AUDIT_RECORD_BYTES);
+    assert_eq!(exact.as_slice().last(), Some(&b'\n'));
+
+    let failure = encode_record(&"x".repeat(MAX_AUDIT_RECORD_BYTES - 2)).unwrap_err();
+    assert_eq!(failure.stage(), AuditFailureStage::WriteRecord);
+    assert!(failure.detail().contains("exceeds its byte limit"));
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlink_record_is_never_followed() {

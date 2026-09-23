@@ -959,11 +959,16 @@ impl ManagedRuntimes {
         withdraw: impl Fn(&[PathBuf]) -> Result<(), StoreFailure> + Copy,
         confirm: impl Fn() -> Result<Option<RuntimeArtifact>, StoreFailure> + Copy,
     ) -> Result<Publication, PublishFailure> {
-        let lock = self.hold(agent).map_err(PublishFailure::unchanged)?;
-        if let Some(installed) = self
-            .installed(agent, release)
-            .map_err(PublishFailure::unchanged)?
-        {
+        let lock = self
+            .hold(agent)
+            .map_err(|failure| PublishFailure::unchanged(failure, Box::new(())))?;
+        let installed = match self.installed(agent, release) {
+            Ok(installed) => installed,
+            Err(failure) => {
+                return Err(PublishFailure::unchanged(failure, Box::new(lock)));
+            }
+        };
+        if let Some(installed) = installed {
             return Ok(Publication::new(
                 installed,
                 PublicationChange::Reused,
@@ -971,23 +976,31 @@ impl ManagedRuntimes {
             ));
         }
 
-        let previous_record = self
-            .installation_record(agent)
-            .map_err(PublishFailure::unchanged)?;
-        let previous_artifact = self
-            .held_artifact(
-                agent,
-                previous_record
-                    .as_ref()
-                    .and_then(InstallationRecord::artifact),
-            )
-            .map_err(PublishFailure::unchanged)?;
+        let previous_record = match self.installation_record(agent) {
+            Ok(record) => record,
+            Err(failure) => {
+                return Err(PublishFailure::unchanged(failure, Box::new(lock)));
+            }
+        };
+        let previous_artifact = match self.held_artifact(
+            agent,
+            previous_record
+                .as_ref()
+                .and_then(InstallationRecord::artifact),
+        ) {
+            Ok(artifact) => artifact,
+            Err(failure) => {
+                return Err(PublishFailure::unchanged(failure, Box::new(lock)));
+            }
+        };
 
-        self.private_directory(&self.artifact_root(agent, release))
-            .map_err(PublishFailure::unchanged)?;
+        if let Err(failure) = self.private_directory(&self.artifact_root(agent, release)) {
+            return Err(PublishFailure::unchanged(failure, Box::new(lock)));
+        }
         for directory in self.content_directories(agent, release) {
-            self.private_directory(&directory)
-                .map_err(PublishFailure::unchanged)?;
+            if let Err(failure) = self.private_directory(&directory) {
+                return Err(PublishFailure::unchanged(failure, Box::new(lock)));
+            }
         }
 
         let mut written = Vec::new();

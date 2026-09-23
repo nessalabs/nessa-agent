@@ -208,6 +208,9 @@ impl InstallFailureEvidence {
         if detail.len() > Self::MAX_DETAIL_BYTES {
             return Err(InstallTransitionError::FailureDetailTooLong);
         }
+        if truncated && detail.len() < Self::MAX_DETAIL_BYTES - 3 {
+            return Err(InstallTransitionError::InvalidTruncatedFailureDetail);
+        }
         Ok(Self {
             kind,
             detail,
@@ -439,6 +442,7 @@ pub enum InstallTransitionError {
     TargetReportedRestored,
     MissingCleanupFailure,
     FailureDetailTooLong,
+    InvalidTruncatedFailureDetail,
     ConfirmedWithConfirmationFailure,
     UnconfirmedWithoutConfirmationFailure,
 }
@@ -451,6 +455,9 @@ impl fmt::Display for InstallTransitionError {
             Self::TargetReportedRestored => "a rolled-back target cannot be the restored runtime",
             Self::MissingCleanupFailure => "incomplete recovery requires a cleanup failure",
             Self::FailureDetailTooLong => "stored install failure detail exceeds its byte limit",
+            Self::InvalidTruncatedFailureDetail => {
+                "stored truncated install failure detail is too short"
+            }
             Self::ConfirmedWithConfirmationFailure => {
                 "confirmed recovery cannot contain a confirmation failure"
             }

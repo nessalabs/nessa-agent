@@ -3,8 +3,9 @@ use crate::agent_install::application::{
     AuditAcknowledgement, AuditFailureStage, PublicationCleanupFailure, RollbackChange,
 };
 use crate::agent_install::domain::{
-    InstallRequest, InstallTransitionKind, Libc, RecoveryState, ReleasePlatform,
-    ReleaseRequirements, RollbackState, RuntimeArtifact,
+    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallTransitionError,
+    InstallTransitionKind, Libc, RecoveryState, ReleasePlatform, ReleaseRequirements,
+    RollbackState, RuntimeArtifact,
 };
 use crate::agent_install::infrastructure::DurableInstallAudit;
 use crate::agent_install_test_support::{
@@ -35,6 +36,132 @@ impl Clock for FixedClock {
 struct CommitTerminalThenFailOnceAudit {
     durable: DurableInstallAudit,
     failed: Mutex<bool>,
+}
+
+struct RefuseTerminalBeforeCommitOnceAudit {
+    durable: DurableInstallAudit,
+    failed: Mutex<bool>,
+}
+
+impl InstallAudit for RefuseTerminalBeforeCommitOnceAudit {
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        let mut failed = self.failed.lock().unwrap();
+        if transition.kind() == InstallTransitionKind::Installed && !*failed {
+            *failed = true;
+            return Err(AuditFailure::new(
+                AuditFailureStage::PublishRecord,
+                "injected failure before durable commit".into(),
+                None,
+                None,
+            ));
+        }
+        drop(failed);
+        self.durable.record(transition)
+    }
+}
+
+struct SignallingLease(mpsc::Sender<()>);
+
+impl Drop for SignallingLease {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+struct LeaseCheckingAudit {
+    target: InstallTransitionKind,
+    dropped: Mutex<mpsc::Receiver<()>>,
+    fail: bool,
+}
+
+impl InstallAudit for LeaseCheckingAudit {
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        if transition.kind() == self.target {
+            assert!(matches!(
+                self.dropped.lock().unwrap().try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+            if self.fail {
+                return Err(AuditFailure::new(
+                    AuditFailureStage::AcknowledgeRecord,
+                    "sink refused".into(),
+                    None,
+                    None,
+                ));
+            }
+        }
+        Ok(AuditAcknowledgement::Recorded)
+    }
+}
+
+struct OneShotFailureStore {
+    inner: FakeStore,
+    failure: Mutex<Option<PublishFailure>>,
+}
+
+impl RuntimeStore for OneShotFailureStore {
+    fn installed(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<std::path::PathBuf>, StoreFailure> {
+        self.inner.installed(agent, release)
+    }
+
+    fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
+        self.inner.stage(agent)
+    }
+
+    fn digest(&self, staged: &mut StagedArchive) -> Result<ArchiveDigest, StoreFailure> {
+        self.inner.digest(staged)
+    }
+
+    fn publish(
+        &self,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
+        _staged: &mut StagedArchive,
+    ) -> Result<Publication, PublishFailure> {
+        Err(self.failure.lock().unwrap().take().unwrap())
+    }
+
+    fn discard(&self, staged: StagedArchive) {
+        self.inner.discard(staged);
+    }
+}
+
+fn store_failure_detail(failure: &StoreFailure) -> &str {
+    match failure {
+        StoreFailure::Unwritable(detail)
+        | StoreFailure::Unreadable(detail)
+        | StoreFailure::IncompleteArchive(detail)
+        | StoreFailure::MalformedArchive(detail) => detail,
+    }
+}
+
+fn journal_identities(root: &std::path::Path) -> Vec<(u64, String, String)> {
+    let mut records = std::fs::read_dir(root.join("audit"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    records.sort();
+    records
+        .iter()
+        .map(|path| {
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            (
+                record["sequence"].as_u64().unwrap(),
+                record["event"]["requestId"].as_str().unwrap().to_owned(),
+                record["event"]["slot"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
 }
 
 impl InstallAudit for CommitTerminalThenFailOnceAudit {
@@ -760,7 +887,190 @@ fn retained_pending_transition_can_be_redelivered_without_repeating_install_effe
 }
 
 #[test]
-fn later_install_is_journaled_before_earlier_terminal_redelivery_with_both_identities() {
+fn incomplete_publication_moves_full_diagnostics_and_bounds_only_audit_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let (lease_dropped, dropped) = mpsc::channel();
+    let publication = StoreFailure::Unwritable("p".repeat(5_000));
+    let withdrawal = StoreFailure::Unwritable("w".repeat(5_000));
+    let restoration = StoreFailure::Unreadable("r".repeat(5_000));
+    let confirmation = StoreFailure::MalformedArchive("c".repeat(5_000));
+    let pointers = [
+        store_failure_detail(&publication).as_ptr(),
+        store_failure_detail(&withdrawal).as_ptr(),
+        store_failure_detail(&restoration).as_ptr(),
+        store_failure_detail(&confirmation).as_ptr(),
+    ];
+    let cleanup =
+        PublicationCleanupFailure::new(Some(withdrawal), Some(restoration), Some(confirmation))
+            .unwrap();
+    let store = OneShotFailureStore {
+        inner: FakeStore::empty(root.path()),
+        failure: Mutex::new(Some(PublishFailure::incomplete(
+            publication,
+            None,
+            cleanup,
+            Box::new(SignallingLease(lease_dropped)),
+        ))),
+    };
+    let audit = LeaseCheckingAudit {
+        target: InstallTransitionKind::RecoveryIncomplete,
+        dropped: Mutex::new(dropped),
+        fail: true,
+    };
+
+    let failure = InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    let InstallFailure::Audit(delivery) = &failure else {
+        panic!("expected nested audit failure: {failure:?}");
+    };
+    let Some(InstallFailure::Recovery { operation, cleanup }) = delivery.operation() else {
+        panic!("expected retained recovery failure: {delivery:?}");
+    };
+    assert_eq!(store_failure_detail(operation).as_ptr(), pointers[0]);
+    assert_eq!(
+        store_failure_detail(cleanup.withdrawal().unwrap()).as_ptr(),
+        pointers[1]
+    );
+    assert_eq!(
+        store_failure_detail(cleanup.restoration().unwrap()).as_ptr(),
+        pointers[2]
+    );
+    assert_eq!(
+        store_failure_detail(cleanup.confirmation().unwrap()).as_ptr(),
+        pointers[3]
+    );
+    let (state, evidence) = delivery.pending().recovery().unwrap();
+    assert_eq!(state, &RecoveryState::Unconfirmed);
+    for retained in [
+        evidence.publication(),
+        evidence.withdrawal().unwrap(),
+        evidence.restoration().unwrap(),
+        evidence.confirmation().unwrap(),
+    ] {
+        assert_eq!(
+            retained.detail().len(),
+            InstallFailureEvidence::MAX_DETAIL_BYTES
+        );
+        assert!(retained.truncated());
+    }
+    assert_eq!(
+        evidence.publication().kind(),
+        InstallFailureKind::Unwritable
+    );
+    assert_eq!(
+        evidence.withdrawal().unwrap().kind(),
+        InstallFailureKind::Unwritable
+    );
+    assert_eq!(
+        evidence.restoration().unwrap().kind(),
+        InstallFailureKind::Unreadable
+    );
+    assert_eq!(
+        evidence.confirmation().unwrap().kind(),
+        InstallFailureKind::MalformedArchive
+    );
+    assert!(matches!(audit.dropped.lock().unwrap().try_recv(), Ok(())));
+}
+
+#[test]
+fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
+    for (recovery, target) in [
+        (PublicationRecovery::NotRequired, None),
+        (
+            PublicationRecovery::RolledBack(RollbackChange::NoInstalledRuntime),
+            Some(InstallTransitionKind::RolledBack),
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (lease_dropped, dropped) = mpsc::channel();
+        let operation = StoreFailure::Unwritable("owned diagnostic".into());
+        let pointer = store_failure_detail(&operation).as_ptr();
+        let publish = match recovery {
+            PublicationRecovery::NotRequired => {
+                PublishFailure::unchanged(operation, Box::new(SignallingLease(lease_dropped)))
+            }
+            PublicationRecovery::RolledBack(rollback) => PublishFailure::rolled_back(
+                operation,
+                rollback,
+                Box::new(SignallingLease(lease_dropped)),
+            ),
+            PublicationRecovery::Incomplete { .. } => unreachable!(),
+        };
+        let store = OneShotFailureStore {
+            inner: FakeStore::empty(root.path()),
+            failure: Mutex::new(Some(publish)),
+        };
+        let audit = LeaseCheckingAudit {
+            target: target.unwrap_or(InstallTransitionKind::RecoveryIncomplete),
+            dropped: Mutex::new(dropped),
+            fail: false,
+        };
+
+        let failure = InstallAgentRuntime {
+            source: &FakeSource::serving(b"archive bytes"),
+            store: &store,
+            audit: &audit,
+        }
+        .execute(
+            &agent(),
+            &release("1.18.31", PINNED_DIGEST, &platform()),
+            &host(),
+            &request(),
+        )
+        .unwrap_err();
+
+        let InstallFailure::Store(operation) = failure else {
+            panic!("expected original store failure: {failure:?}");
+        };
+        assert_eq!(store_failure_detail(&operation).as_ptr(), pointer);
+        assert!(matches!(audit.dropped.lock().unwrap().try_recv(), Ok(())));
+    }
+}
+
+#[test]
+fn publication_lease_survives_until_evidence_validation_returns() {
+    let root = tempfile::tempdir().unwrap();
+    let (lease_dropped, dropped) = mpsc::channel();
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let store = OneShotFailureStore {
+        inner: FakeStore::empty(root.path()),
+        failure: Mutex::new(Some(PublishFailure::rolled_back(
+            StoreFailure::Unwritable("publication".into()),
+            RollbackChange::Restored(RuntimeArtifact::for_release(&pinned)),
+            Box::new(SignallingLease(lease_dropped)),
+        ))),
+    };
+
+    let failure = InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: audit(),
+    }
+    .execute(&agent(), &pinned, &host(), &request())
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Evidence(InstallAttemptError::Contradictory(
+            InstallTransitionError::TargetReportedRestored
+        ))
+    ));
+    assert_eq!(dropped.try_recv(), Ok(()));
+}
+
+#[test]
+fn postcommit_terminal_failure_replays_without_changing_later_journal_order() {
     let store_root = tempfile::tempdir().unwrap();
     let audit_root = temporary_root();
     let source = FakeSource::serving(b"archive bytes");
@@ -791,31 +1101,8 @@ fn later_install_is_journaled_before_earlier_terminal_redelivery_with_both_ident
         Ok(AuditAcknowledgement::Replayed)
     );
 
-    let directory = audit_root.path().join("audit");
-    let mut records = std::fs::read_dir(directory)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .collect::<Vec<_>>();
-    records.sort();
-    let identities = records
-        .iter()
-        .map(|path| {
-            let record: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-            (
-                record["sequence"].as_u64().unwrap(),
-                record["event"]["requestId"].as_str().unwrap().to_owned(),
-                record["event"]["slot"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        identities,
+        journal_identities(audit_root.path()),
         vec![
             (1, "earlier".into(), "started".into()),
             (2, "earlier".into(), "verification_outcome".into()),
@@ -825,6 +1112,70 @@ fn later_install_is_journaled_before_earlier_terminal_redelivery_with_both_ident
             (6, "later".into(), "completion_outcome".into()),
         ]
     );
+}
+
+#[test]
+fn precommit_terminal_failure_is_first_published_after_a_later_install() {
+    let store_root = tempfile::tempdir().unwrap();
+    let audit_root = temporary_root();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(store_root.path());
+    let audit = RefuseTerminalBeforeCommitOnceAudit {
+        durable: DurableInstallAudit::new(
+            audit_root.path(),
+            std::path::Path::new("audit"),
+            Arc::new(FixedClock),
+        )
+        .unwrap(),
+        failed: Mutex::new(false),
+    };
+    let install = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    };
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let earlier = InstallRequest::new("unix:501", "earlier").unwrap();
+    let failure = install
+        .execute(&agent(), &pinned, &host(), &earlier)
+        .unwrap_err();
+    let later = InstallRequest::new("unix:501", "later").unwrap();
+    let later_runtime = install.execute(&agent(), &pinned, &host(), &later).unwrap();
+    assert_eq!(later_runtime.version, pinned.version().clone());
+    assert!(later_runtime.downloaded);
+    assert_eq!(later_runtime.executable, store_root.path().join("opencode"));
+    assert_eq!(
+        journal_identities(audit_root.path()),
+        vec![
+            (1, "earlier".into(), "started".into()),
+            (2, "earlier".into(), "verification_outcome".into()),
+            (3, "later".into(), "started".into()),
+            (4, "later".into(), "verification_outcome".into()),
+            (5, "later".into(), "completion_outcome".into()),
+        ]
+    );
+
+    assert_eq!(
+        install.retry_audit(&failure),
+        Ok(AuditAcknowledgement::Recorded)
+    );
+    let after_retry = journal_identities(audit_root.path());
+    assert_eq!(
+        after_retry,
+        vec![
+            (1, "earlier".into(), "started".into()),
+            (2, "earlier".into(), "verification_outcome".into()),
+            (3, "later".into(), "started".into()),
+            (4, "later".into(), "verification_outcome".into()),
+            (5, "later".into(), "completion_outcome".into()),
+            (6, "earlier".into(), "completion_outcome".into()),
+        ]
+    );
+    assert_eq!(
+        install.retry_audit(&failure),
+        Ok(AuditAcknowledgement::Replayed)
+    );
+    assert_eq!(journal_identities(audit_root.path()), after_retry);
 }
 
 #[test]

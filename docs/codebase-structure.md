@@ -941,14 +941,20 @@ an archive that was not accepted. Its ports are `ArchiveSource` (the network),
 evidence). `StagedArchive` carries an open file rather than a path, so the bytes
 that are measured are the bytes that are unpacked. Publication captures the
 prior valid artifact while holding the store's per-agent lock and returns that
-authority as a lease. The use case keeps the lease until the installed,
-replaced, or rolled-back evidence is acknowledged, so concurrent installers
-cannot report effects in an order that contradicts their before/after chain.
+authority as a lease. The use case keeps the lease through the immediate audit
+attempt and drops it when `execute` returns, including an audit error. A later
+redelivery can therefore first publish an earlier transition after another
+install. Journal sequence and observation time describe that publication order,
+not physical effect order; domain event identity and before/after facts retain
+the causal meaning.
 Audit failure stays visible and carries typed state evidence: unchanged, the
 target installed, the prior artifact restored, no runtime installed, or
 unconfirmed. It therefore does not turn an uncertain cleanup into a claim that
 nothing is installed. It also retains the exact transition whose
-acknowledgement failed. `retry_audit` redelivers only that transition and never
+acknowledgement failed. The original upstream store diagnostics are moved once
+into the returned failure and remain full-sized; only their audit projection is
+bounded. This does not cap allocations already made by a provider or store.
+`retry_audit` redelivers only that transition and never
 repeats download or publication. A normal `execute` reports a typed reused
 request when its initial started event was replayed, before any install effect;
 a genuinely new invocation uses a new request identity.
@@ -991,9 +997,9 @@ the syntax is not provenance, and the journal neither promotes nor deletes an
 abandoned reservation, so those files can consume disk until separate cleanup
 is designed. Sequence and observation time describe journal observation order,
 not domain causality. An audit error drops the runtime publication lease after
-the immediate delivery attempt, so a later install can be observed before the
-earlier transition is redelivered; stable event identity and the domain history
-remain authoritative. Directory sync is unavailable on Windows, so its
+the immediate delivery attempt, so an earlier transition's first journal
+publication can follow a later install; stable event identity and the domain
+history remain authoritative. Directory sync is unavailable on Windows, so its
 power-loss guarantee remains limited to the storage primitive's documented file
 behavior there.
 The stable lock excludes every cooperating writer. On Unix it does not protect

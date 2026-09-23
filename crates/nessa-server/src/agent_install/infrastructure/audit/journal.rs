@@ -4,7 +4,7 @@
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
-    io::{Read, Seek, Write},
+    io::{self, Read, Seek, Write},
     path::Path,
     sync::Arc,
 };
@@ -15,6 +15,7 @@ use nessa_local_storage::{
     PrivateDirectoryTempFile, PrivateFileType, PrivatePublicationFailure, PrivatePublicationStage,
     PublishedPrivateFile,
 };
+use serde::Serialize;
 use uuid::Uuid;
 
 use super::record::StoredRecord;
@@ -29,6 +30,57 @@ use crate::agent_install::{
 
 const LOCK_NAME: &str = "audit.lock";
 const MAX_AUDIT_RECORD_BYTES: usize = 64 * 1024;
+
+#[derive(Debug)]
+struct BoundedRecordBuffer {
+    bytes: Box<[u8]>,
+    len: usize,
+}
+
+impl BoundedRecordBuffer {
+    fn new() -> Self {
+        Self {
+            bytes: vec![0; MAX_AUDIT_RECORD_BYTES].into_boxed_slice(),
+            len: 0,
+        }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+impl Write for BoundedRecordBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let end = self
+            .len
+            .checked_add(bytes.len())
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or_else(|| io::Error::other("encoded audit record exceeds its byte limit"))?;
+        self.bytes[self.len..end].copy_from_slice(bytes);
+        self.len = end;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encode_record(value: &impl Serialize) -> Result<BoundedRecordBuffer, AuditFailure> {
+    let mut encoded = BoundedRecordBuffer::new();
+    serde_json::to_writer(&mut encoded, value)
+        .map_err(|error| audit_failure(AuditFailureStage::WriteRecord, error))?;
+    encoded
+        .write_all(b"\n")
+        .map_err(|error| audit_failure(AuditFailureStage::WriteRecord, error))?;
+    Ok(encoded)
+}
 
 /// Private host audit storage for agent-runtime installation transitions.
 pub struct DurableInstallAudit {
@@ -154,21 +206,13 @@ impl DurableInstallAudit {
             self.clock.unix_milliseconds(),
             &transition,
         );
-        let mut encoded = serde_json::to_vec(&stored)
-            .map_err(|error| audit_failure(AuditFailureStage::WriteRecord, error))?;
-        encoded.push(b'\n');
-        if encoded.len() > MAX_AUDIT_RECORD_BYTES {
-            return Err(audit_failure(
-                AuditFailureStage::WriteRecord,
-                "encoded audit record exceeds its byte limit",
-            ));
-        }
+        let encoded = encode_record(&stored)?;
 
         let mut reservation = self
             .directory
             .reserve_temp()
             .map_err(|error| audit_failure(AuditFailureStage::WriteRecord, error))?;
-        if let Err(error) = reservation.as_file_mut().write_all(&encoded) {
+        if let Err(error) = reservation.as_file_mut().write_all(encoded.as_slice()) {
             return Err(discard_failure(
                 reservation,
                 AuditFailureStage::WriteRecord,

@@ -196,9 +196,10 @@ impl InstallAgentRuntime<'_> {
     ///
     /// Every consequential transition is passed to [`InstallAudit`] before
     /// this call reports its outcome. Publication and rollback retain the
-    /// store's per-agent lease through that acknowledgement, so two concurrent
-    /// installs cannot report their effects in an order that contradicts the
-    /// before/after evidence captured under the publication lock.
+    /// store's per-agent lease through that immediate audit attempt. An audit
+    /// error drops the lease on return; bounded redelivery can therefore first
+    /// publish that transition after a later install. Domain identity and
+    /// before/after facts remain authoritative across that journal order.
     pub fn execute(
         &self,
         agent: &AgentName,
@@ -307,19 +308,22 @@ impl InstallAgentRuntime<'_> {
                 Ok(publication.executable().to_owned())
             }
             Err(publish) => {
-                let publication_evidence = failure_evidence(publish.failure());
-                let operation = InstallFailure::Store(publish.failure().clone());
-                let (transition, runtime_state, outcome) = match publish.recovery() {
-                    PublicationRecovery::NotRequired => return Err(operation),
+                let (failure, recovery, publication_lease) = publish.into_parts();
+                let (transition, runtime_state, outcome) = match recovery {
+                    PublicationRecovery::NotRequired => {
+                        drop(publication_lease);
+                        return Err(InstallFailure::Store(failure));
+                    }
                     PublicationRecovery::RolledBack(rollback) => {
-                        let restored = rollback_state(rollback);
-                        let runtime_state = runtime_state(rollback);
+                        let restored = rollback_state(&rollback);
+                        let runtime_state = runtime_state(&rollback);
                         let transition = attempt
                             .rolled_back(restored)
                             .map_err(InstallFailure::Evidence)?;
-                        (transition, runtime_state, operation)
+                        (transition, runtime_state, InstallFailure::Store(failure))
                     }
                     PublicationRecovery::Incomplete { rollback, cleanup } => {
+                        let publication_evidence = failure_evidence(&failure);
                         let state = rollback
                             .as_ref()
                             .map(|rollback| RecoveryState::Confirmed(rollback_state(rollback)))
@@ -328,18 +332,18 @@ impl InstallAgentRuntime<'_> {
                             .as_ref()
                             .map(runtime_state)
                             .unwrap_or(RuntimeStateEvidence::Unconfirmed);
-                        let failures = recovery_failures(publication_evidence, cleanup);
+                        let failures = recovery_failures(publication_evidence, &cleanup);
                         let transition = attempt
                             .recovery_incomplete(state, failures)
                             .map_err(InstallFailure::Evidence)?;
                         let outcome = InstallFailure::Recovery {
-                            operation: publish.failure().clone(),
-                            cleanup: Box::new(cleanup.clone()),
+                            operation: failure,
+                            cleanup: Box::new(cleanup),
                         };
                         (transition, runtime_state, outcome)
                     }
                 };
-                match self.audit.record(transition.clone()) {
+                let result = match self.audit.record(transition.clone()) {
                     Ok(_) => Err(outcome),
                     Err(failure) => Err(with_audit_failure(
                         outcome,
@@ -347,7 +351,9 @@ impl InstallAgentRuntime<'_> {
                         transition,
                         failure,
                     )),
-                }
+                };
+                drop(publication_lease);
+                result
             }
         }
     }
