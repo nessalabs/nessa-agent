@@ -317,9 +317,12 @@ impl Agent {
                             original,
                         );
                     }
-                    let cleanup = agent
-                        .shutdown_after_failure(SessionCloseRequest::SessionFailed)
-                        .await;
+                    // Failed pending work was already settled under the scheduler
+                    // lock above. Keep that lock available so concurrent admissions
+                    // can observe and reject this Failed attachment while its owned
+                    // resource cleanup is still running.
+                    let attempt = agent.start_shutdown(SessionCloseRequest::SessionFailed);
+                    let cleanup = lifecycle.complete_stop(&attempt).await;
                     if let Err(cleanup_error) = cleanup.into_result() {
                         result = Err(AgentError::OperationAndCleanupFailure {
                             operation_error: Box::new(

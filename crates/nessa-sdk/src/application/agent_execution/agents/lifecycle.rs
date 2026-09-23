@@ -590,7 +590,7 @@ impl SessionLifecycle {
     ) -> Result<T, AgentError> {
         let _transition = self.resource_transition.lock().await;
         if !self.attachment_current(generation) {
-            return Err(AgentError::AttachmentAuthorizationStale);
+            return Err(AgentError::Closed);
         }
         #[cfg(test)]
         {
