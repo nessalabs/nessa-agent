@@ -1,9 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-nessa-surface="panel">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nessa</title>
+    <script data-nessa-load-surface>
+      document.documentElement.dataset.nessaSurface =
+        new URLSearchParams(window.location.search).get("surface") === "setup"
+          ? "setup"
+          : "panel"
+    </script>
     <style>
       [data-nessa-load-fallback] {
         position: fixed;
@@ -18,11 +24,7 @@
 
       [data-nessa-load-message] {
         position: fixed;
-        right: 0;
-        bottom: 0;
         box-sizing: border-box;
-        width: 320px;
-        height: 320px;
         max-width: 100vw;
         max-height: 100vh;
         display: grid;
@@ -31,6 +33,17 @@
         padding: 1.5rem;
         overflow-wrap: anywhere;
         text-align: center;
+      }
+
+      html[data-nessa-surface="panel"] [data-nessa-load-message] {
+        right: 0;
+        bottom: 0;
+        width: 320px;
+        height: 320px;
+      }
+
+      html[data-nessa-surface="setup"] [data-nessa-load-message] {
+        inset: 0;
       }
 
       @keyframes reveal-load-help {
