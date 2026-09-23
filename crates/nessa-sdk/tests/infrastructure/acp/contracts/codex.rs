@@ -538,7 +538,7 @@ async fn a_codex_approval_the_audit_cannot_record_is_never_given_to_codex() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
     assert_gone(&root, "pid");
 }

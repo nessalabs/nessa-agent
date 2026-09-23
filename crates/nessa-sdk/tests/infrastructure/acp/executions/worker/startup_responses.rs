@@ -251,9 +251,9 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 assert_eq!(
                     completed.failure,
                     Some(if reject_audit && method == "session/set_config_option" {
-                        AgentError::MultipleOperationFailures {
-                            first_error: Box::new(AgentError::Deadline),
-                            subsequent_error: Box::new(AgentError::AuditFailure),
+                        AgentError::OperationAndCleanupFailure {
+                            operation_error: Box::new(AgentError::Deadline),
+                            cleanup_error: Box::new(AgentError::AuditFailure),
                         }
                     } else {
                         AgentError::Deadline

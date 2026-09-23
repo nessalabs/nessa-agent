@@ -63,7 +63,10 @@ async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() 
                     .shutdown(SessionCloseRequest::Explicit(close_action()))
                     .await
                     .into_result(),
-                Err(failure)
+                Err(AgentError::OperationAndCleanupFailure {
+                    operation_error: Box::new(AgentError::Backpressure),
+                    cleanup_error: Box::new(rejected_audits(3)),
+                })
             );
         } else {
             assert_eq!(failure, AgentError::Backpressure);
