@@ -13,7 +13,10 @@ fn cleanup_confirmation_is_independent_of_every_primary_and_audit_error() {
     for primary in [
         AgentError::Deadline,
         AgentError::CleanupUncertain,
-        AgentError::Provider { code: -42 },
+        AgentError::Provider {
+            code: -42,
+            diagnostic: None,
+        },
         AgentError::AuditFailure,
     ] {
         for confirmed in [false, true] {
@@ -89,7 +92,10 @@ fn unexpected_finish_failure_is_reported_unless_execution_was_already_released()
         for previous in [
             None,
             Some(AgentError::OperationAndCleanupFailure {
-                operation_error: Box::new(AgentError::Provider { code: -42 }),
+                operation_error: Box::new(AgentError::Provider {
+                    code: -42,
+                    diagnostic: None,
+                }),
                 cleanup_error: Box::new(AgentError::AuditAndCleanupFailure),
             }),
         ] {

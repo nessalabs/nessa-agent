@@ -43,7 +43,12 @@ export function Transcript({
   gatewayAvailable: boolean
   onOpenPaste: (text: string) => void
 }) {
-  const [workFor, setWorkFor] = React.useState<string | null>(null)
+  // Scoped to the conversation, so a key that happens to recur in the next
+  // tab does not open that tab's sheet.
+  const [workFor, setWorkFor] = React.useState<{
+    conversationId: string
+    key: string
+  } | null>(null)
   const sheetId = React.useId()
   const normalized = React.useMemo(
     () =>
@@ -58,10 +63,11 @@ export function Transcript({
     () => normalized.turns.map((turn) => agentTurnView(turn, normalized)),
     [normalized],
   )
-  const segments = rows.flatMap((row) =>
-    row.content.map((part) => ({ ...part, running: row.status === "running" })),
+  const segments = rows.flatMap((row) => row.content)
+  const openWork = selectedWork(
+    segments,
+    workFor?.conversationId === conversation.id ? workFor.key : null,
   )
-  const openWork = selectedWork(segments, workFor)
   React.useEffect(() => {
     if (workFor !== null && !openWork) setWorkFor(null)
   }, [openWork, workFor])
@@ -107,11 +113,16 @@ export function Transcript({
                       {part.work && (
                         <WorkActivity
                           work={part.work}
-                          running={row.status === "running"}
+                          running={part.running ?? false}
                           seed={conversation.id}
-                          expanded={workFor === part.key}
+                          expanded={
+                            workFor?.conversationId === conversation.id &&
+                            workFor.key === part.key
+                          }
                           sheetId={sheetId}
-                          onOpen={() => setWorkFor(part.key)}
+                          onOpen={() =>
+                            setWorkFor({ conversationId: conversation.id, key: part.key })
+                          }
                         />
                       )}
                       {part.text && (
@@ -130,10 +141,12 @@ export function Transcript({
                       )}
                     </React.Fragment>
                   ))}
+                  <TurnStatus key={`${row.key}:status`} status={row.status} />
                 </React.Fragment>
               )
             })}
             {conversation.phase === "thinking" &&
+            (rows.length === 0 || rows.at(-1)?.status === "running") &&
             !conversation.readError &&
             !conversation.error ? (
               <Thinking motion={animateMount} />
@@ -149,7 +162,7 @@ export function Transcript({
       {openWork?.work && (
         <WorkDetails
           work={openWork.work}
-          running={openWork.running}
+          running={openWork.running ?? false}
           sheetId={sheetId}
           onClose={() => setWorkFor(null)}
         />
@@ -181,17 +194,6 @@ const TurnRow = React.memo(function TurnRow({
           <MessageMarkdown streaming={streaming}>{turn.text}</MessageMarkdown>
         )}
       </ChatBubble>
-      {/*
-        A turn that ended some other way is a mark on the transcript, not a
-        line the agent said: the same rule the compaction divider draws.
-      */}
-      {turn.from === "assistant" &&
-      turn.status &&
-      !["running", "completed"].includes(turn.status) ? (
-        <TranscriptDivider>
-          {turn.status === "cancelled" ? "Cancelled" : turn.status}
-        </TranscriptDivider>
-      ) : null}
       {turn.from === "user" ? (
         <ChatMessageActions>
           <ChatMessageReceipt>{receiptLabel(turn.receipt)}</ChatMessageReceipt>
@@ -200,6 +202,21 @@ const TurnRow = React.memo(function TurnRow({
     </ChatMessage>
   )
 })
+
+/**
+ * How a turn ended, when it did not simply finish. It belongs to the turn, not
+ * to a bubble — a turn cancelled before it said anything has no bubble to hang
+ * it on — and it is a mark on the transcript rather than a line the agent
+ * said, so it is drawn as the same rule the compaction divider draws.
+ */
+function TurnStatus({ status }: { status: string }) {
+  if (["running", "completed"].includes(status)) return null
+  return (
+    <TranscriptDivider role="status" className="[overflow-wrap:anywhere]">
+      {status === "cancelled" ? "Cancelled" : status}
+    </TranscriptDivider>
+  )
+}
 
 function receiptLabel(receipt: Receipt) {
   return {

@@ -128,8 +128,9 @@ not the one that started it: run `just server` in that same namespace
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
 lists recipes. `just server` runs the WebSocket control plane. `just dev` is
 `tauri dev` when a display is available, the browser UI (`just web`) when it
-is not. `just release` is the shipping installer. `pnpm app` and `pnpm dev`
-still work without those defaults. The window controls no-op in the browser
+is not. `just release` is the shipping installer for `prod`; pass another
+named stage as its first argument, such as `just release alpha`. `pnpm app`
+resolves one dev stage for Vite and the host. The window controls no-op in the browser
 (see [src/host/window.ts](src/host/window.ts)).
 
 Install `just` with the platform's package manager (`apt install just`,
@@ -156,18 +157,18 @@ that does have `/dev/dri`:
 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 just dev
 ```
 
-A testing-shaped `.deb` is `just release fast`. A shipping `.deb` is `just release`.
+A testing-shaped `.deb` is `just release prod fast`. A shipping `.deb` is `just release`.
 
 ### macOS
 
-`just dev` is `tauri dev`. `just release fast` writes a `.app` (no dmg). `just release`
+`just dev` is `tauri dev`. `just release prod fast` writes a `.app` (no dmg). `just release`
 writes a `.dmg`.
 
 ### Windows
 
 Windows recipes in the justfile have **not been run on a Windows machine yet**:
-`just release fast` and `just release` ask Tauri for `nsis`. The justfile uses
-`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just release fast`,
+`just release prod fast` and `just release` ask Tauri for `nsis`. The justfile uses
+`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just release prod fast`,
 and `just release` there.
 
 | Command | What it does |
@@ -176,10 +177,11 @@ and `just release` there.
 | `just server` | Local `nessa server` (stage=dev defaults) |
 | `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
 | `just web` | The UI in a browser, no Tauri |
-| `just release fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
+| `just release prod fast` | Testing-shaped prod release — slow opts off (`.app` / `.deb` / NSIS) |
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
-| `pnpm app` | `tauri dev`, no host defaults |
-| `pnpm app:build` | Build and verify the currently supported macOS shipping bundle |
+| `just release alpha` | Shipping-shaped bundle whose UI and host both use `alpha` |
+| `pnpm app` | `tauri dev` with one validated dev stage supplied to the UI and host |
+| `pnpm app:build` | Build and verify the prod macOS shipping bundle (`--stage alpha` selects another named stage) |
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
 | `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
@@ -286,35 +288,87 @@ Every agent starts here rather than running `git worktree` by hand:
 
 ```bash
 just worktree create add-something   # branch + worktree, ready to build
-just worktree clean                  # rebuild this crate, keep deps
+just worktree isolate                # migrate an existing shared-target checkout
+just worktree clean                  # rebuild this checkout's app/server crates
 just worktree list
 just worktree remove add-something   # the branch is kept
 ```
 
 These commands use `scripts/worktree.sh` on macOS and Linux. After entering the
-new checkout, run `just release fast` to build a fast release.
+new checkout, run `just release prod fast` to build a fast release.
 
-A fresh worktree does not pay for a rebuild. It shares the main checkout's
-workspace `target/`, so cargo reuses the ~500 already-compiled dependency crates
-and only recompiles this repo's own crates — measured at **27 s** in a new
-worktree, against minutes from scratch. pnpm hardlinks from its global store, so
-`pnpm install` costs seconds and no disk.
+`just worktree create` starts the new branch from the locally known remote
+default branch and does not configure that remote branch as its upstream. The
+saved checkout may remain on any feature branch without leaking those commits
+into new work. Creation does not fetch, so it remains usable offline; run
+`git fetch origin main` first when the newest remote commit is required.
 
-Cargo locks the shared target, so two worktrees building at once queue rather
-than corrupt each other.
+Each worktree owns its workspace `target/`. Cargo, Tauri, and scripts that run
+`target/debug/*` therefore read artifacts produced from the same checkout as
+their source. `scripts/worktree-target.test.mjs` enforces that boundary with two
+worktrees containing divergent versions of the same package: after A builds,
+B builds, and B runs, A's already-built executable must still report A.
 
-A bare `cargo clean` in any worktree does empty it for all of them, and that is
-not preventable — cargo has no notion of a protected shared target. It is
-**bounded** rather than fixed: sccache's cache lives in
-`~/Library/Caches/Mozilla.sccache`, outside the target directory entirely, so
-the worst case is one ~45 s rebuild rather than a cold one. Use
-`just worktree clean` instead: it runs
-`cargo clean -p nessa-app -p nessa-server`, which drops only this repo's crates
-— the things that are actually stale after a code change — and rebuilds in
-**4 s** with every dependency intact.
+The separation costs a target directory per worktree. `sccache` still shares
+compiled dependencies across those directories when `RUSTC_WRAPPER=sccache` is
+set, and pnpm hardlinks from its global store. `just worktree clean` runs the
+package-scoped clean from the invoking checkout and refuses a symbolic target,
+so it cannot empty another checkout's output. Before cleaning, it asks Cargo for
+the effective target and proceeds only when that is this checkout's own
+`target/`.
 
-Worktrees are created as **siblings** of this checkout
-(`../nessa-app-<name>`) so they can share this repo's workspace `target/`.
+An explicit `CARGO_TARGET_DIR` still overrides Cargo's default and therefore
+opts that command into the directory it names. Build-and-run scripts ask
+`cargo metadata` for the effective directory, so they execute the artifact from
+that same override instead of a stale checkout-local binary. Use a path unique
+to the checkout when setting it during parallel work. The override selects where
+builds and runs happen; it does not authorize `just worktree clean` to delete an
+external or another checkout's target. Clean such an intentional target directly
+from the process that owns it.
+
+Worktrees made by the former recipe still have `target/` linked to the original
+clone. From each such checkout, run `just worktree isolate` once. It unlinks only
+that exact former link, creates an empty local directory, and leaves the original
+artifacts untouched. A link to any other path is refused for manual inspection.
+New worktrees are created as **siblings** of this checkout
+(`../nessa-agent-<name>`) with a local target directory from the start.
+
+Claude Code makes worktrees of its own, for background agents and for subagents
+declaring `isolation: worktree`.
+`.claude/settings.json` configures
+[`WorktreeCreate` and `WorktreeRemove` hooks](https://code.claude.com/docs/en/worktrees)
+pointing at `./scripts/worktree.sh claude-hook` and `claude-hook-remove`. The
+create hook gives these worktrees the same isolated target ownership as the
+manual recipe.
+
+Replacing Claude Code's creation means owing it the behaviour it would have had.
+The `WorktreeCreate` payload carries exactly one field, `name`, and it is a
+worktree **slug** — not a branch and not a path — so everything else is the
+hook's job to match:
+
+| | What the hook does, and why |
+| --- | --- |
+| Location | `.claude/worktrees/<name>`, where Claude Code puts its own, already gitignored. Deliberately **not** the sibling directory `create` uses. Those are people's worktrees, and the two naming schemes are not the same function — a slug may contain dots, a `create` name may not — so keeping the namespaces apart is what stops an agent being handed somebody's checkout to commit to |
+| Branch | `worktree-<name>`, which is what Claude Code's own default names it |
+| Base | The repository's default branch, which is what `worktree.baseRef: "fresh"` means. `git worktree add -b` with no start-point instead branches from whatever the clone is sitting on, so a clone parked on a feature branch would have given every agent that branch's commits. `--no-track`, so the agent's `git push` and `git pull` don't act on main |
+
+Note that the documented input schema for `WorktreeCreate` lists `path` and
+`worktree_path` as well. Claude Code 2.1.278 sends neither; only `WorktreeRemove`
+carries `worktree_path`. The hook reads what is actually sent.
+
+The remove hook is not optional. Claude Code's periodic sweep only removes
+worktrees carrying a marker it writes itself, and one a hook created has none,
+so without it every worktree made this way would stay on disk for ever — the
+accumulation this exists to stop. It unlinks a legacy target link before removing
+the directory, leaving the link destination untouched, and deletes the branch
+only when the base already contains every commit on it. That last test is
+`merge-base --is-ancestor` rather than `git branch -d`, because `-d` means
+"merged into whatever this clone has checked out" and would refuse to tidy up an
+empty worktree branch whenever the clone sits on an unrelated branch.
+
+One thing the hook gives up: `.worktreeinclude` is not processed when a
+`WorktreeCreate` hook replaces creation. This repo has no such file, so nothing
+is lost today; add the copying to the hook if one is ever introduced.
 
 ## Build
 
@@ -323,10 +377,10 @@ testing does not cost a shipping build.
 
 | | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `just release fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `just release prod fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
 | `just release` | 6.5 MB `.app` inside a `.dmg` / a `.deb` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
-`just release fast` / `pnpm app:fast` overrides the release profile with
+`just release prod fast` / `pnpm app:fast` overrides the release profile with
 `CARGO_PROFILE_RELEASE_*` env vars rather than defining a second profile, so
 there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected
@@ -343,6 +397,21 @@ from clean went 104s → **43s** at an 85% hit rate on the machine that measured
 it. `brew install sccache` or `apt install sccache`; it cannot cache
 incrementally-compiled crates, so it skips this app's own crate in dev builds —
 the win is the ~500 dependency crates, which is where the time goes.
+
+Measured again on `nessa-images`, the crate whose dependencies carry the
+`opt-level = 2` override, building into a target directory wiped between the
+two runs: **18.5 s → 4.3 s**, 39 of 39 compilations served from the cache. That
+gap is what a worktree with its own `target/`, or a stray `cargo clean`, costs
+when sccache is absent. Set it once in your shell profile:
+
+```sh
+command -v sccache >/dev/null 2>&1 && export RUSTC_WRAPPER=sccache
+```
+
+The guard is the point: the variable is only set where sccache exists, so the
+same profile is safe on a machine without it. It is deliberately not in
+`.cargo/config.toml` — a wrapper named there fails the build outright on any
+machine that has not installed it, including CI.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.

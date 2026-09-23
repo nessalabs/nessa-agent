@@ -12,7 +12,13 @@ import { sessionReducer } from "./session/adapters/store/slice"
 
 import { createDependencies, type AppDependencies } from "./composition/dependencies"
 
-export function makeStore(dependencies: AppDependencies = createDependencies()) {
+/** The dependencies the store itself owns and passes to conversation commands. */
+export type StoreDependencies = Pick<
+  AppDependencies,
+  "attachments" | "canChoosePaths" | "conversation"
+>
+
+export function makeStore(dependencies: StoreDependencies = createDependencies()) {
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({

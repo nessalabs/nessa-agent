@@ -333,6 +333,7 @@ for (const violation of composerBudgetViolations(readFileSync(stylesheet, "utf8"
 const architecture = join(root, "scripts", "architecture")
 for (const file of [
   join(root, "scripts", "check-architecture.mjs"),
+  join(root, "scripts", "check-runtime-dependencies.mjs"),
   ...walk(architecture),
 ]) {
   const text = readFileSync(file, "utf8")

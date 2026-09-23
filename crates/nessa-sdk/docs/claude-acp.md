@@ -63,16 +63,22 @@ cleanup. An already-settled invocation keeps its earlier result.
   routed to Nessa's permission owner by a single `ask` rule. A built-in this
   adapter has never heard of is reviewed with its input preserved rather than
   refused; refusing one ended the whole execution. An unfamiliar *name* is what
-  this covers: a denied name, and a tool result carrying a content block this
-  adapter does not model, still end the execution. Native file tools retain
-  schema validation; other tools preserve bounded original JSON review input.
+  this covers: denied names still fail closed. A structurally tagged tool-result
+  block this adapter does not render becomes a fixed visible placeholder, while
+  malformed known text/diff shapes still end the execution. Native file tools
+  validate required known fields and their types while preserving additive
+  provider fields in the exact review JSON; other tools preserve bounded
+  original JSON review input.
   MCP names must belong to a configured server. Native tool names are bounded
   and provider-validated. Only supplied `allow_once` and `reject_once` choices
   are exposed. Ambiguous permission options fail closed.
 - Denied tools are the whole of that boundary, since admission is otherwise
   open, and they are read against the one pinned harness version startup
-  verifies. Execution Nessa does not own is denied: Bash, BashOutput, KillShell,
-  Monitor — which takes a shell command or a WebSocket — and REPL. Nessa-owned
+  verifies. Execution Nessa does not own is denied: Bash, TaskOutput, TaskStop,
+  Monitor — which takes a shell command or a WebSocket — and REPL. The pinned
+  Claude SDK canonicalizes the historical BashOutput and KillShell spellings to
+  TaskOutput and TaskStop before permission-rule matching, so the configured
+  names state the effective boundary directly. Nessa-owned
   tools, including Shepherd-backed shell execution, are exposed through MCP.
   EnterPlanMode and ExitPlanMode are denied to preserve default permission mode.
   Work that would outlive or escape the execution that asked for it is denied
@@ -166,8 +172,10 @@ Other smoke modes are `close` (after first text), `deny-write`, `close-write`
 (while permission is pending), and `verify-write`. The last mode allows only one
 Write to `nessa-binding-smoke.txt` in the selected workspace with exact content
 `Nessa binding smoke test\n`; every other request is denied. Use a scratch workspace
-for these file tests. Authentication/provider failures are surfaced as typed
-errors, without provider error text that could contain credentials.
+for these file tests. Authentication/provider failures retain their numeric code
+as the typed decision fact and, when supplied, at most 4 KiB of provider text as
+diagnostic context. The diagnostic does not decide admission, settlement, or
+cleanup.
 
 ## Verification
 

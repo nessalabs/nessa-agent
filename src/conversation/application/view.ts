@@ -1,4 +1,4 @@
-import type { ImageReference, LinkedFile } from "../model"
+import type { ConversationCapabilities, ImageReference, LinkedFile } from "../model"
 import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
@@ -46,14 +46,7 @@ export type ConversationView = {
     input: string
     details: string
   }[]
-  capabilities: {
-    queue: boolean
-    steer: boolean
-    resume: boolean
-    permissions: boolean
-    /** The opened agent takes images. False until one is open, so never assumed. */
-    imageInput: boolean
-  }
+  capabilities: ConversationCapabilities
   permissionViewError?: string
 }
 

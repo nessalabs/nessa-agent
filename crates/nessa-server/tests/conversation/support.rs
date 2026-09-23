@@ -23,11 +23,11 @@ use nessa_sdk::{
             },
             providers::{
                 AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
-                ExecutionReport, OpenedProviderSession, OperationCapabilities,
+                ExecutionReport, ObservationFailure, OpenedProviderSession,
                 ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationFailure,
-                ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-                ProviderSessionState, SessionCloseRequest,
+                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationCapabilities,
+                ProviderOperationFailure, ProviderOperationFuture, ProviderSession,
+                ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
             },
         },
         dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
@@ -145,6 +145,18 @@ pub(crate) struct ProviderFactory {
     pub(crate) executions: Mutex<Vec<String>>,
     pub(crate) execution_started: Notify,
     pub(crate) execution_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    /// One explicit provider settlement used by failure-path projection tests.
+    /// Absence keeps the normal completed response below.
+    pub(crate) execution_reply: Mutex<Option<ProviderExecutionReply>>,
+    /// Valid observations emitted before an explicit settlement fixture.
+    pub(crate) execution_updates: Mutex<Vec<ExecutionUpdate>>,
+    /// The terminal observation failure paired with `execution_reply`.
+    ///
+    /// Setting this also ends the observation stream, matching an ACP worker
+    /// generation that exits after publishing its failed settlement. A failed
+    /// reply without this evidence intentionally leaves the synthetic stream
+    /// open and does not model that adapter path.
+    pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     pub(crate) request_permission: AtomicUsize,
     pub(crate) permission_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) answer_started: Notify,
@@ -300,32 +312,52 @@ impl AgentProvider for Provider {
                     }),
                     Arc::new(Backend {
                         factory: self.0.clone(),
-                        sender,
+                        sender: Mutex::new(Some(sender)),
                     }),
                     capabilities(self.0.model_images.load(Ordering::SeqCst)),
                     Arc::new(AcceptingAudit),
                 ),
-                events: Box::new(Events(receiver)),
+                events: Box::new(Events {
+                    receiver,
+                    factory: self.0.clone(),
+                }),
             })
         })
     }
 }
-struct Events(mpsc::UnboundedReceiver<ExecutionEvent>);
+struct Events {
+    receiver: mpsc::UnboundedReceiver<ExecutionEvent>,
+    factory: Arc<ProviderFactory>,
+}
 impl ExecutionEventStream for Events {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
-        Box::pin(async move { Ok(self.0.recv().await) })
+        Box::pin(async move {
+            match self.receiver.recv().await {
+                Some(event) => Ok(Some(event)),
+                None => match self
+                    .factory
+                    .execution_observation_failure
+                    .lock()
+                    .unwrap()
+                    .take()
+                {
+                    Some(failure) => Err(failure),
+                    None => Ok(None),
+                },
+            }
+        })
     }
 }
 struct Backend {
     factory: Arc<ProviderFactory>,
-    sender: mpsc::UnboundedSender<ExecutionEvent>,
+    sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
 }
 impl ProviderSessionBackend for Backend {
-    fn operation_capabilities(&self) -> OperationCapabilities {
-        OperationCapabilities {
+    fn operation_capabilities(&self) -> ProviderOperationCapabilities {
+        ProviderOperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
-            ..OperationCapabilities::default()
+            ..ProviderOperationCapabilities::default()
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
@@ -348,6 +380,27 @@ impl ProviderSessionBackend for Backend {
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
+            for update in self.factory.execution_updates.lock().unwrap().drain(..) {
+                let _ = self
+                    .sender
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .send(ExecutionEvent::new(request.execution_id.clone(), update));
+            }
+            if let Some(reply) = self.factory.execution_reply.lock().unwrap().take() {
+                if self
+                    .factory
+                    .execution_observation_failure
+                    .lock()
+                    .unwrap()
+                    .is_some()
+                {
+                    self.sender.lock().unwrap().take();
+                }
+                return reply;
+            }
             if self.factory.request_permission.load(Ordering::SeqCst) != 0 {
                 let options = PermissionOptions::new(
                     vec![PermissionOption::new(
@@ -362,35 +415,54 @@ impl ProviderSessionBackend for Backend {
                     &PermissionOfferPolicy::once_only(),
                 )
                 .unwrap();
-                let _ = self.sender.send(ExecutionEvent::new(
-                    request.execution_id.clone(),
-                    ExecutionUpdate::PermissionRequested {
-                        id: PermissionId::new("permission").unwrap(),
-                        tool_id: ToolCallId::new("tool").unwrap(),
-                        observation: ToolObservation::default(),
-                        input: nessa_sdk::application::agent_execution::tools::ToolReviewInput {
-                            name: "write_file".into(),
-                            arguments_json: "{}".into(),
+                let _ = self
+                    .sender
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .send(ExecutionEvent::new(
+                        request.execution_id.clone(),
+                        ExecutionUpdate::PermissionRequested {
+                            id: PermissionId::new("permission").unwrap(),
+                            tool_id: ToolCallId::new("tool").unwrap(),
+                            observation: ToolObservation::default(),
+                            input:
+                                nessa_sdk::application::agent_execution::tools::ToolReviewInput {
+                                    name: "write_file".into(),
+                                    arguments_json: "{}".into(),
+                                },
+                            options,
                         },
-                        options,
-                    },
-                ));
+                    ));
                 let gate = self.factory.permission_gate.lock().unwrap().take();
                 if let Some(gate) = gate {
                     let _ = gate.await;
                 }
             }
-            let _ = self.sender.send(ExecutionEvent::new(
-                request.execution_id.clone(),
-                ExecutionUpdate::Message(MessageChunk::text(format!(
-                    "Response: {}",
-                    request.user_message.text_str()
-                ))),
-            ));
-            let _ = self.sender.send(ExecutionEvent::new(
-                request.execution_id,
-                ExecutionUpdate::Finished(ExecutionOutcome::Completed),
-            ));
+            let _ = self
+                .sender
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send(ExecutionEvent::new(
+                    request.execution_id.clone(),
+                    ExecutionUpdate::Message(MessageChunk::text(format!(
+                        "Response: {}",
+                        request.user_message.text_str()
+                    ))),
+                ));
+            let _ = self
+                .sender
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .send(ExecutionEvent::new(
+                    request.execution_id,
+                    ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+                ));
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,

@@ -90,15 +90,26 @@ export function agentTranscript(
     let bufferKind: "text" | "thought" = "text"
     let bufferOffset = 0
     let bufferMessageId: string | undefined
+    const execution = {
+      sourceTurnId: turn.id,
+      executionId: turn.executionId ?? null,
+      executionStatus: turn.status ?? null,
+      activityRunning:
+        turn.status === undefined || ["queued", "running"].includes(turn.status),
+    }
     const flush = () => {
       if (buffered)
-        push(`${turn.id}:${bufferOffset}`, {
-          type: bufferKind === "text" ? "assistant_text" : "reasoning",
-          text: buffered,
-          block: bufferMessageId
-            ? { messageId: bufferMessageId, index: bufferOffset }
-            : null,
-        })
+        push(
+          `${turn.id}:${bufferOffset}`,
+          {
+            type: bufferKind === "text" ? "assistant_text" : "reasoning",
+            text: buffered,
+            block: bufferMessageId
+              ? { messageId: bufferMessageId, index: bufferOffset }
+              : null,
+          },
+          execution,
+        )
       buffered = ""
     }
     const insertInputs = (offset: number) => {
@@ -152,7 +163,7 @@ export function agentTranscript(
             title: tool.title,
             input,
           },
-          { ...tool, executionStatus: turn.status ?? "running" },
+          { ...tool, ...execution },
         )
       seenTools.add(part.toolId)
       const last = [...turn.parts]
@@ -173,22 +184,26 @@ export function agentTranscript(
     flush()
     insertInputs(Infinity)
     if (turn.status && !["running", "queued"].includes(turn.status)) {
-      push(`${turn.id}:end`, {
-        type: "turn_completed",
-        status:
-          turn.status === "completed"
-            ? "completed"
-            : turn.status === "cancelled"
-              ? "interrupted"
-              : "error",
-        stopReason: turn.status,
-        terminalReason: turn.status,
-        finalText: null,
-        usage: null,
-        durationMs: null,
-        numTurns: null,
-        permissionDenials: [],
-      })
+      push(
+        `${turn.id}:end`,
+        {
+          type: "turn_completed",
+          status:
+            turn.status === "completed"
+              ? "completed"
+              : turn.status === "cancelled"
+                ? "interrupted"
+                : "error",
+          stopReason: turn.status,
+          terminalReason: turn.status,
+          finalText: null,
+          usage: null,
+          durationMs: null,
+          numTurns: null,
+          permissionDenials: [],
+        },
+        execution,
+      )
     }
   }
   const builder = new TranscriptBuilder({ sessionId })

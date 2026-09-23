@@ -63,6 +63,18 @@ function view() {
       resume: true,
       permissions: true,
       imageInput: false,
+      agentFeatures: {
+        permissionDenial: "unknown",
+        nativeHookSuppression: "unknown",
+        compactionReporting: "unsupported_not_implemented",
+        modelSwitchReporting: "unsupported_not_implemented",
+        permissionDeferral: "unsupported_not_implemented",
+        elicitationForwarding: "unknown",
+        preToolPolicy: "unsupported_not_implemented",
+        policyEndTurn: "unsupported_not_implemented",
+        policyCloseSession: "unsupported_not_implemented",
+        incomingElicitation: "unsupported_not_implemented",
+      },
     },
   }
 }
@@ -231,6 +243,20 @@ describe("conversation view agreement", () => {
     const truthy = view()
     Object.assign(truthy.capabilities, { imageInput: "true" })
     expect(() => conversationView(truthy, "conversation")).toThrow("imageInput")
+
+    const missingFeatures = view()
+    delete (missingFeatures.capabilities as { agentFeatures?: unknown }).agentFeatures
+    expect(() => conversationView(missingFeatures, "conversation")).toThrow(
+      "Invalid conversation response",
+    )
+
+    const contradictoryFeature = view()
+    Object.assign(contradictoryFeature.capabilities.agentFeatures, {
+      preToolPolicy: "supported_for_offered_permission_reviews",
+    })
+    expect(() => conversationView(contradictoryFeature, "conversation")).toThrow(
+      "Invalid conversation state",
+    )
   })
 
   it("rejects unknown fields in receipts and control results", () => {

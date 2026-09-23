@@ -253,6 +253,176 @@ impl ConversationDisposition {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionDenialSupport {
+    Unknown,
+    Unsupported,
+    SupportedForOfferedPermissionReviews,
+}
+impl PermissionDenialSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Unsupported => "unsupported",
+            Self::SupportedForOfferedPermissionReviews => {
+                "supported_for_offered_permission_reviews"
+            }
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeHookSuppressionSupport {
+    Unknown,
+    Unsupported,
+    SupportedForUserConfiguredHooks,
+}
+impl NativeHookSuppressionSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Unsupported => "unsupported",
+            Self::SupportedForUserConfiguredHooks => "supported_for_user_configured_hooks",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReportingSupport {
+    UnsupportedNotImplemented,
+    SupportedWithInvocationCorrelation,
+}
+impl CompactionReportingSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedWithInvocationCorrelation => "supported_with_invocation_correlation",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSwitchReportingSupport {
+    UnsupportedNotImplemented,
+    SupportedAfterValidatedSwitch,
+}
+impl ModelSwitchReportingSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedAfterValidatedSwitch => "supported_after_validated_switch",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionDeferralSupport {
+    UnsupportedNotImplemented,
+    SupportedWithNonterminalOutcome,
+}
+impl PermissionDeferralSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedWithNonterminalOutcome => "supported_with_nonterminal_outcome",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationForwardingSupport {
+    Unknown,
+    Unsupported,
+    SupportedWithCorrelatedRoundTrip,
+}
+impl ElicitationForwardingSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Unsupported => "unsupported",
+            Self::SupportedWithCorrelatedRoundTrip => "supported_with_correlated_round_trip",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreToolPolicySupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedAtPermissionGate,
+}
+impl PreToolPolicySupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedAtPermissionGate => "supported_at_permission_gate",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyEndTurnSupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedForCurrentInvocation,
+}
+impl PolicyEndTurnSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedForCurrentInvocation => "supported_for_current_invocation",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyCloseSessionSupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedForSession,
+}
+impl PolicyCloseSessionSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedForSession => "supported_for_session",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncomingElicitationSupport {
+    Unknown,
+    UnsupportedNotImplemented,
+    SupportedWithCorrelatedRoundTrip,
+}
+impl IncomingElicitationSupport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::SupportedWithCorrelatedRoundTrip => "supported_with_correlated_round_trip",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAgentFeatures {
+    pub permission_denial: PermissionDenialSupport,
+    pub native_hook_suppression: NativeHookSuppressionSupport,
+    pub compaction_reporting: CompactionReportingSupport,
+    pub model_switch_reporting: ModelSwitchReportingSupport,
+    pub permission_deferral: PermissionDeferralSupport,
+    pub elicitation_forwarding: ElicitationForwardingSupport,
+    pub pre_tool_policy: PreToolPolicySupport,
+    pub policy_end_turn: PolicyEndTurnSupport,
+    pub policy_close_session: PolicyCloseSessionSupport,
+    pub incoming_elicitation: IncomingElicitationSupport,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationCapabilities {
@@ -261,6 +431,7 @@ pub struct ConversationCapabilities {
     pub resume: bool,
     pub permissions: bool,
     pub image_input: bool,
+    pub agent_features: ConversationAgentFeatures,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

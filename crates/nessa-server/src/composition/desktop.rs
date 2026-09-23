@@ -3,10 +3,12 @@
 //! The credentials this app needs are created by
 //! [`super::provisioning::ensure_local_credentials`], which the developer loop
 //! asks for by the same name; nothing here provisions separately.
+use super::installed_launch::{installed_arguments, installed_launch, InstalledLaunch};
 use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
+use crate::agent_install::infrastructure::{host_platform, ManagedRuntimes};
 use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,16 +33,9 @@ const DEFAULT_AGENT: AgentId = AgentId::Claude;
 /// meant to be fetched onto the machine that wants it instead, which is why
 /// this says nothing about where it lives.
 ///
-/// Nothing writes that yet, and this comment does not pretend otherwise. The
-/// installer is on another branch and, even there, it unpacks a binary and
-/// prints a report — it does not record a runtime, and no other code turns the
-/// unpacked path into one. So `None` here is the whole truth at this commit:
-/// the desktop does not ship Opencode and nothing else supplies it either.
-/// What is missing between the two is one step, a step that records the
-/// installed launch. The catalog is no longer part of that gap — the shipped
-/// `models.json` now carries OpenCode Zen entries, so a runtime written by
-/// hand starts today.
-fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
+/// `None` means only that the desktop does not ship the agent. Composition
+/// resolves a managed launch separately from the installed-runtime store.
+pub(super) fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
         AgentId::Claude => Some((
             "node",
@@ -63,14 +58,18 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
-        // Unreachable from here today: this is read for bundled agents, and
-        // Opencode is not one. Named rather than wildcarded so that a new agent
-        // has to say what it starts on, and a real name rather than a
-        // placeholder: the shipped catalog serves it, and
-        // `opencode_builds_against_the_catalog_nessa_ships` holds the two
-        // together. Spelled the way Opencode spells it, slash and all, because
-        // the binding sends this string back as the session's `model` option.
         AgentId::Opencode => "opencode/big-pickle",
+    }
+}
+
+fn managed_runtime(agent: AgentId, command: PathBuf) -> AgentRuntime {
+    AgentRuntime {
+        command,
+        args: installed_arguments(agent),
+        model: default_model(agent).into(),
+        tools_enabled: true,
+        context_tokens: 100_000,
+        output_tokens: 4096,
     }
 }
 
@@ -86,9 +85,9 @@ pub(super) fn configure(
     let mcp = bundle.join("nessa-mcp");
     // Only the agents this desktop ships. A bundle checked for files it was
     // never meant to contain would refuse to start, so an agent with no bundled
-    // launch is skipped here rather than looked for. Skipped is all it is: no
-    // launch is written for it anywhere else yet either, so an unbundled agent
-    // stays unconfigured and the picker says exactly that.
+    // launch is skipped here rather than looked for. The installed-runtime
+    // store below independently decides whether that agent has a verified
+    // launch on this host.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
         .filter_map(|agent| {
@@ -162,6 +161,38 @@ pub(super) fn configure(
                 output_tokens: 4096,
             });
     }
+    let store = ManagedRuntimes::new(data.join("agents"));
+    let host = host_platform();
+    for agent in AgentId::ALL.iter().copied() {
+        if bundled_launch(agent).is_some() {
+            continue;
+        }
+        let resolution = installed_launch(agent, &host, &store).map_err(unusable_runtime)?;
+        match resolution {
+            InstalledLaunch::Ready(command) => {
+                let args = installed_arguments(agent);
+                agents
+                    .runtimes
+                    .entry(agent.name().into())
+                    .and_modify(|runtime| {
+                        runtime.command = command.clone();
+                        runtime.args = args.clone();
+                    })
+                    .or_insert_with(|| managed_runtime(agent, command));
+            }
+            InstalledLaunch::Unknown(failure) => {
+                tracing::warn!(
+                    agent = agent.name(),
+                    %failure,
+                    "the optional installed runtime could not be verified"
+                );
+                remove_unverified_runtime(agents, agent);
+            }
+            InstalledLaunch::Missing | InstalledLaunch::UnsupportedHost => {
+                remove_unverified_runtime(agents, agent);
+            }
+        }
+    }
     // Only the Nessa-owned server is replaced. User-configured MCP servers retain their settings.
     agents.mcp_servers.retain(|server| server.name != "nessa");
     agents
@@ -177,6 +208,22 @@ pub(super) fn configure(
             ],
         });
     Ok(())
+}
+
+/// Remove a launch the current store did not verify without leaving an invalid
+/// selected/runtime pair behind.
+fn remove_unverified_runtime(agents: &mut AgentsConfig, agent: AgentId) {
+    let was_selected = agents.selected.as_deref() == Some(agent.name());
+    agents.runtimes.remove(agent.name());
+    if was_selected {
+        // The complete bundled-runtime check above proves this entry exists.
+        // Naming it directly keeps fallback deterministic even if HashMap
+        // iteration order changes.
+        agents.selected = agents
+            .runtimes
+            .contains_key(DEFAULT_AGENT.name())
+            .then(|| DEFAULT_AGENT.name().to_owned());
+    }
 }
 fn failure(error: impl std::fmt::Display) -> RunError {
     RunError::Agent(error.to_string())

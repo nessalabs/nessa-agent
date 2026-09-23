@@ -4,14 +4,14 @@ import test from "node:test"
 import { gatewayPort, selectedPort, selectedStage } from "./gateway-port.mjs"
 
 /**
- * These answer for `nessa-server`, which reads `NESSA_STAGE` and treats it as
- * `dev` when it says nothing, and `NESSA_PORT` ahead of the stage's own port.
- * Anything that starts that server and then waits for it — `just start` frees a
- * socket, launches, and probes for health — has to name the same socket the
- * server will. Assuming `dev` meant a `ci` run freed 7421, started a gateway on
- * 7420, and waited for health on 7421 until it gave up.
+ * These answer for the developer recipe, which starts a debug `nessa-server`
+ * and chooses `dev` when no stage is named, with `NESSA_PORT` ahead of the
+ * stage's own port. `just start` frees a socket, exports the selected stage,
+ * launches, and probes for health, so each step has to name the same socket.
+ * Assuming `dev` meant a `ci` run freed 7421, started a gateway on 7420, and
+ * waited for health on 7421 until it gave up.
  */
-test("no stage named is the dev stage, the way the server reads it", () => {
+test("the developer recipe defaults a missing stage to dev", () => {
   assert.equal(selectedStage({}), "dev")
   assert.equal(selectedStage({ NESSA_STAGE: "" }), "dev")
   assert.equal(selectedPort({}), gatewayPort("dev"))

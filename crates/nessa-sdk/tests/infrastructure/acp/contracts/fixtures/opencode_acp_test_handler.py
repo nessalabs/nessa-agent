@@ -10,8 +10,9 @@ keeping what it answered:
   - `session/new`: it succeeds with no authentication challenge, and offers
     `model` and `mode` as config options, with `build` current;
   - that unknown parameters on `session/new` are ignored rather than refused;
-  - the `available_commands_update` it sends straight after the `session/new`
-    result, before any configuration.
+  - the `available_commands_update` it schedules while answering `session/new`,
+    before any configuration. The pinned source uses a zero-delay timer, so
+    either wire order relative to the response is valid.
 
 ASSUMED from the ACP specification, because observing them needs a model turn
 and this environment's network policy does not allow OpenCode Zen's host:
@@ -31,7 +32,10 @@ shared contract fixture otherwise conforms by default: `wrong-harness` (lies in
 `model-not-offered` (omits the asked-for model), `model-refused` (errors the
 model selection), `mode-refused` (reports a mode other than the one selected),
 `left-the-mode` (leaves the selected mode mid-turn), `announces-unknown-mode`
-(names a mode the session does not offer).
+(names a mode the session does not offer), `wrong-session-startup-update`
+(races an advisory for another context), and
+`execution-output-before-session-response` (races execution output before a
+context has been admitted).
 """
 import json
 import os
@@ -82,6 +86,13 @@ assert os.environ["OPENCODE_PURE"] == "1"
 assert os.environ["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
 assert os.environ["OPENCODE_DISABLE_AUTOUPDATE"] == "1"
 assert "CODEX_CONFIG" not in os.environ
+assert os.environ["XDG_DATA_HOME"] == os.environ["NESSA_EXPECTED_OPENCODE_DATA_HOME"]
+assert os.environ["HOME"] != os.environ["NESSA_REFUSED_OPENCODE_HOME"]
+assert pathlib.Path(os.environ["XDG_CONFIG_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
+assert pathlib.Path(os.environ["XDG_CACHE_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
+assert pathlib.Path(os.environ["XDG_STATE_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
+for alternate in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"):
+    assert alternate not in os.environ
 
 (root / "pid").write_text(str(os.getpid()))
 # What Opencode itself opens a session on: its gateway's current default, which
@@ -160,6 +171,15 @@ for line in sys.stdin:
         assert params["mcpServers"] == []
         if method == "session/resume":
             session = params["sessionId"]
+        if mode == "startup-update-before-session-response":
+            update({"sessionUpdate": "available_commands_update", "availableCommands": []})
+        elif mode == "wrong-session-startup-update":
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": "another-session", "update": {
+                    "sessionUpdate": "available_commands_update", "availableCommands": []}}})
+        elif mode == "execution-output-before-session-response":
+            update({"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "too early"}})
         result(msg["id"], {"sessionId": session, **configs()})
         # Recorded: 1.18.31 sends this unprompted the moment it has answered
         # `session/new`, before anything has been configured. It is sent in
@@ -168,7 +188,10 @@ for line in sys.stdin:
         # test can forget. An adapter that treated an advisory update as
         # execution output, or checked it against a session it has not admitted
         # yet, would fail `open()` on it — see the test named for it.
-        update({"sessionUpdate": "available_commands_update", "availableCommands": []})
+        if mode not in ("startup-update-before-session-response",
+                        "wrong-session-startup-update",
+                        "execution-output-before-session-response"):
+            update({"sessionUpdate": "available_commands_update", "availableCommands": []})
     elif method == "session/set_config_option":
         params = msg["params"]
         assert params["sessionId"] == session
@@ -231,6 +254,11 @@ for line in sys.stdin:
                     {"optionId": "reject_once", "kind": "reject_once", "name": "Reject"},
                 ],
             }})
+            continue
+        elif mode in ("stall", "process-exit"):
+            text("running")
+            if mode == "process-exit":
+                sys.exit(17)
             continue
         else:
             text(msg["params"]["prompt"][0]["text"])

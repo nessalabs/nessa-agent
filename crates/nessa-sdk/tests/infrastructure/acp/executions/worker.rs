@@ -60,7 +60,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
         .is_err());
         let (_commands, commands) = mpsc::channel(1);
         let (_close, close_requested) = watch::channel(None);
-        let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
+        let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
         let (events, _events) = EventQueueBudget::new().channel(1);
         let mut worker = Worker {
             profile: TestAcpProfile {
@@ -84,6 +84,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             agent_accepts_images: false,
             operation_capabilities,
             permissions: HashMap::new(),
+            startup_advisory_session: None,
             declined: None,
             shutdown_deadline: None,
             configured: true,

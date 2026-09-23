@@ -1,18 +1,14 @@
-use crate::browser_session::domain::value_objects::{Lifetime, RemovalReason};
+use crate::{
+    browser_session::domain::value_objects::{
+        BrowserSessionOrigin, BrowserSessionState, RemovalReason,
+    },
+    core::trusted_origin::is_trusted_origin_value,
+};
 use nessa_auth::application::ports::{
     AccessError, CredentialEvidence, PortFuture, SessionEvidence, SessionVerifier,
     VerifiedSessionCredential,
 };
 use nessa_auth::domain::CredentialId;
-
-const RENEWAL_INTERVAL_SECONDS: u64 = 60 * 60;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BrowserSession {
-    credential_id: CredentialId,
-    lifetime: Lifetime,
-    origin: String,
-}
 
 /// Bounded session persistence selected by server composition.
 pub trait SessionStore: Send + Sync {
@@ -20,11 +16,11 @@ pub trait SessionStore: Send + Sync {
     fn insert<'a>(
         &'a self,
         id: String,
-        session: BrowserSession,
+        session: BrowserSessionState,
         prior: Option<String>,
         now: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>>;
-    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSession>>;
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>>;
+    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSessionState>>;
     /// Remove a session with its typed cause and verified explicit initiator.
     /// Automatic causes carry `None`; explicit sign-out carries the credential
     /// verified by the application immediately before this command.
@@ -39,7 +35,7 @@ pub trait SessionStore: Send + Sync {
     fn abandon_login<'a>(
         &'a self,
         id: String,
-        prior: Option<(String, BrowserSession)>,
+        prior: Option<(String, BrowserSessionState)>,
         now: u64,
     ) -> PortFuture<'a, ()>;
     /// Renew activity attributed to the credential just verified by the application.
@@ -48,73 +44,7 @@ pub trait SessionStore: Send + Sync {
         id: String,
         now: u64,
         initiator: CredentialId,
-    ) -> PortFuture<'a, BrowserSession>;
-}
-
-impl BrowserSession {
-    pub fn new(credential_id: CredentialId, origin: String, now: u64) -> Option<Self> {
-        Some(Self {
-            lifetime: Lifetime::new(now)?,
-            credential_id,
-            origin,
-        })
-    }
-    pub fn restore(
-        credential_id: CredentialId,
-        origin: String,
-        created_at: u64,
-        renewed_at: u64,
-        idle_expires_at: u64,
-    ) -> Option<Self> {
-        Some(Self {
-            lifetime: Lifetime::restore(created_at, renewed_at, idle_expires_at)?,
-            credential_id,
-            origin,
-        })
-    }
-    pub fn renewed_for_check(&self, now: u64) -> Option<Self> {
-        if !self.is_active_at(now) {
-            return None;
-        }
-        if now.saturating_sub(self.renewed_at()) < RENEWAL_INTERVAL_SECONDS {
-            return Some(self.clone());
-        }
-        let lifetime = self.lifetime.renew(now)?;
-        Some(Self {
-            credential_id: self.credential_id.clone(),
-            origin: self.origin.clone(),
-            lifetime,
-        })
-    }
-    pub fn is_active_at(&self, now: u64) -> bool {
-        self.lifetime.is_active_at(now)
-    }
-    /// Whether this session's renewal instant is one a clock at `now` can vouch for.
-    pub fn is_plausible_at(&self, now: u64) -> bool {
-        self.lifetime.is_plausible_at(now)
-    }
-    pub fn expiration_reason(&self, now: u64) -> Option<RemovalReason> {
-        if self.is_active_at(now) {
-            None
-        } else {
-            Some(RemovalReason::IdleExpired)
-        }
-    }
-    pub fn credential_id(&self) -> &CredentialId {
-        &self.credential_id
-    }
-    pub fn origin(&self) -> &str {
-        &self.origin
-    }
-    pub fn created_at(&self) -> u64 {
-        self.lifetime.created_at()
-    }
-    pub fn renewed_at(&self) -> u64 {
-        self.lifetime.renewed_at()
-    }
-    pub fn idle_expires_at(&self) -> u64 {
-        self.lifetime.idle_expires_at()
-    }
+    ) -> PortFuture<'a, BrowserSessionState>;
 }
 
 pub fn invalidation_reason(error: AccessError) -> Option<RemovalReason> {
@@ -133,7 +63,11 @@ pub struct ReadBrowserSession<'a> {
     pub store: &'a dyn SessionStore,
 }
 impl ReadBrowserSession<'_> {
-    pub async fn execute(&self, id: &str, now: u64) -> Result<Option<BrowserSession>, AccessError> {
+    pub async fn execute(
+        &self,
+        id: &str,
+        now: u64,
+    ) -> Result<Option<BrowserSessionState>, AccessError> {
         let Some(session) = self.store.get(id.to_owned()).await? else {
             return Ok(None);
         };
@@ -160,6 +94,9 @@ impl SessionVerifier for BrowserSessionVerifier<'_> {
         _: &'a nessa_auth::domain::AudienceId,
     ) -> PortFuture<'a, VerifiedSessionCredential> {
         Box::pin(async move {
+            let expected_origin = BrowserSessionOrigin::new(self.expected_origin.to_owned())
+                .filter(|origin| is_trusted_origin_value(origin.as_str()))
+                .ok_or(AccessError::InvalidCredential)?;
             let id = std::str::from_utf8(evidence.expose_bytes())
                 .ok()
                 .filter(|id| id.len() == 64 && id.as_bytes().iter().all(u8::is_ascii_hexdigit))
@@ -167,7 +104,7 @@ impl SessionVerifier for BrowserSessionVerifier<'_> {
             let session = ReadBrowserSession { store: self.store }
                 .execute(id, self.now)
                 .await?
-                .filter(|session| session.origin() == self.expected_origin)
+                .filter(|session| session.origin() == expected_origin.as_str())
                 .ok_or(AccessError::InvalidCredential)?;
             Ok(VerifiedSessionCredential {
                 credential_id: session.credential_id().clone(),
@@ -189,15 +126,19 @@ impl SignIn<'_> {
         origin: String,
         id: String,
         prior: Option<&str>,
-    ) -> Result<(u64, Option<(String, BrowserSession)>), AccessError> {
+    ) -> Result<(u64, Option<(String, BrowserSessionState)>), AccessError> {
+        let origin = BrowserSessionOrigin::new(origin)
+            .filter(|origin| is_trusted_origin_value(origin.as_str()))
+            .ok_or(AccessError::InvalidCredential)?;
         let evidence = CredentialEvidence::new(token.into_bytes())?;
         let identity = self
             .authentication
             .execute(&evidence, self.audience)
             .await?;
         let now = self.authentication.clock.unix_seconds();
-        let session = BrowserSession::new(identity.context().credential_id().clone(), origin, now)
-            .ok_or(AccessError::InvalidCredential)?;
+        let session =
+            BrowserSessionState::new(identity.context().credential_id().clone(), origin, now)
+                .ok_or(AccessError::InvalidCredential)?;
         let idle_expires_at = session.idle_expires_at();
         let replaced = self
             .store

@@ -27,18 +27,40 @@ fn standard_tool_updates_preserve_sparse_content_without_provider_metadata() {
     assert!(tool_call(&json!({"toolCallId":"read", "locations":[{"path":""}]})).is_err());
 }
 #[test]
-fn unsupported_content_rejects_the_whole_patch_without_clearing_previous_observations() {
+fn tagged_unsupported_content_becomes_bounded_placeholders_beside_supported_content() {
+    let parsed = tool_call(&json!({"toolCallId":"read","content":[
+        {"type":"content","content":{"type":"text","text":"before"}},
+        {"type":"content","content":{"type":"image","data":"opaque"}},
+        {"type":"terminal","terminalId":"command"},
+        {"type":"bash_code_execution_result","stdout":"opaque"},
+        {"type":"content","content":{"type":"text","text":"after"}}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        parsed.content(),
+        &Some(vec![
+            ToolContent::text("before"),
+            ToolContent::text(UNSUPPORTED_TOOL_CONTENT),
+            ToolContent::text(UNSUPPORTED_TOOL_CONTENT),
+            ToolContent::text(UNSUPPORTED_TOOL_CONTENT),
+            ToolContent::text("after"),
+        ])
+    );
+}
+
+#[test]
+fn malformed_content_rejects_the_whole_patch_without_clearing_previous_observations() {
     let initial = tool_call(&json!({"toolCallId":"read","content":[{"type":"content","content":{"type":"text","text":"retained"}}]})).unwrap();
     let tool = ToolObservation::default().with_update(initial);
     let before = tool.clone();
-    for unsupported in [
-        json!({"type":"image"}),
-        json!({"type":"content","content":{"type":"image","data":"opaque"}}),
+    for malformed in [
         json!({"type":"content","content":{}}),
+        json!({"type":"content"}),
+        json!({"type":"diff","path":"file","newText":7}),
         json!({"type":7}),
         json!({}),
     ] {
-        let update = json!({"toolCallId":"read","content":[{"type":"content","content":{"type":"text","text":"partial"}},unsupported]});
+        let update = json!({"toolCallId":"read","content":[{"type":"content","content":{"type":"text","text":"partial"}},malformed]});
         assert!(matches!(tool_call(&update), Err(AgentError::Protocol(_))));
         assert_eq!(&tool, &before);
     }

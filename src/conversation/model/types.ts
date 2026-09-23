@@ -1,6 +1,33 @@
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 
+export type AgentFeatures = {
+  permissionDenial: "unknown" | "unsupported" | "supported_for_offered_permission_reviews"
+  nativeHookSuppression: "unknown" | "unsupported" | "supported_for_user_configured_hooks"
+  compactionReporting:
+    "unsupported_not_implemented" | "supported_with_invocation_correlation"
+  modelSwitchReporting: "unsupported_not_implemented" | "supported_after_validated_switch"
+  permissionDeferral: "unsupported_not_implemented" | "supported_with_nonterminal_outcome"
+  elicitationForwarding:
+    "unknown" | "unsupported" | "supported_with_correlated_round_trip"
+  preToolPolicy:
+    "unknown" | "unsupported_not_implemented" | "supported_at_permission_gate"
+  policyEndTurn:
+    "unknown" | "unsupported_not_implemented" | "supported_for_current_invocation"
+  policyCloseSession: "unknown" | "unsupported_not_implemented" | "supported_for_session"
+  incomingElicitation:
+    "unknown" | "unsupported_not_implemented" | "supported_with_correlated_round_trip"
+}
+
+export type ConversationCapabilities = {
+  queue: boolean
+  steer: boolean
+  resume: boolean
+  permissions: boolean
+  imageInput: boolean
+  agentFeatures: AgentFeatures
+}
+
 /**
  * Why a conversation command did not do what was asked, in this panel's own
  * words rather than the gateway's.
@@ -189,13 +216,7 @@ type ConversationState = {
       attachments: ImageReference[]
       mode: "queued" | "steering"
     }[]
-    capabilities: {
-      queue: boolean
-      steer: boolean
-      resume: boolean
-      permissions: boolean
-      imageInput: boolean
-    }
+    capabilities: ConversationCapabilities
     queueComplete: boolean
     truncated: boolean
     permissionViewError?: string

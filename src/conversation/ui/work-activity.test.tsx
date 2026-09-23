@@ -1,5 +1,7 @@
-import { expect, it } from "vitest"
-import { workSummary } from "./work-activity"
+import { renderToStaticMarkup } from "react-dom/server"
+import { describe, expect, it, vi } from "vitest"
+import { WorkActivity, workSummary } from "./work-activity"
+import WorkSteps from "./work-steps"
 import type { AgentToolView } from "./agent-transcript-view"
 
 function tool(status: string, kind = "other"): AgentToolView {
@@ -62,4 +64,68 @@ it("counts only the kinds the provider named, never guessing at the rest", () =>
     { key: "b", tool: tool("completed", "search") },
   ]
   expect(workSummary({ work, running: false })).toBe("Ran 2 tools")
+})
+
+describe("the rendered line and sheet", () => {
+  const work = [
+    { key: "thought", thought: "Inspect the project." },
+    {
+      key: "failed-tool",
+      tool: {
+        callId: "failed-tool",
+        title: "Search",
+        kind: "search",
+        status: "failed",
+        input: "needle",
+        details: "No matches",
+      },
+    },
+    {
+      key: "completed-tool",
+      tool: {
+        callId: "completed-tool",
+        title: "Read",
+        kind: "file_read",
+        status: "completed",
+        input: "README.md",
+        details: "Project notes",
+      },
+    },
+  ]
+  const line = (running: boolean) =>
+    renderToStaticMarkup(
+      <WorkActivity
+        work={work}
+        running={running}
+        seed="chat"
+        expanded={false}
+        sheetId="sheet"
+        onOpen={vi.fn()}
+      />,
+    )
+
+  it("collapses thoughts and tools into one neutral line once the turn is done", () => {
+    const markup = line(false)
+    expect(markup.match(/data-slot="agent-activity"/g)).toHaveLength(1)
+    expect(markup).toContain('data-status="complete"')
+    expect(markup).toContain("Ran 2 tools")
+    expect(markup).not.toContain("failed")
+    expect(markup).not.toContain('data-status="error"')
+  })
+
+  it("shows one working status with no interim count and nothing to open", () => {
+    const markup = line(true)
+    expect(markup.match(/data-slot="agent-activity"/g)).toHaveLength(1)
+    expect(markup).toContain("Running")
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup).not.toContain("tool")
+    expect(markup).not.toContain("<button")
+  })
+
+  it("keeps the thought and the failed call, in order, inside the sheet", () => {
+    const markup = renderToStaticMarkup(<WorkSteps work={work} />)
+    expect(markup.indexOf("Inspect the project.")).toBeLessThan(markup.indexOf("Search"))
+    expect(markup.indexOf("Search")).toBeLessThan(markup.indexOf("Read"))
+    expect(markup).toContain('data-status="error"')
+  })
 })

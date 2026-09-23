@@ -34,8 +34,8 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     )
     .await
     .unwrap();
-    assert!(agent.operation_capabilities().session_resume);
-    assert!(!agent.operation_capabilities().native_steering);
+    assert!(agent.operation_capabilities().session_resume());
+    assert!(!agent.operation_capabilities().native_steering());
     let hook_calls = Arc::new(AtomicUsize::new(0));
     let count = hook_calls.clone();
     agent.add_hook(BeforeInvocation, move |_: &InvocationContext<'_>| {
@@ -542,7 +542,10 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
             agent
                 .invoke(prompt(&format!("failed-restore-{index}")), close_action())
                 .await,
-            Err(AgentError::Provider { code: -32000 }),
+            Err(AgentError::Provider {
+                code: -32000,
+                diagnostic: Some(ProviderDiagnostic::new("restore failed")),
+            }),
             "restoration {index} must reach the provider rather than exhaust the reader queue"
         );
     }
