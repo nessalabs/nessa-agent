@@ -9,6 +9,8 @@ import {
 export type AgentToolView = {
   callId: string
   title: string
+  /** What the call does, in the stream's vocabulary; `other` when unsaid. */
+  kind: string
   status: string
   input: string
   details: string
@@ -49,6 +51,7 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       {
         callId: payload.callId,
         title: payload.title,
+        kind: payload.kind,
         status: result
           ? result.isError
             ? "failed"

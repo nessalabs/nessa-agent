@@ -1,5 +1,9 @@
 import { lazy, Suspense } from "react"
-import { AgentActivity, AgentActivityTrigger } from "@nessa-ui/react/agent-activity"
+import {
+  AgentActivity,
+  AgentActivityCue,
+  AgentActivityTrigger,
+} from "@nessa-ui/react/agent-activity"
 import {
   Sheet,
   SheetHandle,
@@ -9,6 +13,7 @@ import {
   SheetAction,
   SheetBody,
 } from "@nessa-ui/react/sheet"
+import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 import type { WorkStep } from "./agent-transcript-view"
 
 const WorkSteps = lazy(() => import("./work-steps"))
@@ -26,30 +31,54 @@ export type Work = { work: WorkStep[]; running: boolean }
  */
 export function workSummary({ work, running }: Work) {
   const tools = work.flatMap((step) => (step.tool ? [step.tool] : []))
-  if (running) return tools.length ? "Running…" : "Thinking"
+  if (running) return tools.length ? "Running" : "Thinking"
   if (!tools.length) return work.length ? "Thought" : ""
   const count = `${tools.length} tool${tools.length === 1 ? "" : "s"}`
   // A stopped call did not finish, so the past tense would overstate it.
-  return tools.some((tool) => tool.status === "stopped") ? count : `Ran ${count}`
+  const ran = tools.some((tool) => tool.status === "stopped") ? count : `Ran ${count}`
+  // What a reader wants first is whether their files were touched. Only kinds
+  // the provider actually named are counted: an unsaid kind is `other`, and
+  // guessing it as a read would put a number on the line that is not true.
+  const read = tools.filter((tool) => tool.kind === "file_read").length
+  const wrote = tools.filter((tool) => tool.kind === "file_edit").length
+  const bits = [read && `${read} read`, wrote && `${wrote} written`].filter(Boolean)
+  return bits.length ? `${ran} · ${bits.join(", ")}` : ran
 }
 export function WorkActivity({
   work,
   running,
+  seed,
   expanded,
   sheetId,
   onOpen,
-}: Work & { expanded: boolean; sheetId: string; onOpen: () => void }) {
+}: Work & {
+  seed: string
+  expanded: boolean
+  sheetId: string
+  onOpen: () => void
+}) {
   const label = workSummary({ work, running })
   if (!label) return null
   return (
     <AgentActivity status={running ? "running" : "complete"}>
-      <AgentActivityTrigger
-        aria-expanded={expanded}
-        aria-controls={expanded ? sheetId : undefined}
-        onClick={onOpen}
-      >
-        {label}
-      </AgentActivityTrigger>
+      {/*
+        While it runs the line is a status, not a control: it says the agent
+        is working and carries no chevron, because a turn still going has
+        nothing settled to go and read. It becomes the count, and a way in,
+        when the turn is done.
+      */}
+      {running ? (
+        <AgentActivityCue>{label}</AgentActivityCue>
+      ) : (
+        <AgentActivityTrigger
+          icon={<RandomAvatar seed={seed} className="size-4" />}
+          aria-expanded={expanded}
+          aria-controls={expanded ? sheetId : undefined}
+          onClick={onOpen}
+        >
+          {label}
+        </AgentActivityTrigger>
+      )}
     </AgentActivity>
   )
 }

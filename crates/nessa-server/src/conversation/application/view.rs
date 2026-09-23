@@ -102,6 +102,8 @@ pub struct ConversationTool {
     pub execution_id: String,
     pub tool_id: String,
     pub title: String,
+    /// What the call does, as the provider categorised it. Empty until it says.
+    pub kind: String,
     pub status: String,
 }
 #[derive(Clone, Debug, Serialize)]

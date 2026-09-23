@@ -17,6 +17,7 @@ import {
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageContentView } from "./message-content"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
+import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
@@ -107,6 +108,7 @@ export function Transcript({
                         <WorkActivity
                           work={part.work}
                           running={row.status === "running"}
+                          seed={conversation.id}
                           expanded={workFor === part.key}
                           sheetId={sheetId}
                           onOpen={() => setWorkFor(part.key)}
@@ -179,12 +181,16 @@ const TurnRow = React.memo(function TurnRow({
           <MessageMarkdown streaming={streaming}>{turn.text}</MessageMarkdown>
         )}
       </ChatBubble>
+      {/*
+        A turn that ended some other way is a mark on the transcript, not a
+        line the agent said: the same rule the compaction divider draws.
+      */}
       {turn.from === "assistant" &&
       turn.status &&
       !["running", "completed"].includes(turn.status) ? (
-        <p role="status" className="text-xs">
+        <TranscriptDivider>
           {turn.status === "cancelled" ? "Cancelled" : turn.status}
-        </p>
+        </TranscriptDivider>
       ) : null}
       {turn.from === "user" ? (
         <ChatMessageActions>

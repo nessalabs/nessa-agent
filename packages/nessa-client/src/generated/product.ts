@@ -353,6 +353,19 @@ export interface ConversationTool {
   toolId: string
   /** Provider tool title. */
   title: string
+  /** What the call does, as the provider categorised it. Empty until the provider has said, which is why a panel counts kinds it knows rather than assuming the rest are reads. */
+  kind:
+    | ""
+    | "read"
+    | "edit"
+    | "search"
+    | "fetch"
+    | "execute"
+    | "think"
+    | "delete"
+    | "move"
+    | "switch_mode"
+    | "other"
   /** Current provider tool status. */
   status: string
   /** Bounded provider-observed tool output and file changes; omitted content is marked. */

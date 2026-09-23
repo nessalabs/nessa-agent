@@ -11,15 +11,17 @@ import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
 import { makeStore } from "./store"
-import { Transcript } from "./conversation/ui/transcript"
-import { textContent } from "./conversation/model"
-import type { Conversation } from "./conversation/model"
+import { Transcript } from "./conversation"
+
+/** The barrel is the door; a preview has no more business past it than the app. */
+type Conversation = React.ComponentProps<typeof Transcript>["conversation"]
 
 const tools = [
   {
     executionId: "run",
     toolId: "one",
     title: "Read",
+    kind: "read",
     status: "completed",
     input: '{ "path": "src/panel/ui/app.tsx" }',
     details: "export function App() { …",
@@ -28,6 +30,7 @@ const tools = [
     executionId: "run",
     toolId: "two",
     title: "Search",
+    kind: "search",
     status: "failed",
     input: '{ "pattern": "wrapTab" }',
     details: "No matches",
@@ -36,6 +39,7 @@ const tools = [
     executionId: "run",
     toolId: "three",
     title: "Search",
+    kind: "search",
     status: "completed",
     input: '{ "pattern": "renderTab" }',
     details: "2 matches",
@@ -44,6 +48,7 @@ const tools = [
     executionId: "run",
     toolId: "four",
     title: "Edit",
+    kind: "edit",
     status: "completed",
     input: '{ "path": "src/panel/ui/app.tsx" }',
     details: "1 change applied",
@@ -52,6 +57,7 @@ const tools = [
     executionId: "run",
     toolId: "five",
     title: "Shell",
+    kind: "execute",
     status: "completed",
     input: '{ "command": "pnpm test" }',
     details: "26 files passed",
@@ -101,7 +107,7 @@ function chat(
         from: "user",
         executionId: "run",
         receipt: "delivered",
-        content: textContent("Why does the tab label clip at panel width?"),
+        content: [{ type: "text", text: "Why does the tab label clip at panel width?" }],
       },
       { id: `${id}:agent`, from: "assistant", executionId: "run", ...agent },
     ],
