@@ -54,6 +54,19 @@ fn confirmed(audit_failed: bool) -> CleanupReport {
     )
 }
 
+struct ClosedAttachmentPanickingAudit;
+impl ExecutionAudit for ClosedAttachmentPanickingAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(record, ExecutionAuditRecord::Attachment(ref attachment) if attachment.after() == AttachmentAuditStage::Absent)
+            {
+                panic!("closed attachment audit panic");
+            }
+            Ok(())
+        })
+    }
+}
+
 #[tokio::test]
 async fn confirmed_control_then_last_agent_drop_releases_lease_without_closing_again() {
     for audit_failed in [false, true] {
@@ -238,5 +251,51 @@ async fn repeated_confirmation_keeps_distinct_failures_without_growing_history()
         drop(admission);
         let close = agent.close(actor()).await;
         assert_eq!(close.is_err(), audit);
+    }
+}
+
+#[tokio::test]
+async fn panicking_attachment_audit_preserves_confirmed_and_unconfirmed_cleanup_ownership() {
+    for resources in [
+        ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+        ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain),
+    ] {
+        let backend = Arc::new(Backend::default());
+        let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+            .await
+            .unwrap();
+        let agent = Agent::prepare(
+            Arc::new(Provider(backend.clone())),
+            manager,
+            Arc::new(ClosedAttachmentPanickingAudit),
+        )
+        .await
+        .unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        *backend.cleanup_report.lock().unwrap() =
+            Some(CleanupReport::new(resources.clone(), Ok(())));
+        let request = SessionCloseRequest::Explicit(
+            ActionContext::new("owner", "surface", "audit-panic-close").unwrap(),
+        );
+
+        let attempt = agent.start_shutdown(request.clone());
+        let report = agent.inner.lifecycle.complete_stop(&attempt).await;
+
+        assert_eq!(report.resources(), &resources);
+        assert_eq!(report.audit(), &Err(AgentError::AuditFailure));
+        assert_eq!(report.operation_failure(), None);
+        assert_eq!(
+            agent.inner.lifecycle.attachment_needs_cleanup(),
+            matches!(resources, ResourceCleanup::Unconfirmed(_))
+        );
+        assert_eq!(backend.closes.lock().unwrap().as_slice(), &[request]);
     }
 }

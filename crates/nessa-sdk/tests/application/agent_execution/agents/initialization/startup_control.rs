@@ -96,3 +96,47 @@ async fn ignored_control_stays_owned_and_cannot_stop_the_replacement_generation(
     assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
     agent.close(close_action()).await.unwrap();
 }
+
+#[tokio::test]
+async fn close_after_provider_ready_waits_for_publication_and_cleans_the_actual_session() {
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::Starting);
+    let (release_start, waiting_start) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting_start);
+    let agent = prepared(provider.clone(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    let (saving_context, release_context) = storage.pause_next_save();
+    release_start.send(()).unwrap();
+    saving_context.await.unwrap();
+    assert_eq!(provider.calls.opens.lock().unwrap().len(), 1);
+    assert!(provider.calls.closes.lock().unwrap().is_empty());
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Starting);
+
+    let request = close_action();
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        let request = request.clone();
+        async move { agent.close(request).await }
+    });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    assert!(!closing.is_finished());
+    assert!(provider.calls.closes.lock().unwrap().is_empty());
+
+    release_context.send(()).unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    closing.await.unwrap().unwrap();
+    assert_eq!(
+        provider.calls.closes.lock().unwrap().as_slice(),
+        &[SessionCloseRequest::Explicit(request)]
+    );
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+}
