@@ -83,8 +83,9 @@ const SETUP_HEIGHT: f64 = 640.0;
 /// also reopened during a session (`restart_onboarding`), and two declarations
 /// of one window are two things to keep in step with nothing comparing them.
 ///
-/// Built hidden: a window is on screen the moment it exists, and its page
-/// reveals it once it has rendered (`reveal_setup_window`).
+/// Built hidden: a window is on screen the moment it exists. A release page
+/// reveals it once rendered; the debug host reveals the static loading fallback
+/// after placement so failed JavaScript still leaves an explanation on screen.
 ///
 /// A size, and deliberately no position: where the window goes is
 /// [`platform::Host::place_overlay`]'s alone, and asking the builder for one as
@@ -119,12 +120,20 @@ fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     .build()
 }
 
-/// Opens first-run setup at startup: built hidden, shaped into an overlay, and
-/// left for its own page to reveal. A setup window that cannot be built is
-/// survivable — the panel is still reachable from the tray.
+/// Opens first-run setup at startup: built hidden and shaped into an overlay.
+///
+/// A release page reveals itself after its first rendered frame. A standalone
+/// debug executable also has to expose the embedded document's loading fallback
+/// when its JavaScript never starts, so the host reveals the already-placed
+/// setup window immediately in that build. A setup window that cannot be built
+/// is survivable — the panel is still reachable from the tray.
 pub fn open_setup_window(app: &AppHandle) {
     match build_setup_window(app) {
-        Ok(window) => platform::current().place_overlay(&window),
+        Ok(window) => {
+            platform::current().place_overlay(&window);
+            #[cfg(debug_assertions)]
+            reveal_setup_window(window);
+        }
         Err(error) => eprintln!("[nessa] could not open setup: {error}"),
     }
 }

@@ -309,7 +309,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
+            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
+            webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
       # `cargo install` spent most of a minute building this tool from source
       # on every run, to arrive at a binary its author already publishes. Taken
@@ -329,6 +330,32 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/check-sdk-domain-coverage.sh
       - run: cargo build -p nessa-server
+      # This is the one platform where Tauri has a native WebDriver for the
+      # WebKit host. It drives the real embedded executable through a message
+      # and attachment, then proves the app, provider, gateway, and drivers are
+      # gone. macOS still gets the release-profile compile above; WKWebView has
+      # no corresponding WebDriver endpoint.
+      - name: Install native desktop WebDriver
+        if: runner.os == 'Linux'
+        run: cargo install tauri-driver --version 2.0.6 --locked
+      - name: Install native desktop smoke dependencies
+        if: runner.os == 'Linux'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Exercise the native desktop window
+        if: runner.os == 'Linux'
+        env:
+          NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
+        run: xvfb-run --auto-servernum pnpm desktop:smoke
+      - name: Upload native desktop smoke failure evidence
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-window-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nessa-native-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
       # Auth/SDK checks do not need the desktop UI's separate repository. Use an
       # isolated minimal npm harness so this job has no UI checkout credentials.
       - name: Prepare SDK integration harness
