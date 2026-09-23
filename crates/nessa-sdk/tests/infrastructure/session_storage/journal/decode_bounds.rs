@@ -555,27 +555,23 @@ fn acknowledgement_audit_uses_direct_optional_error_shape_and_preflight_bounds()
         });
         acknowledgement["Failed"][field] = error;
         oversized["invocations"][0]["metadata"]["acknowledgement"] = acknowledgement;
-        let bytes = if field == "storage" {
-            let metadata = oversized["invocations"][0]["metadata"]
-                .as_object_mut()
-                .unwrap();
-            let acknowledgement = metadata.remove("acknowledgement").unwrap();
-            metadata.remove("user_message").unwrap();
-            let remaining = serde_json::to_string(metadata).unwrap();
-            let ordered = format!(
-                "{{\"acknowledgement\":{},\"user_message\":\"{}\",{}",
-                serde_json::to_string(&acknowledgement).unwrap(),
-                "x".repeat(1024 * 1024),
-                &remaining[1..]
-            );
-            oversized["invocations"][0]["metadata"] = json!("ordered-metadata");
-            String::from_utf8(encoded(&oversized))
-                .unwrap()
-                .replace("\"ordered-metadata\"", &ordered)
-                .into_bytes()
-        } else {
-            encoded(&oversized)
-        };
+        let metadata = oversized["invocations"][0]["metadata"]
+            .as_object_mut()
+            .unwrap();
+        let acknowledgement = metadata.remove("acknowledgement").unwrap();
+        metadata.remove("user_message").unwrap();
+        let remaining = serde_json::to_string(metadata).unwrap();
+        let ordered = format!(
+            "{{\"acknowledgement\":{},\"user_message\":\"{}\",{}",
+            serde_json::to_string(&acknowledgement).unwrap(),
+            "x".repeat(1024 * 1024),
+            &remaining[1..]
+        );
+        oversized["invocations"][0]["metadata"] = json!("ordered-metadata");
+        let bytes = String::from_utf8(encoded(&oversized))
+            .unwrap()
+            .replace("\"ordered-metadata\"", &ordered)
+            .into_bytes();
         let length = bytes.len();
         let (result, decoded) = load(bytes);
         assert!(matches!(result, Err(StorageError::Corrupt(_))));

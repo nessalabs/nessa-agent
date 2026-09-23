@@ -81,7 +81,7 @@ fn capabilities() -> EffectiveCapabilities {
         audio: false,
     };
     let model = ModelMetadata::try_from(ModelMetadataDto {
-        provider: "fixture".into(),
+        provider: "anthropic".into(),
         model_id: "model".into(),
         display_name: "Fixture".into(),
         input: text,

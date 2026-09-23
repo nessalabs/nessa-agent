@@ -37,6 +37,7 @@ enum RemovalCause {
     Withdrawn,
     SessionClosed,
     RunnerStopped,
+    DispatchFailed,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +62,7 @@ impl From<&QueueHistoryRecord> for QueueEvent {
                         QueueRemovalCause::Withdrawn => RemovalCause::Withdrawn,
                         QueueRemovalCause::SessionClosed => RemovalCause::SessionClosed,
                         QueueRemovalCause::RunnerStopped => RemovalCause::RunnerStopped,
+                        QueueRemovalCause::DispatchFailed => RemovalCause::DispatchFailed,
                     },
                 },
                 QueueMutation::Reordered(change) => Mutation::Reordered {
@@ -98,6 +100,7 @@ impl QueueEvent {
                         RemovalCause::Withdrawn => QueueRemovalCause::Withdrawn,
                         RemovalCause::SessionClosed => QueueRemovalCause::SessionClosed,
                         RemovalCause::RunnerStopped => QueueRemovalCause::RunnerStopped,
+                        RemovalCause::DispatchFailed => QueueRemovalCause::DispatchFailed,
                     },
                 },
                 Mutation::Reordered { before, after } => QueueMutation::Reordered(

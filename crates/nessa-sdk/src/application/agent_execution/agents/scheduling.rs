@@ -1791,7 +1791,7 @@ impl Agent {
                             ),
                             QueueMutation::Removed {
                                 id: id.clone(),
-                                cause: QueueRemovalCause::RunnerStopped,
+                                cause: QueueRemovalCause::DispatchFailed,
                             },
                             result.clone(),
                         )
