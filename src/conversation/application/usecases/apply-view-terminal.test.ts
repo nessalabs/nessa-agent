@@ -11,6 +11,7 @@ const providerFailure = (revision: string): ConversationView => ({
   revision,
   truncated: false,
   queueComplete: true,
+  lifecycle: { phase: "absent" },
   messages: [
     {
       executionId: "execution",
