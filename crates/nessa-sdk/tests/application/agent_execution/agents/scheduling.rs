@@ -256,13 +256,14 @@ async fn automatic_failure_claim_precedes_close_while_settlement_audit_waits() {
 
     assert_eq!(settlement.await.unwrap(), Ok(()));
     assert_eq!(queued.wait().await, Err(failure));
-    let records = audit.settlements.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].cause(), SchedulingCause::DispatchFailed);
-    assert_eq!(records[0].initiator(), SchedulingInitiator::Automatic);
-    assert_eq!(records[0].submitted_by(), &actor());
-    assert_eq!(records[0].initiated_by(), None);
-    drop(records);
+    {
+        let records = audit.settlements.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].cause(), SchedulingCause::DispatchFailed);
+        assert_eq!(records[0].initiator(), SchedulingInitiator::Automatic);
+        assert_eq!(records[0].submitted_by(), &actor());
+        assert_eq!(records[0].initiated_by(), None);
+    }
     agent.inner.lifecycle.complete_stop(&attempt).await;
 }
 
@@ -294,12 +295,13 @@ async fn explicit_close_precedes_unclaimed_automatic_failure_settlement() {
     drop(scheduler);
 
     assert_eq!(queued.wait().await, Err(AgentError::Closed));
-    let records = audit.settlements.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].cause(), SchedulingCause::SessionClosed);
-    assert_eq!(records[0].initiator(), SchedulingInitiator::Caller);
-    assert_eq!(records[0].submitted_by(), &submitted_by);
-    assert_eq!(records[0].initiated_by(), Some(&closer));
-    drop(records);
+    {
+        let records = audit.settlements.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].cause(), SchedulingCause::SessionClosed);
+        assert_eq!(records[0].initiator(), SchedulingInitiator::Caller);
+        assert_eq!(records[0].submitted_by(), &submitted_by);
+        assert_eq!(records[0].initiated_by(), Some(&closer));
+    }
     agent.inner.lifecycle.complete_stop(&attempt).await;
 }
