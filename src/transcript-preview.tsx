@@ -95,6 +95,7 @@ function chat(
   id: string,
   extra: Partial<Conversation>,
   agent: { text: string; status: string; parts: typeof parts },
+  calls: typeof tools = tools,
 ): Conversation {
   return {
     id,
@@ -113,7 +114,7 @@ function chat(
     ],
     remote: {
       running: false,
-      tools: tools.map((tool) => ({ ...tool })),
+      tools: calls.map((tool) => ({ ...tool })),
       permissions: [],
       pending: [],
       capabilities: {
@@ -170,6 +171,39 @@ const thinking = chat(
   { text: "", status: "running", parts: parts.slice(0, 1) },
 )
 
+/** Many calls, so the sheet has to pass its floor and actually move. */
+const manyTools = Array.from({ length: 12 }, (_, index) => ({
+  ...tools[index % tools.length],
+  toolId: `many-${index}`,
+  status: "completed",
+}))
+
+/** A turn that gains a tool every second, so the sheet's growth is watchable. */
+function Growing({ label }: { label: string }) {
+  const [count, setCount] = React.useState(1)
+  React.useEffect(() => {
+    if (count >= manyTools.length) return
+    const timer = setTimeout(() => setCount((count) => count + 1), 1200)
+    return () => clearTimeout(timer)
+  }, [count])
+  const conversation = chat(
+    "growing",
+    {},
+    {
+      text: "",
+      status: "completed",
+      parts: manyTools.slice(0, count).map((tool, index) => ({
+        offset: index,
+        kind: "tool" as const,
+        text: "",
+        toolId: tool.toolId,
+      })),
+    },
+    manyTools,
+  )
+  return <Panel label={label} conversation={conversation} />
+}
+
 function Panel({ label, conversation }: { label: string; conversation: Conversation }) {
   return (
     <div className="flex flex-col gap-2">
@@ -201,6 +235,7 @@ createRoot(container).render(
         <Panel label="While it runs" conversation={running} />
         <Panel label="Thinking, before any tool" conversation={thinking} />
         <Panel label="One tool — the sheet still has a floor" conversation={single} />
+        <Growing label="A tool a second — open the sheet and watch it grow" />
       </div>
     </Provider>
   </React.StrictMode>,
