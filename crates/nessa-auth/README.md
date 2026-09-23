@@ -78,15 +78,17 @@ Issue, bootstrap, and revoke results carry their committed transitions, and the
 [credential transition audit](../../docs/design/auth/credential-transition-audit.md)
 for the decisions.
 
-Opening an invalid registry is a separate audited event because no registry
-state can be trusted enough to append evidence to it. The local adapter reports
-the exact path and a bounded structural fault without including rejected values;
-the application records target, unchanged-before/after meaning, cause, and the
-known initiator in a private sibling audit directory. Audit failure remains
-visible beside the original refusal. Neither path edits or deletes the registry.
+Opening an invalid registry authority file is a separate audited event because
+no registry state can be trusted enough to append evidence to it. The local
+adapter reports the exact path, the registry-or-lock role, and a bounded
+structural fault without including rejected values. The application derives a
+role-specific preserved transition and records it with cause and the known
+initiator in a private sibling audit directory. Audit failure remains visible
+beside the original refusal. Neither path edits or deletes the registry.
 The local refusal sink addresses every directory and record beneath the verified
-auth root, refuses symbolic-link ancestry, and syncs each parent after creating
-its child before it publishes and syncs the record.
+auth root and refuses symbolic-link ancestry. Unix syncs each parent after
+creating its child; Windows revalidates the tree, flushes the record file, and
+uses a write-through move because it has no directory-fsync equivalent.
 
 ## Authentication is not ongoing authorization
 

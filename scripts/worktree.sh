@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Feature worktrees that do not pay for a rebuild.
+# Feature worktrees with checkout-owned build output.
 #
 # Every agent working on a feature starts here:
 #
@@ -8,24 +8,17 @@
 #     ./scripts/worktree.sh list
 #     ./scripts/worktree.sh remove add-something
 #
-# Two things make a fresh worktree cheap:
+# Two things keep a fresh worktree practical:
 #
-#   * The Rust target directory is shared with the main checkout, so cargo
-#     reuses ~500 already-compiled dependency crates instead of starting over.
-#     Cargo takes a lock on it, so two worktrees building at once queue rather
-#     than corrupt each other.
-#
-#     A bare `cargo clean` in any worktree does empty it for all of them, and
-#     that is not preventable — cargo offers no way to protect a shared target.
-#     It is bounded rather than fixed: sccache's cache lives outside the target
-#     directory entirely, so the recovery is one ~45s rebuild, not a cold one.
-#     `./scripts/worktree.sh clean` is the non-destructive version and is what
-#     you almost always want.
+#   * Every checkout owns its Rust target directory. Cargo artifacts include
+#     source-dependent workspace output, so a target shared by divergent
+#     worktrees can leave one checkout launching another checkout's binary.
+#     sccache can still reuse compiled dependencies across those directories
+#     when RUSTC_WRAPPER=sccache is set.
 #   * pnpm hardlinks from its global store, so `pnpm install` in a new worktree
 #     costs seconds and no disk.
 #
-# Worktrees are created as SIBLINGS of this checkout so they can share this
-# repo's workspace `target/`. The design system is vendored by
+# Worktrees are created as SIBLINGS of this checkout. The design system is vendored by
 # scripts/ensure-nessa-ui.mjs, so install no longer depends on a relative path
 # sitting next to the checkout.
 
@@ -37,8 +30,8 @@ set -euo pipefail
 # to reopen its own worktree, and would skip deleting its branch on removal.
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-# Worktrees, and the build cache they share, belong to the original clone —
-# never to whichever checkout this copy of the script happens to sit in.
+# Worktree registration belongs to the original clone, never to whichever
+# checkout this copy of the script happens to sit in.
 #
 # This used to be `dirname $0/..` and nothing more, which was right for as long
 # as only people ran it, from the clone. Claude Code runs it from inside a
@@ -65,14 +58,16 @@ usage: ./scripts/worktree.sh <command> [name]
 
   create <name>   New branch <name> in a sibling worktree, ready to build
   remove <name>   Delete that worktree (the branch is kept)
-  clean           Rebuild this repo's crates only, keeping dependencies
+  isolate         Replace this checkout's old shared target link with an empty,
+                  checkout-owned target directory; shared artifacts are kept
+  clean           Rebuild this checkout's crates only, keeping dependencies
   list            Show every worktree
   path <name>     Where that branch's worktree is, or would be
   claude-hook     Not for people. Claude Code's WorktreeCreate and
   claude-hook-remove
                   WorktreeRemove hooks, wired up in .claude/settings.json, so
-                  the worktrees it makes for itself share this build cache and
-                  are cleaned up after.
+                  the worktrees it makes for itself use isolated build output
+                  and are cleaned up after.
 
 <name> is a slug: letters, digits, dash, underscore, slash.
 USAGE
@@ -170,16 +165,17 @@ hook_field() {
 
 # The ref a new worktree's branch starts from.
 #
-# Claude Code's own default is `worktree.baseRef: "fresh"` — the repository's
-# default branch on the remote — and replacing its creation means owing it the
-# same behaviour. `git worktree add -b <name> <path>` with no start-point does
-# something quite different: it branches from whatever HEAD the clone happens to
-# be sitting on. That is silent and wrong. A clone parked on a feature branch
-# would hand every background agent that branch's commits, and the pull request
-# they opened against main would carry them.
+# Manual and Claude worktrees both begin at the repository's remote default.
+# `git worktree add -b <name> <path>` with no start-point does something quite
+# different: it branches from whatever HEAD the clone happens to be sitting on.
+# That is silent and wrong. A clone parked on a feature branch would hand every
+# new worktree that branch's commits, and a pull request against main would carry
+# unrelated work.
 #
 # Falls back the way the documented behaviour does: origin/HEAD, then the local
 # default branch, then this checkout's HEAD when there is no remote at all.
+# It deliberately does not fetch: worktree creation remains available offline
+# and uses the last remote state the repository has already verified locally.
 default_base() {
   local ref
   ref="$(git -C "$repo_root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
@@ -239,58 +235,63 @@ branch_at_worktree() {
   '
 }
 
-# Point a worktree's target/ at the one the main checkout builds into.
-#
-# Share the compiled dependencies rather than rebuilding them. A symlink rather
-# than CARGO_TARGET_DIR so it applies however cargo is invoked — directly,
-# through pnpm, or by the Tauri CLI. The workspace root relocates cargo's build
-# dir to <repo>/target (not src-tauri/target), so that is the path linked.
-#
-# LOAD-BEARING: this is a symlink, not a copy. `cmd_remove` must delete it
-# before removing the worktree — see the warning there.
-#
-# A real directory is never replaced. A worktree that already has one has
-# already built into it, and swapping it for a link would strand gigabytes
-# where nothing will look for them again.
-ensure_shared_target() {
-  local path="$1" shared="$repo_root/target" link="$1/target"
-  mkdir -p "$shared"
+# Require build output to belong to the checkout whose source Cargo reads.
+# A directory is the ownership boundary: relative target/debug paths used by
+# Cargo, Tauri, and the smoke scripts all resolve inside the same checkout.
+ensure_local_target() {
+  local path="$1" target="$1/target"
+  if [[ -L "$target" ]]; then
+    echo "→ $target is a symbolic link; refusing shared or foreign build output" >&2
+    echo "  run 'just worktree isolate' from that checkout first" >&2
+    return 1
+  fi
+  if [[ -e "$target" && ! -d "$target" ]]; then
+    echo "→ $target exists and is not a directory; refusing to replace it" >&2
+    return 1
+  fi
+  mkdir -p "$target"
+}
 
-  if [[ -L "$link" ]]; then
-    # Already a link, but not necessarily to the cache this checkout builds
-    # into: a worktree copied from another clone, or one left dangling by a
-    # move, would otherwise go on quietly compiling somewhere else. Replacing a
-    # symlink only removes the link.
-    [[ "$(readlink "$link")" == "$shared" ]] && return 0
-    echo "→ repointing $link at $shared" >&2
-    rm -f "$link"
-  elif [[ -e "$link" ]]; then
-    # A real directory holds artifacts already built into it, and a regular file
-    # is something this has no business guessing about. Either way `ln -s` would
-    # fail, and under `set -e` that would abort a worktree that git has already
-    # created.
-    echo "→ $link exists and is not a link to $shared; leaving it alone" >&2
-    echo "  remove it and re-run to share $repo_name's build cache" >&2
+# Existing worktrees opt in one at a time. Only the exact link created by the
+# former recipe is replaced. Its target is left untouched, so migration cannot
+# discard the original clone's artifacts. Any other link is refused because
+# this script cannot establish who owns it.
+cmd_isolate() {
+  local target="$script_root/target" former_shared="$repo_root/target"
+  is_registered_worktree "$script_root" \
+    || die "$script_root is not a registered worktree"
+
+  if [[ -L "$target" ]]; then
+    [[ "$(readlink "$target")" == "$former_shared" ]] \
+      || die "$target points somewhere other than the former shared target; leaving it unchanged"
+    rm -f "$target"
+    mkdir "$target"
+    echo "isolated $target; kept $former_shared unchanged"
     return 0
   fi
-
-  ln -s "$shared" "$link"
-  echo "→ sharing target/ with $repo_name" >&2
+  if [[ -d "$target" ]]; then
+    echo "$target is already checkout-owned"
+    return 0
+  fi
+  [[ ! -e "$target" ]] || die "$target exists and is not a directory; leaving it unchanged"
+  mkdir "$target"
+  echo "created checkout-owned $target"
 }
 
 cmd_create() {
   check_name "${1:-}"
-  local branch="$1" path
+  local branch="$1" path base
   path="$(worktree_path "$branch")"
 
   [[ -e "$path" ]] && die "already exists: $path"
   git -C "$repo_root" show-ref --quiet --verify "refs/heads/$branch" \
     && die "branch '$branch' already exists — use it, or pick another name"
 
-  echo "→ worktree $path (branch $branch)"
-  git -C "$repo_root" worktree add -b "$branch" "$path" >/dev/null
+  base="$(default_base)"
+  echo "→ worktree $path (branch $branch from $base)"
+  git -C "$repo_root" worktree add --no-track -b "$branch" "$path" "$base" >/dev/null
 
-  ensure_shared_target "$path"
+  ensure_local_target "$path"
 
   echo "→ pnpm install"
   (cd "$path" && pnpm install --prefer-offline >/dev/null)
@@ -314,9 +315,9 @@ EOF
 #
 # Claude Code makes its own worktrees — for background agents, isolated
 # sessions, and subagents declaring `isolation: worktree` — and its default is a
-# plain `git worktree add` with no shared target/: a cold build of ~600 crates
-# and several gigabytes, every time. Sixteen had accumulated here, ten carrying
-# their own target/, about 58 GB between them.
+# plain `git worktree add`. This hook preserves Claude Code's placement,
+# branch, dependency-installation, and cleanup behavior while ensuring build
+# output stays with the source tree that produced it.
 #
 # This replaces that creation step, which means owing Claude Code the behaviour
 # it would otherwise have had. The payload carries one field, `name`, and it is
@@ -343,9 +344,9 @@ EOF
 # the path and nothing else and every line meant for a person goes to stderr. A
 # non-zero exit aborts creation and shows stderr to the user.
 #
-# Sharing the build cache and installing dependencies are both improvements to a
-# worktree, not conditions of one: neither failing is allowed to cost a worktree
-# git has already made.
+# Installing dependencies is an improvement to a worktree, not a condition of
+# one: a failure is not allowed to cost a worktree git has already made. Build
+# isolation is a correctness condition and a reopened legacy link is refused.
 cmd_claude_hook() {
   local payload name dir branch existing occupant base
   payload="$(cat)"
@@ -366,7 +367,7 @@ cmd_claude_hook() {
 Remove it and let this recreate it, or pick another name."
     occupant="$(branch_at_worktree "$dir")"
     echo "→ reusing $dir (on ${occupant:-a detached HEAD})" >&2
-    ensure_shared_target "$dir" || echo "→ build cache not shared; continuing" >&2
+    ensure_local_target "$dir"
     printf '%s\n' "$dir"
     return 0
   fi
@@ -378,7 +379,7 @@ Remove it and let this recreate it, or pick another name."
   if [[ -n "$existing" ]]; then
     if [[ -d "$existing" ]]; then
       echo "→ reusing $existing (branch $branch is checked out there)" >&2
-      ensure_shared_target "$existing" || echo "→ build cache not shared; continuing" >&2
+      ensure_local_target "$existing"
       printf '%s\n' "$existing"
       return 0
     fi
@@ -396,7 +397,7 @@ Remove it and let this recreate it, or pick another name."
     git -C "$repo_root" worktree add --no-track -b "$branch" "$dir" "$base" >&2
   fi
 
-  ensure_shared_target "$dir" || echo "→ build cache not shared; continuing" >&2
+  ensure_local_target "$dir"
 
   if ! (cd "$dir" && pnpm install --prefer-offline >&2); then
     echo "→ pnpm install failed; run it in $dir before building the frontend" >&2
@@ -417,10 +418,9 @@ Remove it and let this recreate it, or pick another name."
 #
 # `worktree_path` is the only field this event carries; `name` is not sent.
 #
-# The symlink comes out first, and that ordering is the load-bearing one
-# `cmd_remove` documents: `target/` points into the main checkout's build cache,
-# and anything deleting the directory recursively while the link is still in it
-# would take every worktree's compiled artifacts with it.
+# A legacy target symlink comes out before removal. Git then removes the
+# checkout-owned directory normally; it never receives a path through which it
+# could touch the original clone's target directory.
 #
 # The branch goes too, but only when it holds nothing. `git branch -d` is the
 # obvious way to ask that and the wrong one: it means "merged into the branch
@@ -524,21 +524,8 @@ cmd_remove() {
   [[ -n "$path" ]] || path="$(worktree_path "$1")"
   [[ -d "$path" ]] || die "no worktree for '$1' (looked at $path)"
 
-  # ┌──────────────────────────────────────────────────────────────────────┐
-  # │ DO NOT CHANGE THE ORDER OF THE NEXT TWO LINES.                       │
-  # │                                                                      │
-  # │ target/ is a SYMLINK into the main checkout's build cache, shared by │
-  # │ every worktree. It must be unlinked BEFORE anything deletes the      │
-  # │ worktree directory: a recursive delete would otherwise follow it and │
-  # │ wipe gigabytes of compiled artifacts for every worktree at once,     │
-  # │ turning every next build into a cold one.                            │
-  # │                                                                      │
-  # │ `rm -f` on the link itself (no trailing slash, no -r) removes the    │
-  # │ link and never touches what it points at. Keep it that way.          │
-  # └──────────────────────────────────────────────────────────────────────┘
-  # Only ever the link. `rm -f` on a real directory fails rather than deleting
-  # it, which under `set -e` would abort before the removal below and leave both
-  # behind — the old `.claude/worktrees/*` copies have real target/ directories.
+  # Legacy worktrees may still link to the original clone's target. Unlink the
+  # path itself before asking git to remove the checkout; never traverse it.
   if [[ -L "$path/target" ]]; then
     rm -f "$path/target"
   fi
@@ -546,17 +533,37 @@ cmd_remove() {
   echo "removed $path (branch '$1' kept)"
 }
 
-# The safe counterpart to `cargo clean`. The target directory is shared, so a
-# bare clean throws away every worktree's dependency builds; this drops only
-# this repo's own crates, which is what is actually stale after a code change,
-# and costs ~27s to rebuild instead of minutes.
+# The package-scoped counterpart to `cargo clean`. Cargo's effective target is
+# the authority here: CARGO_TARGET_DIR and .cargo/config.toml both override the
+# ordinary checkout-local path. Checking only $script_root/target before running
+# Cargo would authorize one directory and let Cargo delete another.
 cmd_clean() {
+  local effective_target
+  effective_target="$({
+    cd "$script_root"
+    cargo metadata --no-deps --format-version 1
+  } | node -e '
+    let raw = ""
+    process.stdin.on("data", (chunk) => (raw += chunk))
+    process.stdin.on("end", () => {
+      const target = JSON.parse(raw).target_directory
+      if (typeof target !== "string" || target.length === 0) process.exit(1)
+      process.stdout.write(target)
+    })
+  ')" || die "could not resolve Cargo's effective target directory; nothing was cleaned"
+
+  [[ "$effective_target" == "$script_root/target" ]] || die \
+    "refusing to clean $effective_target; this checkout owns $script_root/target
+Unset CARGO_TARGET_DIR or remove the target-dir override before using this recipe.
+Clean an intentional external target explicitly, from the process that owns it."
+  ensure_local_target "$script_root"
   echo "→ cargo clean -p nessa-app -p nessa-server (dependencies kept)"
-  (cd "$repo_root" && cargo clean -p nessa-app -p nessa-server)
+  (cd "$script_root" && cargo clean -p nessa-app -p nessa-server)
 }
 
 case "${1:-}" in
   create)      shift; cmd_create "$@" ;;
+  isolate)     cmd_isolate ;;
   clean)       cmd_clean ;;
   remove)      shift; cmd_remove "$@" ;;
   list)        git -C "$repo_root" worktree list ;;

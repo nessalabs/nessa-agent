@@ -34,7 +34,9 @@ src/                      composition root (`main.tsx`, `store.ts`)
   session/                wire session to nessa-server (@nessa/client)
   panel/                  floating-window chrome (model / application / adapters / UI)
   host/                   injected OS features + the window seam
+  diagnostics/            development page-console forwarding
 src-tauri/src/
+  diagnostics.rs          debug-only page-to-terminal diagnostic bridge
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs
@@ -256,14 +258,17 @@ providers. See [local authentication](adr/done/0010-local-authentication.md). Ho
 identity providers remain future adapters.
 
 `application/credential_registry.rs` owns the secret-free refusal facts and
-audit port for an existing registry that cannot be trusted. The local registry
-adapter keeps one content-validation path and translates private-storage
-refusals at the same open boundary: it reports the exact path plus a bounded
-syntax, schema, invariant, size, or storage fault and never rewrites the
-rejected file. `adapters/local/registry_refusal_audit.rs` records the target,
+audit port for a registry authority file that cannot be trusted. The local
+registry adapter keeps one content-validation path and translates
+private-storage refusals at the same open boundary: it reports the exact path,
+the registry-or-lock role, and a bounded syntax, schema, invariant, size, or
+storage fault and never rewrites the rejected file. The application derives the
+role-specific preserved transition, so a lock refusal does not claim registry
+state was read. `adapters/local/registry_refusal_audit.rs` records the target,
 before/after meaning, cause, and known initiator outside the untrusted registry.
 It creates and publishes only beneath the verified auth root, syncs each parent
-after creating its child, and reports a sink failure beside the primary fault.
+after creating its child on Unix, applies the Windows guarantees described
+below, and reports a sink failure beside the primary fault.
 Server composition supplies whether the open came from gateway startup,
 automatic provisioning, or an explicit local command.
 
@@ -275,9 +280,10 @@ path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
-`create_durable_directory_beneath` establishes a nested private tree one name
-at a time, syncing each parent before descent and the final leaf before success;
-audit sinks use it before publishing records into a previously absent tree.
+`create_private_directory_tree_beneath` establishes a nested private tree one
+name at a time. Unix syncs each parent before descent and the final leaf before
+success. Windows revalidates the anchored tree because it has no directory-fsync
+equivalent; sinks flush record files and use write-through moves separately.
 
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or
@@ -367,8 +373,11 @@ All additional Nessa tools use this MCP boundary. See the
 [server guide](../crates/nessa-mcp/README.md).
 
 `src/conversation/adapters/agent-stream/` maps replacement gateway projections to
-Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives activity
-rows from the shared Transcript; it does not parse provider wire formats.
+Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives one
+turn-level activity row from the shared Transcript; `ui/turn-activity.tsx` opens
+its ordered thought and tool detail. Neither parses provider wire formats.
+`ui/transcript.tsx` renders a turn's terminal status once at row level,
+independently of whether that turn contains text.
 
 ### Packaged gateway lifecycle
 
@@ -396,7 +405,7 @@ rows from the shared Transcript; it does not parse provider wire formats.
 - `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, verifies full-tree parity with the packaging digest, and publishes atomically before service mutation. Existing versions are verified and retained; launchd arguments name the staged directory and no search path derives from it — the gateway addresses `nessa`, `node`, the ACP entry and `nessa-mcp` absolutely, so the staged directory is on neither the service's `PATH` nor the agent's. Tests cover cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
 - `src-tauri/src/gateway/infrastructure/macos/pruning.rs` collects the staged versions nothing can be running, under the same per-label lock, once the service has advertised its identity. `removable` is the whole rule and is pure: a published fingerprint directory goes only when it is neither the registered nor the running version and neither an unanswered retirement request nor an unacknowledged fence names it. `RetirementEvidence` carries `retired` for exactly that distinction: admission fencing needs only a recorded cause, while collection needs to know whether the old gateway finished and was booted out. An interrupted `.staging-` attempt goes because holding the lock means nobody is staging; every other name is left alone. `RuntimeVersions` is the directory seam, so the rule is tested without a filesystem and the real `LabelDirectory` revalidates each entry as a directory this user owns before removing it. No single entry can stop the pass: a refused removal, an entry the directory will not yield, and an entry with no valid text name are each reported and stepped over while the recognised versions beside them are still collected. Only a directory that cannot be listed at all ends the pass. What is reported is typed rather than a message string, so each line says what actually happened: a path appears only for an entry a removal was really attempted on, and a lossy rendering of an unusable name is never presented as somewhere to look. Failures are reported with their path and never reach registration's result. Reconciliations that return an error collect nothing, because the version they were replacing may still be running.
 - `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
-- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths.
+- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths plus verified installed-runtime launches.
 - `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
 - `settings.onboarding.completed` records that first-run setup finished. `src-tauri/src/main.rs` opens the setup window only when it is false. `panel::finish_setup` owns the whole handoff and its order — show the panel, record completion, close the setup window — in the process that outlives that window; a panel that will not show abandons the handoff and writes nothing, while a refused write is logged and the close still happens. `src/host/window.ts`'s `finishSetupWindow` is a single invoke of it, carrying only whether setup was finished or left (`isOnboardingCompleted`), and maps the reported steps onto the `SetupHandoff` outcomes. `src/onboarding/application/setup-recovery.ts` decides what the setup window shows when it is still there afterwards: a panel that never came up offers the handoff again, a panel that came up over a window that would not close offers only that window's close. The `Destroyed` handler in `main.rs` is a safety net for dismissal and crashes, not the handoff's cleanup path. The debug-only tray item clears the flag through `panel::restart_onboarding`.
 
@@ -895,6 +904,18 @@ the domain's rules, application ordering and failure reporting, the three
 adapters, concurrent publication authority, and the command's output.
 
 ## Command-line surface
+
+Developer worktree lifecycle is owned by `scripts/worktree.sh`. Manual sibling
+worktrees and Claude Code's nested worktrees use different naming namespaces,
+but both keep Cargo output in a real `target/` directory inside the checkout.
+`scripts/worktree-target.test.mjs` covers creation, legacy migration, cleanup,
+removal, invalid links, hook reopen behavior, and A/B/A artifact provenance.
+The optional `sccache` process cache is the cross-checkout reuse boundary; Cargo
+target directories are not shared by the recipe. `scripts/cargo-target.mjs` is
+the one resolver used by scripts that build and then execute an artifact, so an
+explicit `CARGO_TARGET_DIR` selects the same output for both steps.
+The worktree clean command separately resolves that effective value and permits
+deletion only when it is the invoking checkout's ordinary local target.
 
 The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,

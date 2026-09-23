@@ -9,7 +9,7 @@ use std::{
 
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{
-    create_durable_directory_beneath, open, open_beneath, sync_directory_beneath, OpenMode,
+    create_private_directory_tree_beneath, open, open_beneath, sync_directory_beneath, OpenMode,
     PrivateTempFile,
 };
 use serde_json::{json, Value};
@@ -33,7 +33,7 @@ pub struct DurableInstallAudit {
 
 impl DurableInstallAudit {
     pub fn new(root: &Path, directory: &Path, clock: Arc<dyn Clock>) -> Result<Self, AuditFailure> {
-        create_durable_directory_beneath(root, directory).map_err(audit_failure)?;
+        create_private_directory_tree_beneath(root, directory).map_err(audit_failure)?;
         let lock_path = directory.join("audit.lock");
         open_beneath(root, &lock_path, OpenMode::OpenOrCreate).map_err(audit_failure)?;
         sync_directory_beneath(root, directory).map_err(audit_failure)?;

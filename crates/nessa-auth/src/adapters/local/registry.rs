@@ -17,7 +17,10 @@ use crate::{
             IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
             ListTransitionsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
-        credential_registry::{CredentialRegistryFault, JsonFaultCategory, RegistryInvariant},
+        credential_registry::{
+            CredentialRegistryFault, CredentialRegistryStorageRole, JsonFaultCategory,
+            RegistryInvariant,
+        },
         dto::{
             CredentialGrantDto, CredentialMetadataDto, CredentialTransitionDto, InitiatorDto,
             MembershipInputDto, MembershipRoleDto, MembershipStateDto, OrganizationInputDto,
@@ -116,14 +119,22 @@ impl fmt::Display for LocalStoreError {
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("{path:?}"));
                 write!(formatter, "credential registry at {path} was refused: {fault}. The file was left unchanged. ")?;
-                if matches!(fault, CredentialRegistryFault::UnsafeStorage) {
-                    formatter.write_str(
+                match fault {
+                    CredentialRegistryFault::UnsafeStorage(
+                        CredentialRegistryStorageRole::Registry,
+                    ) => formatter.write_str(
                         "Preserve the current file and path as evidence. If the registry is verified, restore private current-user ownership, a single regular-file link, and private permissions (0600 for the file and 0700 for its directories on Unix), then retry. Otherwise restore a verified private backup to the same path. ",
-                    )?;
-                } else {
-                    formatter.write_str(
+                    )?,
+                    CredentialRegistryFault::UnsafeStorage(
+                        CredentialRegistryStorageRole::Lock,
+                    ) => {
+                        return formatter.write_str(
+                            "Stop every Nessa process using this namespace and preserve the unsafe lock path as evidence. If it is a verified regular lock file, restore private current-user ownership, one link, and private permissions (0600 for the file and 0700 for its directories on Unix), then retry. Otherwise move only the unsafe lock to secure evidence storage and retry; the credential registry is not changed or reinitialized",
+                        );
+                    }
+                    _ => formatter.write_str(
                         "Restore a verified backup to the same path to preserve credential identities and revocations. ",
-                    )?;
+                    )?,
                 }
                 formatter.write_str(
                     "As a last resort, move the invalid file to secure evidence storage, then run `nessa auth init --local --owner-token-file <new-absolute-path>`; reinitializing creates new identities, invalidates old tokens, and can orphan access tied to the old organization",
@@ -280,7 +291,8 @@ impl LocalCredentialStore {
             create_private_directory(&root, parent)?;
         }
         let lock_path = path.with_extension("lock");
-        let lock = private_open(&root, &lock_path, true)?;
+        let lock =
+            authoritative_open(&root, &lock_path, true, CredentialRegistryStorageRole::Lock)?;
         lock.try_lock_exclusive().map_err(|error| {
             // Windows reports ERROR_LOCK_VIOLATION rather than WouldBlock.
             // Match the adapter's native contention code without hiding other I/O errors.
@@ -290,7 +302,12 @@ impl LocalCredentialStore {
                 LocalStoreError::Io(error)
             }
         })?;
-        let registry = match private_open_registry(&root, &path) {
+        let registry = match authoritative_open(
+            &root,
+            &path,
+            false,
+            CredentialRegistryStorageRole::Registry,
+        ) {
             Ok(file) => {
                 let metadata = file.metadata()?;
                 if metadata.len() > config.max_registry_bytes {
@@ -1639,24 +1656,32 @@ fn private_open(root: &Path, path: &Path, create: bool) -> Result<File, LocalSto
     })
 }
 
-fn private_open_registry(root: &Path, path: &Path) -> Result<File, LocalStoreError> {
-    nessa_local_storage::open_beneath(root, path, nessa_local_storage::OpenMode::ReadWrite).map_err(
-        |error| {
-            if unsafe_storage_error(&error) {
-                invalid_registry(root, path, CredentialRegistryFault::UnsafeStorage)
-            } else {
-                LocalStoreError::Io(error)
-            }
+fn authoritative_open(
+    root: &Path,
+    path: &Path,
+    create: bool,
+    role: CredentialRegistryStorageRole,
+) -> Result<File, LocalStoreError> {
+    nessa_local_storage::open_beneath(
+        root,
+        path,
+        if create {
+            nessa_local_storage::OpenMode::OpenOrCreate
+        } else {
+            nessa_local_storage::OpenMode::ReadWrite
         },
     )
+    .map_err(|error| {
+        if unsafe_storage_error(&error) {
+            invalid_registry(root, path, CredentialRegistryFault::UnsafeStorage(role))
+        } else {
+            LocalStoreError::Io(error)
+        }
+    })
 }
 
 fn unsafe_storage_error(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::PermissionDenied
-        || matches!(
-            error.raw_os_error(),
-            Some(libc::ELOOP) | Some(libc::ENOTDIR)
-        )
+    error.kind() == io::ErrorKind::PermissionDenied || nessa_local_storage::is_unsafe_file(error)
 }
 fn set_private_directory(path: &Path) -> Result<(), LocalStoreError> {
     Ok(nessa_local_storage::verify_directory(path)?)
@@ -2492,7 +2517,9 @@ mod tests {
         assert!(matches!(
             open_store(&path),
             Err(LocalStoreError::InvalidRegistry {
-                fault: CredentialRegistryFault::UnsafeStorage,
+                fault: CredentialRegistryFault::UnsafeStorage(
+                    CredentialRegistryStorageRole::Registry
+                ),
                 ..
             })
         ));
@@ -2505,7 +2532,9 @@ mod tests {
         assert!(matches!(
             open_store(&path),
             Err(LocalStoreError::InvalidRegistry {
-                fault: CredentialRegistryFault::UnsafeStorage,
+                fault: CredentialRegistryFault::UnsafeStorage(
+                    CredentialRegistryStorageRole::Registry
+                ),
                 ..
             })
         ));
@@ -2525,7 +2554,9 @@ mod tests {
         assert!(matches!(
             open_store(registry),
             Err(LocalStoreError::InvalidRegistry {
-                fault: CredentialRegistryFault::UnsafeStorage,
+                fault: CredentialRegistryFault::UnsafeStorage(
+                    CredentialRegistryStorageRole::Registry
+                ),
                 ..
             })
         ));
@@ -3000,7 +3031,10 @@ mod tests {
         ));
         let message = error.to_string();
         assert!(message.contains("schema 1 is unsupported"), "{message}");
-        assert!(message.contains(path.to_str().unwrap()), "{message}");
+        // Windows may render the same path through its equivalent short-name
+        // spelling. The typed target above is the exact lossless assertion;
+        // this checks only that the human diagnostic names the affected file.
+        assert!(message.contains("credentials.v1.json"), "{message}");
         assert!(!message.contains("never-report-this"), "{message}");
         assert_eq!(fs::read(path).unwrap(), bytes);
     }

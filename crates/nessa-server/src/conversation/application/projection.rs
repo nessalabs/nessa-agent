@@ -4,6 +4,7 @@ use super::view::{
     ConversationPermission, ConversationPermissionOption, ConversationTool, ConversationView,
 };
 use nessa_sdk::application::agent_execution::{
+    agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate},
     sessions::{InvocationRecord, SessionSnapshot},
 };
@@ -20,6 +21,8 @@ const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_VIEW_BYTES: usize = 60_000;
+const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
+const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
 pub(super) struct Projection {
     pub view: ConversationView,
@@ -44,6 +47,34 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::RequestLimit
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
+}
+fn failure_notice(record: &InvocationRecord) -> Option<String> {
+    let final_error = record.result.as_ref()?.as_ref().err()?;
+    let report = record.provider_report.as_ref();
+    let provider_error = report
+        .and_then(|report| report.provider_result())
+        .and_then(|result| result.as_ref().err());
+    let Some(AgentError::Provider {
+        diagnostic: Some(diagnostic),
+        ..
+    }) = provider_error
+    else {
+        return Some(REQUIRED_WORK_FAILURE.into());
+    };
+    let diagnostic = diagnostic.as_str().trim();
+    if diagnostic.is_empty() {
+        return Some(REQUIRED_WORK_FAILURE.into());
+    }
+    let mut notice = format!("{PROVIDER_FAILURE_PREFIX}{diagnostic}");
+    let report_error = report.and_then(|report| report.clone().into_result().err());
+    if report_error.as_ref() != provider_error || provider_error != Some(final_error) {
+        if !matches!(notice.chars().last(), Some('.' | '!' | '?')) {
+            notice.push('.');
+        }
+        notice.push(' ');
+        notice.push_str(REQUIRED_WORK_FAILURE);
+    }
+    Some(notice)
 }
 impl Projection {
     pub fn new(
@@ -91,6 +122,13 @@ impl Projection {
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.view.revision = format!("{}:{}", self.epoch, self.revision);
+    }
+    /// Replace the coherent capability snapshot and revise the view only when it changed.
+    pub fn capabilities(&mut self, capabilities: ConversationCapabilities) {
+        if self.view.capabilities != capabilities {
+            self.view.capabilities = capabilities;
+            self.bump();
+        }
     }
     fn ensure_message(&mut self, id: &str) -> usize {
         if let Some(index) = self
@@ -560,9 +598,7 @@ impl Projection {
                 self.injected(id, &target);
             }
         }
-        if record.result.as_ref().is_some_and(Result::is_err) {
-            self.view.messages[index].error = Some("The agent operation failed. Retry with the same submission identity to inspect its saved result.".into());
-        }
+        self.view.messages[index].error = failure_notice(record);
         if record.result.is_some() || restoring {
             self.view
                 .permissions
@@ -602,7 +638,12 @@ impl Projection {
         if self.view.messages[index].status != ConversationMessageStatus::Cancelled {
             self.view.messages[index].status = ConversationMessageStatus::Failed;
         }
-        self.view.messages[index].error = Some("The invocation could not complete all required work. Its provider result and audit evidence remain saved separately.".into());
+        // Both receipt watchers call `settled` under this same projection lock
+        // first. Preserve any diagnostic derived from the refreshed durable
+        // record; absent snapshot evidence still receives the generic fallback.
+        if self.view.messages[index].error.is_none() {
+            self.view.messages[index].error = Some(REQUIRED_WORK_FAILURE.into());
+        }
         self.bump();
     }
     pub fn settled(&mut self, id: &str, snapshot: Option<&SessionSnapshot>) {

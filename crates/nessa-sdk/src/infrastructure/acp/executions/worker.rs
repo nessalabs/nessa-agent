@@ -16,7 +16,7 @@ use super::{
     wire,
 };
 use crate::application::agent_execution::agents::{
-    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, ProviderDiagnostic,
 };
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
@@ -30,7 +30,7 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
-    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
+    ProviderExecutionReply, ProviderOperationCapabilities, ProviderOperationFailure,
     ProviderOperationResult, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
     SteeringOutcome,
 };
@@ -68,15 +68,19 @@ use tokio::{
 /// Turn a provider's error response into this adapter's error, reporting what
 /// the provider said on the way past.
 ///
-/// The error itself carries only the code, because the code is what decides
-/// anything. The text is the operator's: `-32000` from a Codex that is not
-/// signed in is indistinguishable from any other provider refusal, and
-/// "Authentication required" is the entire answer. Logged once, here, so every
-/// provider failure says as much as the provider said.
+/// The code is the decision fact. Provider text is retained and logged only as
+/// bounded diagnostic context, so it cannot decide lifecycle behavior or grow
+/// through an untrusted response.
 fn provider_failure(phase: &str, error: RpcError) -> AgentError {
-    match &error.message {
+    let diagnostic = error.message.map(ProviderDiagnostic::new);
+    match &diagnostic {
         Some(message) => {
-            tracing::warn!(code = error.code, phase, %message, "provider refused")
+            tracing::warn!(
+                code = error.code,
+                phase,
+                message = message.as_str(),
+                "provider refused"
+            )
         }
         None => tracing::warn!(
             code = error.code,
@@ -84,7 +88,10 @@ fn provider_failure(phase: &str, error: RpcError) -> AgentError {
             "provider refused without a message"
         ),
     }
-    AgentError::Provider { code: error.code }
+    AgentError::Provider {
+        code: error.code,
+        diagnostic,
+    }
 }
 
 type ExecutionReply = oneshot::Sender<ProviderExecutionReply>;
@@ -140,7 +147,7 @@ struct Worker<P> {
     /// Whether an image can actually be delivered also needs a byte source, so
     /// the published capability is this and `config.images` together.
     agent_accepts_images: bool,
-    operation_capabilities: watch::Sender<OperationCapabilities>,
+    operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
     /// The review this worker answered without registering one — a refusal.
     ///
@@ -185,7 +192,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     audit: Arc<dyn ExecutionAudit>,
     restore: Option<ExecutionSessionId>,
     permission_sequence: Arc<AtomicU64>,
-    operation_capabilities: watch::Sender<OperationCapabilities>,
+    operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
     recovery: Arc<ProcessCleanup>,
 ) {
     let reader = Reader::new(
@@ -746,8 +753,9 @@ impl<P: AcpProfile> Worker<P> {
                 .verify_session(&result, &self.capabilities, step == last)?;
         }
         self.configured = true;
+        let profile_capabilities = self.profile.operation_capabilities(&init);
         self.operation_capabilities
-            .send_replace(OperationCapabilities {
+            .send_replace(ProviderOperationCapabilities {
                 negotiated: true,
                 native_steering: self.steering_supported,
                 // Only an agent that said so receives an image, and only when
@@ -756,6 +764,7 @@ impl<P: AcpProfile> Worker<P> {
                 session_resume: init
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
+                ..profile_capabilities
             });
         Ok(())
     }

@@ -12,8 +12,10 @@
 //! escape it, an archive is fetched over https from a host that is named.
 //! Deciding *where* a runtime goes and putting it there is infrastructure.
 pub mod entities;
+mod release_selection;
 pub mod value_objects;
 pub use entities::{InstallAttempt, InstallAttemptError};
+pub use release_selection::preferred_release;
 pub use value_objects::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, HostPlatform,
     InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallRequestError,

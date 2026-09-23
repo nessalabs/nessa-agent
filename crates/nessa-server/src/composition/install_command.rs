@@ -9,7 +9,9 @@ use crate::agent_install::application::{
     InstallAgentRuntime, InstallFailure, InstalledRuntime, RuntimeStateEvidence, SourceFailure,
     StoreFailure,
 };
-use crate::agent_install::domain::{AgentName, HostPlatform, InstallRequest, PinnedRelease};
+use crate::agent_install::domain::{
+    preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease,
+};
 use crate::agent_install::infrastructure::{
     host_platform, releases_for, DurableInstallAudit, HttpsArchives, ManagedRuntimes,
 };
@@ -114,7 +116,7 @@ fn pinned(agent: &AgentName, host: &HostPlatform) -> Result<PinnedRelease, RunEr
             "{agent} is not an agent nessa installs"
         )));
     }
-    preferred(releases.clone(), host)
+    preferred_release(releases.clone(), host)
         .ok_or_else(|| RunError::Agent(unrunnable(agent, host, &releases)))
 }
 
@@ -145,25 +147,6 @@ fn unrunnable(agent: &AgentName, host: &HostPlatform, releases: &[PinnedRelease]
         host.platform(),
         needs.join(", or ")
     )
-}
-
-/// The best of `releases` for this machine, if any of them runs on it at all.
-///
-/// Its own function, taking the releases rather than reading them, because the
-/// answer has to be the same whatever order the pin file happens to list them
-/// in — and a test that asks this through the compiled-in file cannot tell a
-/// preference from the first entry that matched.
-fn preferred(releases: Vec<PinnedRelease>, host: &HostPlatform) -> Option<PinnedRelease> {
-    releases
-        .into_iter()
-        .filter(|release| release.runs_on(host))
-        // Several pinned archives can run here at once: the vendor publishes a
-        // build that needs AVX2 and one that does not, and a machine with AVX2
-        // runs either. The domain says which of two builds asks more of a
-        // machine, and that ranking is total over any set one machine can run,
-        // so this answer does not depend on the order the pin file lists them
-        // in. See [`ReleaseRequirements::demand`].
-        .max_by_key(|release| release.requirements().demand())
 }
 
 /// Say what went wrong, and whether it is worth trying again.
