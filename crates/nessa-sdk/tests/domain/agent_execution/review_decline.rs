@@ -2,10 +2,6 @@
 //! could not be read — so these check what a decline keeps, not whether it
 //! succeeds.
 use super::*;
-use nessa_sdk::domain::agent_execution::permissions::{
-    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
-    ReviewDeclineStage,
-};
 
 #[test]
 fn decline_identity_is_a_bounded_positive_decimal_sequence() {

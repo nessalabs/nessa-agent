@@ -9,7 +9,6 @@ mod executions;
 mod invocation_history;
 mod permissions;
 mod prompts;
-mod review_decline;
 mod scheduling;
 mod session_identity;
 mod sessions;

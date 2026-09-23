@@ -482,23 +482,30 @@ impl SessionStorageLease for FailSelectedDeclineLease {
 
 struct DeclineBarrierAudit {
     declines: Mutex<Vec<ReviewDeclineRecord>>,
+    cancellations: Mutex<Vec<PermissionCancellation>>,
     written: Mutex<Option<oneshot::Sender<()>>>,
 }
 impl ExecutionAudit for DeclineBarrierAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
-            if let ExecutionAuditRecord::ReviewDeclined(record) = record {
-                let written = record.delivery() == &PermissionAnswerDelivery::Written;
-                self.declines.lock().unwrap().push(record);
-                if written {
-                    self.written
-                        .lock()
-                        .unwrap()
-                        .take()
-                        .unwrap()
-                        .send(())
-                        .unwrap();
+            match record {
+                ExecutionAuditRecord::ReviewDeclined(record) => {
+                    let written = record.delivery() == &PermissionAnswerDelivery::Written;
+                    self.declines.lock().unwrap().push(record);
+                    if written {
+                        self.written
+                            .lock()
+                            .unwrap()
+                            .take()
+                            .unwrap()
+                            .send(())
+                            .unwrap();
+                    }
                 }
+                ExecutionAuditRecord::Cancelled(record) => {
+                    self.cancellations.lock().unwrap().push(record)
+                }
+                _ => {}
             }
             Ok(())
         })
@@ -523,6 +530,7 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
     let (written, write_completed) = oneshot::channel();
     let audit = Arc::new(DeclineBarrierAudit {
         declines: Mutex::new(Vec::new()),
+        cancellations: Mutex::new(Vec::new()),
         written: Mutex::new(Some(written)),
     });
     let (_root, config, model) = test_acp_configuration("declined-tool", 16);
@@ -567,7 +575,8 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
     agent.close(close_action()).await.unwrap();
 
     let snapshot = agent.session_manager().snapshot().await.unwrap();
-    let declines = snapshot.invocations[0]
+    let record = &snapshot.invocations[0];
+    let declines = record
         .events
         .iter()
         .filter_map(|event| match event.update() {
@@ -581,6 +590,27 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
     assert_eq!(declines[0].id(), declines[1].id());
     assert_eq!(declines[0].decline(), declines[1].decline());
     assert_eq!(declines[1].id(), final_observation.id());
+    assert!(!record.events.iter().any(|event| matches!(
+        event.update(),
+        ExecutionUpdate::PermissionRequested { .. } | ExecutionUpdate::PermissionCancelled(_)
+    )));
+    let Err(AgentError::StorageAfterExecution {
+        error: StorageError::Io(storage_error),
+        execution_result,
+    }) = record.result.as_ref().unwrap()
+    else {
+        panic!("storage failure and provider result must remain distinct: {record:?}");
+    };
+    assert_eq!(storage_error, "selected decline persistence rejected");
+    assert_eq!(
+        execution_result.as_ref(),
+        &record
+            .provider_report
+            .as_ref()
+            .expect("provider settlement remains independently retained")
+            .clone()
+            .into_result()
+    );
 
     let audited = audit.declines.lock().unwrap();
     assert_eq!(audited.len(), 2);
@@ -589,6 +619,7 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
     assert_eq!(audited[0].id(), audited[1].id());
     assert_eq!(audited[1].id(), declines[1].id());
     assert_eq!(audited[0].decline(), audited[1].decline());
+    assert!(audit.cancellations.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
