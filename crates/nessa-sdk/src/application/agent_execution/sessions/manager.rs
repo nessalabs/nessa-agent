@@ -1154,34 +1154,33 @@ impl SessionManager {
         let mut evidence = self.evidence.lock().await;
         self.retain_result(&mut evidence, index, result).await
     }
+    /// Retain a receipt result already known after a storage future panicked.
+    ///
+    /// This updates observed evidence only. A later ordinary flush owns any
+    /// durable write, so retaining the failed write does not claim it succeeded
+    /// or recursively create another persistence failure.
+    pub(crate) async fn retain_submission_result(
+        &self,
+        index: usize,
+        result: Result<ExecutionOutcome, AgentError>,
+    ) -> Result<(), StorageError> {
+        let result = result.map_err(AgentError::bounded);
+        let mut evidence = self.evidence.lock().await;
+        Self::update_result(&mut evidence, index, &result).map(|_| ())
+    }
     async fn retain_result(
         &self,
         evidence: &mut Evidence,
         index: usize,
         mut result: Result<ExecutionOutcome, AgentError>,
     ) -> (Result<ExecutionOutcome, AgentError>, Option<StorageError>) {
-        let local_outcome = match Self::validate_result(evidence, index, &result) {
-            Ok(outcome) => outcome,
+        let changed = match Self::update_result(evidence, index, &result) {
+            Ok(changed) => changed,
             Err(error) => return (Err(AgentError::Storage(error.clone())), Some(error)),
         };
-        if evidence
-            .observed
-            .as_ref()
-            .expect("initialized agent session")
-            .invocations[index]
-            .result
-            .as_ref()
-            == Some(&result)
-        {
+        if !changed {
             return (result, None);
         }
-        let record = &mut evidence
-            .observed
-            .as_mut()
-            .expect("initialized agent session")
-            .invocations[index];
-        record.local_outcome = local_outcome;
-        record.result = Some(result.clone());
         let mut storage_failure = None;
         if let Err(error) = self.save_observed(evidence).await {
             storage_failure = Some(error.clone());
@@ -1198,6 +1197,24 @@ impl SessionManager {
                 .result = Some(result.clone());
         }
         (result, storage_failure)
+    }
+    fn update_result(
+        evidence: &mut Evidence,
+        index: usize,
+        result: &Result<ExecutionOutcome, AgentError>,
+    ) -> Result<bool, StorageError> {
+        let local_outcome = Self::validate_result(evidence, index, result)?;
+        let record = &mut evidence
+            .observed
+            .as_mut()
+            .expect("initialized agent session")
+            .invocations[index];
+        if record.result.as_ref() == Some(result) {
+            return Ok(false);
+        }
+        record.local_outcome = local_outcome;
+        record.result = Some(result.clone());
+        Ok(true)
     }
     async fn save_observed(&self, evidence: &mut Evidence) -> Result<(), StorageError> {
         evidence.message_histories.clear();

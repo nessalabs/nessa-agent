@@ -1844,7 +1844,20 @@ impl Agent {
                         Some(error),
                     )
                 });
+            let (result, retention_storage) = self
+                .retain_receipt_after_failed_save(pending.index, result, receipt_storage.is_some())
+                .await;
             if let Some(error) = receipt_storage {
+                let aggregate = AgentError::Storage(error);
+                aggregate_failure = Some(match aggregate_failure.take() {
+                    Some(first) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(first),
+                        subsequent_error: Box::new(aggregate),
+                    },
+                    None => aggregate,
+                });
+            }
+            if let Some(error) = retention_storage {
                 let aggregate = AgentError::Storage(error);
                 aggregate_failure = Some(match aggregate_failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
@@ -2007,23 +2020,35 @@ impl Agent {
                 })
                 .await
                 // The manager retains this result before calling storage; use the
-                // same result for the receipt if that save panics.
+                // same result for the receipt if that save panics, then retain the
+                // newly known failure without recursively attempting storage.
                 .unwrap_or_else(|()| {
                     let error = StorageError::Io(
                         "pending cancellation receipt persistence panicked".into(),
                     );
-                    (
-                        Err(AgentError::StorageAfterExecution {
-                            error: error.clone(),
-                            execution_result: Box::new(retained),
-                        }),
-                        Some(error),
-                    )
+                    let result = Err(AgentError::StorageAfterExecution {
+                        error: error.clone(),
+                        execution_result: Box::new(retained),
+                    });
+                    (result, Some(error))
                 })
             } else {
                 (result, None)
             };
+            let (result, retention_storage) = self
+                .retain_receipt_after_failed_save(pending.index, result, receipt_storage.is_some())
+                .await;
             if let Some(error) = receipt_storage {
+                let aggregate = AgentError::Storage(error);
+                failure = Some(match failure.take() {
+                    Some(first) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(first),
+                        subsequent_error: Box::new(aggregate),
+                    },
+                    None => aggregate,
+                });
+            }
+            if let Some(error) = retention_storage {
                 let aggregate = AgentError::Storage(error);
                 failure = Some(match failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
@@ -2037,6 +2062,33 @@ impl Agent {
             scheduler.pending.remove(&id);
         }
         failure.map_or(Ok(()), Err)
+    }
+
+    async fn retain_receipt_after_failed_save(
+        &self,
+        index: usize,
+        result: Result<ExecutionOutcome, AgentError>,
+        save_failed: bool,
+    ) -> (Result<ExecutionOutcome, AgentError>, Option<StorageError>) {
+        if !save_failed {
+            return (result, None);
+        }
+        match self
+            .inner
+            .manager
+            .retain_submission_result(index, result.clone())
+            .await
+        {
+            Ok(()) => (result, None),
+            Err(error) => (
+                Err(AgentError::MultipleOperationFailures {
+                    first_error: Box::new(result.expect_err("failed save has failed receipt")),
+                    subsequent_error: Box::new(AgentError::Storage(error.clone())),
+                }
+                .bounded()),
+                Some(error),
+            ),
+        }
     }
 
     pub(super) async fn close_scheduled(

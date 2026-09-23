@@ -44,14 +44,13 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
             Err(AgentError::StalePermission)
         );
         let calls = backend.controls.load(Ordering::SeqCst);
-        assert_permissions_fenced(
-            &agent,
-            &backend,
-            calls,
-            AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
-            "after the cleanup-reporting control",
-        )
-        .await;
+        let expected = if matches!(source, ProviderControl::Steer) {
+            AgentError::Closed
+        } else {
+            AgentError::AttachmentUnavailable(AttachmentPhase::Absent)
+        };
+        let stage = format!("after the {source:?} cleanup-reporting control");
+        assert_permissions_fenced(&agent, &backend, calls, expected, &stage).await;
         // Steering after cleanup queues for preparation instead of targeting the retired context.
         let (release_prepare, prepare_gate) = oneshot::channel();
         *backend.prepare_gate.lock().unwrap() = Some(prepare_gate);
