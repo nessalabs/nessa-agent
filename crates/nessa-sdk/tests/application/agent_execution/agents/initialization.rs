@@ -32,7 +32,7 @@ impl ExecutionAudit for AttachmentAuditProbe {
                     .gate_after
                     .lock()
                     .unwrap()
-                    .map_or(true, |stage| stage == record.after());
+                    .is_none_or(|stage| stage == record.after());
                 self.records.lock().unwrap().push(record.clone());
                 if gated {
                     self.entered.notify_one();
@@ -48,7 +48,7 @@ impl ExecutionAudit for AttachmentAuditProbe {
                         .reject_after
                         .lock()
                         .unwrap()
-                        .map_or(true, |stage| stage == after),
+                        .is_none_or(|stage| stage == after),
                     _ => self.reject_after.lock().unwrap().is_none(),
                 };
             let result = if reject {
