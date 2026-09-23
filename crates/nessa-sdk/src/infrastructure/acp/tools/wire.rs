@@ -5,6 +5,10 @@ use crate::domain::agent_execution::tools::{
 };
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::Value;
+
+/// Bounded display text for a structurally valid tool result Nessa cannot render.
+pub(crate) const UNSUPPORTED_TOOL_CONTENT: &str = "[unsupported tool result content]";
+
 pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
     let id = identifier(value, "toolCallId")?.to_owned();
     let kind = value
@@ -69,37 +73,46 @@ pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
                 .ok_or_else(|| protocol("invalid tool content"))?;
             let mut result = Vec::new();
             for item in content {
-                if item.get("type").and_then(Value::as_str) == Some("diff") {
-                    let old = match item.get("oldText") {
-                        None | Some(Value::Null) => None,
-                        Some(Value::String(text)) => Some(text.clone()),
-                        _ => return Err(protocol("invalid diff old text")),
-                    };
-                    result.push(ToolContent::diff(
-                        path(string(item, "path")?)?,
-                        old,
-                        item.get("newText")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| protocol("missing diff new text"))?
-                            .to_owned(),
-                    ));
-                } else if item.get("type").and_then(Value::as_str) == Some("content") {
-                    let block = item
-                        .get("content")
-                        .ok_or_else(|| protocol("missing tool content block"))?;
-                    if block.get("type").and_then(Value::as_str) == Some("text") {
-                        result.push(ToolContent::text(
-                            block
-                                .get("text")
+                match item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| protocol("invalid tool content type"))?
+                {
+                    "diff" => {
+                        let old = match item.get("oldText") {
+                            None | Some(Value::Null) => None,
+                            Some(Value::String(text)) => Some(text.clone()),
+                            _ => return Err(protocol("invalid diff old text")),
+                        };
+                        result.push(ToolContent::diff(
+                            path(string(item, "path")?)?,
+                            old,
+                            item.get("newText")
                                 .and_then(Value::as_str)
-                                .ok_or_else(|| protocol("invalid tool text"))?
+                                .ok_or_else(|| protocol("missing diff new text"))?
                                 .to_owned(),
                         ));
-                    } else {
-                        return Err(protocol("unsupported nested tool content type"));
                     }
-                } else {
-                    return Err(protocol("unsupported tool content type"));
+                    "content" => {
+                        let block = item
+                            .get("content")
+                            .ok_or_else(|| protocol("missing tool content block"))?;
+                        match block
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| protocol("invalid nested tool content type"))?
+                        {
+                            "text" => result.push(ToolContent::text(
+                                block
+                                    .get("text")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| protocol("invalid tool text"))?
+                                    .to_owned(),
+                            )),
+                            _ => result.push(ToolContent::text(UNSUPPORTED_TOOL_CONTENT)),
+                        }
+                    }
+                    _ => result.push(ToolContent::text(UNSUPPORTED_TOOL_CONTENT)),
                 }
             }
             Ok::<_, AgentError>(result)

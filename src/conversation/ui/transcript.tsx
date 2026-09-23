@@ -198,7 +198,7 @@ const TurnRow = React.memo(function TurnRow({
 function TurnStatus({ status }: { status: string }) {
   if (["running", "completed"].includes(status)) return null
   return (
-    <p role="status" className="text-xs">
+    <p role="status" className="[overflow-wrap:anywhere] text-xs">
       {status === "cancelled" ? "Cancelled" : status}
     </p>
   )
