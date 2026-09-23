@@ -1,5 +1,6 @@
 //! Offline local owner provisioning. OS access and the exclusive registry lock
 //! establish authority; these commands are never available through the gateway.
+use super::credential_registry::{self, RegistryOpenContext};
 use super::local_auth::SystemClock;
 use crate::{core::RunError, env::Environment};
 use nessa_auth::{
@@ -22,8 +23,15 @@ use uuid::Uuid;
 
 /// Parse the explicit offline command; credential material never appears in argv.
 pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
+    execute_with_context(args, RegistryOpenContext::LocalAuthCommand)
+}
+
+pub(super) fn execute_with_context(
+    args: &[String],
+    registry_context: RegistryOpenContext,
+) -> Result<(), RunError> {
     if args.get(1).is_some_and(|arg| arg == "provision-surface") {
-        return provision_command(args);
+        return provision_command(args, registry_context);
     }
     let (recover, output) = parse(&args[..args.len().min(4)])?;
     let extra = &args[args.len().min(4)..];
@@ -42,12 +50,7 @@ pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = LocalCredentialStore::open_with_config(
-        &directory,
-        "credentials.v1.json",
-        settings.registry,
-    )
-    .map_err(failure)?;
+    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
     // Reserve a new protected output before changing durable state. Never overwrite.
     let mut file = private_output(&output).map_err(failure)?;
     let now = SystemClock.unix_seconds();
@@ -184,7 +187,10 @@ fn expiry_option(args: &[String]) -> Result<Option<u64>, RunError> {
         .transpose()
 }
 
-fn provision_command(args: &[String]) -> Result<(), RunError> {
+fn provision_command(
+    args: &[String],
+    registry_context: RegistryOpenContext,
+) -> Result<(), RunError> {
     let args = &args[2..];
     validate_options(args, &["--surface-id", "--grants", "--expires-at"])?;
     let surface =
@@ -199,12 +205,7 @@ fn provision_command(args: &[String]) -> Result<(), RunError> {
     let directory = Environment::auth_directory_from_system()?;
     prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = LocalCredentialStore::open_with_config(
-        &directory,
-        "credentials.v1.json",
-        settings.registry,
-    )
-    .map_err(failure)?;
+    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
     provision(
         &store,
         &directory,
