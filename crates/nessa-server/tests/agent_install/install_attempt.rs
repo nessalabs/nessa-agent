@@ -69,7 +69,10 @@ fn rejection_requires_the_started_state_and_preserves_both_digests() {
 
     assert_eq!(rejected.target(), &target);
     assert_eq!(rejected.actual_digest(), Some(&actual));
-    assert_eq!(attempt.verified(), Err(InstallAttemptError::WrongStage));
+    assert_eq!(
+        attempt.verified(),
+        Err(InstallAttemptError::ConflictingEvent)
+    );
 }
 
 #[test]

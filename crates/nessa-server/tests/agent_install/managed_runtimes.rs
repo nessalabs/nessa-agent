@@ -1416,11 +1416,8 @@ fn an_install_that_cannot_be_settled_takes_back_only_what_it_wrote() {
         "a failed install left a runtime nothing records"
     );
     assert!(
-        std::fs::read_dir(artifact_path(root.path()))
-            .expect("the empty artifact directory remains")
-            .next()
-            .is_none(),
-        "a failed install left bytes in its artifact directory"
+        !artifact_path(root.path()).exists(),
+        "a failed install left its empty target artifact directory behind"
     );
     assert_eq!(
         std::fs::read(&survivor).expect("the other runtime still reads"),
@@ -1579,6 +1576,7 @@ fn withdrawal_failure_is_visible_while_the_restored_runtime_is_confirmed() {
                 }
             },
             |_| Err(StoreFailure::Unwritable("withdrawal failed".into())),
+            || store.recorded_artifact(&agent()),
         )
         .unwrap_err();
 
@@ -1626,6 +1624,7 @@ fn every_cleanup_failure_is_preserved_when_rollback_cannot_be_confirmed() {
                     .ok_or_else(|| std::io::Error::other("durability failed"))
             },
             |_| Err(StoreFailure::Unwritable("withdrawal failed".into())),
+            || Err(StoreFailure::Unreadable("confirmation failed".into())),
         )
         .unwrap_err();
 
@@ -1635,7 +1634,7 @@ fn every_cleanup_failure_is_preserved_when_rollback_cannot_be_confirmed() {
     assert!(rollback.is_none());
     assert!(cleanup.withdrawal().is_some());
     assert!(cleanup.restoration().is_some());
-    assert!(cleanup.confirmation().is_none());
+    assert!(cleanup.confirmation().is_some());
 }
 
 #[test]

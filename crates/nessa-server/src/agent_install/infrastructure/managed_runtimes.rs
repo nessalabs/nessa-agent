@@ -906,12 +906,13 @@ impl ManagedRuntimes {
         recovery: PublicationRecoveryContext<'_>,
         durable: impl Fn(&Path) -> io::Result<()> + Copy,
         withdraw: impl Fn(&[PathBuf]) -> Result<(), StoreFailure> + Copy,
+        confirm: impl Fn() -> Result<Option<RuntimeArtifact>, StoreFailure> + Copy,
     ) -> PublishFailure {
         let withdrawal = withdraw(recovery.written).err();
         let restoration = self
             .restore_record(recovery.agent, recovery.previous_record, durable)
             .err();
-        let (rollback, confirmation) = match self.recorded_artifact(recovery.agent) {
+        let (rollback, confirmation) = match confirm() {
             Ok(confirmed) if confirmed == recovery.previous_artifact => {
                 let rollback = match confirmed {
                     Some(artifact) => RollbackChange::Restored(artifact),
@@ -951,9 +952,14 @@ impl ManagedRuntimes {
         staged: &mut StagedArchive,
         durable: impl Fn(&Path) -> io::Result<()> + Copy,
     ) -> Result<Publication, PublishFailure> {
-        self.publish_with_recovery(agent, release, staged, durable, |written| {
-            self.withdraw(agent, release, written)
-        })
+        self.publish_with_recovery(
+            agent,
+            release,
+            staged,
+            durable,
+            |written| self.withdraw(agent, release, written),
+            || self.recorded_artifact(agent),
+        )
     }
 
     fn publish_with_recovery(
@@ -963,6 +969,7 @@ impl ManagedRuntimes {
         staged: &mut StagedArchive,
         durable: impl Fn(&Path) -> io::Result<()> + Copy,
         withdraw: impl Fn(&[PathBuf]) -> Result<(), StoreFailure> + Copy,
+        confirm: impl Fn() -> Result<Option<RuntimeArtifact>, StoreFailure> + Copy,
     ) -> Result<Publication, PublishFailure> {
         let lock = self.hold(agent).map_err(PublishFailure::unchanged)?;
         if let Some(installed) = self
@@ -1010,6 +1017,7 @@ impl ManagedRuntimes {
                 },
                 durable,
                 withdraw,
+                confirm,
             ));
         }
         if let Err(failure) = self.settle(agent, release, durable) {
@@ -1024,6 +1032,7 @@ impl ManagedRuntimes {
                 },
                 durable,
                 withdraw,
+                confirm,
             ));
         }
 
