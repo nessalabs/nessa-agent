@@ -278,7 +278,10 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
             .cleanup(Duration::ZERO, Duration::from_secs(2))
             .await
             .unwrap();
-        assert!(matches!(result, Err(AgentError::Deadline)));
+        assert_eq!(
+            result.map_err(WorkerFailure::into_error),
+            Err(AgentError::Deadline)
+        );
         assert!(
             elapsed <= Duration::from_millis(21),
             "{method}: {elapsed:?}"

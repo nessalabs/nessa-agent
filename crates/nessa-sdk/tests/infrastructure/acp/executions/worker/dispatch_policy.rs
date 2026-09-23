@@ -4,7 +4,9 @@ use crate::application::agent_execution::{
     agents::ProviderDiagnostic,
     executions::{ExecutionRequest, SubmissionMode},
     permissions::ActionContext,
-    providers::{CloseOutcome, FinalizedExecutionProjection, ProviderIdentity},
+    providers::{
+        CloseOutcome, FinalizedExecutionProjection, FinalizedFailureComponent, ProviderIdentity,
+    },
     sessions::storage::{
         InvocationRecord, ProviderContext, SessionSnapshot, SessionStorage,
         SubmissionAcknowledgement,

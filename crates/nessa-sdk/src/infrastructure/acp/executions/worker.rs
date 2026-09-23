@@ -994,9 +994,7 @@ impl<P: AcpProfile> Worker<P> {
                         requested_close_reason(&request, execution.active_execution_id().is_some());
                     let origin = request.origin();
                     self.cancellation_cause = Some((reason.clone(), origin.clone()));
-                    if let Err(error) = self.drain_admitted_permissions(execution).await {
-                        return Err(error);
-                    }
+                    self.drain_admitted_permissions(execution).await?;
                     let records = match self.active.as_ref() {
                         Some(active) => {
                             execution.close_execution(&active.execution_id, reason, origin)
@@ -1004,9 +1002,7 @@ impl<P: AcpProfile> Worker<P> {
                         _ => execution.close(reason, origin),
                     }
                     .map_err(|error| self.record_failure(OperationEffectPhase::Teardown, error))?;
-                    if let Err(error) = self.record_lifecycle(records).await {
-                        return Err(error);
-                    }
+                    self.record_lifecycle(records).await?;
                     if let Err(error) = self.send_cancellation(execution.id().as_str()).await {
                         return Err(self.record_failure(OperationEffectPhase::Teardown, error));
                     }
@@ -1037,9 +1033,7 @@ impl<P: AcpProfile> Worker<P> {
                     };
                 }
                 Input::Command(Some(command)) => {
-                    if let Err(error) = self.command(execution, command).await {
-                        return Err(error);
-                    }
+                    self.command(execution, command).await?;
                     if self.deferred_outcome.is_some() {
                         return Ok(());
                     }
@@ -1048,12 +1042,8 @@ impl<P: AcpProfile> Worker<P> {
                     let message = message.map_err(|error| {
                         self.record_failure(OperationEffectPhase::Worker, error)
                     })?;
-                    if let Err(error) = self
-                        .message(execution, message, self.current_deadline())
-                        .await
-                    {
-                        return Err(error);
-                    }
+                    self.message(execution, message, self.current_deadline())
+                        .await?;
                     if self.deferred_outcome.is_some() || (self.closing && self.active.is_none()) {
                         return Ok(());
                     }
