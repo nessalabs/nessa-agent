@@ -1,7 +1,8 @@
 use super::super::generation::random_generation;
 use super::{
     clone_file, entry_name, finalize_file, launch_settings, publish, stage_runtime,
-    stage_runtime_using, tree_fingerprint, utf8, validate_runtime,
+    stage_runtime_cached, stage_runtime_using, tree_fingerprint, utf8, validate_runtime,
+    ValidatedRuntimes,
 };
 use serde_json::json;
 use std::{
@@ -98,6 +99,7 @@ impl Drop for Fixture {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+
 #[test]
 fn rust_fingerprint_matches_javascript_with_unicode_and_escape_framing() {
     let fixture = Fixture::new();
@@ -320,6 +322,28 @@ fn published_permissions_and_manifest_are_validated_without_repair() {
     fs::set_permissions(staged.join("node"), Permissions::from_mode(0o600)).unwrap();
     fs::write(staged.join("manifest.json"), b"invalid").unwrap();
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
+}
+
+#[test]
+fn validation_cache_reuses_only_the_same_private_published_directory_identity() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let validated = ValidatedRuntimes::default();
+
+    let staged = stage_runtime_cached(&source, &versions, &fingerprint, &validated).unwrap();
+    assert!(validated.contains(&staged, &fingerprint).unwrap());
+    assert_eq!(
+        stage_runtime_cached(&source, &versions, &fingerprint, &validated).unwrap(),
+        staged
+    );
+    assert!(!validated.contains(&staged, &"b".repeat(64)).unwrap());
+
+    fs::remove_dir_all(&staged).unwrap();
+    nessa_local_storage::create_directory(&staged).unwrap();
+    assert!(!validated.contains(&staged, &fingerprint).unwrap());
+    assert!(stage_runtime_cached(&source, &versions, &fingerprint, &validated).is_err());
 }
 
 #[test]

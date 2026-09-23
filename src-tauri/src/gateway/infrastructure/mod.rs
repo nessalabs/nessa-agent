@@ -15,16 +15,26 @@
 //! the account's own login shell for the search path the agent will be given.
 //!
 //! ```text
+//! bundled windows -> commands -> Gateway startup snapshot / retry
 //! Gateway -> Launchd -> staging -> verified immutable runtime
 //!                    -> control -> launchd / existing gateway
 //!                    -> pruning -> superseded runtime versions
+//!         -> reconciliation audit -> private atomic intent/outcome records
 //!         -> LoginShell -------> the account's login shell
 //! ```
-//! Arrows mean calls; only launchd owns the background process lifetime.
+//! Arrows mean calls; commands translate only the application-owned startup
+//! contract, and only launchd owns the background process lifetime.
+mod commands;
 mod login_shell;
 #[cfg(target_os = "macos")]
 mod macos;
+mod reconciliation_ids;
 mod selection;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
-pub use selection::{current, login_shell_path};
+pub use commands::{
+    __cmd__gateway_startup, __cmd__retry_gateway_startup, __tauri_command_name_gateway_startup,
+    __tauri_command_name_retry_gateway_startup, gateway_startup, retry_gateway_startup,
+    startup_events,
+};
+pub use selection::{current, login_shell_path, reconciliation_audit, reconciliation_ids};

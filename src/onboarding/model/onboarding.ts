@@ -212,6 +212,11 @@ export function recordReadinessFailure(
   return withAnswer(state, undefined, reason)
 }
 
+/** Forget an answer while the managed gateway is not ready to stand behind it. */
+export function clearReadiness(state: OnboardingState): OnboardingState {
+  return withAnswer(state, undefined, undefined)
+}
+
 /** What an agent's runtime reported.
  *
  * `not-supported` is a real negative answer and belongs to the listing, not to

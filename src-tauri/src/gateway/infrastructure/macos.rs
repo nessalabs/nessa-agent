@@ -1,46 +1,80 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
-use crate::gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
-use crate::gateway::domain::value_objects::SearchPath;
+use crate::gateway::application::{
+    GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
+    GatewayReconciliationProgress, ReconciledGateway, ReconciliationHistoryFact,
+};
+use crate::gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
+    fmt::{self, Display, Formatter},
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
+    process::{Command, Output, Stdio},
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 
 mod control;
 mod generation;
 mod install_attempt;
 mod pruning;
+mod reconciliation_audit;
 mod staging;
 mod startup;
 use control::{
     classify, forward_recovery, health, launchctl, legacy_listener_pid, lock_namespace,
     read_pending_retirement, read_retirement_evidence, retire, service_status, wait_fingerprint,
-    Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    Health, InstallFailure, ManagedRuntime, Registration, ServiceState, ServiceStatus,
 };
 use generation::service_generation;
 use install_attempt::{
     authorizes_rebootstrap, clear as clear_install_attempt, publish as publish_install_attempt,
 };
 use pruning::{prune_runtimes, retained_runtimes};
-use staging::{launch_settings, stage_runtime};
+pub(in crate::gateway::infrastructure) use reconciliation_audit::FileReconciliationAudit;
+use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
 
-pub(super) struct Launchd;
+pub(super) struct Launchd {
+    validated_runtimes: ValidatedRuntimes,
+    disabled_services: Arc<dyn DisabledServiceStatus>,
+}
+
+impl Launchd {
+    pub(super) fn new(disabled_services: Arc<dyn DisabledServiceStatus>) -> Self {
+        Self {
+            validated_runtimes: ValidatedRuntimes::default(),
+            disabled_services,
+        }
+    }
+}
 impl GatewayHost for Launchd {
     fn register(
         &self,
         runtime: &Path,
         stage: &str,
         agent_path: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError> {
-        register(runtime, stage, agent_path).map_err(GatewayError::Registration)
+        register(
+            runtime,
+            stage,
+            agent_path,
+            attempt,
+            progress,
+            &self.validated_runtimes,
+            self.disabled_services.as_ref(),
+        )
+        .map_err(|error| match error {
+            RegisterFailure::Physical(message) => GatewayError::Registration(message),
+            RegisterFailure::Audit(error) => error,
+        })
     }
     fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
         let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
@@ -67,7 +101,7 @@ impl GatewayHost for Launchd {
 
 fn matches_reconciled_gateway(
     gateway: &ReconciledGateway,
-    status: &control::ServiceStatus,
+    status: &ServiceStatus,
     health: Option<&Health>,
 ) -> bool {
     matches!(
@@ -82,11 +116,54 @@ fn matches_reconciled_gateway(
                 && runtime.generation == gateway.service_generation()
     )
 }
+
+fn retire_then_unload(
+    progress: &dyn GatewayReconciliationProgress,
+    retire: impl FnOnce() -> Result<(), String>,
+    unload: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    retire()?;
+    progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
+    unload()?;
+    progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
+    Ok(())
+}
+
+fn publish_definition(
+    progress: &dyn GatewayReconciliationProgress,
+    rename: impl FnOnce() -> Result<(), String>,
+    sync_directory: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    rename()?;
+    progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionPublished);
+    sync_directory()?;
+    progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionDurable);
+    Ok(())
+}
+
+fn run_bootstrap<T, E>(
+    progress: &dyn GatewayReconciliationProgress,
+    run: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    progress.history_observed(ReconciliationHistoryFact::BootstrapCommandRequested);
+    let output = run()?;
+    progress.history_observed(ReconciliationHistoryFact::BootstrapCommandCompleted);
+    Ok(output)
+}
+
+fn bootstrap_succeeded(progress: &dyn GatewayReconciliationProgress) {
+    progress.history_observed(ReconciliationHistoryFact::BootstrapCommandSucceeded);
+}
+
 fn register(
     runtime: &Path,
     stage: &str,
     agent_path: Option<&SearchPath>,
-) -> Result<ReconciledGateway, String> {
+    attempt: &GatewayReconciliationAttempt,
+    progress: &dyn GatewayReconciliationProgress,
+    validated_runtimes: &ValidatedRuntimes,
+    disabled_services: &dyn DisabledServiceStatus,
+) -> Result<ReconciledGateway, RegisterFailure> {
     let location = runtime.to_string_lossy();
     if location.starts_with("/Volumes/") || location.contains("/AppTranslocation/") {
         return Err("Move Nessa to Applications before starting its background service".into());
@@ -143,7 +220,8 @@ fn register(
     nessa_local_storage::create_directory(&runtime_root).map_err(|error| error.to_string())?;
     nessa_local_storage::sync_directory(&private_root).map_err(|error| error.to_string())?;
     let installations = runtime_root.join(&label);
-    let staged_runtime = stage_runtime(runtime, &installations, &fingerprint)?;
+    let staged_runtime =
+        stage_runtime_cached(runtime, &installations, &fingerprint, validated_runtimes)?;
     let runtime = staged_runtime.as_path();
     let arguments = launch_settings(runtime);
     let agents = home.join("Library/LaunchAgents");
@@ -248,11 +326,34 @@ fn register(
         registration,
         loaded_pid,
         loaded && !running_fenced && service_matches(&path, &definition),
-        running,
+        running.clone(),
         (&fingerprint, &generation),
         TcpStream::connect_timeout(&address(port), Duration::from_millis(200)).is_ok(),
         listener,
     );
+    let before = match &running {
+        Some(Health::Managed(runtime)) => Some(ReconciledGateway::new(
+            service.clone(),
+            runtime.fingerprint.clone(),
+            runtime.instance.clone(),
+            runtime.generation.clone(),
+            runtime.pid,
+            port,
+        )),
+        _ => None,
+    };
+    let before = before
+        .map(|gateway| gateway.audit_identity())
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let target =
+        ReconciliationTarget::new(service.clone(), fingerprint.clone(), generation.clone())
+            .map_err(|error| error.to_string())?;
+    let intent = GatewayReconciliationIntent::new(attempt.clone(), target, before)
+        .map_err(|error| error.to_string())?;
+    progress
+        .intent_admitted(intent)
+        .map_err(RegisterFailure::Audit)?;
     match state {
         ServiceState::ManagedCurrent(running) => {
             clear_install_attempt(&lock_directory)?;
@@ -279,6 +380,7 @@ fn register(
             ));
         }
         ServiceState::ManagedStale(running) => {
+            progress.readiness_invalidated();
             let old_definition = read_definition(&path)?;
             let old_data = old_definition
                 .get("WorkingDirectory")
@@ -286,29 +388,37 @@ fn register(
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute())
                 .ok_or("Loaded definition has no absolute data namespace")?;
-            retire(
-                &old_data,
-                &service,
-                &fingerprint,
-                &running.fingerprint,
-                &running.instance,
-                &running.generation,
-                &generation,
+            retire_then_unload(
+                progress,
+                || {
+                    retire(
+                        &old_data,
+                        &service,
+                        &fingerprint,
+                        &running.fingerprint,
+                        &running.instance,
+                        &running.generation,
+                        &generation,
+                    )
+                },
+                || launchctl(&["bootout", &service]),
             )?;
-            launchctl(&["bootout", &service])?;
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::LegacyExactService => {
             // This exact pre-upgrade registration has no retirement protocol.
             // SIGTERM cancels its active agents; never send it SIGUSR2.
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
+            progress.readiness_invalidated();
             launchctl(&["bootout", &service])?;
+            progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::ForeignPort => {
             return Err(format!(
                 "Port {port} is occupied by an unmanaged process; no service was stopped"
-            ))
+            )
+            .into())
         }
         ServiceState::UnavailableLoadedService => {
             // A service that gave up is loaded with no process and will not be
@@ -320,13 +430,16 @@ fn register(
                 installed_generation(installed.as_ref())
                     .is_some_and(|generation| record.belongs_to(generation))
             });
+            if !process_identity_known {
+                return Err(unreadable_process_identity().into());
+            }
             if !incomplete_install_retry(
                 loaded_pid,
                 process_identity_known,
                 authorizes_rebootstrap(&lock_directory, &service, &definition, installed.as_ref())?,
             ) && !gave_up_retry(loaded_pid, process_identity_known, recorded.is_some())
             {
-                return Err(unavailable_service(recorded.as_ref(), port));
+                return Err(unavailable_service(recorded.as_ref(), port).into());
             }
             if let Some(recorded) = &recorded {
                 // What is being replaced, why, and on whose say-so, in the log
@@ -337,13 +450,18 @@ fn register(
                     recorded.describe()
                 );
             }
+            progress.readiness_invalidated();
             launchctl(&["bootout", &service])?;
+            progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
             if recorded.is_some() {
                 startup::forget_recorded_failure(&installed_logs);
             }
             clear_install_attempt(&lock_directory)?;
         }
-        ServiceState::Unloaded => clear_install_attempt(&lock_directory)?,
+        ServiceState::Unloaded => {
+            progress.readiness_invalidated();
+            clear_install_attempt(&lock_directory)?;
+        }
     }
     let installation = (|| -> Result<ManagedRuntime, InstallFailure> {
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
@@ -373,29 +491,27 @@ fn register(
             .map_err(|e| e.to_string())?
             .sync_all()
             .map_err(|e| e.to_string())?;
-        if let Err(error) = fs::rename(&next, &path) {
-            return Err(error.to_string().into());
-        }
-        nessa_local_storage::sync_directory(&agents).map_err(|e| e.to_string())?;
+        publish_definition(
+            progress,
+            || fs::rename(&next, &path).map_err(|error| error.to_string()),
+            || nessa_local_storage::sync_directory(&agents).map_err(|error| error.to_string()),
+        )?;
         publish_install_attempt(&lock_directory, &service, &definition)?;
-        let bootstrap = Command::new("/bin/launchctl")
-            .args(["bootstrap", &domain])
-            .arg(&path)
-            .output()
-            .map_err(|error| error.to_string())
-            .and_then(|output| {
-                output.status.success().then_some(()).ok_or_else(|| {
-                    format!(
-                        "Could not register gateway: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )
-                })
-            });
+        let bootstrap = run_bootstrap(progress, || {
+            Command::new("/bin/launchctl")
+                .args(["bootstrap", &domain])
+                .arg(&path)
+                .output()
+        })
+        .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
+        .and_then(bootstrap_result);
         finish_bootstrap(
             bootstrap,
             || service_status(&service).map(|status| status.loaded),
+            || disabled_services.is_disabled(&domain, &label),
             || clear_install_attempt(&lock_directory),
         )?;
+        bootstrap_succeeded(progress);
         let running = wait_fingerprint(&service, (&fingerprint, &generation), port, &log)?;
         clear_install_attempt(&lock_directory)?;
         Ok(running)
@@ -420,6 +536,23 @@ fn register(
         running.pid,
         port,
     ))
+}
+
+enum RegisterFailure {
+    Physical(String),
+    Audit(GatewayError),
+}
+
+impl From<String> for RegisterFailure {
+    fn from(message: String) -> Self {
+        Self::Physical(message)
+    }
+}
+
+impl From<&str> for RegisterFailure {
+    fn from(message: &str) -> Self {
+        Self::Physical(message.into())
+    }
 }
 fn prepare_data_directory(
     trusted_base: &Path,
@@ -574,23 +707,168 @@ fn unavailable_service(recorded: Option<&startup::RecordedFailure>, port: u16) -
         None => "Loaded gateway has no valid health response; service was preserved".into(),
     }
 }
+
+fn unreadable_process_identity() -> &'static str {
+    "Nessa could not read launchd's process identity, so the background service was preserved rather than risking a live gateway. Quit Nessa and open it again to retry; Nessa will replace the registration only if launchd then proves it has no process and the saved install attempt still matches."
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BootstrapFailure {
+    CouldNotRun(String),
+    Refused { status: Option<i32>, detail: String },
+}
+
+impl Display for BootstrapFailure {
+    fn fmt(&self, out: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CouldNotRun(error) => write!(out, "Could not run launchctl bootstrap: {error}"),
+            Self::Refused { detail, .. } => write!(out, "Could not register gateway: {detail}"),
+        }
+    }
+}
+
+fn bootstrap_result(output: Output) -> Result<(), BootstrapFailure> {
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(BootstrapFailure::Refused {
+        status: output.status.code(),
+        detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+pub(super) trait DisabledServiceStatus: Send + Sync {
+    fn is_disabled(&self, domain: &str, label: &str) -> Result<bool, String>;
+}
+
+pub(super) struct LaunchctlDisabledServiceStatus;
+
+impl DisabledServiceStatus for LaunchctlDisabledServiceStatus {
+    fn is_disabled(&self, domain: &str, label: &str) -> Result<bool, String> {
+        let output = bounded_output(
+            Command::new("/bin/launchctl")
+                .args(["print-disabled", domain])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+            Duration::from_secs(2),
+        )?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        disabled_service(&String::from_utf8_lossy(&output.stdout), label)
+    }
+}
+
+fn bounded_output(command: &mut Command, deadline: Duration) -> Result<Output, String> {
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().ok_or("launchctl stdout unavailable")?;
+    let stderr = child.stderr.take().ok_or("launchctl stderr unavailable")?;
+    let stdout = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut output = stdout;
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut output = stderr;
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let until = Instant::now() + deadline;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout.join();
+            let _ = stderr.join();
+            return Err("launchctl print-disabled exceeded its deadline".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Output {
+        status,
+        stdout: stdout
+            .join()
+            .map_err(|_| "launchctl stdout reader panicked")?
+            .map_err(|error| error.to_string())?,
+        stderr: stderr
+            .join()
+            .map_err(|_| "launchctl stderr reader panicked")?
+            .map_err(|error| error.to_string())?,
+    })
+}
+
+fn disabled_service(output: &str, label: &str) -> Result<bool, String> {
+    let output = output.trim();
+    if !output.starts_with("disabled services = {") || !output.ends_with('}') {
+        return Err("launchctl returned malformed disabled-service status".into());
+    }
+    let expected = format!("\"{label}\" => disabled");
+    let enabled = format!("\"{label}\" => enabled");
+    for line in output.lines().map(str::trim) {
+        if line == expected {
+            return Ok(true);
+        }
+        if line == enabled {
+            return Ok(false);
+        }
+        if line.starts_with(&format!("\"{label}\" =>")) {
+            return Err("launchctl returned an unknown disabled-service value".into());
+        }
+    }
+    Ok(false)
+}
+
 fn finish_bootstrap(
-    bootstrap: Result<(), String>,
+    bootstrap: Result<(), BootstrapFailure>,
     loaded_after_failure: impl FnOnce() -> Result<bool, String>,
+    disabled_after_failure: impl FnOnce() -> Result<bool, String>,
     clear_attempt: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let Err(error) = bootstrap else {
         return Ok(());
     };
     match loaded_after_failure() {
-        Ok(false) => match clear_attempt() {
-            Ok(()) => Err(format!(
-                "{error}; launchd reports no loaded service and the install attempt was cleared"
-            )),
-            Err(clear) => Err(format!(
-                "{error}; launchd reports no loaded service, but the install attempt could not be cleared: {clear}"
-            )),
-        },
+        Ok(false) => {
+            let disabled = if matches!(
+                &error,
+                BootstrapFailure::Refused {
+                    status: Some(5),
+                    ..
+                }
+            ) {
+                disabled_after_failure()
+            } else {
+                Ok(false)
+            };
+            let blocked = matches!(disabled, Ok(true));
+            let diagnosis = disabled
+                .err()
+                .map(|diagnosis| format!("; disabled-item diagnosis also failed: {diagnosis}"))
+                .unwrap_or_default();
+            let cleared = clear_attempt();
+            if blocked {
+                return match cleared {
+                    Ok(()) => Err(
+                        "macOS disabled Nessa's background item. Open System Settings → General → Login Items and allow Nessa to run in the background, then choose Retry. The incomplete install attempt was cleared."
+                            .into(),
+                    ),
+                    Err(clear) => Err(format!(
+                        "macOS disabled Nessa's background item. Open System Settings → General → Login Items and allow Nessa to run in the background, then choose Retry. The incomplete install attempt could not be cleared: {clear}"
+                    )),
+                };
+            }
+            match cleared {
+                Ok(()) => Err(format!(
+                    "{error}; launchd reports no loaded service and the install attempt was cleared{diagnosis}"
+                )),
+                Err(clear) => Err(format!(
+                    "{error}; launchd reports no loaded service, but the install attempt could not be cleared: {clear}{diagnosis}"
+                )),
+            }
+        }
         Ok(true) => Err(format!(
             "{error}; launchd reports a loaded service and the install attempt was preserved for verified retry"
         )),
@@ -602,11 +880,16 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_bootstrap, gave_up_retry, incomplete_install_retry, installed_generation,
-        matches_reconciled_gateway, prepare_data_directory, registered_agent_path,
-        runtime_fingerprint, service_matches, startup, unavailable_service, SearchPath,
+        bootstrap_succeeded, disabled_service, finish_bootstrap, gave_up_retry,
+        incomplete_install_retry, installed_generation, matches_reconciled_gateway,
+        prepare_data_directory, publish_definition, registered_agent_path, retire_then_unload,
+        run_bootstrap, runtime_fingerprint, service_matches, startup, unavailable_service,
+        unreadable_process_identity, BootstrapFailure, SearchPath,
     };
-    use crate::gateway::application::ReconciledGateway;
+    use crate::gateway::application::{
+        GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
+        ReconciledGateway, ReconciliationHistoryFact,
+    };
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
     use crate::gateway::infrastructure::macos::startup::LastExit;
     use serde_json::{json, Value};
@@ -614,7 +897,68 @@ mod tests {
         cell::Cell,
         fs,
         path::{Path, PathBuf},
+        sync::Mutex,
     };
+
+    #[derive(Default)]
+    struct RecordingProgress(Mutex<Vec<ReconciliationHistoryFact>>);
+
+    impl GatewayReconciliationProgress for RecordingProgress {
+        fn readiness_invalidated(&self) {}
+
+        fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn history_observed(&self, fact: ReconciliationHistoryFact) {
+            self.0.lock().unwrap().push(fact);
+        }
+    }
+
+    #[test]
+    fn production_transition_helpers_emit_only_completed_ordered_boundaries() {
+        let progress = RecordingProgress::default();
+        assert_eq!(
+            retire_then_unload(&progress, || Ok(()), || Err("bootout failed".into())),
+            Err("bootout failed".into())
+        );
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [ReconciliationHistoryFact::RetirementAcknowledged]
+        );
+
+        let progress = RecordingProgress::default();
+        assert_eq!(
+            publish_definition(&progress, || Ok(()), || Err("sync failed".into())),
+            Err("sync failed".into())
+        );
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [ReconciliationHistoryFact::ServiceDefinitionPublished]
+        );
+
+        let progress = RecordingProgress::default();
+        assert_eq!(
+            run_bootstrap(&progress, || Err::<(), _>("spawn failed")),
+            Err("spawn failed")
+        );
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [ReconciliationHistoryFact::BootstrapCommandRequested]
+        );
+
+        let progress = RecordingProgress::default();
+        run_bootstrap(&progress, || Ok::<_, &str>(())).unwrap();
+        bootstrap_succeeded(&progress);
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [
+                ReconciliationHistoryFact::BootstrapCommandRequested,
+                ReconciliationHistoryFact::BootstrapCommandCompleted,
+                ReconciliationHistoryFact::BootstrapCommandSucceeded,
+            ]
+        );
+    }
 
     fn temporary_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nessa-gateway-{name}-{}", std::process::id()))
@@ -769,6 +1113,15 @@ mod tests {
         assert!(!incomplete_install_retry(Some(42), false, true));
     }
 
+    #[test]
+    fn unreadable_process_identity_preserves_the_service_and_names_safe_recovery() {
+        let message = unreadable_process_identity();
+        assert!(message.contains("preserved rather than risking a live gateway"));
+        assert!(message.contains("Quit Nessa and open it again"));
+        assert!(message.contains("saved install attempt still matches"));
+        assert!(!incomplete_install_retry(None, false, true));
+    }
+
     /// A service that gave up is loaded, has no process, and launchd will
     /// never start it again — so this host is the only thing that can, and the
     /// cause may well have been repaired since. It may boot out only what it
@@ -840,6 +1193,7 @@ mod tests {
             finish_bootstrap(
                 Ok(()),
                 || Ok(false),
+                || Ok(false),
                 || {
                     called.set(true);
                     Ok(())
@@ -850,7 +1204,8 @@ mod tests {
         assert!(!called.get());
 
         let error = finish_bootstrap(
-            Err("bootstrap failed".into()),
+            Err(BootstrapFailure::CouldNotRun("bootstrap failed".into())),
+            || Ok(false),
             || Ok(false),
             || {
                 called.set(true);
@@ -863,8 +1218,9 @@ mod tests {
 
         called.set(false);
         let error = finish_bootstrap(
-            Err("bootstrap failed".into()),
+            Err(BootstrapFailure::CouldNotRun("bootstrap failed".into())),
             || Ok(true),
+            || Ok(false),
             || {
                 called.set(true);
                 Ok(())
@@ -875,13 +1231,74 @@ mod tests {
         assert!(error.contains("preserved for verified retry"));
 
         let error = finish_bootstrap(
-            Err("bootstrap failed".into()),
+            Err(BootstrapFailure::CouldNotRun("bootstrap failed".into())),
             || Err("ambiguous status".into()),
+            || Ok(false),
             || Ok(()),
         )
         .unwrap_err();
         assert!(error.contains("could not be verified"));
         assert!(error.contains("ambiguous status"));
+    }
+
+    #[test]
+    fn disabled_login_item_needs_exit_five_unloaded_and_disabled_to_name_settings() {
+        let refusal = BootstrapFailure::Refused {
+            status: Some(5),
+            detail: "Bootstrap failed: 5: Input/output error".into(),
+        };
+        let blocked =
+            finish_bootstrap(Err(refusal), || Ok(false), || Ok(true), || Ok(())).unwrap_err();
+        assert!(blocked.contains("System Settings → General → Login Items"));
+
+        for (status, loaded, disabled) in [
+            (Some(4), false, true),
+            (Some(5), true, true),
+            (Some(5), false, false),
+        ] {
+            let error = finish_bootstrap(
+                Err(BootstrapFailure::Refused {
+                    status,
+                    detail: "bootstrap refused".into(),
+                }),
+                || Ok(loaded),
+                || Ok(disabled),
+                || Ok(()),
+            )
+            .unwrap_err();
+            assert!(!error.contains("System Settings"), "{error}");
+        }
+
+        let diagnosis_failed = finish_bootstrap(
+            Err(BootstrapFailure::Refused {
+                status: Some(5),
+                detail: "original bootstrap refusal".into(),
+            }),
+            || Ok(false),
+            || Err("print-disabled exceeded its deadline".into()),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(diagnosis_failed.contains("original bootstrap refusal"));
+        assert!(diagnosis_failed.contains("print-disabled exceeded its deadline"));
+        assert!(!diagnosis_failed.contains("System Settings"));
+    }
+
+    #[test]
+    fn disabled_service_parser_requires_the_exact_label_and_disabled_value() {
+        let output = r#"disabled services = {
+            "so.nessa.gateway.prod" => disabled
+            "so.nessa.gateway.other" => enabled
+        }"#;
+        assert!(disabled_service(output, "so.nessa.gateway.prod").unwrap());
+        assert!(!disabled_service(output, "so.nessa.gateway.other").unwrap());
+        assert!(!disabled_service(output, "so.nessa.gateway").unwrap());
+        assert!(disabled_service("not launchctl output", "so.nessa.gateway.prod").is_err());
+        assert!(disabled_service(
+            "disabled services = {\n\"so.nessa.gateway.prod\" => mystery\n}",
+            "so.nessa.gateway.prod"
+        )
+        .is_err());
     }
 
     #[test]

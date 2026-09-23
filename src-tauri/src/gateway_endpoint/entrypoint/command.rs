@@ -1,6 +1,8 @@
 use crate::{
-    composition::HostDependencies, gateway::application::Gateway,
-    gateway_endpoint::application::GatewayEndpointAccess, panel,
+    composition::HostDependencies,
+    gateway::{application::Gateway, domain::value_objects::BundledSurface},
+    gateway_endpoint::application::GatewayEndpointAccess,
+    panel,
 };
 use std::sync::Arc;
 use tauri::{State, WebviewWindow};
@@ -16,7 +18,7 @@ async fn load_for(
     }
     if let Some(gateway) = gateway {
         gateway
-            .wait_ready()
+            .wait_ready(BundledSurface::Main)
             .await
             .map_err(|error| error.to_string())?;
     }

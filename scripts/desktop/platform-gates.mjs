@@ -24,6 +24,7 @@
 /** A `#[cfg(...)]` that only holds on macOS. */
 const MACOS_GATE = /#\[cfg\((?:[^)]*\W)?target_os\s*=\s*"macos"/
 const TEST_GATE = /#\[cfg\((?:[^)]*\W)?test\W/
+const TEST_ATTRIBUTE = /#\[test\]/
 
 /** `mod name;` — a module in another file, not an inline `mod name { }`. */
 const MODULE_DECLARATION = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([a-z_][a-z0-9_]*)\s*;/
@@ -79,7 +80,7 @@ export function declaredModules(source) {
  */
 function gateFrom(attributes) {
   if (MACOS_GATE.test(attributes)) return MACOS_ONLY
-  if (TEST_GATE.test(attributes)) return TEST_ONLY
+  if (TEST_GATE.test(attributes) || TEST_ATTRIBUTE.test(attributes)) return TEST_ONLY
   return EVERY_PLATFORM
 }
 

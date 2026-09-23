@@ -4,13 +4,77 @@ use super::{generation::random_generation, runtime_fingerprint};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     ffi::{CString, OsString},
     fs::{self, DirBuilder, OpenOptions, Permissions},
     io::{Error, ErrorKind, Read},
     os::fd::AsRawFd,
     os::unix::fs::{symlink, DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct ValidatedRuntime {
+    path: PathBuf,
+    fingerprint: String,
+    device: u64,
+    inode: u64,
+}
+
+/// Successful full-tree validations retained by one injected launchd adapter.
+///
+/// Published generations are immutable to the host. Reuse still checks that
+/// the private root directory is the same filesystem object with the expected
+/// owner and mode before trusting the earlier full validation. This deliberately
+/// trusts the publication contract: code in this process never mutates a child
+/// of a published root. A privileged or out-of-process in-place child mutation
+/// that preserves the root inode is outside this cache's threat model.
+#[derive(Default)]
+pub(super) struct ValidatedRuntimes(Mutex<HashSet<ValidatedRuntime>>);
+
+impl ValidatedRuntimes {
+    fn identity(path: &Path, fingerprint: &str) -> Result<Option<ValidatedRuntime>, String> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o7777 != 0o700
+        {
+            return Ok(None);
+        }
+        Ok(Some(ValidatedRuntime {
+            path: path.to_owned(),
+            fingerprint: fingerprint.to_owned(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }))
+    }
+
+    fn contains(&self, path: &Path, fingerprint: &str) -> Result<bool, String> {
+        let Some(identity) = Self::identity(path, fingerprint)? else {
+            return Ok(false);
+        };
+        self.0
+            .lock()
+            .map(|validated| validated.contains(&identity))
+            .map_err(|_| "Runtime validation cache is unavailable".into())
+    }
+
+    fn remember(&self, path: &Path, fingerprint: &str) -> Result<(), String> {
+        let identity = Self::identity(path, fingerprint)?
+            .ok_or("Validated runtime lost its private directory identity")?;
+        self.0
+            .lock()
+            .map_err(|_| "Runtime validation cache is unavailable".to_owned())?
+            .insert(identity);
+        Ok(())
+    }
+}
 
 struct TemporaryRuntime(PathBuf);
 impl Drop for TemporaryRuntime {
@@ -30,19 +94,29 @@ pub(super) fn stage_runtime(
     stage_runtime_using(source, installations, expected, clone_file)
 }
 
+pub(super) fn stage_runtime_cached(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    validated: &ValidatedRuntimes,
+) -> Result<PathBuf, String> {
+    validate_fingerprint(expected)?;
+    let published = installations.join(expected);
+    if validated.contains(&published, expected)? {
+        return Ok(published);
+    }
+    let published = stage_runtime(source, installations, expected)?;
+    validated.remember(&published, expected)?;
+    Ok(published)
+}
+
 fn stage_runtime_using(
     source: &Path,
     installations: &Path,
     expected: &str,
     clone: CloneFile,
 ) -> Result<PathBuf, String> {
-    if expected.len() != 64
-        || !expected
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err("Invalid runtime staging fingerprint".into());
-    }
+    validate_fingerprint(expected)?;
     utf8(installations)?;
     let source = source.canonicalize().map_err(|error| error.to_string())?;
     utf8(&source)?;
@@ -75,6 +149,18 @@ fn stage_runtime_using(
     // remove the published directory even if directory synchronization fails.
     nessa_local_storage::sync_directory(installations).map_err(|error| error.to_string())?;
     Ok(published)
+}
+
+fn validate_fingerprint(expected: &str) -> Result<(), String> {
+    if expected.len() == 64
+        && expected
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        Ok(())
+    } else {
+        Err("Invalid runtime staging fingerprint".into())
+    }
 }
 fn publish(temporary: &Path, published: &Path) -> Result<(), String> {
     let temporary = CString::new(utf8(temporary)?).map_err(|error| error.to_string())?;

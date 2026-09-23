@@ -1,6 +1,7 @@
 //! Native storage for the bundled chat surface. Renderer input never selects a file.
 use crate::composition::HostDependencies;
 use crate::gateway::application::Gateway;
+use crate::gateway::domain::value_objects::BundledSurface;
 use crate::panel;
 use std::{io::Read, path::PathBuf, sync::Arc};
 use tauri::State;
@@ -230,7 +231,7 @@ async fn load_for(
     }
     if let Some(gateway) = gateway {
         gateway
-            .wait_ready()
+            .wait_ready(BundledSurface::Main)
             .await
             .map_err(|error| error.to_string())?;
     }
@@ -273,9 +274,11 @@ pub async fn load_surface_credential(
 mod tests {
     use super::*;
     use crate::gateway::application::{
-        testing::system_login_shell, GatewayError, GatewayHost, ReconciledGateway,
+        testing::system_login_shell, GatewayError, GatewayHost, GatewayReconciliationAttempt,
+        GatewayReconciliationIntent, GatewayReconciliationProgress, ReconciledGateway,
+        ReconciliationHistoryFact,
     };
-    use crate::gateway::domain::value_objects::SearchPath;
+    use crate::gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
     use nessa_gateway_endpoint::{
         application::EndpointDiscovery,
         domain::{EndpointIdentity, GatewayEndpoint},
@@ -357,8 +360,33 @@ mod tests {
             _: &Path,
             _: &str,
             _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
             *self.registrations.lock().unwrap() += 1;
+            let target = match &self.registration {
+                Ok(gateway) => gateway.audit_identity()?.target().clone(),
+                Err(_) => ReconciliationTarget::new(
+                    "com.nessa.gateway".into(),
+                    "a".repeat(64),
+                    "b".repeat(64),
+                )
+                .expect("target"),
+            };
+            let intent =
+                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent");
+            progress.intent_admitted(intent)?;
+            if self.registration.is_ok() {
+                for fact in [
+                    ReconciliationHistoryFact::ServiceDefinitionPublished,
+                    ReconciliationHistoryFact::ServiceDefinitionDurable,
+                    ReconciliationHistoryFact::BootstrapCommandRequested,
+                    ReconciliationHistoryFact::BootstrapCommandCompleted,
+                    ReconciliationHistoryFact::BootstrapCommandSucceeded,
+                ] {
+                    progress.history_observed(fact);
+                }
+            }
             self.registration.clone()
         }
 
@@ -376,6 +404,9 @@ mod tests {
             Gateway::bootstrap(
                 host.clone(),
                 system_login_shell(),
+                crate::gateway::application::testing::discard_startup_events(),
+                crate::gateway::application::testing::sequential_reconciliation_ids(),
+                crate::gateway::application::testing::discard_reconciliation_audit(),
                 "/runtime".into(),
                 "ci".into(),
             ),
@@ -386,9 +417,9 @@ mod tests {
     fn reconciled() -> ReconciledGateway {
         ReconciledGateway::new(
             "com.nessa.gateway".into(),
-            "fingerprint".into(),
-            "instance".into(),
-            "generation".into(),
+            "a".repeat(64),
+            "550e8400-e29b-41d4-a716-446655440000".into(),
+            "b".repeat(64),
             42,
             7420,
         )

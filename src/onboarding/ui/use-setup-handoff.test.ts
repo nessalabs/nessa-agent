@@ -20,6 +20,9 @@ const host = vi.hoisted(() => ({
   finishSetupWindow: vi.fn<(completed: boolean) => Promise<SetupHandoff>>(),
   retrySetupRecord: vi.fn<(agent?: string) => Promise<SetupHandoff>>(),
   closeSetupWindow: vi.fn<() => Promise<SetupWindowClose>>(),
+  gatewayStartup: vi.fn(async () => ({ revision: 0, state: "unmanaged" as const })),
+  onGatewayStartup: vi.fn(async () => () => undefined),
+  retryGatewayStartup: vi.fn(async () => undefined),
 }))
 vi.mock("../../host", () => host)
 

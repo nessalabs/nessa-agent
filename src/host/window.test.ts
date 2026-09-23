@@ -3,18 +3,72 @@ import { superviseSession } from "../session/adapters/lifecycle/supervisor"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import type { EstablishedDevSession } from "../session/adapters/client/dev-session"
 
-const { invoke, close } = vi.hoisted(() => ({ invoke: vi.fn(), close: vi.fn() }))
+const { invoke, listen, close } = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  listen: vi.fn(),
+  close: vi.fn(),
+}))
 vi.mock("@tauri-apps/api/core", () => ({ invoke }))
+vi.mock("@tauri-apps/api/event", () => ({ listen }))
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close }) }))
 
 beforeEach(() => {
   vi.resetModules()
   invoke.mockReset()
+  listen.mockReset()
   close.mockReset()
   close.mockResolvedValue(undefined)
   vi.stubGlobal("window", { __TAURI_INTERNALS__: {} })
 })
 afterEach(() => vi.unstubAllGlobals())
+
+describe("gateway startup", () => {
+  it("reads, subscribes, and retries through the native host contract", async () => {
+    const startup = { revision: 3, state: "starting" } as const
+    const stop = vi.fn()
+    let publish!: (event: { payload: typeof startup }) => void
+    invoke.mockResolvedValueOnce(startup).mockResolvedValueOnce(undefined)
+    listen.mockImplementation(async (_name, handler) => {
+      publish = handler
+      return stop
+    })
+    const { gatewayStartup, onGatewayStartup, retryGatewayStartup } =
+      await import("./window")
+    const received = vi.fn()
+
+    await expect(gatewayStartup()).resolves.toEqual(startup)
+    const unlisten = await onGatewayStartup(received)
+    publish({ payload: startup })
+    await retryGatewayStartup()
+    unlisten()
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "gateway_startup")
+    expect(listen).toHaveBeenCalledWith("nessa://gateway-startup", expect.any(Function))
+    expect(received).toHaveBeenCalledWith(startup)
+    expect(invoke).toHaveBeenNthCalledWith(2, "retry_gateway_startup")
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it("keeps the browser workflow unmanaged without native calls", async () => {
+    vi.stubGlobal("window", {})
+    vi.resetModules()
+    const { gatewayStartup, onGatewayStartup, retryGatewayStartup } =
+      await import("./window")
+    const received = vi.fn()
+
+    await expect(gatewayStartup()).resolves.toEqual({
+      revision: 0,
+      state: "unmanaged",
+    })
+    const unlisten = await onGatewayStartup(received)
+    await retryGatewayStartup()
+    unlisten()
+
+    expect(invoke).not.toHaveBeenCalled()
+    expect(listen).not.toHaveBeenCalled()
+    expect(received).not.toHaveBeenCalled()
+  })
+})
 
 describe("native surface credential failures", () => {
   it("returns the native host's verified endpoint", async () => {
