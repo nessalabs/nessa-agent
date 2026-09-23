@@ -3,6 +3,7 @@
 use super::*;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+use std::sync::OnceLock;
 
 async fn submit(
     agent: &Agent,
@@ -130,8 +131,14 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                 "operation {operation}"
             );
             assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
-            assert_eq!(storage.0.lock().unwrap().writes, writes);
-            assert!(storage.snapshot().invocations.is_empty());
+            if operation == 0 {
+                assert_eq!(storage.0.lock().unwrap().writes, writes);
+                assert!(storage.snapshot().invocations.is_empty());
+            } else {
+                let snapshot = storage.snapshot();
+                assert_eq!(snapshot.invocations.len(), 1);
+                assert_eq!(snapshot.invocations[0].result, Some(result));
+            }
             agent.close(actor()).await.unwrap();
         }
     }
@@ -206,12 +213,16 @@ fn image_capabilities() -> EffectiveCapabilities {
     )
     .unwrap()
 }
+fn image_capabilities_ref() -> &'static EffectiveCapabilities {
+    static CAPABILITIES: OnceLock<EffectiveCapabilities> = OnceLock::new();
+    CAPABILITIES.get_or_init(image_capabilities)
+}
 impl AgentProvider for ImageProvider {
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("fixture", "fixture", "workspace").unwrap()
+        ProviderIdentity::new("anthropic", "fixture", "workspace").unwrap()
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
-        capabilities_ref()
+        image_capabilities_ref()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         let (restore, _control) = request.into_parts();
@@ -228,7 +239,7 @@ impl AgentProvider for ImageProvider {
                         refuses: self.refuses.clone(),
                         sender,
                     }),
-                    image_capabilities(),
+                    image_capabilities_ref().clone(),
                 ),
                 events: Box::new(TestEvents(receiver)),
             })
@@ -387,8 +398,14 @@ async fn every_entry(
         let executions = provider.executions.load(Ordering::SeqCst);
         if expected.is_err() {
             assert_eq!(executions, 0, "operation {operation}");
-            assert_eq!(storage.0.lock().unwrap().writes, writes);
-            assert!(storage.snapshot().invocations.is_empty());
+            if operation == 0 {
+                assert_eq!(storage.0.lock().unwrap().writes, writes);
+                assert!(storage.snapshot().invocations.is_empty());
+            } else {
+                let snapshot = storage.snapshot();
+                assert_eq!(snapshot.invocations.len(), 1);
+                assert_eq!(snapshot.invocations[0].result, Some(result));
+            }
         } else {
             assert_eq!(executions, 1, "operation {operation}");
         }

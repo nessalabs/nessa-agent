@@ -1126,7 +1126,7 @@ impl SessionManager {
             .bounded(),
             None => error,
         });
-        self.retain_result(&mut evidence, index, result).await
+        self.retain_result(&mut evidence, index, result).await.0
     }
 
     /// Retains late receipt failures so later saves cannot erase an observed error.
@@ -1140,6 +1140,18 @@ impl SessionManager {
     ) -> Result<ExecutionOutcome, AgentError> {
         let result = result.map_err(AgentError::bounded);
         let mut evidence = self.evidence.lock().await;
+        self.retain_result(&mut evidence, index, result).await.0
+    }
+    pub(crate) async fn settle_submission_with_storage_ack(
+        &self,
+        index: usize,
+        result: Result<ExecutionOutcome, AgentError>,
+    ) -> (Result<ExecutionOutcome, AgentError>, Option<StorageError>) {
+        // The receipt may already contain an earlier storage failure. Return this
+        // save's acknowledgement separately so callers never infer a new effect
+        // by inspecting or comparing diagnostic error values.
+        let result = result.map_err(AgentError::bounded);
+        let mut evidence = self.evidence.lock().await;
         self.retain_result(&mut evidence, index, result).await
     }
     async fn retain_result(
@@ -1147,9 +1159,11 @@ impl SessionManager {
         evidence: &mut Evidence,
         index: usize,
         mut result: Result<ExecutionOutcome, AgentError>,
-    ) -> Result<ExecutionOutcome, AgentError> {
-        let local_outcome =
-            Self::validate_result(evidence, index, &result).map_err(AgentError::Storage)?;
+    ) -> (Result<ExecutionOutcome, AgentError>, Option<StorageError>) {
+        let local_outcome = match Self::validate_result(evidence, index, &result) {
+            Ok(outcome) => outcome,
+            Err(error) => return (Err(AgentError::Storage(error.clone())), Some(error)),
+        };
         if evidence
             .observed
             .as_ref()
@@ -1159,7 +1173,7 @@ impl SessionManager {
             .as_ref()
             == Some(&result)
         {
-            return result;
+            return (result, None);
         }
         let record = &mut evidence
             .observed
@@ -1168,7 +1182,9 @@ impl SessionManager {
             .invocations[index];
         record.local_outcome = local_outcome;
         record.result = Some(result.clone());
+        let mut storage_failure = None;
         if let Err(error) = self.save_observed(evidence).await {
+            storage_failure = Some(error.clone());
             result = Err(AgentError::StorageAfterExecution {
                 error,
                 execution_result: Box::new(result),
@@ -1181,7 +1197,7 @@ impl SessionManager {
                 .invocations[index]
                 .result = Some(result.clone());
         }
-        result
+        (result, storage_failure)
     }
     async fn save_observed(&self, evidence: &mut Evidence) -> Result<(), StorageError> {
         evidence.message_histories.clear();

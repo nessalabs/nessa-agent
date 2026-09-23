@@ -63,13 +63,7 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         release_active.send(()).unwrap();
         assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
         backend.preparing.notified().await;
-        assert_permissions_fenced(
-            &agent,
-            &backend,
-            calls,
-            AgentError::AttachmentUnavailable(AttachmentPhase::Starting),
-        )
-        .await;
+        assert_permissions_fenced(&agent, &backend, calls, AgentError::StalePermission).await;
         *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
         release_prepare.send(()).unwrap();
         assert_eq!(following.wait().await, Ok(ExecutionOutcome::Completed));
@@ -183,6 +177,19 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
             }
             release_active.send(()).unwrap();
             assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
+            assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+            assert!(matches!(
+                agent.authorize_attachment(AttachmentRequest::AutomaticRecovery),
+                Err(AgentError::Closed)
+            ));
+            assert!(matches!(
+                agent.enqueue(input("blocked-queue"), actor()).await,
+                Err(AgentError::AuditFailure)
+            ));
+            assert!(matches!(
+                agent.steer(input("blocked-steering"), actor()).await,
+                Err(AgentError::AuditFailure)
+            ));
             let (_release_prepare, prepare_gate) = oneshot::channel();
             *backend.prepare_gate.lock().unwrap() = Some(prepare_gate);
             for id in ["next-one", "next-two"] {

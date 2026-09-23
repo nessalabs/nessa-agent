@@ -595,7 +595,10 @@ async fn scheduling_failed_close_audit_reports_failure_and_still_cleans_every_pe
     );
     assert!(matches!(
         within(first.wait()).await,
-        Err(AgentError::Storage(StorageError::Io(_)))
+        Err(AgentError::StorageAfterExecution {
+            error: StorageError::Io(_),
+            execution_result,
+        }) if *execution_result == Err(AgentError::Closed)
     ));
     assert_eq!(within(second.wait()).await, Err(AgentError::Closed));
     assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Cancelled));
@@ -628,7 +631,10 @@ async fn scheduling_runner_cleanup_audit_failure_is_visible_without_losing_other
     );
     assert!(matches!(
         within(first.wait()).await,
-        Err(AgentError::Storage(StorageError::Io(_)))
+        Err(AgentError::StorageAfterExecution {
+            error: StorageError::Io(_),
+            execution_result,
+        }) if *execution_result == Err(AgentError::Closed)
     ));
     assert_eq!(within(second.wait()).await, Err(AgentError::Closed));
     for id in ["first", "second"] {

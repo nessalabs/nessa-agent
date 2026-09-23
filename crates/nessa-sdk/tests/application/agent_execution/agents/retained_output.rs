@@ -205,6 +205,15 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
             assert_eq!(state.calls.load(Ordering::SeqCst), 1);
             assert_eq!(agent.close(actor()).await, Err(AgentError::AuditFailure));
         } else {
+            let authorization = agent
+                .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+                .unwrap();
+            agent
+                .start_attachment(authorization)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             assert_eq!(
                 agent.invoke(request("next"), actor()).await,
                 Ok(ExecutionOutcome::Completed)

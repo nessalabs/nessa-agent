@@ -1818,25 +1818,27 @@ impl Agent {
                 });
             }
             let retained = result.clone();
-            let result = self
+            let (result, receipt_storage) = self
                 .catch_scheduling_panic(async {
                     self.inner
                         .manager
-                        .settle_submission(pending.index, result)
+                        .settle_submission_with_storage_ack(pending.index, result)
                         .await
                 })
                 .await
                 .unwrap_or_else(|()| {
-                    Err(AgentError::StorageAfterExecution {
-                        error: StorageError::Io("failed queue receipt persistence panicked".into()),
-                        execution_result: Box::new(retained),
-                    })
+                    let error =
+                        StorageError::Io("failed queue receipt persistence panicked".into());
+                    (
+                        Err(AgentError::StorageAfterExecution {
+                            error: error.clone(),
+                            execution_result: Box::new(retained),
+                        }),
+                        Some(error),
+                    )
                 });
-            if let Err(
-                AgentError::StorageAfterExecution { error, .. } | AgentError::Storage(error),
-            ) = &result
-            {
-                let aggregate = AgentError::Storage(error.clone());
+            if let Some(error) = receipt_storage {
+                let aggregate = AgentError::Storage(error);
                 aggregate_failure = Some(match aggregate_failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
                         first_error: Box::new(first),
@@ -1988,33 +1990,34 @@ impl Agent {
             }
             // Retain the cancellation failure without letting a second storage
             // panic interrupt receipt delivery or the remaining cancellations.
-            let result = if recovering || result != Err(AgentError::Closed) {
-                let retained = result.clone();
+            let retained = result.clone();
+            let (result, receipt_storage) = if recovering || result != Err(AgentError::Closed) {
                 self.catch_scheduling_panic(async {
                     self.inner
                         .manager
-                        .settle_submission(pending.index, result)
+                        .settle_submission_with_storage_ack(pending.index, result)
                         .await
                 })
                 .await
                 // The manager retains this result before calling storage; use the
                 // same result for the receipt if that save panics.
                 .unwrap_or_else(|()| {
-                    Err(AgentError::StorageAfterExecution {
-                        error: StorageError::Io(
-                            "pending cancellation receipt persistence panicked".into(),
-                        ),
-                        execution_result: Box::new(retained),
-                    })
+                    let error = StorageError::Io(
+                        "pending cancellation receipt persistence panicked".into(),
+                    );
+                    (
+                        Err(AgentError::StorageAfterExecution {
+                            error: error.clone(),
+                            execution_result: Box::new(retained),
+                        }),
+                        Some(error),
+                    )
                 })
             } else {
-                result
+                (result, None)
             };
-            if let Err(
-                AgentError::StorageAfterExecution { error, .. } | AgentError::Storage(error),
-            ) = &result
-            {
-                let aggregate = AgentError::Storage(error.clone());
+            if let Some(error) = receipt_storage {
+                let aggregate = AgentError::Storage(error);
                 failure = Some(match failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
                         first_error: Box::new(first),

@@ -757,7 +757,7 @@ impl SessionLifecycle {
                 .cleanup
                 .as_ref()
                 .filter(|_| {
-                    matches!(&state.work_status, WorkStatus::Stopping(stop)
+                    matches!(&state.work_status, WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)
                     if matches!(stop.recovery, RecoveryPolicy::Automatic))
                 })
                 .and_then(|cleanup| {
@@ -973,28 +973,41 @@ impl SessionLifecycle {
                 // Control callers checked the provider generation before this call;
                 // execution reports are serialized with provider restoration.
                 if Self::retire_confirmed_provider_generation(state) {
-                    state.automatic_recovery_ready = true;
+                    state.automatic_recovery_ready = report.audit().is_ok();
+                }
+                let result = if let Some(cleanup) = &state.cleanup {
+                    cleanup.completion.send_replace(Some(report.clone()));
+                    cleanup.result.clone()
+                } else {
+                    let (completion, result) = watch::channel(Some(report.clone()));
+                    state.cleanup = Some(Cleanup {
+                        provider_generation: state.provider_generation,
+                        completion,
+                        result: result.clone(),
+                    });
+                    result
+                };
+                if report.audit().is_err() && matches!(state.work_status, WorkStatus::Open) {
+                    // Physical retirement and audit acknowledgement are separate facts.
+                    // The completed report is the stop owner: every admission mode
+                    // observes the same failed acknowledgement, while an earlier
+                    // stop keeps its original request and work generation.
+                    state.work_generation.0 += 1;
+                    state.work_status = WorkStatus::Blocked(Stop {
+                        ticket: CloseAttempt {
+                            id: state.work_generation.0,
+                            request: SessionCloseRequest::ExecutionFailed,
+                            result,
+                        },
+                        finalized: true,
+                        recovery: RecoveryPolicy::Automatic,
+                    });
                 }
                 self.notify_stop(
                     state,
                     &SessionCloseRequest::ExecutionFailed,
                     report.audit().is_err(),
                 );
-                if let Some(cleanup) = &state.cleanup {
-                    // Pending close I/O publishes only after its final report is
-                    // reconciled with this confirmation. Completed waiters and
-                    // retries keep observing the same shared evidence channel.
-                    if cleanup.result.borrow().is_some() {
-                        cleanup.completion.send_replace(Some(report));
-                    }
-                } else {
-                    let (completion, result) = watch::channel(Some(report));
-                    state.cleanup = Some(Cleanup {
-                        provider_generation: state.provider_generation,
-                        completion,
-                        result,
-                    });
-                }
                 return;
             }
         }

@@ -168,7 +168,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             .iter()
             .find(|record| record.request.execution_id.as_str() == "steering")
             .unwrap();
-        assert_eq!(record.result, Some(Err(AgentError::SubmissionUnresolved)));
+        assert_eq!(record.result, None);
         assert_eq!(record.actor, actor());
         let final_event = record.scheduling.last().unwrap();
         if stage == InvocationStage::Injected {
@@ -184,6 +184,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             Err(AgentError::Closed)
         ));
         agent.close(actor()).await.unwrap();
+        reattach_after_explicit_close(&agent).await;
         assert_eq!(
             agent
                 .enqueue(input("recovered"), actor())

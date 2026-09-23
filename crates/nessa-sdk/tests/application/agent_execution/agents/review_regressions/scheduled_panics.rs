@@ -367,7 +367,10 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
             if stage == InvocationStage::Cancelled {
                 assert!(matches!(
                     first_pending,
-                    Err(AgentError::Storage(StorageError::Io(_)))
+                    Err(AgentError::StorageAfterExecution {
+                        error: StorageError::Io(_),
+                        execution_result,
+                    }) if *execution_result == Err(AgentError::Closed)
                 ));
             } else {
                 assert_eq!(first_pending, Err(AgentError::Closed));

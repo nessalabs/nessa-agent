@@ -78,7 +78,7 @@ async fn scheduling_retry_rejects_changed_content_attribution_or_delivery_mode()
     .unwrap();
     assert!(matches!(
         agent.enqueue(different, actor()).await,
-        Err(AgentError::SubmissionConflict)
+        Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
     ));
     let mut different = request("same");
     different.estimated_input_tokens += 1;
@@ -155,19 +155,24 @@ async fn restored_retry_retains_late_queue_and_native_persistence_failures() {
         let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
         let receipt = agent.enqueue(request("active"), actor()).await.unwrap();
         let running = started(&mut calls, "active").await;
-        let original = if native {
+        let (native_evidence, queue_error) = if native {
             storage.fail_scheduling("correction", InvocationStage::Injected);
-            let error = match agent.steer(request("correction"), actor()).await {
-                Err(error) => error,
-                _ => panic!("injection evidence save must fail"),
+            let evidence = match agent.steer(request("correction"), actor()).await.unwrap() {
+                SteeringDelivery::Injected { evidence, .. } => evidence,
+                SteeringDelivery::Queued(_) => panic!("active steering must remain native"),
             };
+            assert!(matches!(
+                &evidence,
+                SteeringEvidence::Failed(failure)
+                    if matches!(failure.storage(), Some(StorageError::Io(_)))
+            ));
             complete(running);
             within(receipt.wait()).await.unwrap();
-            error
+            (Some(evidence), None)
         } else {
             storage.fail_scheduling("active", InvocationStage::Settled);
             complete(running);
-            within(receipt.wait()).await.unwrap_err()
+            (None, Some(within(receipt.wait()).await.unwrap_err()))
         };
         agent.close(close_action()).await.unwrap();
         drop(agent);
@@ -178,13 +183,15 @@ async fn restored_retry_retains_late_queue_and_native_persistence_failures() {
         .await
         .unwrap();
         if native {
-            assert!(
-                matches!(restored.steer(request("correction"), actor()).await, Err(error) if error == original)
-            );
+            let restored_evidence = match restored.steer(request("correction"), actor()).await {
+                Ok(SteeringDelivery::Injected { evidence, .. }) => evidence,
+                result => panic!("restored native receipt was not retained: {result:?}"),
+            };
+            assert_eq!(Some(restored_evidence), native_evidence);
             assert_eq!(provider.steered.lock().unwrap().len(), 1);
         } else {
             let retry = restored.enqueue(request("active"), actor()).await.unwrap();
-            assert_eq!(within(retry.wait()).await, Err(original));
+            assert_eq!(within(retry.wait()).await, Err(queue_error.unwrap()));
         }
         assert!(calls.try_recv().is_err());
         restored.close(close_action()).await.unwrap();

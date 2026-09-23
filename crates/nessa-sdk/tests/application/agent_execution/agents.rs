@@ -461,18 +461,16 @@ async fn lease_and_provider_mismatch_fail_before_opening_another_context() {
 }
 
 #[tokio::test]
-async fn failed_initial_save_closes_the_opened_provider_context() {
+async fn failed_initial_save_prevents_opening_a_provider_context() {
     let storage = MemoryStorage::default();
     storage.fail_next();
     let provider = TestProvider::new();
     assert!(matches!(
         attached_agent(provider.clone(), storage.manager().await).await,
-        Err(error) if matches!(error, AgentError::StorageInitialization { .. })
+        Err(AgentError::Storage(StorageError::Io(_)))
     ));
-    assert_eq!(
-        provider.calls.closes.lock().unwrap().as_slice(),
-        &[SessionCloseRequest::SessionFailed]
-    );
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert!(provider.calls.closes.lock().unwrap().is_empty());
     assert!(!storage.0.lock().unwrap().leased);
 }
 
