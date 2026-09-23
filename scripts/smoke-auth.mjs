@@ -21,7 +21,9 @@ import { WebSocket, WebSocketServer } from "ws"
 import { cargoTargetDirectory } from "./cargo-target.mjs"
 import {
   NessaClient,
+  NessaClientConfig,
   NessaConnectionClosedError,
+  NessaEndpointDiscoveryError,
   NessaMutationError,
   NessaRpcError,
 } from "@nessa/client"
@@ -35,10 +37,13 @@ const binary = join(
   "debug",
   process.platform === "win32" ? "nessa.exe" : "nessa",
 )
-const listener = createServer().listen(0, "127.0.0.1")
-await once(listener, "listening")
-const port = listener.address().port
-await new Promise((resolve) => listener.close(resolve))
+let port
+do {
+  const listener = createServer().listen(0, "127.0.0.1")
+  await once(listener, "listening")
+  port = listener.address().port
+  await new Promise((resolve) => listener.close(resolve))
+} while (`ws://127.0.0.1:${port}` === NessaClient.defaultUrl)
 const env = {
   ...process.env,
   NESSA_DATA_DIR: join(directory, "data"),
@@ -49,6 +54,8 @@ const env = {
 }
 process.env.NESSA_DATA_DIR = env.NESSA_DATA_DIR
 process.env.NESSA_INSTANCE = env.NESSA_INSTANCE
+const inheritedClientPort = process.env.NESSA_PORT
+delete process.env.NESSA_PORT
 const url = `ws://127.0.0.1:${port}`
 let server
 const clients = []
@@ -295,8 +302,35 @@ try {
     assert.equal((await browserRequest("check", browserCookie)).status, 401)
     assert.equal((await owner.server.health()).ok, true)
   }
+  const discoveredOptions = { ...options }
+  delete discoveredOptions.url
+  assert.equal(Object.hasOwn(discoveredOptions, "url"), false)
+  assert.equal(discoveredOptions.stage, "ci")
+  assert.equal(process.env.NESSA_PORT, undefined)
+  assert.notEqual(url, NessaClient.defaultUrl)
+  const endpointPath = join(
+    env.NESSA_DATA_DIR,
+    "ci",
+    "instances",
+    env.NESSA_INSTANCE,
+    "logs",
+    "gateway-endpoint.json",
+  )
+  const publishedEndpoint = readFileSync(endpointPath, "utf8")
+  const endpointRecord = JSON.parse(publishedEndpoint)
+  assert.equal(endpointRecord.webSocketUrl, url)
+  const panelCredentialPath = join(
+    env.NESSA_DATA_DIR,
+    "ci",
+    "instances",
+    env.NESSA_INSTANCE,
+    "auth",
+    "surfaces",
+    "nessa-panel.token",
+  )
+  const panelSecret = readFileSync(panelCredentialPath, "utf8").trim()
   const chat = await NessaClient.connect({
-    ...options,
+    ...discoveredOptions,
     profile: "product",
     client: { ...options.client, id: "nessa-panel" },
   })
@@ -305,6 +339,68 @@ try {
   assert.notEqual(chat.productSession.credentialId, identity.credentialId)
   assert.notEqual(chat.productSession.principalId, identity.principalId)
   assert.equal((await chat.server.health()).ok, true)
+
+  const endpointMode =
+    process.platform === "win32" ? undefined : statSync(endpointPath).mode & 0o777
+  const staleEndpointInstance =
+    endpointRecord.endpointInstance === "38baa4b2-bd37-45fa-aeda-d7b04059da21"
+      ? "5485b918-1eeb-4a4a-ad1d-9fdc70dfa231"
+      : "38baa4b2-bd37-45fa-aeda-d7b04059da21"
+  assert.notEqual(staleEndpointInstance, endpointRecord.endpointInstance)
+  const RealWebSocket = globalThis.WebSocket
+  const realFetch = globalThis.fetch
+  let credentialReads = 0
+  let healthRequests = 0
+  let socketAdmissions = 0
+  try {
+    writeFileSync(
+      endpointPath,
+      JSON.stringify({ ...endpointRecord, endpointInstance: staleEndpointInstance }),
+      { mode: endpointMode },
+    )
+    globalThis.fetch = (input, init) => {
+      if (String(input) === `http://127.0.0.1:${port}/health`) healthRequests += 1
+      return realFetch(input, init)
+    }
+    globalThis.WebSocket = new Proxy(RealWebSocket, {
+      construct(target, argumentsList, newTarget) {
+        socketAdmissions += 1
+        return Reflect.construct(target, argumentsList, newTarget)
+      },
+    })
+    await assert.rejects(
+      async () => {
+        const unexpected = await NessaClient.connect({
+          ...discoveredOptions,
+          profile: "product",
+          client: { ...options.client, id: "stale-endpoint-probe" },
+          credentialSource: {
+            async load() {
+              credentialReads += 1
+              return ownerSecret
+            },
+          },
+          config: new NessaClientConfig({
+            retry: { maxAttempts: 1 },
+            reconnect: { enabled: false, maxAttempts: 1 },
+            requestTimeoutMs: 2_000,
+          }),
+        })
+        unexpected.close()
+      },
+      (error) => error instanceof NessaEndpointDiscoveryError,
+    )
+    assert.equal(healthRequests, 1)
+    assert.equal(credentialReads, 0)
+    assert.equal(socketAdmissions, 0)
+  } finally {
+    globalThis.fetch = realFetch
+    globalThis.WebSocket = RealWebSocket
+    writeFileSync(endpointPath, publishedEndpoint, { mode: endpointMode })
+  }
+  assert.equal(readFileSync(endpointPath, "utf8"), publishedEndpoint)
+  if (endpointMode !== undefined)
+    assert.equal(statSync(endpointPath).mode & 0o777, endpointMode)
   // This smoke server is configured with no conversations at all, which is its
   // own answer and not "the agent you asked for is missing".
   await assert.rejects(
@@ -596,7 +692,7 @@ try {
   )
   const registryPath = join(directory, "data/ci/instances/e2e/auth/credentials.v1.json")
   const registry = readFileSync(registryPath, "utf8")
-  for (const secret of [ownerSecret, issued.secret, expiring.secret]) {
+  for (const secret of [ownerSecret, panelSecret, issued.secret, expiring.secret]) {
     assert.ok(!registry.includes(secret))
     assert.ok(!logs.includes(secret))
   }
@@ -754,10 +850,12 @@ try {
     "credential_revoked",
   )
   console.log(
-    "auth e2e passed: bootstrap, issue/retry, isolation, denial, idle revocation/expiry, restart, recovery, session isolation, shared-credential revocation, self-revocation acknowledgement, unauthenticated bypass rejection, typed administration denial, identity/restriction snapshots, lost issuance response and durable explicit retry",
+    "auth e2e passed: published endpoint discovery, stale identity refusal before credentials, bootstrap, issue/retry, isolation, denial, idle revocation/expiry, restart, recovery, session isolation, shared-credential revocation, self-revocation acknowledgement, unauthenticated bypass rejection, typed administration denial, identity/restriction snapshots, lost issuance response and durable explicit retry",
   )
 } finally {
   for (const client of clients) client.close()
   await stop()
   rmSync(directory, { recursive: true, force: true })
+  if (inheritedClientPort === undefined) delete process.env.NESSA_PORT
+  else process.env.NESSA_PORT = inheritedClientPort
 }
