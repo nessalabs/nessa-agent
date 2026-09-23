@@ -32,5 +32,9 @@ mod reconciliation_ids;
 mod selection;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
-pub use commands::{gateway_startup, retry_gateway_startup, startup_events};
+pub use commands::{
+    __cmd__gateway_startup, __cmd__retry_gateway_startup, __tauri_command_name_gateway_startup,
+    __tauri_command_name_retry_gateway_startup, gateway_startup, retry_gateway_startup,
+    startup_events,
+};
 pub use selection::{current, login_shell_path, reconciliation_audit, reconciliation_ids};

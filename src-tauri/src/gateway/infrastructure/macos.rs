@@ -37,7 +37,7 @@ use install_attempt::{
     authorizes_rebootstrap, clear as clear_install_attempt, publish as publish_install_attempt,
 };
 use pruning::{prune_runtimes, retained_runtimes};
-pub(super) use reconciliation_audit::FileReconciliationAudit;
+pub(in crate::gateway::infrastructure) use reconciliation_audit::FileReconciliationAudit;
 use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
 
 pub(super) struct Launchd {

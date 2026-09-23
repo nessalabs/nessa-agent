@@ -20,12 +20,12 @@ use crate::gateway::{
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-pub(super) struct FileReconciliationAudit {
+pub(in crate::gateway::infrastructure) struct FileReconciliationAudit {
     directory: Option<PathBuf>,
 }
 
 impl FileReconciliationAudit {
-    pub(super) fn new(config_root: Option<PathBuf>) -> Self {
+    pub(in crate::gateway::infrastructure) fn new(config_root: Option<PathBuf>) -> Self {
         Self {
             directory: config_root.map(|root| root.join("gateway-reconciliation-audit")),
         }

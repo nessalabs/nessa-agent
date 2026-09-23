@@ -2,10 +2,8 @@
 mod reconciliation_evidence;
 pub use reconciliation_evidence::{
     BundledSurface, PendingReconciliation, ReconciliationAttemptRecord, ReconciliationCause,
-    ReconciliationConsistencyError, ReconciliationCorrelation, ReconciliationCorrelationError,
-    ReconciliationCorrelationPairError, ReconciliationEvidence, ReconciliationEvidenceError,
-    ReconciliationHistory, ReconciliationHistoryAssessment, ReconciliationHistoryFact,
-    ReconciliationIdentityError, ReconciliationIncarnation, ReconciliationInitiator,
+    ReconciliationCorrelation, ReconciliationEvidence, ReconciliationHistory,
+    ReconciliationHistoryFact, ReconciliationIncarnation, ReconciliationInitiator,
     ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
     ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
     ReconciliationTarget,

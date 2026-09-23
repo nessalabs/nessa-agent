@@ -74,6 +74,17 @@ test("items are the ones at the top level, not the methods inside them", () => {
   )
 })
 
+test("a test function misread as top level stays test-only", () => {
+  const sources = crate({
+    [ROOT]: `mod gateway;\nuse gateway::Ready;\nmod host;\nuse host::answer;\n`,
+    "src/host.rs":
+      `pub fn answer() {}\n\n#[cfg(test)]\nmod tests {\n` +
+      `    fn earlier() { println!("{field}"); }\n` +
+      `    #[test]\n    fn shell_contract_matches() {}\n}\n`,
+  })
+  assert.deepEqual(unreachableOffMacos(sources, ROOT), [])
+})
+
 /**
  * `stage_port`: a module the root declared plainly, reached only by the launchd
  * registration, which is macOS-only. Windows and Linux compiled every line of

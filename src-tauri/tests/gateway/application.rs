@@ -1,8 +1,8 @@
 use super::*;
 use crate::gateway::{
     application::{
-        testing::FixedLoginShell, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
-        LoginShellError,
+        testing::{self, FixedLoginShell},
+        GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellError,
     },
     domain::value_objects::{
         ReconciliationCause, ReconciliationCorrelation, ReconciliationEvidence,
