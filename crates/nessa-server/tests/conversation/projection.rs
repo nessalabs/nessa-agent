@@ -26,7 +26,7 @@ use nessa_sdk::{
             ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
             ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
         },
-        sessions::{InvocationRecord, SessionSnapshot},
+        sessions::{InvocationRecord, SessionSnapshot, SubmissionAcknowledgement},
         tools::ToolReviewInput,
     },
     domain::agent_execution::{
@@ -191,6 +191,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
                 reserved_output_tokens: 10,
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
             cancellation: None,

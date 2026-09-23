@@ -546,7 +546,18 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
         audit.clone(),
     )
     .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = Agent::prepare(Arc::new(provider), manager, audit.clone())
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let mut events = agent.subscribe();
     let caller = tokio::spawn({
         let agent = agent.clone();

@@ -4,7 +4,9 @@ use super::*;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
     providers::ProviderIdentity,
-    sessions::{InvocationRecord, InvocationSchedulingEvent, SessionSnapshot},
+    sessions::{
+        InvocationRecord, InvocationSchedulingEvent, SessionSnapshot, SubmissionAcknowledgement,
+    },
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationKind, SchedulingCause, SubmissionMode},
@@ -52,6 +54,7 @@ fn invocation(
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("person", "panel", "turn-1").unwrap(),
+        acknowledgement: SubmissionAcknowledgement::Acknowledged,
         events: Vec::new(),
         scheduling: vec![InvocationSchedulingEvent {
             kind: InvocationKind::Queued,
