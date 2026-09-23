@@ -16,8 +16,10 @@
 //! ```
 //! Arrows show calls. Agent drains provider events and saves evidence before
 //! publishing observations. Error preflight bounds adapter diagnostics before
-//! retention while preserving lifecycle decisions. Provider and storage adapters
-//! remain injected.
+//! retention while preserving lifecycle decisions. [`ProviderDiagnostic`]
+//! retains bounded provider prose separately from the numeric provider code;
+//! neither diagnostic text nor its presence grants lifecycle authority.
+//! Provider and storage adapters remain injected.
 //! The lifecycle coordinator alone opens/closes admission. Supervised submission
 //! owners retain work permits through evidence and receipt settlement; waiting
 //! callers own no dispatch authority. Attachment generation and admission work generation
@@ -35,6 +37,7 @@ mod submissions;
 pub use agent::{Agent, AgentEvents};
 pub use error::{
     AgentError, AgentFuture, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+    ProviderDiagnostic,
 };
 pub use initialization::AgentInitializationError;
 pub use scheduling::{QueueRemoval, QueueReorder, QueuedInvocation, SteeringDelivery};

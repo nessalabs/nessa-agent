@@ -455,12 +455,18 @@ async fn provider_error_cannot_hide_a_failed_cancellation_audit() {
         ExecutionUpdate::PermissionRequested { .. }
     ));
     let expected = AgentError::OperationAndCleanupFailure {
-        operation_error: Box::new(AgentError::Provider { code: -32000 }),
+        operation_error: Box::new(AgentError::Provider {
+            code: -32000,
+            diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
+        }),
         cleanup_error: Box::new(AgentError::AuditFailure),
     };
     let settlement_error = AgentError::ExecutionObservation {
         error: Box::new(expected.clone()),
-        execution_result: Some(Box::new(Err(AgentError::Provider { code: -32000 }))),
+        execution_result: Some(Box::new(Err(AgentError::Provider {
+            code: -32000,
+            diagnostic: Some(ProviderDiagnostic::new("fixture provider failure")),
+        }))),
     };
     assert_eq!(active.await.unwrap(), Err(settlement_error.clone()));
     assert_eq!(

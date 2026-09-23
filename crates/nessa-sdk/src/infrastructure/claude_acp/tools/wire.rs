@@ -28,16 +28,16 @@ use std::collections::HashMap;
 ///    account rather than to a local conversation.
 ///
 /// These names go to the harness as both `disallowedTools` and permission
-/// `deny`, and it reads rule names through an alias map before matching —
-/// `KillShell` and `BashOutput` are read there as `TaskStop` and `TaskOutput`.
-/// None of the names above is an alias, so each denies the tool it names, but
-/// a name added here must be checked against that map: this list and the
-/// harness must deny the same set for admission to be open safely.
+/// `deny`. The pinned Claude SDK canonicalizes historical names before matching:
+/// `KillShell` becomes `TaskStop` and `BashOutput` becomes `TaskOutput`. This
+/// list uses the canonical names so its text and its effective boundary agree.
+/// A name added here must be checked against that normalization: this list and
+/// the harness must deny the same set for admission to be open safely.
 pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
     // Execution Nessa does not own.
     "Bash",
-    "BashOutput",
-    "KillShell",
+    "TaskOutput",
+    "TaskStop",
     "Monitor",
     "REPL",
     // Permission mode.
@@ -153,7 +153,6 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
     mcp_prefixes: &[String],
 ) -> Result<ToolReviewInput, AgentError> {
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Read {
         file_path: String,
         offset: Option<u64>,
@@ -161,13 +160,11 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
         pages: Option<String>,
     }
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Write {
         file_path: String,
         content: String,
     }
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Edit {
         file_path: String,
         old_string: String,
@@ -176,13 +173,11 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
         replace_all: bool,
     }
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Glob {
         pattern: String,
         path: Option<String>,
     }
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Grep {
         pattern: String,
         path: Option<String>,

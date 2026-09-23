@@ -339,7 +339,10 @@ async fn invocation_modes_follow_explicit_resource_status_independently_of_error
     for mode in Mode::ALL {
         for unconfirmed in [false, true] {
             let (agent, backend, storage) = workflow().await;
-            let error = AgentError::Provider { code: -32077 };
+            let error = AgentError::Provider {
+                code: -32077,
+                diagnostic: None,
+            };
             let attachment = if unconfirmed {
                 ProviderSessionState::CleanupRequired
             } else {

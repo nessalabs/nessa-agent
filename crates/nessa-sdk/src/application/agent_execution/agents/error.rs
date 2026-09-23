@@ -9,6 +9,53 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
+/// Bounded provider-supplied context for a typed provider failure.
+///
+/// This text is diagnostic only. Callers must use the provider error code and
+/// the surrounding typed lifecycle reports for decisions about retries,
+/// admission, settlement, and resource ownership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderDiagnostic(Box<str>);
+impl ProviderDiagnostic {
+    /// Maximum UTF-8 byte length retained from a provider error message.
+    pub const MAX_BYTES: usize = 4096;
+    const TRUNCATED_SUFFIX: &'static str = " [diagnostic truncated]";
+
+    /// Retain a provider message within [`Self::MAX_BYTES`].
+    ///
+    /// Oversized messages are cut at a UTF-8 character boundary and end with a
+    /// fixed truncation marker. The resulting allocation contains only the
+    /// retained bytes, even when the input string had spare capacity.
+    pub fn new(message: impl Into<String>) -> Self {
+        let message = message.into();
+        if message.len() <= Self::MAX_BYTES {
+            return Self(message.into_boxed_str());
+        }
+        let payload_limit = Self::MAX_BYTES - Self::TRUNCATED_SUFFIX.len();
+        let mut end = payload_limit;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut retained = String::with_capacity(end + Self::TRUNCATED_SUFFIX.len());
+        retained.push_str(&message[..end]);
+        retained.push_str(Self::TRUNCATED_SUFFIX);
+        Self(retained.into_boxed_str())
+    }
+
+    /// Borrow the retained provider message.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Restore already-bounded durable evidence without normalizing corruption.
+    pub(crate) fn restore(message: String) -> Result<Self, &'static str> {
+        if message.len() > Self::MAX_BYTES {
+            return Err("provider diagnostic exceeds retained limit");
+        }
+        Ok(Self(message.into_boxed_str()))
+    }
+}
+
 /// Sendable asynchronous result borrowing its adapter for the lifetime of the call.
 pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AgentError>> + Send + 'a>>;
 
@@ -228,6 +275,9 @@ pub enum AgentError {
     Provider {
         /// Provider-supplied numeric error code, retained without string classification.
         code: i64,
+        /// Bounded provider context for display and diagnosis, when supplied.
+        /// This prose carries no admission, settlement, or cleanup authority.
+        diagnostic: Option<ProviderDiagnostic>,
     },
     /// A pipe or transport operation failed; delivery may be uncertain.
     Transport(String),
