@@ -2,7 +2,7 @@ use super::ports::{ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError,
 use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::{
-    agents::{Agent, AgentError, AttachmentFailureCode, AttachmentPhase, AttachmentRequest},
+    agents::{Agent, AgentError, AttachmentRequest},
     executions::ExecutionAudit,
     permissions::ActionContext,
     providers::AgentProvider,
@@ -233,10 +233,7 @@ impl AgentWarmUp {
             .map_err(provider_failure)?;
         if let Err(error) = attachment.wait().await {
             return Err(ProviderFailure {
-                cleanup_unconfirmed: matches!(
-                    agent.attachment_status().phase(),
-                    AttachmentPhase::Failed(AttachmentFailureCode::Cleanup)
-                ),
+                cleanup_unconfirmed: agent.attachment_cleanup_pending(),
                 error,
             });
         }
@@ -254,16 +251,12 @@ impl AgentWarmUp {
             });
         // Closing is part of the warm-up, not cleanup after it: the provider's
         // own closure evidence is what records that this session existed.
-        agent
-            .close(actor.clone())
-            .await
-            .map_err(|error| ProviderFailure {
-                cleanup_unconfirmed: matches!(
-                    error,
-                    AgentError::CleanupUncertain | AgentError::AuditAndCleanupFailure
-                ),
+        if let Err(error) = agent.close(actor.clone()).await {
+            return Err(ProviderFailure {
+                cleanup_unconfirmed: agent.attachment_cleanup_pending(),
                 error,
-            })?;
+            });
+        }
         Ok(session_id)
     }
 }

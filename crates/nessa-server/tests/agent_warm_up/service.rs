@@ -214,9 +214,9 @@ async fn a_failed_launch_is_audited_as_still_cold_and_not_recorded_complete() {
         records[0].failure,
         Some(ProviderFailure {
             error: deadline,
-            cleanup_unconfirmed: false,
+            cleanup_unconfirmed: true,
         }),
-        "the typed failure survives into the record"
+        "physical resource ownership survives independently of the provider diagnostic"
     );
     assert!(fixture.records.completed.lock().unwrap().is_empty());
 }

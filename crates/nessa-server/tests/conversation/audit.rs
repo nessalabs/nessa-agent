@@ -48,6 +48,7 @@ fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
     let attachment = record_value(&ExecutionAuditRecord::Attachment(
         AttachmentAuditRecord::new(
             session.clone(),
+            7,
             AttachmentAuditStage::Waiting,
             AttachmentAuditStage::Starting,
             AttachmentAuditCause::Started(AttachmentCause::Reopen),
@@ -55,6 +56,7 @@ fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
         ),
     ));
     assert_eq!(attachment["kind"], "attachment_transition");
+    assert_eq!(attachment["generation"], 7);
     assert_eq!(attachment["before"], "waiting");
     assert_eq!(attachment["after"], "starting");
     assert_eq!(attachment["cause"]["kind"], "started");

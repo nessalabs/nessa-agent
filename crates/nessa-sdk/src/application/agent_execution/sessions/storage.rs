@@ -90,6 +90,10 @@ pub struct InvocationRecord {
     pub request: ExecutionRequest,
     /// Caller attribution verified by the host before submission.
     pub actor: ActionContext,
+    /// Independent audit and durable-write acknowledgement for admission or
+    /// confirmed native injection. This fact is retained even when delivery or
+    /// execution has no terminal result.
+    pub acknowledgement: SubmissionAcknowledgement,
     /// Provider observations associated with this invocation, in received order.
     pub events: Vec<ExecutionEvent>,
     /// Local scheduling transitions in causal order, independent of provider output.
@@ -110,6 +114,23 @@ pub struct InvocationRecord {
     pub local_outcome: Option<ExecutionOutcome>,
     /// Saved settlement, or `None` if settlement has not been recorded.
     pub result: Option<Result<ExecutionOutcome, AgentError>>,
+}
+
+/// Durable acknowledgement state for a submitted invocation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmissionAcknowledgement {
+    /// The submission is saved, but its admission or injection acknowledgement
+    /// has not completed yet.
+    Pending,
+    /// Audit and storage both acknowledged the applicable boundary effect.
+    Acknowledged,
+    /// The boundary effect remains retained with one or both acknowledgement failures.
+    Failed {
+        /// Mandatory audit failure, if the audit sink did not acknowledge it.
+        audit: Option<AgentError>,
+        /// Durable snapshot failure, if storage did not acknowledge it.
+        storage: Option<StorageError>,
+    },
 }
 
 /// Cause and caller of a stop captured by an admitted invocation owner.
@@ -245,6 +266,12 @@ impl SessionSnapshot {
         for invocation in &mut self.invocations {
             if let Some(Err(error)) = invocation.result.take() {
                 error.discard_iteratively();
+            }
+            if let SubmissionAcknowledgement::Failed { audit, .. } = &mut invocation.acknowledgement
+            {
+                if let Some(error) = audit.take() {
+                    error.discard_iteratively();
+                }
             }
         }
     }

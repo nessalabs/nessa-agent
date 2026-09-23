@@ -1,7 +1,7 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
 use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, SessionSnapshot,
-    StorageError,
+    StorageError, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
@@ -242,6 +242,17 @@ pub(super) fn invocation_history(
     });
     if let Some(result) = &invocation.result {
         validate_local_result(invocation, result)?;
+    }
+    if matches!(
+        &invocation.acknowledgement,
+        SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: None
+        }
+    ) {
+        return Err(corrupt(
+            "failed submission acknowledgement has no failed boundary",
+        ));
     }
     let mut history = InvocationHistory::new(
         invocation.request.execution_id.clone(),

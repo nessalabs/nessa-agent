@@ -42,6 +42,7 @@ fn metadata() -> Value {
         "submission":"Immediate", "execution_id":"active", "user_message":"input", "user_images":[], "user_files":[],
         "estimated_input_tokens":1, "reserved_output_tokens":1,
         "actor":{"principal_id":"user","surface_id":"test","request_id":"invoke"},
+        "acknowledgement":"Pending",
         "provider_report":null,"local_outcome":null,"cancellation":null,"result":null
     })
 }

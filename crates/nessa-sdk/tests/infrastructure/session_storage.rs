@@ -82,6 +82,7 @@ fn snapshot(name: &str) -> SessionSnapshot {
                 reserved_output_tokens: 24,
             },
             actor: ActionContext::new("user", "test", "invoke").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
             events: vec![ExecutionEvent::new(
                 execution_id,
                 ExecutionUpdate::Message(MessageChunk::text("exact α\n")),

@@ -1,6 +1,6 @@
 use super::{
     cancellation::Cancellation as InvocationCancellation,
-    errors::{Outcome, SavedError},
+    errors::{Outcome, SavedError, StorageFailure},
     permissions::{self, Actor, Cancellation, Choice, Input},
     settlement::Settlement,
     tools::{corrupt, Tool},
@@ -11,7 +11,7 @@ use crate::application::agent_execution::{
         SubmissionMode,
     },
     providers::ProviderIdentity,
-    sessions::storage::{InvocationRecord, StorageError},
+    sessions::storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
 };
 use crate::domain::{
     agent_execution::{
@@ -108,11 +108,46 @@ pub(super) struct Metadata {
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
+    pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
     pub(super) local_outcome: Option<Outcome>,
     pub(super) cancellation: Option<InvocationCancellation>,
     pub(super) result: Option<Result<Outcome, SavedError>>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum Acknowledgement {
+    Pending,
+    Acknowledged,
+    Failed {
+        audit: Option<SavedError>,
+        storage: Option<StorageFailure>,
+    },
+}
+impl From<&SubmissionAcknowledgement> for Acknowledgement {
+    fn from(value: &SubmissionAcknowledgement) -> Self {
+        match value {
+            SubmissionAcknowledgement::Pending => Self::Pending,
+            SubmissionAcknowledgement::Acknowledged => Self::Acknowledged,
+            SubmissionAcknowledgement::Failed { audit, storage } => Self::Failed {
+                audit: audit.clone().map(Into::into),
+                storage: storage.clone().map(Into::into),
+            },
+        }
+    }
+}
+impl From<Acknowledgement> for SubmissionAcknowledgement {
+    fn from(value: Acknowledgement) -> Self {
+        match value {
+            Acknowledgement::Pending => Self::Pending,
+            Acknowledgement::Acknowledged => Self::Acknowledged,
+            Acknowledgement::Failed { audit, storage } => Self::Failed {
+                audit: audit.map(Into::into),
+                storage: storage.map(Into::into),
+            },
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -179,6 +214,7 @@ impl From<&InvocationRecord> for Metadata {
             estimated_input_tokens: value.request.estimated_input_tokens,
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
+            acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
             local_outcome: value.local_outcome.map(Into::into),
@@ -273,6 +309,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
+            acknowledgement: self.acknowledgement.into(),
             events: Vec::new(),
             scheduling: Vec::new(),
             provider_report: self.provider_report.map(Into::into),

@@ -2,11 +2,14 @@
 //! Saved intent verifies retries; live receipts share one settlement notification.
 
 use super::scheduling::QueuedInvocation;
-use super::{AdmissionEvidence, AgentError, QueueAdmission, SteeringDelivery, SteeringEvidence};
+use super::{
+    AdmissionEvidence, AdmissionEvidenceFailure, AgentError, QueueAdmission, SteeringDelivery,
+    SteeringEvidence,
+};
 use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode},
     permissions::ActionContext,
-    sessions::SessionManager,
+    sessions::{SessionManager, SubmissionAcknowledgement},
 };
 use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, InvocationStage};
 use std::collections::HashMap;
@@ -20,6 +23,29 @@ pub(super) enum SubmissionReceipt {
         evidence: AdmissionEvidence,
     },
     Steering(Result<(ExecutionId, SteeringEvidence), AgentError>),
+}
+
+fn admission_evidence(
+    acknowledgement: &SubmissionAcknowledgement,
+) -> Result<AdmissionEvidence, AgentError> {
+    match acknowledgement {
+        SubmissionAcknowledgement::Pending => Err(AgentError::SubmissionUnresolved),
+        SubmissionAcknowledgement::Acknowledged => Ok(AdmissionEvidence::Acknowledged),
+        SubmissionAcknowledgement::Failed { audit, storage } => {
+            AdmissionEvidenceFailure::new(audit.clone(), storage.clone())
+                .map(AdmissionEvidence::Failed)
+                .ok_or(AgentError::SubmissionUnresolved)
+        }
+    }
+}
+
+fn steering_evidence(
+    acknowledgement: &SubmissionAcknowledgement,
+) -> Result<SteeringEvidence, AgentError> {
+    admission_evidence(acknowledgement).map(|evidence| match evidence {
+        AdmissionEvidence::Acknowledged => SteeringEvidence::Acknowledged,
+        AdmissionEvidence::Failed(failure) => SteeringEvidence::Failed(failure),
+    })
 }
 
 pub(super) async fn recover(
@@ -53,19 +79,16 @@ pub(super) async fn recover(
     let has_result = record.result.is_some();
     let result = match record.scheduling.last() {
         Some(event) if event.stage == InvocationStage::Injected => {
-            if let Some(Err(error)) = record.result {
-                return Some(Err(error));
-            }
-            return Some(
-                event
-                    .target
-                    .clone()
-                    .map(|target| SteeringDelivery::Injected {
-                        target,
-                        evidence: SteeringEvidence::Acknowledged,
-                    })
-                    .ok_or(AgentError::SubmissionUnresolved),
-            );
+            // Provider acceptance is authoritative for delivery. A later local
+            // stop or evidence failure cannot turn confirmed injection into a
+            // retryable provider operation.
+            return Some(event.target.clone().map_or_else(
+                || Err(AgentError::SubmissionUnresolved),
+                |target| {
+                    steering_evidence(&record.acknowledgement)
+                        .map(|evidence| SteeringDelivery::Injected { target, evidence })
+                },
+            ));
         }
         Some(event) if event.stage == InvocationStage::Cancelled => {
             record.result.unwrap_or(Err(AgentError::Closed))
@@ -92,5 +115,7 @@ pub(super) async fn recover(
             .unwrap_or(AgentError::SubmissionUnresolved)));
     }
     let (_, receiver) = watch::channel(Some(result));
-    Some(queued(receiver, AdmissionEvidence::Acknowledged))
+    Some(
+        admission_evidence(&record.acknowledgement).and_then(|evidence| queued(receiver, evidence)),
+    )
 }

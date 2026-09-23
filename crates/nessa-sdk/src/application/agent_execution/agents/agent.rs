@@ -158,6 +158,16 @@ impl Agent {
         &self.inner.capabilities
     }
 
+    /// Whether this agent still owns provider or storage resources whose
+    /// physical release has not been confirmed.
+    ///
+    /// This fact is independent of the diagnostic category returned by the
+    /// operation that attempted cleanup. Callers that report cleanup state
+    /// should use it after a failed attachment or close.
+    pub fn attachment_cleanup_pending(&self) -> bool {
+        self.inner.lifecycle.attachment_needs_cleanup()
+    }
+
     /// Authorize one attachment attempt for the current lifecycle generation.
     /// Dropping the returned token abandons only that exact authorization.
     pub fn authorize_attachment(
@@ -183,6 +193,7 @@ impl Agent {
         runtime.spawn(async move {
             let started = AttachmentAuditRecord::new(
                 agent.inner.manager.id().clone(),
+                start.generation,
                 AttachmentAuditStage::Waiting,
                 AttachmentAuditStage::Starting,
                 AttachmentAuditCause::Started(start.cause),
@@ -205,6 +216,7 @@ impl Agent {
                                 .map_err(|_| AgentError::Closed)?;
                             let published = AttachmentAuditRecord::new(
                                 agent.inner.manager.id().clone(),
+                                start.generation,
                                 AttachmentAuditStage::Starting,
                                 AttachmentAuditStage::ContextPublished,
                                 AttachmentAuditCause::Published,
@@ -250,9 +262,29 @@ impl Agent {
                     result.as_ref().expect_err("attachment failed").clone(),
                 );
                 if transitioned {
+                    // Initial attachment has no runner available to own queued
+                    // receipts. Claim their first terminal cause immediately;
+                    // a concurrent close keeps any owners it already cancelled.
+                    let settlement = {
+                        let mut scheduler = agent.inner.scheduler.lock().await;
+                        let settlement = agent
+                            .settle_failed_pending(&mut scheduler, original.clone())
+                            .await;
+                        scheduler.running = false;
+                        settlement
+                    };
+                    if let Err(settlement_error) = settlement {
+                        result = Err(AgentError::MultipleOperationFailures {
+                            first_error: Box::new(
+                                result.expect_err("attachment failure requires settlement"),
+                            ),
+                            subsequent_error: Box::new(settlement_error),
+                        });
+                    }
                     if code != AttachmentFailureCode::Audit {
                         let failed = AttachmentAuditRecord::new(
                             agent.inner.manager.id().clone(),
+                            start.generation,
                             AttachmentAuditStage::Starting,
                             AttachmentAuditStage::Failed,
                             AttachmentAuditCause::Failed,
@@ -268,7 +300,9 @@ impl Agent {
                                 audit_error.clone(),
                             );
                             result = Err(AgentError::MultipleOperationFailures {
-                                first_error: Box::new(original),
+                                first_error: Box::new(
+                                    result.expect_err("attachment failure requires audit"),
+                                ),
                                 subsequent_error: Box::new(audit_error),
                             });
                         }

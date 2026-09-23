@@ -28,6 +28,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             json!({
                 "kind":"attachment_transition",
                 "sessionId":record.session_id().as_str(),
+                "generation":record.generation(),
                 "before":attachment_stage(record.before()),
                 "after":attachment_stage(record.after()),
                 "cause":attachment_cause(record.cause()),
@@ -139,6 +140,7 @@ fn attachment_cause(cause: AttachmentAuditCause) -> Value {
         AttachmentAuditCause::AuthorizationAbandoned => {
             json!({"kind":"authorization_abandoned"})
         }
+        AttachmentAuditCause::Closed => json!({"kind":"closed"}),
         AttachmentAuditCause::Published => json!({"kind":"published"}),
         AttachmentAuditCause::Failed => json!({"kind":"failed"}),
     }

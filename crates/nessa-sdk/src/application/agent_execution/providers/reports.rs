@@ -62,6 +62,11 @@ impl CleanupReport {
     pub fn with_resources(self, resources: ResourceCleanup) -> Self {
         Self::new(resources, self.audit).with_operation_failure(self.operation_failure)
     }
+    /// Replace audit acknowledgement while preserving physical cleanup and the
+    /// initiating operation diagnostic.
+    pub fn with_audit(self, audit: Result<(), AgentError>) -> Self {
+        Self::new(self.resources, audit).with_operation_failure(self.operation_failure)
+    }
     /// Preserve the initiating operation diagnostic alongside cleanup and audit.
     pub fn with_operation_failure(mut self, failure: Option<AgentError>) -> Self {
         self.operation_failure = failure.map(AgentError::bounded);

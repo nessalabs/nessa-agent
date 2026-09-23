@@ -38,6 +38,8 @@ pub enum AttachmentAuditCause {
     Started(AttachmentCause),
     /// Its unused authorization owner was dropped.
     AuthorizationAbandoned,
+    /// Session closure cancelled an authorized or starting attachment.
+    Closed,
     /// Provider startup completed and durable context publication succeeded.
     Published,
     /// Audit, provider startup, storage publication, or cleanup failed.
@@ -48,6 +50,7 @@ pub enum AttachmentAuditCause {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttachmentAuditRecord {
     session_id: SessionId,
+    generation: u64,
     before: AttachmentAuditStage,
     after: AttachmentAuditStage,
     cause: AttachmentAuditCause,
@@ -57,6 +60,7 @@ impl AttachmentAuditRecord {
     /// Construct exact attachment transition evidence without performing effects.
     pub fn new(
         session_id: SessionId,
+        generation: u64,
         before: AttachmentAuditStage,
         after: AttachmentAuditStage,
         cause: AttachmentAuditCause,
@@ -64,6 +68,7 @@ impl AttachmentAuditRecord {
     ) -> Self {
         Self {
             session_id,
+            generation,
             before,
             after,
             cause,
@@ -73,6 +78,10 @@ impl AttachmentAuditRecord {
     /// Local session whose attachment lifecycle changed.
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
+    }
+    /// Attachment generation affected by this transition.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
     /// Stage before the transition.
     pub fn before(&self) -> AttachmentAuditStage {

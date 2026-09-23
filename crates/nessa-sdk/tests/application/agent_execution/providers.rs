@@ -173,6 +173,7 @@ pub(super) async fn provider_agent_with_review(
                     reserved_output_tokens: 1,
                 },
                 actor: close_action(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
                 events: vec![review],
                 scheduling: Vec::new(),
                 cancellation: None,

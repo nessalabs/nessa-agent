@@ -14,7 +14,7 @@ use crate::application::agent_execution::{
         validate_configured_input, CloseOutcome, ProviderOperationFailure, ProviderSessionState,
         SessionCloseRequest, SteeringOutcome,
     },
-    sessions::{InvocationSchedulingEvent, StorageError},
+    sessions::{InvocationSchedulingEvent, StorageError, SubmissionAcknowledgement},
 };
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, InvocationKind, InvocationQueue, InvocationStage, QueueMutation,
@@ -64,7 +64,7 @@ pub struct AdmissionEvidenceFailure {
     storage: Option<StorageError>,
 }
 impl AdmissionEvidenceFailure {
-    fn new(audit: Option<AgentError>, storage: Option<StorageError>) -> Option<Self> {
+    pub(super) fn new(audit: Option<AgentError>, storage: Option<StorageError>) -> Option<Self> {
         (audit.is_some() || storage.is_some()).then_some(Self { audit, storage })
     }
     /// Mandatory audit failure, when the sink did not acknowledge ownership.
@@ -273,6 +273,66 @@ fn event(
 }
 
 impl Agent {
+    async fn persist_submission_acknowledgement(
+        &self,
+        index: usize,
+        audit: Option<AgentError>,
+        storage: Option<StorageError>,
+        panic_diagnostic: &'static str,
+    ) -> Option<AdmissionEvidenceFailure> {
+        let mut failure = AdmissionEvidenceFailure::new(audit, storage);
+        let acknowledgement = match &failure {
+            Some(failure) => SubmissionAcknowledgement::Failed {
+                audit: failure.audit.clone(),
+                storage: failure.storage.clone(),
+            },
+            None => SubmissionAcknowledgement::Acknowledged,
+        };
+        if let Err(error) = self
+            .inner
+            .manager
+            .retain_submission_acknowledgement(index, acknowledgement)
+            .await
+        {
+            failure = AdmissionEvidenceFailure::new(
+                failure.as_ref().and_then(|failure| failure.audit.clone()),
+                Some(error),
+            );
+            return failure;
+        }
+        let saved = self
+            .catch_scheduling_panic(self.inner.manager.flush_observed())
+            .await;
+        let storage = match saved {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(()) => Some(StorageError::Io(panic_diagnostic.into())),
+        };
+        if let Some(storage) = storage {
+            let mut retained = failure.unwrap_or(AdmissionEvidenceFailure {
+                audit: None,
+                storage: None,
+            });
+            retained.retain_storage(storage);
+            let acknowledgement = SubmissionAcknowledgement::Failed {
+                audit: retained.audit.clone(),
+                storage: retained.storage.clone(),
+            };
+            // This mutation has no adapter call and cannot erase the exact live
+            // receipt fact. The subsequent stop/settlement write persists it.
+            if let Err(error) = self
+                .inner
+                .manager
+                .retain_submission_acknowledgement(index, acknowledgement)
+                .await
+            {
+                retained.retain_storage(error);
+            }
+            failure = Some(retained);
+        }
+        failure
+    }
+
     /// Saves `input` and its verified `actor`, then schedules a sequential invocation.
     ///
     /// Ordinary inputs default to FIFO across all Agent clones; explicit
@@ -723,7 +783,14 @@ impl Agent {
                 "queue admission evidence persistence panicked".into(),
             )),
         };
-        let failure = AdmissionEvidenceFailure::new(audit, storage);
+        let failure = self
+            .persist_submission_acknowledgement(
+                index,
+                audit,
+                storage,
+                "queue admission acknowledgement persistence panicked",
+            )
+            .await;
         let acknowledged = failure.is_none();
         let evidence = failure.map_or(AdmissionEvidence::Acknowledged, AdmissionEvidence::Failed);
         let mut admission = QueueAdmission::new(receipt, evidence);
@@ -1320,7 +1387,14 @@ impl Agent {
                         "native steering evidence persistence panicked".into(),
                     )),
                 };
-                let failure = AdmissionEvidenceFailure::new(audit, storage);
+                let failure = self
+                    .persist_submission_acknowledgement(
+                        index,
+                        audit,
+                        storage,
+                        "native steering acknowledgement persistence panicked",
+                    )
+                    .await;
                 let evidence =
                     failure.map_or(SteeringEvidence::Acknowledged, SteeringEvidence::Failed);
                 if matches!(evidence, SteeringEvidence::Failed(_)) {
@@ -1386,7 +1460,14 @@ impl Agent {
                         "queue admission evidence persistence panicked".into(),
                     )),
                 };
-                let failure = AdmissionEvidenceFailure::new(audit, storage);
+                let failure = self
+                    .persist_submission_acknowledgement(
+                        index,
+                        audit,
+                        storage,
+                        "steering queue acknowledgement persistence panicked",
+                    )
+                    .await;
                 let acknowledged = failure.is_none();
                 let evidence =
                     failure.map_or(AdmissionEvidence::Acknowledged, AdmissionEvidence::Failed);
@@ -1641,7 +1722,7 @@ impl Agent {
             .await
     }
 
-    async fn settle_failed_pending(
+    pub(super) async fn settle_failed_pending(
         &self,
         scheduler: &mut Scheduler,
         failure: AgentError,
@@ -1997,6 +2078,19 @@ impl Agent {
             let _invocation = agent.inner.invocation.lock().await;
             agent.inner.manager.await_admission_writes().await;
             agent.inner.lifecycle.wait_for_work().await;
+            let cleanup = match attachment_evidence {
+                Ok(()) => cleanup,
+                Err(error) => {
+                    let audit = match cleanup.audit() {
+                        Ok(()) => error,
+                        Err(first_error) => AgentError::MultipleOperationFailures {
+                            first_error: Box::new(first_error.clone()),
+                            subsequent_error: Box::new(error),
+                        },
+                    };
+                    cleanup.with_audit(Err(audit))
+                }
+            };
             let cleanup = agent
                 .inner
                 .lifecycle
@@ -2011,16 +2105,7 @@ impl Agent {
                 }),
                 Err(error) => Err(error),
             };
-            match (result, attachment_evidence) {
-                (result, Ok(())) => result,
-                (Ok(_), Err(error)) => Err(error),
-                (Err(first_error), Err(subsequent_error)) => {
-                    Err(AgentError::MultipleOperationFailures {
-                        first_error: Box::new(first_error),
-                        subsequent_error: Box::new(subsequent_error),
-                    })
-                }
-            }
+            result
         })
         .await
         .map_err(|_| AgentError::Closed)?

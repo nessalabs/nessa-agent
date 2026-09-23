@@ -392,11 +392,15 @@ impl SessionLifecycle {
         })
     }
     pub(super) fn start_attachment(
-        &self,
+        self: &Arc<Self>,
         mut authorization: AttachmentAuthorization,
     ) -> Result<(AttachmentStart, AttachmentWait), AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
-        let matches = matches!(&state.attachment, AttachmentState::Authorized(authority)
+        let matches = authorization
+            .owner
+            .upgrade()
+            .is_some_and(|owner| Arc::ptr_eq(&owner, self))
+            && matches!(&state.attachment, AttachmentState::Authorized(authority)
             if authority.id == authorization.id
                 && authority.work_generation.0 == authorization.work_generation
                 && authority.attachment_generation == authorization.attachment_generation
@@ -455,6 +459,7 @@ impl SessionLifecycle {
             };
             let record = AttachmentAuditRecord::new(
                 self.session_id.clone(),
+                authorization.attachment_generation,
                 AttachmentAuditStage::Waiting,
                 AttachmentAuditStage::Absent,
                 AttachmentAuditCause::AuthorizationAbandoned,
@@ -884,7 +889,6 @@ impl SessionLifecycle {
     pub(super) fn notify_next_cleanup_start(&self, entered: oneshot::Sender<()>) {
         *self.cleanup_started.lock().unwrap() = Some(entered);
     }
-    #[cfg(test)]
     pub(super) fn attachment_needs_cleanup(&self) -> bool {
         self.attachment.needs_cleanup()
     }
@@ -1126,6 +1130,17 @@ impl SessionLifecycle {
             .as_ref()
             .map_or(state.work_generation.0 + 1, |ticket| ticket.id);
         if existing.is_none() {
+            let closing_attachment = match &state.attachment {
+                AttachmentState::Authorized(authority) => Some((
+                    state.attachment_generation,
+                    AttachmentAuditStage::Waiting,
+                    authority.cause,
+                )),
+                AttachmentState::Starting {
+                    generation, cause, ..
+                } => Some((*generation, AttachmentAuditStage::Starting, *cause)),
+                _ => None,
+            };
             state.work_generation.0 += 1;
             let recorded = match &state.attachment {
                 AttachmentState::Absent { recorded }
@@ -1152,6 +1167,36 @@ impl SessionLifecycle {
                 Some(failure) => AttachmentState::Failed { failure, recorded },
                 None => AttachmentState::Absent { recorded },
             };
+            if let Some((generation, before, attachment_cause)) = closing_attachment {
+                let record = AttachmentAuditRecord::new(
+                    self.session_id.clone(),
+                    generation,
+                    before,
+                    AttachmentAuditStage::Absent,
+                    AttachmentAuditCause::Closed,
+                    match &request {
+                        SessionCloseRequest::Explicit(actor) => Some(actor.clone()),
+                        _ => None,
+                    },
+                );
+                let (completion, result) = watch::channel(None);
+                state.attachment_evidence = Some(result);
+                let owner = self.clone();
+                tokio::spawn(async move {
+                    let outcome = owner
+                        .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                        .await;
+                    if let Err(error) = &outcome {
+                        owner.retain_attachment_evidence_failure(
+                            generation,
+                            attachment_cause,
+                            error.clone(),
+                        );
+                    }
+                    completion.send_replace(Some(outcome));
+                    owner.changed.send_replace(());
+                });
+            }
         }
         if let SessionCloseRequest::Explicit(actor) = &request {
             self.close.send_replace(Some(actor.clone()));
@@ -1230,11 +1275,15 @@ impl SessionLifecycle {
         }
         // A concurrent retry or operation may have supplied newer evidence while
         // this waiter was settling work. Never republish its earlier snapshot.
-        let report = state
+        let latest = state
             .cleanup
             .as_ref()
             .and_then(|cleanup| cleanup.result.borrow().clone())
             .unwrap_or_else(|| report.clone());
+        let report = match report.audit() {
+            Ok(()) => latest,
+            Err(error) => latest.with_audit(Err(error.clone())),
+        };
         let report = self.attachment.reconcile_cleanup(report);
         let stop = match &mut state.work_status {
             WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop)

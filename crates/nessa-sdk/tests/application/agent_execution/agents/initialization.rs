@@ -1,11 +1,13 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
+use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
 use std::{
     future::Future,
     pin::Pin,
     sync::atomic::AtomicBool,
     task::{Context, Poll},
 };
+use tempfile::tempdir;
 use tokio::sync::Notify;
 
 #[derive(Default)]
@@ -68,6 +70,7 @@ enum AuditPanic {
 }
 struct PanickingAudit(AuditPanic);
 struct QueuePanickingAudit(AuditPanic);
+struct QueueSettlementRejectingAudit;
 struct PanickingAuditFuture(AuditPanic);
 impl ExecutionAudit for PanickingAudit {
     fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -88,6 +91,17 @@ impl ExecutionAudit for QueuePanickingAudit {
         Box::pin(PanickingAuditFuture(self.0))
     }
 }
+impl ExecutionAudit for QueueSettlementRejectingAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(record, ExecutionAuditRecord::QueueSettled(_)) {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
 
 #[derive(Clone, Copy)]
 enum OpenPanic {
@@ -96,6 +110,12 @@ enum OpenPanic {
     Drop,
 }
 struct PanickingProvider(OpenPanic);
+struct NoResourcesProvider;
+struct GatedOpenProvider {
+    inner: Arc<TestProvider>,
+    entered: Notify,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+}
 struct PanickingOpen(OpenPanic);
 #[derive(Clone, Copy)]
 enum CleanupPanic {
@@ -139,6 +159,35 @@ impl AgentProvider for PanickingProvider {
             panic!("open construction panic");
         }
         Box::pin(PanickingOpen(self.0))
+    }
+}
+impl AgentProvider for NoResourcesProvider {
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("no-resources", "fixture", "test").unwrap()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+    }
+}
+impl AgentProvider for GatedOpenProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.inner.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.inner.capabilities()
+    }
+    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        let release = self.release.lock().unwrap().take();
+        Box::pin(async move {
+            self.entered.notify_one();
+            if let Some(release) = release {
+                let _ = release.await;
+            }
+            self.inner.open(restore).await
+        })
     }
 }
 impl Future for PanickingOpen {
@@ -343,6 +392,235 @@ async fn queued_work_admitted_before_attachment_binds_to_the_published_provider(
 }
 
 #[tokio::test]
+async fn initial_open_failure_settles_every_owned_queue_receipt() {
+    let storage = MemoryStorage::default();
+    let agent = prepared(
+        Arc::new(NoResourcesProvider),
+        &storage,
+        Arc::new(AcceptingAudit),
+    )
+    .await;
+    let first = agent
+        .enqueue(request("first-before-failure"), actor())
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("second-before-failure"), actor())
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+
+    assert_eq!(
+        agent.start_attachment(authorization).unwrap().wait().await,
+        Err(AgentError::Closed)
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), first.wait())
+            .await
+            .expect("first receipt settled"),
+        Err(AgentError::Closed)
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), second.wait())
+            .await
+            .expect("second receipt settled"),
+        Err(AgentError::Closed)
+    );
+}
+
+#[tokio::test]
+async fn initial_open_failure_settles_all_receipts_despite_audit_and_storage_failures() {
+    let storage = MemoryStorage::default();
+    let agent = prepared(
+        Arc::new(NoResourcesProvider),
+        &storage,
+        Arc::new(QueueSettlementRejectingAudit),
+    )
+    .await;
+    let first = agent
+        .enqueue(request("failed-evidence-first"), actor())
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("failed-evidence-second"), actor())
+        .await
+        .unwrap();
+    storage.fail_scheduling("failed-evidence-first", InvocationStage::Settled);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+
+    assert!(agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .is_err());
+    for receipt in [first, second] {
+        let error = tokio::time::timeout(Duration::from_secs(1), receipt.wait())
+            .await
+            .expect("every receipt settles")
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AgentError::MultipleOperationFailures { .. } | AgentError::StorageAfterExecution { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn provider_publication_preserves_queue_changes_made_while_open_waits() {
+    let storage = MemoryStorage::default();
+    let inner = TestProvider::new();
+    let (release, waiting) = oneshot::channel();
+    let provider = Arc::new(GatedOpenProvider {
+        inner,
+        entered: Notify::new(),
+        release: Mutex::new(Some(waiting)),
+    });
+    let agent = prepared(provider.clone(), &storage, Arc::new(AcceptingAudit)).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    provider.entered.notified().await;
+
+    let first = agent.enqueue(request("open-first"), actor()).await.unwrap();
+    let removed = agent
+        .enqueue(request("open-removed"), actor())
+        .await
+        .unwrap();
+    let last = agent.enqueue(request("open-last"), actor()).await.unwrap();
+    assert_eq!(
+        agent
+            .remove_queued(request("open-removed").execution_id, actor())
+            .await
+            .unwrap(),
+        QueueRemoval::Removed
+    );
+    assert_eq!(
+        agent
+            .reorder_queued(
+                vec![
+                    request("open-last").execution_id,
+                    request("open-first").execution_id,
+                ],
+                actor(),
+            )
+            .await
+            .unwrap(),
+        QueueReorder::Applied
+    );
+
+    release.send(()).unwrap();
+    attachment.wait().await.unwrap();
+    assert_eq!(removed.wait().await, Err(AgentError::Closed));
+    assert_eq!(last.wait().await, Ok(ExecutionOutcome::Completed));
+    assert_eq!(first.wait().await, Ok(ExecutionOutcome::Completed));
+    let snapshot = storage.snapshot();
+    assert!(matches!(
+        snapshot.provider_context,
+        ProviderContext::Recorded(_)
+    ));
+    assert!(snapshot.queue_history.iter().any(|record| {
+        matches!(
+            &record.mutation,
+            QueueMutation::Removed { id, .. } if id.as_str() == "open-removed"
+        )
+    }));
+    assert!(snapshot
+        .queue_history
+        .iter()
+        .any(|record| matches!(&record.mutation, QueueMutation::Reordered(_))));
+}
+
+#[tokio::test]
+async fn journal_restores_queue_changes_published_during_gated_open() {
+    let root = tempdir().unwrap();
+    let storage = Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap());
+    let manager = SessionManager::open(
+        Some(SessionId::new("gated-open-journal").unwrap()),
+        storage.clone(),
+    )
+    .await
+    .unwrap();
+    let inner = TestProvider::new();
+    let (release, waiting) = oneshot::channel();
+    let provider = Arc::new(GatedOpenProvider {
+        inner,
+        entered: Notify::new(),
+        release: Mutex::new(Some(waiting)),
+    });
+    let agent = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit))
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    provider.entered.notified().await;
+    let first = agent
+        .enqueue(request("journal-first"), actor())
+        .await
+        .unwrap();
+    let removed = agent
+        .enqueue(request("journal-removed"), actor())
+        .await
+        .unwrap();
+    let last = agent
+        .enqueue(request("journal-last"), actor())
+        .await
+        .unwrap();
+    assert_eq!(
+        agent
+            .remove_queued(request("journal-removed").execution_id, actor())
+            .await
+            .unwrap(),
+        QueueRemoval::Removed
+    );
+    agent
+        .reorder_queued(
+            vec![
+                request("journal-last").execution_id,
+                request("journal-first").execution_id,
+            ],
+            actor(),
+        )
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    attachment.wait().await.unwrap();
+    assert!(removed.wait().await.is_err());
+    last.wait().await.unwrap();
+    first.wait().await.unwrap();
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+
+    let restored = Agent::prepare(
+        provider,
+        SessionManager::open(Some(SessionId::new("gated-open-journal").unwrap()), storage)
+            .await
+            .unwrap(),
+        Arc::new(AcceptingAudit),
+    )
+    .await
+    .unwrap();
+    let snapshot = restored.session_manager().snapshot().await.unwrap();
+    assert!(snapshot.queue_history.iter().any(|record| {
+        matches!(
+            &record.mutation,
+            QueueMutation::Removed { id, .. } if id.as_str() == "journal-removed"
+        )
+    }));
+    assert!(snapshot
+        .queue_history
+        .iter()
+        .any(|record| matches!(&record.mutation, QueueMutation::Reordered(_))));
+}
+
+#[tokio::test]
 async fn authorization_wait_and_start_publish_one_coherent_status() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
@@ -395,6 +673,14 @@ async fn close_before_attachment_task_runs_preserves_close_without_failed_transi
         .unwrap()
         .iter()
         .all(|record| record.after() != AttachmentAuditStage::Failed));
+    let records = audit.records.lock().unwrap();
+    assert!(records.iter().any(|record| {
+        record.cause() == AttachmentAuditCause::Closed
+            && record.generation() == 0
+            && record.before() == AttachmentAuditStage::Starting
+            && record.after() == AttachmentAuditStage::Absent
+            && record.actor() == Some(&close_action())
+    }));
 }
 
 #[tokio::test]
@@ -487,6 +773,178 @@ async fn close_fences_and_wakes_only_its_held_authorization() {
         .wait()
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn attachment_authorization_cannot_be_consumed_by_an_identical_other_agent() {
+    let first_storage = MemoryStorage::default();
+    let second_storage = MemoryStorage::default();
+    let first = prepared(
+        TestProvider::new(),
+        &first_storage,
+        Arc::new(AcceptingAudit),
+    )
+    .await;
+    let second = prepared(
+        TestProvider::new(),
+        &second_storage,
+        Arc::new(AcceptingAudit),
+    )
+    .await;
+    let first_authorization = first
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let second_authorization = second
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+
+    assert!(matches!(
+        first.start_attachment(second_authorization),
+        Err(AgentError::AttachmentAuthorizationStale)
+    ));
+    assert_eq!(first.attachment_status().phase(), AttachmentPhase::Waiting);
+    first
+        .start_attachment(first_authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert!(matches!(
+        second.authorize_attachment(AttachmentRequest::CallerRequested(actor())),
+        Err(AgentError::AttachmentAuthorizationStale)
+    ));
+}
+
+#[tokio::test]
+async fn close_of_unopened_authorization_records_generation_and_closer_once() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    let agent = prepared(TestProvider::new(), &storage, audit.clone()).await;
+    let _authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+
+    agent.close(close_action()).await.unwrap();
+    agent.close(close_action()).await.unwrap();
+
+    let closed = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| record.cause() == AttachmentAuditCause::Closed)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].generation(), 0);
+    assert_eq!(closed[0].before(), AttachmentAuditStage::Waiting);
+    assert_eq!(closed[0].after(), AttachmentAuditStage::Absent);
+    assert_eq!(closed[0].actor(), Some(&close_action()));
+}
+
+#[tokio::test]
+async fn rejecting_unopened_close_audit_remains_visible_and_blocks_success() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    audit.reject.store(true, Ordering::SeqCst);
+    *audit.reject_after.lock().unwrap() = Some(AttachmentAuditStage::Absent);
+    let agent = prepared(TestProvider::new(), &storage, audit).await;
+    let _authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+
+    assert_eq!(
+        agent.close(close_action()).await,
+        Err(AgentError::AuditFailure)
+    );
+    assert_eq!(
+        agent
+            .attachment_status()
+            .evidence_failure()
+            .map(AttachmentFailure::code),
+        Some(AttachmentFailureCode::Audit)
+    );
+    assert_eq!(
+        agent.close(close_action()).await,
+        Err(AgentError::AuditFailure)
+    );
+}
+
+#[tokio::test]
+async fn rejecting_starting_close_audit_blocks_close_and_retains_the_failed_generation() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    audit.reject.store(true, Ordering::SeqCst);
+    *audit.reject_after.lock().unwrap() = Some(AttachmentAuditStage::Absent);
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::Starting);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(TestProvider::new(), &storage, audit.clone()).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    audit.entered.notified().await;
+
+    assert_eq!(
+        agent.close(close_action()).await,
+        Err(AgentError::AuditFailure)
+    );
+    release.send(()).unwrap();
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    let failed = agent.attachment_status().evidence_failure().unwrap();
+    assert_eq!(failed.generation(), 0);
+    assert_eq!(failed.code(), AttachmentFailureCode::Audit);
+}
+
+#[tokio::test]
+async fn caller_loss_does_not_abandon_unopened_close_evidence() {
+    let storage = MemoryStorage::default();
+    let audit = Arc::new(AttachmentAuditProbe::default());
+    *audit.gate_after.lock().unwrap() = Some(AttachmentAuditStage::Absent);
+    let (release, waiting) = oneshot::channel();
+    *audit.release.lock().unwrap() = Some(waiting);
+    let agent = prepared(TestProvider::new(), &storage, audit.clone()).await;
+    let _authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(close_action()).await }
+    });
+    audit.entered.notified().await;
+    closing.abort();
+    let _ = closing.await;
+    release.send(()).unwrap();
+    audit.completed.notified().await;
+
+    assert!(audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|record| record.cause() == AttachmentAuditCause::Closed));
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
+async fn panicking_unopened_close_audit_is_reported_for_every_future_boundary() {
+    for panic in [AuditPanic::Construct, AuditPanic::Poll, AuditPanic::Drop] {
+        let storage = MemoryStorage::default();
+        let agent = prepared(
+            TestProvider::new(),
+            &storage,
+            Arc::new(PanickingAudit(panic)),
+        )
+        .await;
+        let _authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert_eq!(
+            agent.close(close_action()).await,
+            Err(AgentError::AuditFailure)
+        );
+    }
 }
 
 #[tokio::test]
@@ -694,11 +1152,25 @@ async fn queue_audit_panics_preserve_owned_receipt_and_prevent_dispatch() {
             .enqueue(request("queue-audit-panic"), actor())
             .await
             .unwrap();
+        let original_evidence = admission.evidence().clone();
         assert!(
             matches!(admission.evidence(), AdmissionEvidence::Failed(failure)
             if failure.audit() == Some(&AgentError::AuditFailure))
         );
         assert!(admission.wait().await.is_err());
         assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+        agent.close(close_action()).await.unwrap();
+        drop(agent);
+        let restored = attached_agent(provider.clone(), storage.manager().await)
+            .await
+            .unwrap();
+        let retry = restored
+            .enqueue(request("queue-audit-panic"), actor())
+            .await
+            .unwrap();
+        assert_eq!(retry.evidence(), &original_evidence);
+        assert!(retry.wait().await.is_err());
+        assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+        restored.close(close_action()).await.unwrap();
     }
 }

@@ -324,6 +324,7 @@ fn same_metadata(left: &InvocationRecord, right: &InvocationRecord) -> bool {
     left.submission == right.submission
         && left.request == right.request
         && left.actor == right.actor
+        && left.acknowledgement == right.acknowledgement
         && left.provider_report == right.provider_report
         && left.local_cancellation == right.local_cancellation
         && left.local_outcome == right.local_outcome

@@ -51,5 +51,5 @@ pub use manager::SessionManager;
 pub use storage::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     QueueHistoryRecord, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture,
+    StorageFuture, SubmissionAcknowledgement,
 };

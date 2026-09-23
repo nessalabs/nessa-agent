@@ -132,6 +132,10 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             .unwrap()
             .unwrap()
             .unwrap();
+        let original_evidence = match &delivery {
+            SteeringDelivery::Injected { evidence, .. } => evidence.clone(),
+            SteeringDelivery::Queued(_) => panic!("confirmed native injection must stay injected"),
+        };
         assert!(matches!(
             &delivery,
             SteeringDelivery::Injected {
@@ -190,5 +194,14 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
             Ok(ExecutionOutcome::Completed)
         );
         agent.close(actor()).await.unwrap();
+        drop(agent);
+        let (restored, restored_backend) = probe_with_manager(false, storage.manager().await).await;
+        let restored_delivery = restored.steer(input("steering"), actor()).await.unwrap();
+        assert!(matches!(
+            restored_delivery,
+            SteeringDelivery::Injected { evidence, .. } if evidence == original_evidence
+        ));
+        assert_eq!(restored_backend.steers.load(Ordering::SeqCst), 0);
+        restored.close(actor()).await.unwrap();
     }
 }

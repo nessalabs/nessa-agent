@@ -1,7 +1,7 @@
 use super::{
     attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
     InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -330,21 +330,32 @@ impl SessionManager {
         self.attachment
             .arm(self.storage_lease.clone(), session.clone(), events.clone())
             .await;
-        let mut next = snapshot;
-        next.provider_context = ProviderContext::Recorded(session.id().clone());
-        if let Err(error) = catch_storage_operation(|| self.storage_lease.save(next.clone()))
-            .await
-            .map_err(StorageError::bounded)
-        {
+        // Provider open is deliberately outside the evidence lock. Publish its
+        // context into the current snapshot so queue mutations acknowledged
+        // while open was pending cannot be overwritten by the pre-open view.
+        let save_result = {
+            let mut evidence = self.evidence.lock().await;
+            let next = evidence
+                .observed
+                .as_mut()
+                .expect("prepared session evidence");
+            next.provider_context = ProviderContext::Recorded(session.id().clone());
+            let next = next.clone();
+            let result = catch_storage_operation(|| self.storage_lease.save(next.clone()))
+                .await
+                .map_err(StorageError::bounded);
+            if result.is_ok() {
+                evidence.committed = Some(next);
+            }
+            result
+        };
+        if let Err(error) = save_result {
             let cleanup_result = self.attachment.cleanup().await;
             return Err(AgentError::StorageInitialization {
                 error,
                 cleanup_result: Box::new(cleanup_result.into_result()),
             });
         }
-        let mut evidence = self.evidence.lock().await;
-        evidence.observed = Some(next.clone());
-        evidence.committed = Some(next);
         Ok(AttachedProvider { session, events })
     }
     pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {
@@ -423,6 +434,7 @@ impl SessionManager {
                 submission,
                 request,
                 actor,
+                acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,
                 provider_report: None,
@@ -670,6 +682,27 @@ impl SessionManager {
     pub(crate) async fn flush_observed(&self) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         self.save_observed(&mut evidence).await
+    }
+    /// Retain the acknowledgement fact separately from delivery and settlement.
+    /// The caller flushes it under panic supervision so a failed adapter cannot
+    /// erase the live receipt's exact audit/storage outcome.
+    pub(crate) async fn retain_submission_acknowledgement(
+        &self,
+        index: usize,
+        acknowledgement: SubmissionAcknowledgement,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed
+            .as_mut()
+            .ok_or_else(|| StorageError::Corrupt("acknowledgement has no session".into()))?
+            .invocations
+            .get_mut(index)
+            .ok_or_else(|| {
+                StorageError::Corrupt("acknowledgement has no submitted invocation".into())
+            })?;
+        record.acknowledgement = acknowledgement;
+        Ok(())
     }
     /// Appends scheduling evidence to an existing input and saves it.
     /// Failed writes retain observed evidence for the next persistence attempt,

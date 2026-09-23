@@ -41,6 +41,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
+        acknowledgement: SubmissionAcknowledgement::Pending,
         events: if complete {
             vec![ExecutionEvent::new(
                 id,

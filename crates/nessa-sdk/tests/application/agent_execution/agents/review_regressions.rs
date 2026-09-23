@@ -560,6 +560,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             submission: SubmissionMode::Queued,
             request: request("corrupt"),
             actor: actor(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: history,
             result: Some(Ok(ExecutionOutcome::Completed)),
