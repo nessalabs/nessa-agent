@@ -27,7 +27,7 @@ mod robustness;
 mod scheduling;
 mod settlement;
 use nessa_sdk::application::agent_execution::agents::{
-    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, ProviderDiagnostic,
 };
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode,
@@ -447,7 +447,10 @@ async fn snapshots_preserve_all_settlement_errors_and_unresolved_attempts() {
         AgentError::Closed,
         AgentError::StalePermission,
         AgentError::Protocol("protocol".into()),
-        AgentError::Provider { code: -123 },
+        AgentError::Provider {
+            code: -123,
+            diagnostic: None,
+        },
         AgentError::Transport("transport".into()),
         AgentError::Deadline,
         AgentError::Backpressure,
