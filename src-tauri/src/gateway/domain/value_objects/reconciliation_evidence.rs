@@ -586,16 +586,22 @@ pub struct ReconciliationRejectedReport {
 
 impl ReconciliationRejectedReport {
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        not(test),
+        expect(
+            dead_code,
+            reason = "rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome"
+        )
     )]
     pub fn claimed_physical(&self) -> &ReconciliationPhysicalRecord {
         &self.claimed_physical
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        not(test),
+        expect(
+            dead_code,
+            reason = "rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome"
+        )
     )]
     pub fn claimed_identity(&self) -> Option<&ReconciliationIncarnation> {
         match &self.claimed_physical {
@@ -605,13 +611,23 @@ impl ReconciliationRejectedReport {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        not(test),
+        expect(
+            dead_code,
+            reason = "rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome"
+        )
     )]
     pub fn validation(&self) -> &ReconciliationValidationFacts {
         &self.validation
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome"
+        )
+    )]
     pub fn cleanup(&self) -> ReconciliationCleanupDecision {
         self.cleanup
     }
@@ -1266,6 +1282,10 @@ mod tests {
         let ReconciliationOutcomeDisposition::Rejected(report) = outcome.disposition() else {
             panic!("failed intent delivery accepted physical success");
         };
+        assert_eq!(
+            report.claimed_physical(),
+            &ReconciliationPhysicalRecord::Confirmed(after.clone())
+        );
         assert_eq!(report.claimed_identity(), Some(&after));
         assert!(report.validation().candidate_eligible());
         assert_eq!(

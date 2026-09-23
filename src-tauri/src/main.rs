@@ -278,9 +278,9 @@ mod tests {
     use super::*;
     use gateway::application::{
         GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-        GatewayReconciliationProgress, ReconciledGateway,
+        GatewayReconciliationProgress, ReconciledGateway, ReconciliationHistoryFact,
     };
-    use gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
+    use gateway::domain::value_objects::SearchPath;
     use settings::testing::in_memory;
     use std::path::Path;
     use std::sync::Arc;
@@ -303,23 +303,28 @@ mod tests {
             progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
             self.calls.lock().unwrap().push("register");
-            let target = ReconciliationTarget::new(
-                "com.nessa.gateway".into(),
-                "a".repeat(64),
-                "b".repeat(64),
-            )
-            .expect("target");
-            progress.intent_admitted(
-                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent"),
-            )?;
-            Ok(ReconciledGateway::new(
+            let gateway = ReconciledGateway::new(
                 "com.nessa.gateway".into(),
                 "a".repeat(64),
                 "550e8400-e29b-41d4-a716-446655440000".into(),
                 "b".repeat(64),
                 7,
                 7420,
-            ))
+            );
+            let target = gateway.audit_identity()?.target().clone();
+            progress.intent_admitted(
+                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent"),
+            )?;
+            for fact in [
+                ReconciliationHistoryFact::ServiceDefinitionPublished,
+                ReconciliationHistoryFact::ServiceDefinitionDurable,
+                ReconciliationHistoryFact::BootstrapCommandRequested,
+                ReconciliationHistoryFact::BootstrapCommandCompleted,
+                ReconciliationHistoryFact::BootstrapCommandSucceeded,
+            ] {
+                progress.history_observed(fact);
+            }
+            Ok(gateway)
         }
 
         fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {

@@ -395,11 +395,17 @@ mod tests {
         error: &str,
     ) -> Value {
         let correlation = intent.attempt().correlation().as_str().to_owned();
+        let facts = progress.facts();
+        let effect_timing = if facts.is_empty() {
+            GatewayReconciliationEffectTiming::NoEffectsObserved
+        } else {
+            GatewayReconciliationEffectTiming::AfterIntentAcknowledgement
+        };
         let outcome = GatewayReconciliationOutcome::assess(
             intent,
             GatewayReconciliationIntentDelivery::Acknowledged,
-            GatewayReconciliationEffectTiming::AfterIntentAcknowledgement,
-            progress.facts(),
+            effect_timing,
+            facts,
             Err(GatewayError::Registration(error.into())),
         );
         audit.outcome(&outcome).expect("outcome write");
@@ -739,7 +745,7 @@ mod tests {
             .iter()
             .map(|intent| {
                 let audit = Arc::clone(&audit);
-                let intent = Arc::clone(&intent);
+                let intent = Arc::clone(intent);
                 let barrier = Arc::clone(&barrier);
                 thread::spawn(move || {
                     barrier.wait();

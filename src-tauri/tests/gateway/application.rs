@@ -1033,7 +1033,8 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
         calls: AtomicUsize,
         entered: Mutex<bool>,
         released: Mutex<bool>,
-        changed: Condvar,
+        entered_changed: Condvar,
+        released_changed: Condvar,
         gateway: Mutex<Option<Weak<Gateway>>>,
         outcomes: Mutex<Vec<GatewayReconciliationOutcome>>,
     }
@@ -1041,7 +1042,7 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
     impl BlockingIntentAudit {
         fn wait_until_entered(&self) {
             let (entered, timeout) = self
-                .changed
+                .entered_changed
                 .wait_timeout_while(
                     self.entered.lock().unwrap(),
                     Duration::from_secs(2),
@@ -1056,7 +1057,7 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
 
         fn release(&self) {
             *self.released.lock().unwrap() = true;
-            self.changed.notify_all();
+            self.released_changed.notify_all();
         }
     }
 
@@ -1076,10 +1077,10 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
                 &GatewayStartupPhase::Starting
             );
             *self.entered.lock().unwrap() = true;
-            self.changed.notify_all();
+            self.entered_changed.notify_all();
             let mut released = self.released.lock().unwrap();
             while !*released {
-                released = self.changed.wait(released).unwrap();
+                released = self.released_changed.wait(released).unwrap();
             }
             Ok(())
         }
@@ -1189,14 +1190,15 @@ fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgem
         block_intent: bool,
         entered: Mutex<bool>,
         released: Mutex<bool>,
-        changed: Condvar,
+        entered_changed: Condvar,
+        released_changed: Condvar,
         outcomes: Mutex<Vec<GatewayReconciliationOutcome>>,
     }
 
     impl TimingAudit {
         fn wait_until_entered(&self) {
             let (entered, timeout) = self
-                .changed
+                .entered_changed
                 .wait_timeout_while(
                     self.entered.lock().unwrap(),
                     Duration::from_secs(2),
@@ -1211,7 +1213,7 @@ fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgem
 
         fn release(&self) {
             *self.released.lock().unwrap() = true;
-            self.changed.notify_all();
+            self.released_changed.notify_all();
         }
     }
 
@@ -1219,10 +1221,10 @@ fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgem
         fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
             if self.block_intent {
                 *self.entered.lock().unwrap() = true;
-                self.changed.notify_all();
+                self.entered_changed.notify_all();
                 let mut released = self.released.lock().unwrap();
                 while !*released {
-                    released = self.changed.wait(released).unwrap();
+                    released = self.released_changed.wait(released).unwrap();
                 }
             }
             Ok(())
@@ -1780,7 +1782,7 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
         .wait_for_pending_receipt()
         .expect("configuration successor was not admitted");
     assert!(
-        first.wait_for_waiter(),
+        first.wait_for_waiters(1),
         "configuration change did not wait for A"
     );
 
@@ -2184,7 +2186,7 @@ fn panicking_predecessor_settles_and_promotes_the_exact_pending_receipt() {
     let pending = gateway
         .wait_for_pending_receipt()
         .expect("successor was not admitted");
-    assert!(pending.wait_for_waiter());
+    assert!(pending.wait_for_waiters(1));
     release_tx.send(()).unwrap();
     assert!(predecessor.join().unwrap().is_err());
     successor.join().unwrap().unwrap();
@@ -2254,7 +2256,10 @@ fn concurrent_waiters_run_one_registration_and_share_its_ready_identity() {
         })
     };
     let attempt = gateway.lifecycle.lock().unwrap().running.clone().unwrap();
-    assert!(attempt.wait_for_waiter(), "follower did not join in time");
+    assert!(
+        attempt.wait_for_waiters(2),
+        "both callers did not join the same receipt in time"
+    );
     release_tx.send(()).unwrap();
 
     first.join().unwrap().unwrap();
@@ -2321,8 +2326,8 @@ fn caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_re
         "receipt was not installed before owner launch"
     );
     cancelled.abort();
-    assert!(tauri::async_runtime::block_on(cancelled).is_err());
     gateway.owner_launch_gate.release();
+    assert!(tauri::async_runtime::block_on(cancelled).is_err());
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
     let joined = {
@@ -2633,9 +2638,10 @@ fn malformed_success_is_audited_as_rejected_and_never_projects_ready() {
         report.validation().rejected_history_fact(),
         Some(ReconciliationHistoryFact::BootstrapCommandSucceeded)
     );
+    assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
     drop(outcomes);
-    gateway.stop_agents().unwrap();
-    assert_eq!(*host.0.lock().unwrap(), ["malformed"]);
+    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+    assert!(host.0.lock().unwrap().is_empty());
 }
 
 #[test]

@@ -233,14 +233,14 @@ impl AttemptReceipt {
     }
 
     #[cfg(test)]
-    fn wait_for_waiter(&self) -> bool {
+    fn wait_for_waiters(&self, expected: usize) -> bool {
         self.settled
             .wait_timeout_while(
                 self.state.lock().expect("attempt state"),
                 Duration::from_secs(2),
-                |state| state.waiters == 0,
+                |state| state.waiters < expected,
             )
-            .map(|(state, timeout)| state.waiters > 0 && !timeout.timed_out())
+            .map(|(state, timeout)| state.waiters >= expected && !timeout.timed_out())
             .unwrap_or(false)
     }
 }

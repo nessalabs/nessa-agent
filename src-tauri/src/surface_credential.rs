@@ -276,6 +276,7 @@ mod tests {
     use crate::gateway::application::{
         testing::system_login_shell, GatewayError, GatewayHost, GatewayReconciliationAttempt,
         GatewayReconciliationIntent, GatewayReconciliationProgress, ReconciledGateway,
+        ReconciliationHistoryFact,
     };
     use crate::gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
     use nessa_gateway_endpoint::{
@@ -363,18 +364,29 @@ mod tests {
             progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
             *self.registrations.lock().unwrap() += 1;
-            let intent = GatewayReconciliationIntent::new(
-                attempt.clone(),
-                ReconciliationTarget::new(
+            let target = match &self.registration {
+                Ok(gateway) => gateway.audit_identity()?.target().clone(),
+                Err(_) => ReconciliationTarget::new(
                     "com.nessa.gateway".into(),
                     "a".repeat(64),
                     "b".repeat(64),
                 )
                 .expect("target"),
-                None,
-            )
-            .expect("intent");
+            };
+            let intent =
+                GatewayReconciliationIntent::new(attempt.clone(), target, None).expect("intent");
             progress.intent_admitted(intent)?;
+            if self.registration.is_ok() {
+                for fact in [
+                    ReconciliationHistoryFact::ServiceDefinitionPublished,
+                    ReconciliationHistoryFact::ServiceDefinitionDurable,
+                    ReconciliationHistoryFact::BootstrapCommandRequested,
+                    ReconciliationHistoryFact::BootstrapCommandCompleted,
+                    ReconciliationHistoryFact::BootstrapCommandSucceeded,
+                ] {
+                    progress.history_observed(fact);
+                }
+            }
             self.registration.clone()
         }
 
