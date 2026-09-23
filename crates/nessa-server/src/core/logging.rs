@@ -12,6 +12,8 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_FILTER: &str = "nessa_server=info,nessa_sdk=warn,nessa_gateway_endpoint=error";
+
 /// Install the process-global tracing subscriber. Call once at startup, before any log line.
 pub fn init() {
     subscriber(std::io::stderr, std::io::stderr().is_terminal(), filter()).init();
@@ -19,15 +21,16 @@ pub fn init() {
 
 /// What is logged when the environment names nothing.
 ///
-/// The SDK is where an agent actually runs, so its warnings and errors are the
-/// operator's to see: a provider refusing to start, an audit sink rejecting
-/// evidence, cleanup it could not confirm. Filtered to this crate alone, all of
-/// that was dropped before it reached a terminal, and a gateway that could not
-/// open a conversation said so only as a code. The SDK's info and debug lines
-/// stay off, because those are a developer's.
+/// The SDK is where an agent actually runs, and the endpoint crate owns the
+/// publication steps required before the gateway can announce that it is
+/// listening. Their warnings and errors are the operator's to see. Info and
+/// debug lines stay off, because those are a developer's.
 fn filter() -> EnvFilter {
-    EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("nessa_server=info,nessa_sdk=warn"))
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter())
+}
+
+fn default_filter() -> EnvFilter {
+    EnvFilter::new(DEFAULT_FILTER)
 }
 
 /// The subscriber `init` installs, over any writer, so what it writes can be
@@ -97,5 +100,35 @@ mod tests {
         // A terminal still gets its colour: this is one decision, not the
         // removal of a feature.
         assert!(written(true).contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_default_filter_keeps_endpoint_publication_phase_diagnostics() {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        tracing::subscriber::with_default(
+            subscriber(move || writer.clone(), false, default_filter()),
+            || {
+                tracing::error!(
+                    target: "nessa_gateway_endpoint::infrastructure::file",
+                    operation = "replace endpoint record",
+                    error.kind = "PermissionDenied",
+                    error.raw_os_code = 5,
+                    "gateway endpoint publication failed",
+                );
+            },
+        );
+
+        let log = captured.text();
+        assert!(
+            log.contains("nessa_gateway_endpoint::infrastructure::file"),
+            "{log}"
+        );
+        assert!(log.contains("gateway endpoint publication failed"), "{log}");
+        assert!(
+            log.contains("operation=\"replace endpoint record\""),
+            "{log}"
+        );
+        assert!(log.contains("error.raw_os_code=5"), "{log}");
     }
 }
