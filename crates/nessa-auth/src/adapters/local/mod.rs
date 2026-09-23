@@ -8,8 +8,10 @@
 //! each read or mutation inside one transaction boundary.
 
 mod registry;
+mod registry_refusal_audit;
 
 pub use registry::{
     write_evidence_file, BootstrapOutcome, BootstrapRequest, LocalCredentialStore, LocalIdentity,
     LocalStoreConfig, LocalStoreError,
 };
+pub use registry_refusal_audit::DurableCredentialRegistryRefusalAudit;

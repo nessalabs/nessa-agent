@@ -31,6 +31,7 @@
 //! says “admin” is never permission to update a membership.
 
 pub mod credential_admin;
+pub mod credential_registry;
 pub mod dto;
 mod mapping;
 pub mod ports;
