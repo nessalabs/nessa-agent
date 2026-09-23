@@ -1,3 +1,5 @@
+import { desktopStageEnvironment, resolveDesktopStage } from "./stage.mjs"
+
 function optionValue(args, longName, shortName) {
   const matches = []
   for (let index = 0; index < args.length; index += 1) {
@@ -11,11 +13,15 @@ function optionValue(args, longName, shortName) {
       const value = argument.slice(longName.length + 1)
       if (!value) throw new Error(`${longName} requires a value`)
       matches.push(value)
-    } else if (argument.startsWith(`${shortName}=`)) {
+    } else if (shortName && argument.startsWith(`${shortName}=`)) {
       const value = argument.slice(shortName.length + 1)
       if (!value) throw new Error(`${longName} requires a value`)
       matches.push(value)
-    } else if (argument.startsWith(shortName) && argument.length > shortName.length) {
+    } else if (
+      shortName &&
+      argument.startsWith(shortName) &&
+      argument.length > shortName.length
+    ) {
       matches.push(argument.slice(shortName.length))
     }
   }
@@ -23,9 +29,23 @@ function optionValue(args, longName, shortName) {
   return matches[0]
 }
 
+function withoutOption(args, longName) {
+  const forwarded = []
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]
+    if (argument === longName) {
+      index += 1
+    } else if (!argument.startsWith(`${longName}=`)) {
+      forwarded.push(argument)
+    }
+  }
+  return forwarded
+}
+
 /** Parse the Tauri arguments that select the artifact verified after a build. */
 export function parseBuildArguments(args) {
   return {
+    stage: optionValue(args, "--stage"),
     target: optionValue(args, "--target", "-t"),
     bundles: optionValue(args, "--bundles", "-b"),
   }
@@ -33,8 +53,14 @@ export function parseBuildArguments(args) {
 
 /** Run the public desktop build and verify the artifact selected by its arguments. */
 export function runDesktopBuild({ args, environment, platform, spawn }) {
-  const { target, bundles } = parseBuildArguments(args)
-  const command = ["exec", "tauri", "build", ...args]
+  const { stage: requestedStage, target, bundles } = parseBuildArguments(args)
+  const stage = resolveDesktopStage({
+    environment,
+    fallback: "prod",
+    requested: requestedStage,
+  })
+  const buildEnvironment = desktopStageEnvironment(environment, stage)
+  const command = ["exec", "tauri", "build", ...withoutOption(args, "--stage")]
   if (platform === "darwin") {
     const identity = environment.APPLE_SIGNING_IDENTITY?.trim() || "-"
     command.push(
@@ -49,12 +75,12 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   }
 
   const pnpm = platform === "win32" ? "pnpm.cmd" : "pnpm"
-  const build = spawn(pnpm, command, { stdio: "inherit" })
+  const build = spawn(pnpm, command, { env: buildEnvironment, stdio: "inherit" })
   if (build.error) throw build.error
   if (build.status !== 0) return build.status ?? 1
   if (platform !== "darwin") return 0
 
-  const verificationEnvironment = { ...environment }
+  const verificationEnvironment = { ...buildEnvironment }
   delete verificationEnvironment.NESSA_BUILD_TARGET
   delete verificationEnvironment.NESSA_BUILD_BUNDLES
   if (target) verificationEnvironment.NESSA_BUILD_TARGET = target
