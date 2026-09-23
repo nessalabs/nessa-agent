@@ -2,6 +2,7 @@ use super::support::*;
 use crate::application::agent_execution::sessions::SessionManager;
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::process::ProcessScope;
 use crate::infrastructure::session_storage::InMemoryStorage;
 use serde_json::json;
 #[cfg(unix)]
@@ -29,6 +30,46 @@ impl Drop for DropPanicClosureAudit {
 struct SelectiveClosureAudit {
     failure: AtomicU8,
     closures: Mutex<Vec<SessionClosureRecord>>,
+}
+
+fn retains_error(error: &AgentError, expected: &AgentError) -> bool {
+    if error == expected {
+        return true;
+    }
+    match error {
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        } => retains_error(first_error, expected) || retains_error(subsequent_error, expected),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => retains_error(operation_error, expected) || retains_error(cleanup_error, expected),
+        _ => false,
+    }
+}
+
+fn cleanup_fault_process(
+    config: &AcpConfig,
+) -> crate::infrastructure::acp::sessions::binding::ProcessFactory {
+    let config = config.clone();
+    Arc::new(move || {
+        let mut command = tokio::process::Command::new(&config.executable);
+        command
+            .args(&config.arguments)
+            .current_dir(&config.workspace)
+            .env_clear()
+            .envs(&config.environment)
+            .envs(&config.credential_environment)
+            .env("ANTHROPIC_MODEL", "exact-fixture-model")
+            .env("ANTHROPIC_CUSTOM_MODEL_OPTION", "exact-fixture-model")
+            .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "100")
+            .env("DISABLE_AUTOUPDATER", "1")
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+        let mut scope = ProcessScope::spawn(command)?;
+        scope.fail_next_cleanup();
+        Ok(scope)
+    })
 }
 impl ExecutionAudit for SelectiveClosureAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -791,6 +832,59 @@ async fn close_during_configuration_retains_provider_closure_audit_failure() {
             assert_gone(&root, "pid");
         }
     }
+}
+
+#[tokio::test]
+async fn sdk_close_retries_unconfirmed_configuration_cleanup_without_losing_audit_failure() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(SelectiveClosureAudit {
+        failure: AtomicU8::new(1),
+        closures: Mutex::new(Vec::new()),
+    });
+    let (root, config, model) = test_acp_configuration("configuration-stall", 16);
+    let process = cleanup_fault_process(&config);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap()
+    .with_process_factory(process);
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+        .await
+        .unwrap();
+    let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    let opening = agent.start_attachment(authorization).unwrap();
+    wait_for_file(&root, "configuration-wait").await;
+
+    let first_actor = ActionContext::new("owner", "phone", "first-close").unwrap();
+    let first = agent.close(first_actor.clone()).await.unwrap_err();
+    assert!(retains_error(&first, &AgentError::CleanupUncertain));
+    assert!(retains_error(&first, &AgentError::AuditFailure));
+    assert!(opening.wait().await.is_err());
+    assert!(agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .is_err());
+
+    let repeated = agent
+        .close(ActionContext::new("other", "surface", "later-close").unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(repeated, first);
+    let closures = audit.closures.lock().unwrap();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(
+        closures[0].origin(),
+        &CancellationOrigin::Client(first_actor)
+    );
+    drop(closures);
+    assert_gone(&root, "pid");
 }
 
 #[tokio::test]

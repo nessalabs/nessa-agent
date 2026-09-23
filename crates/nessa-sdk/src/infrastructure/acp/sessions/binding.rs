@@ -20,9 +20,9 @@ use crate::application::agent_execution::permissions::{
     PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ImageInputRefusal,
-    ObservationFailure, ObservationFailureCause, OpenedProviderSession, ProviderCleanup,
-    ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture,
+    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCleanup,
+    ImageInputRefusal, ObservationFailure, ObservationFailureCause, OpenedProviderSession,
+    ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture,
     ProviderOpenControl, ProviderOpenError, ProviderOperationCapabilities,
     ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult, ProviderSession,
     ProviderSessionBackend, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
@@ -522,17 +522,28 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                     Ok(started) => started,
                     Err(failure) => {
                         let (cause, cleanup) = failure.into_parts();
-                        if let Some(cleanup) = cleanup {
-                            let recovery = Arc::new(RestorationRecovery {
-                                cause: cause.clone(),
-                                cleanup,
-                            });
-                            let failure = recovery.failure(ProviderSessionState::CleanupRequired);
-                            generation.restoration = Some(recovery.clone());
-                            *control = Control::Restoration(recovery);
-                            return Err(failure);
+                        match cleanup {
+                            FailedOpenCleanup::Retained { report, owner } => {
+                                let recovery = Arc::new(RestorationRecovery {
+                                    cause: cause.clone(),
+                                    cleanup: owner,
+                                });
+                                let failure =
+                                    recovery.failure(ProviderSessionState::CleanupReported(report));
+                                generation.restoration = Some(recovery.clone());
+                                *control = Control::Restoration(recovery);
+                                return Err(failure);
+                            }
+                            FailedOpenCleanup::Completed(report) => {
+                                return Err(LiveGenerationFailure {
+                                    cause,
+                                    state: Some(Box::new(ProviderSessionState::CleanupReported(
+                                        report,
+                                    ))),
+                                });
+                            }
+                            FailedOpenCleanup::NotStarted => return Err(cause.into()),
                         }
-                        return Err(cause.into());
                     }
                 };
                 generation

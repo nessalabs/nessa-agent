@@ -26,6 +26,8 @@ pub struct ClaudeAcpProvider {
     capabilities: EffectiveCapabilities,
     system_prompt: Option<SystemPrompt>,
     audit: Arc<dyn ExecutionAudit>,
+    #[cfg(test)]
+    process: Option<acp_binding::ProcessFactory>,
 }
 impl ClaudeAcpProvider {
     /// Configure a Claude ACP execution factory without starting a process.
@@ -89,7 +91,14 @@ impl ClaudeAcpProvider {
             capabilities,
             system_prompt: None,
             audit,
+            #[cfg(test)]
+            process: None,
         })
+    }
+    #[cfg(test)]
+    pub(crate) fn with_process_factory(mut self, process: acp_binding::ProcessFactory) -> Self {
+        self.process = Some(process);
+        self
     }
     /// Replace the harness's default system prompt with these attributed instructions.
     /// The metadata stays local; only composed text is sent when opening a session.
@@ -144,8 +153,15 @@ impl AgentProvider for ClaudeAcpProvider {
         Box::pin(async move {
             let (restore, control) = request.into_parts();
             let factory = self.clone();
+            #[cfg(test)]
+            let process = self.process.clone().unwrap_or_else(|| {
+                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
+            });
+            #[cfg(not(test))]
+            let process =
+                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into));
             acp_binding::open(
-                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into)),
+                process,
                 self.config.clone(),
                 self.capabilities.clone(),
                 ClaudeProfile::new(self.system_prompt.clone()).with_mcp_servers(&self.config),

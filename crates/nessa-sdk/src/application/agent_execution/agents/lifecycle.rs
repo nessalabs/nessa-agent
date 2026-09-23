@@ -422,13 +422,14 @@ impl SessionLifecycle {
         let (result, wait) = watch::channel(None);
         let (open_stop, open_control) = watch::channel(None);
         let (started_evidence, started_result) = watch::channel(None);
+        let attachment_generation = state.attachment_generation;
         state.attachment_evidence.push(AttachmentEvidenceSlot {
-            generation: state.attachment_generation,
+            generation: attachment_generation,
             transition: AttachmentEvidenceTransition::Started,
             result: started_result,
         });
         let start = AttachmentStart {
-            generation: state.attachment_generation,
+            generation: attachment_generation,
             cause: authorization.cause,
             actor: authorization.actor.clone(),
             result,
