@@ -38,6 +38,14 @@ fn main() {
         std::process::exit(2);
     }
 
+    let stage = match local_data::process_stage() {
+        Ok(stage) => stage,
+        Err(error) => {
+            eprintln!("[nessa] {error}");
+            std::process::exit(1);
+        }
+    };
+
     // Before Tauri (and GTK) start. Linux uses this to disable WebKit's
     // DMA-BUF renderer when there is no DRM device.
     platform::current().prepare();
@@ -66,7 +74,7 @@ fn main() {
             attachments::choose_attachment_files,
             attachments::read_attachment_bytes,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Registered here rather than in the builder chain because there is
             // nothing to update on a phone: an installed iOS or Android app is
             // replaced by its store, not by itself. This is the plugin's own
@@ -92,7 +100,7 @@ fn main() {
             // service, and the release endpoint. Managed as one value so the
             // commands below can declare `State<HostDependencies>` and be given
             // it, and kept here so the rest of `setup` can pass it by hand.
-            let deps = HostDependencies::assemble(app.handle())?;
+            let deps = HostDependencies::assemble(app.handle(), stage.clone())?;
             app.manage(deps.clone());
 
             platform::current().configure_app(app.handle());

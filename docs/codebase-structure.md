@@ -388,6 +388,7 @@ independently of whether that turn contains text.
   the native window. Those script tests run in bare Node with no installed
   packages. `src/host/load-fallback.test.ts` owns the embedded fallback's real
   DOM and computed-style clipping regression in the frontend jsdom gate.
+- `scripts/desktop/stage.mjs` resolves one named stage for the Tauri command and its Vite child. Vite records the stage beside the assets it builds; `src-tauri/build.rs` resolves Tauri's effective base, platform, and `TAURI_CONFIG` layers and reads that record from the `build.frontendDist` Tauri will embed. It refuses a frontend whose stage differs from the host bundle stage, and the host accepts only an equal runtime `NESSA_STAGE` override.
 - `scripts/desktop/prepare.mjs` enables managed runtime preparation only on macOS.
   `runtime-layout.mjs` owns the executable names used by assembly, signing, and
   bundle verification. `prepare-runtime.mjs` owns the shared native-target check,

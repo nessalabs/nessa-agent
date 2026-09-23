@@ -128,8 +128,9 @@ not the one that started it: run `just server` in that same namespace
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
 lists recipes. `just server` runs the WebSocket control plane. `just dev` is
 `tauri dev` when a display is available, the browser UI (`just web`) when it
-is not. `just release` is the shipping installer. `pnpm app` and `pnpm dev`
-still work without those defaults. The window controls no-op in the browser
+is not. `just release` is the shipping installer for `prod`; pass another
+named stage as its first argument, such as `just release alpha`. `pnpm app`
+resolves one dev stage for Vite and the host. The window controls no-op in the browser
 (see [src/host/window.ts](src/host/window.ts)).
 
 Install `just` with the platform's package manager (`apt install just`,
@@ -156,18 +157,18 @@ that does have `/dev/dri`:
 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 just dev
 ```
 
-A testing-shaped `.deb` is `just release fast`. A shipping `.deb` is `just release`.
+A testing-shaped `.deb` is `just release prod fast`. A shipping `.deb` is `just release`.
 
 ### macOS
 
-`just dev` is `tauri dev`. `just release fast` writes a `.app` (no dmg). `just release`
+`just dev` is `tauri dev`. `just release prod fast` writes a `.app` (no dmg). `just release`
 writes a `.dmg`.
 
 ### Windows
 
 Windows recipes in the justfile have **not been run on a Windows machine yet**:
-`just release fast` and `just release` ask Tauri for `nsis`. The justfile uses
-`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just release fast`,
+`just release prod fast` and `just release` ask Tauri for `nsis`. The justfile uses
+`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just release prod fast`,
 and `just release` there.
 
 | Command | What it does |
@@ -176,10 +177,11 @@ and `just release` there.
 | `just server` | Local `nessa server` (stage=dev defaults) |
 | `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
 | `just web` | The UI in a browser, no Tauri |
-| `just release fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
+| `just release prod fast` | Testing-shaped prod release — slow opts off (`.app` / `.deb` / NSIS) |
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
-| `pnpm app` | `tauri dev`, no host defaults |
-| `pnpm app:build` | Build and verify the currently supported macOS shipping bundle |
+| `just release alpha` | Shipping-shaped bundle whose UI and host both use `alpha` |
+| `pnpm app` | `tauri dev` with one validated dev stage supplied to the UI and host |
+| `pnpm app:build` | Build and verify the prod macOS shipping bundle (`--stage alpha` selects another named stage) |
 | `pnpm desktop:smoke` | On Linux, build and drive a real embedded WebKitGTK window against an isolated gateway/provider |
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
@@ -329,7 +331,7 @@ just worktree remove add-something   # the branch is kept
 ```
 
 These commands use `scripts/worktree.sh` on macOS and Linux. After entering the
-new checkout, run `just release fast` to build a fast release.
+new checkout, run `just release prod fast` to build a fast release.
 
 `just worktree create` starts the new branch from the locally known remote
 default branch and does not configure that remote branch as its upstream. The
@@ -411,10 +413,10 @@ testing does not cost a shipping build.
 
 | | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `just release fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `just release prod fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
 | `just release` | 6.5 MB `.app` inside a `.dmg` / a `.deb` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
-`just release fast` / `pnpm app:fast` overrides the release profile with
+`just release prod fast` / `pnpm app:fast` overrides the release profile with
 `CARGO_PROFILE_RELEASE_*` env vars rather than defining a second profile, so
 there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected

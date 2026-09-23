@@ -60,6 +60,31 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
 
+test("the frontend job owns top-level script tests and their just dependency", () => {
+  const root = JSON.parse(readFileSync("package.json", "utf8"))
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const gatewayStart = workflow.indexOf("  gateway-contract:")
+  const releaseStart = workflow.indexOf("  desktop-release-profile:")
+  const frontendStart = workflow.indexOf("  frontend:")
+  const localAuthStart = workflow.indexOf("  local-auth:")
+  for (const boundary of [gatewayStart, releaseStart, frontendStart, localAuthStart])
+    assert.notEqual(boundary, -1, "expected CI job boundary is missing")
+  const gateway = workflow.slice(gatewayStart, releaseStart)
+  const frontend = workflow.slice(frontendStart, localAuthStart)
+
+  assert.equal(root.scripts["scripts:test"], "node --test scripts/*.test.mjs")
+  assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
+  assert.doesNotMatch(workflow, /run: node --test scripts\/\*\.test\.mjs/)
+  assert.doesNotMatch(gateway, /node --test scripts\/\*\.test\.mjs/)
+  assert.doesNotMatch(gateway, /install-action@just/)
+  assert.equal(workflow.match(/install-action@just/g)?.length, 1)
+  assert.match(
+    frontend,
+    /install-action@just[\s\S]*run: pnpm frontend:check/,
+    "the suite's just prerequisite must be installed before its owning aggregate",
+  )
+})
+
 test("nothing in a release is built or published before the key pairing gate", () => {
   // The one release failure with no remedy: ship a build whose trusted public
   // key is not the other half of the signing key, and every update it will ever

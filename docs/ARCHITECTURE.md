@@ -54,7 +54,7 @@ opinion rather than the product's.
 | `platform/linux/` | WebKit DMA-BUF prep, `xdg-open` for links, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
-**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just release fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
+**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just release [stage]` / `just release [stage] fast`. The desktop launch tooling resolves one stage for Vite and the host, and packaged frontend assets record that stage for the Rust build to verify before embedding them. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
 
 **React shell** (`src/`) — everything that is on screen.
 

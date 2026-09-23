@@ -34,10 +34,11 @@ export function gatewayPort(stage) {
 /**
  * The stage this environment selects, spelled the way the table names it.
  *
- * `nessa-server` reads `NESSA_STAGE` and treats it as `dev` when it says
- * nothing, so anything resolving a port for that server has to agree — a
- * recipe that assumes `dev` while the server is told `ci` frees one socket and
- * then waits for health on another.
+ * The developer recipes start a debug `nessa-server` and use `dev` when no
+ * stage is named. They also export the selected stage before starting it, so a
+ * recipe told `ci` cannot free one socket and then wait for health on another.
+ * Release binaries have their own `prod` default for offline commands; the
+ * packaged desktop passes its resolved stage explicitly.
  */
 export function selectedStage(env = process.env) {
   // An empty variable is how a shell spells unset — `NESSA_STAGE= just start` —
