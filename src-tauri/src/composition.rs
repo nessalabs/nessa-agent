@@ -122,13 +122,11 @@ impl HostDependencies {
     /// Builds every dependency the host has, in the order `setup` used to build
     /// them in.
     ///
-    /// The process environment is read here and only here: the stage names both
-    /// the config root the settings and shortcut files sit under and the service
-    /// the gateway registers, and two independent reads of it are two things
-    /// that could disagree.
-    pub fn assemble(app: &AppHandle) -> tauri::Result<Self> {
-        let stage = local_data::process_stage();
-        let config_root = local_data::config_root(app);
+    /// `stage` was resolved once before Tauri started. It names both the config
+    /// root the settings and shortcut files sit under and the service the
+    /// gateway registers; reading the environment again here could disagree.
+    pub fn assemble(app: &AppHandle, stage: String) -> tauri::Result<Self> {
+        let config_root = local_data::config_root(app, &stage);
         let service_namespace = service_namespace_from_environment(&stage);
 
         // A development build has no staged runtime to register, exactly as
