@@ -3,10 +3,7 @@ use super::*;
 use crate::application::agent_execution::agents::{AgentFuture, AttachmentRequest};
 use crate::application::{
     agent_execution::{
-        executions::{
-            AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionRequest,
-            SubmissionMode,
-        },
+        executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, SubmissionMode},
         permissions::{
             ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
             PermissionResolution,
