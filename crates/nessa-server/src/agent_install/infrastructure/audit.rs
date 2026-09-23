@@ -249,23 +249,6 @@ fn record_value(transition: &InstallTransition) -> Value {
             });
             value
         }
-        InstallTransitionKind::SupersededArtifactRemoved => {
-            let mut value = common(
-                transition,
-                "agent_runtime_superseded_artifact_removed",
-                installed(transition.target()),
-                json!({"state": "removed"}),
-                "superseded_by_install",
-            );
-            value["initiator"] = json!({"kind": "automatic"});
-            value["triggeredBy"] = caller(transition);
-            value["current"] = artifact(
-                transition
-                    .current()
-                    .expect("removal carries current artifact"),
-            );
-            value
-        }
     }
 }
 

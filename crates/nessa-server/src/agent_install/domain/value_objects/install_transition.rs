@@ -98,7 +98,6 @@ pub enum InstallTransitionKind {
     Replaced,
     RolledBack,
     RecoveryIncomplete,
-    SupersededArtifactRemoved,
 }
 
 /// The installed state a failed publication actually restored.
@@ -202,7 +201,6 @@ enum TransitionDetail {
         state: RecoveryState,
         failures: RecoveryFailureEvidence,
     },
-    Current(RuntimeArtifact),
 }
 
 /// Immutable evidence produced by the domain owner of one install attempt.
@@ -286,24 +284,6 @@ impl InstallTransition {
         })
     }
 
-    pub(crate) fn removed(
-        agent: AgentName,
-        removed: RuntimeArtifact,
-        current: RuntimeArtifact,
-        request: InstallRequest,
-    ) -> Result<Self, InstallTransitionError> {
-        if removed == current {
-            return Err(InstallTransitionError::CurrentArtifactRemoved);
-        }
-        Ok(Self {
-            kind: InstallTransitionKind::SupersededArtifactRemoved,
-            agent,
-            target: removed,
-            request,
-            detail: TransitionDetail::Current(current),
-        })
-    }
-
     pub(crate) fn recovery_incomplete(
         agent: AgentName,
         target: RuntimeArtifact,
@@ -354,13 +334,6 @@ impl InstallTransition {
             _ => None,
         }
     }
-    pub fn current(&self) -> Option<&RuntimeArtifact> {
-        match &self.detail {
-            TransitionDetail::Current(value) => Some(value),
-            _ => None,
-        }
-    }
-
     pub fn recovery(&self) -> Option<(&RecoveryState, &RecoveryFailureEvidence)> {
         match &self.detail {
             TransitionDetail::RecoveryIncomplete { state, failures } => Some((state, failures)),
@@ -374,7 +347,6 @@ pub enum InstallTransitionError {
     MatchingRejectedDigest,
     UnchangedReplacement,
     TargetReportedRestored,
-    CurrentArtifactRemoved,
     MissingCleanupFailure,
 }
 
@@ -384,7 +356,6 @@ impl fmt::Display for InstallTransitionError {
             Self::MatchingRejectedDigest => "a matching digest cannot be rejected",
             Self::UnchangedReplacement => "an artifact cannot replace itself",
             Self::TargetReportedRestored => "a rolled-back target cannot be the restored runtime",
-            Self::CurrentArtifactRemoved => "the current artifact cannot be removed as superseded",
             Self::MissingCleanupFailure => "incomplete recovery requires a cleanup failure",
         })
     }
