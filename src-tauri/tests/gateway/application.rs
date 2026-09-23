@@ -13,7 +13,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc, Condvar, Mutex,
+        mpsc, Condvar, Mutex, Weak,
     },
     thread,
     time::Duration,
@@ -31,6 +31,16 @@ fn admit(
     let target = ReconciliationTarget::new(service.into(), "a".repeat(64), "b".repeat(64)).unwrap();
     let before = reconciled(service).audit_identity().unwrap();
     let intent = GatewayReconciliationIntent::new(attempt.clone(), target, Some(before)).unwrap();
+    progress.intent_admitted(intent).unwrap();
+}
+
+fn admit_fresh(
+    attempt: &GatewayReconciliationAttempt,
+    progress: &dyn GatewayReconciliationProgress,
+    service: &str,
+) {
+    let target = ReconciliationTarget::new(service.into(), "a".repeat(64), "b".repeat(64)).unwrap();
+    let intent = GatewayReconciliationIntent::new(attempt.clone(), target, None).unwrap();
     progress.intent_admitted(intent).unwrap();
 }
 
@@ -340,6 +350,7 @@ struct RecordingAudit {
     joined: Mutex<Vec<(GatewayReconciliationAttempt, GatewayReconciliationRequest)>>,
     joined_changed: Condvar,
     fail_intent: bool,
+    panic_intent: bool,
     fail_outcome: bool,
     fail_joined: bool,
     panic_outcome: bool,
@@ -397,19 +408,24 @@ fn attempt_and_outcome_constructors_reject_contradictory_correlations_and_target
     )
     .unwrap();
 
-    let outcome = GatewayReconciliationOutcome::assess(intent, Vec::new(), Ok(after));
-    assert!(matches!(
-        outcome.effect(),
-        GatewayReconciliationEffect::RejectedReport {
-            report: ReconciliationRejectedReport::ConfirmedTargetMismatch(_),
-            ..
-        }
-    ));
+    let outcome = GatewayReconciliationOutcome::assess(
+        intent,
+        GatewayReconciliationIntentDelivery::Acknowledged,
+        GatewayReconciliationEffectTiming::NoEffectsObserved,
+        Vec::new(),
+        Ok(after),
+    );
+    let GatewayReconciliationEffect::RejectedReport { report, .. } = outcome.effect() else {
+        panic!("contradictory target was accepted")
+    };
+    assert!(!report.validation().target_matches());
+    assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
 }
 
 impl GatewayReconciliationAudit for RecordingAudit {
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         self.intents.lock().unwrap().push(intent.clone());
+        assert!(!self.panic_intent, "intent audit panic");
         if self.fail_intent {
             Err(GatewayError::Registration(
                 "intent audit unavailable".into(),
@@ -477,7 +493,11 @@ impl GatewayHost for AuditedHost {
             AuditedPhysicalResult::Refused => "refused",
             AuditedPhysicalResult::Partial => "partial",
         };
-        admit(attempt, progress, service);
+        if matches!(self.result, AuditedPhysicalResult::Partial) {
+            admit_fresh(attempt, progress, service);
+        } else {
+            admit(attempt, progress, service);
+        }
         match self.result {
             AuditedPhysicalResult::Confirmed => Ok(reconciled(service)),
             AuditedPhysicalResult::Refused => {
@@ -743,6 +763,98 @@ fn initial_attempt_id_failure_advances_startup_without_installing_a_receipt() {
 }
 
 #[test]
+fn allocator_panic_is_typed_and_a_later_retry_can_own_a_fresh_receipt() {
+    struct PanickingOnceIds(AtomicUsize);
+
+    impl GatewayReconciliationIds for PanickingOnceIds {
+        fn next(&self) -> Result<ReconciliationCorrelation, GatewayError> {
+            let call = self.0.fetch_add(1, Ordering::SeqCst);
+            assert_ne!(call, 0, "allocator panic");
+            Ok(correlation(call as u64))
+        }
+    }
+
+    let host = Arc::new(FakeHost {
+        registration: Ok(reconciled("retry-after-id-panic")),
+        stop_result: Ok(()),
+        calls: Mutex::new(Vec::new()),
+    });
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        Arc::new(PanickingOnceIds(AtomicUsize::new(0))),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    assert_eq!(
+        tauri::async_runtime::block_on(gateway.start()),
+        Err(GatewayError::Registration(
+            "gateway reconciliation id adapter panicked".into()
+        ))
+    );
+    assert!(matches!(
+        gateway.startup().unwrap().phase(),
+        GatewayStartupPhase::Failed(_)
+    ));
+    tauri::async_runtime::block_on(gateway.retry(BundledSurface::Main)).unwrap();
+    assert_eq!(
+        gateway.startup().unwrap().phase(),
+        &GatewayStartupPhase::Ready
+    );
+    assert_eq!(host.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn id_allocation_can_inspect_the_startup_snapshot_without_holding_lifecycle_state() {
+    #[derive(Default)]
+    struct SnapshotIds {
+        calls: AtomicUsize,
+        gateway: Mutex<Option<Weak<Gateway>>>,
+    }
+
+    impl GatewayReconciliationIds for SnapshotIds {
+        fn next(&self) -> Result<ReconciliationCorrelation, GatewayError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            assert_eq!(
+                self.gateway
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .unwrap()
+                    .startup()
+                    .unwrap()
+                    .phase(),
+                &GatewayStartupPhase::Starting
+            );
+            Ok(correlation(call as u64))
+        }
+    }
+
+    let ids = Arc::new(SnapshotIds::default());
+    let gateway = Arc::new(Gateway::bootstrap(
+        Arc::new(FakeHost {
+            registration: Ok(reconciled("allocator-snapshot")),
+            stop_result: Ok(()),
+            calls: Mutex::new(Vec::new()),
+        }),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        ids.clone(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    ));
+    *ids.gateway.lock().unwrap() = Some(Arc::downgrade(&gateway));
+
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert_eq!(ids.calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
     struct BlockingOwnerHost {
         entered: Mutex<Option<mpsc::Sender<()>>>,
@@ -838,31 +950,413 @@ fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
 }
 
 #[test]
-fn failed_intent_audit_prevents_admission_and_has_no_outcome() {
-    let audit = Arc::new(RecordingAudit {
-        fail_intent: true,
-        ..RecordingAudit::default()
-    });
-    let gateway = Gateway::bootstrap(
-        Arc::new(AuditedHost {
-            result: AuditedPhysicalResult::Confirmed,
-            stopped: Mutex::new(Vec::new()),
-        }),
-        login_shell("/usr/bin"),
-        testing::discard_startup_events(),
-        testing::sequential_reconciliation_ids(),
-        audit.clone(),
-        "/runtime".into(),
-        "ci".into(),
-    );
+fn failed_intent_delivery_is_terminally_audited_and_cannot_be_replaced() {
+    struct IgnoringIntentFailureHost(Mutex<Vec<String>>);
 
-    assert!(matches!(
-        tauri::async_runtime::block_on(gateway.start()),
-        Err(GatewayError::Audit { physical: None, .. })
-    ));
-    assert_eq!(audit.intents.lock().unwrap().len(), 1);
-    assert!(audit.outcomes.lock().unwrap().is_empty());
-    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+    impl GatewayHost for IgnoringIntentFailureHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let gateway = reconciled("ignored-intent-failure");
+            let target = gateway.audit_identity().unwrap().target().clone();
+            let before = gateway.audit_identity().unwrap();
+            let intent =
+                GatewayReconciliationIntent::new(attempt.clone(), target, Some(before)).unwrap();
+            assert!(progress.intent_admitted(intent.clone()).is_err());
+            assert!(matches!(
+                progress.intent_admitted(intent),
+                Err(GatewayError::Registration(_))
+            ));
+            Ok(gateway)
+        }
+
+        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
+            self.0.lock().unwrap().push(gateway.service().into());
+            Ok(())
+        }
+    }
+
+    for (panic_intent, fail_outcome) in [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let audit = Arc::new(RecordingAudit {
+            fail_intent: !panic_intent,
+            panic_intent,
+            fail_outcome,
+            ..RecordingAudit::default()
+        });
+        let host = Arc::new(IgnoringIntentFailureHost(Mutex::new(Vec::new())));
+        let gateway = Gateway::bootstrap(
+            host.clone(),
+            login_shell("/usr/bin"),
+            testing::discard_startup_events(),
+            testing::sequential_reconciliation_ids(),
+            audit.clone(),
+            "/runtime".into(),
+            "ci".into(),
+        );
+
+        assert!(matches!(
+            tauri::async_runtime::block_on(gateway.start()),
+            Err(GatewayError::Audit { .. })
+        ));
+        assert_eq!(audit.intents.lock().unwrap().len(), 1);
+        let outcomes = audit.outcomes.lock().unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(
+            outcomes[0].intent_delivery(),
+            GatewayReconciliationIntentDelivery::Failed(GatewayError::Audit { .. })
+        ));
+        assert!(matches!(
+            outcomes[0].effect(),
+            GatewayReconciliationEffect::RejectedReport { report, .. }
+                if report.cleanup() == ReconciliationCleanupDecision::AdoptClaimed
+        ));
+        drop(outcomes);
+        assert!(matches!(
+            gateway.startup().unwrap().phase(),
+            GatewayStartupPhase::Failed(_)
+        ));
+        gateway.stop_agents().unwrap();
+        assert_eq!(*host.0.lock().unwrap(), ["ignored-intent-failure"]);
+    }
+}
+
+#[test]
+fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
+    #[derive(Default)]
+    struct BlockingIntentAudit {
+        calls: AtomicUsize,
+        entered: Mutex<bool>,
+        released: Mutex<bool>,
+        changed: Condvar,
+        gateway: Mutex<Option<Weak<Gateway>>>,
+        outcomes: Mutex<Vec<GatewayReconciliationOutcome>>,
+    }
+
+    impl BlockingIntentAudit {
+        fn wait_until_entered(&self) {
+            let (entered, timeout) = self
+                .changed
+                .wait_timeout_while(
+                    self.entered.lock().unwrap(),
+                    Duration::from_secs(2),
+                    |entered| !*entered,
+                )
+                .unwrap();
+            assert!(
+                *entered && !timeout.timed_out(),
+                "intent audit did not start"
+            );
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+
+    impl GatewayReconciliationAudit for BlockingIntentAudit {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(
+                self.gateway
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .unwrap()
+                    .startup()
+                    .unwrap()
+                    .phase(),
+                &GatewayStartupPhase::Starting
+            );
+            *self.entered.lock().unwrap() = true;
+            self.changed.notify_all();
+            let mut released = self.released.lock().unwrap();
+            while !*released {
+                released = self.changed.wait(released).unwrap();
+            }
+            Ok(())
+        }
+
+        fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+            self.outcomes.lock().unwrap().push(outcome.clone());
+            Ok(())
+        }
+
+        fn joined(
+            &self,
+            _: &GatewayReconciliationAttempt,
+            _: &GatewayReconciliationRequest,
+        ) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    struct DuplicateIntentHost {
+        audit: Arc<BlockingIntentAudit>,
+        conflicting_target: bool,
+    }
+
+    impl GatewayHost for DuplicateIntentHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let gateway = reconciled("first-intent");
+            let before = gateway.audit_identity().unwrap();
+            let first = GatewayReconciliationIntent::new(
+                attempt.clone(),
+                before.target().clone(),
+                Some(before),
+            )
+            .unwrap();
+            let duplicate_target = if self.conflicting_target {
+                ReconciliationTarget::new(
+                    "conflicting-intent".into(),
+                    "a".repeat(64),
+                    "b".repeat(64),
+                )
+                .unwrap()
+            } else {
+                first.target().clone()
+            };
+            let duplicate =
+                GatewayReconciliationIntent::new(attempt.clone(), duplicate_target, None).unwrap();
+            thread::scope(|scope| {
+                let first_delivery = scope.spawn(|| progress.intent_admitted(first));
+                self.audit.wait_until_entered();
+                assert!(matches!(
+                    progress.intent_admitted(duplicate),
+                    Err(GatewayError::Registration(_))
+                ));
+                self.audit.release();
+                first_delivery.join().unwrap().unwrap();
+            });
+            Ok(gateway)
+        }
+
+        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    for conflicting_target in [false, true] {
+        let audit = Arc::new(BlockingIntentAudit::default());
+        let gateway = Arc::new(Gateway::bootstrap(
+            Arc::new(DuplicateIntentHost {
+                audit: audit.clone(),
+                conflicting_target,
+            }),
+            login_shell("/usr/bin"),
+            testing::discard_startup_events(),
+            testing::sequential_reconciliation_ids(),
+            audit.clone(),
+            "/runtime".into(),
+            "ci".into(),
+        ));
+        *audit.gateway.lock().unwrap() = Some(Arc::downgrade(&gateway));
+
+        tauri::async_runtime::block_on(gateway.start()).unwrap();
+        assert_eq!(audit.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
+        assert_eq!(
+            gateway.startup().unwrap().phase(),
+            &GatewayStartupPhase::Ready
+        );
+    }
+}
+
+#[test]
+fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgement() {
+    #[derive(Clone, Copy)]
+    enum EarlyEffects {
+        BeforeReservation,
+        BeforeAcknowledgement,
+    }
+
+    #[derive(Default)]
+    struct TimingAudit {
+        block_intent: bool,
+        entered: Mutex<bool>,
+        released: Mutex<bool>,
+        changed: Condvar,
+        outcomes: Mutex<Vec<GatewayReconciliationOutcome>>,
+    }
+
+    impl TimingAudit {
+        fn wait_until_entered(&self) {
+            let (entered, timeout) = self
+                .changed
+                .wait_timeout_while(
+                    self.entered.lock().unwrap(),
+                    Duration::from_secs(2),
+                    |entered| !*entered,
+                )
+                .unwrap();
+            assert!(
+                *entered && !timeout.timed_out(),
+                "intent sink did not block"
+            );
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+
+    impl GatewayReconciliationAudit for TimingAudit {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            if self.block_intent {
+                *self.entered.lock().unwrap() = true;
+                self.changed.notify_all();
+                let mut released = self.released.lock().unwrap();
+                while !*released {
+                    released = self.changed.wait(released).unwrap();
+                }
+            }
+            Ok(())
+        }
+
+        fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+            self.outcomes.lock().unwrap().push(outcome.clone());
+            Ok(())
+        }
+
+        fn joined(
+            &self,
+            _: &GatewayReconciliationAttempt,
+            _: &GatewayReconciliationRequest,
+        ) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    struct EarlyEffectsHost {
+        timing: EarlyEffects,
+        audit: Arc<TimingAudit>,
+        stopped: Mutex<Vec<String>>,
+    }
+
+    impl EarlyEffectsHost {
+        fn report_effects(progress: &dyn GatewayReconciliationProgress) {
+            for fact in [
+                ReconciliationHistoryFact::ServiceDefinitionPublished,
+                ReconciliationHistoryFact::ServiceDefinitionDurable,
+                ReconciliationHistoryFact::BootstrapCommandRequested,
+                ReconciliationHistoryFact::BootstrapCommandCompleted,
+                ReconciliationHistoryFact::BootstrapCommandSucceeded,
+            ] {
+                progress.history_observed(fact);
+            }
+        }
+    }
+
+    impl GatewayHost for EarlyEffectsHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let gateway = reconciled("early-effects");
+            let intent = GatewayReconciliationIntent::new(
+                attempt.clone(),
+                gateway.audit_identity().unwrap().target().clone(),
+                None,
+            )
+            .unwrap();
+            match self.timing {
+                EarlyEffects::BeforeReservation => {
+                    Self::report_effects(progress);
+                    progress.intent_admitted(intent)?;
+                }
+                EarlyEffects::BeforeAcknowledgement => thread::scope(|scope| {
+                    let delivery = scope.spawn(|| progress.intent_admitted(intent));
+                    self.audit.wait_until_entered();
+                    Self::report_effects(progress);
+                    self.audit.release();
+                    delivery.join().unwrap().unwrap();
+                }),
+            }
+            Ok(gateway)
+        }
+
+        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
+            self.stopped.lock().unwrap().push(gateway.service().into());
+            Ok(())
+        }
+    }
+
+    for timing in [
+        EarlyEffects::BeforeReservation,
+        EarlyEffects::BeforeAcknowledgement,
+    ] {
+        let audit = Arc::new(TimingAudit {
+            block_intent: matches!(timing, EarlyEffects::BeforeAcknowledgement),
+            ..TimingAudit::default()
+        });
+        let host = Arc::new(EarlyEffectsHost {
+            timing,
+            audit: audit.clone(),
+            stopped: Mutex::new(Vec::new()),
+        });
+        let gateway = Gateway::bootstrap(
+            host.clone(),
+            login_shell("/usr/bin"),
+            testing::discard_startup_events(),
+            testing::sequential_reconciliation_ids(),
+            audit.clone(),
+            "/runtime".into(),
+            "ci".into(),
+        );
+
+        assert!(tauri::async_runtime::block_on(gateway.start()).is_err());
+        let outcomes = audit.outcomes.lock().unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].intent_delivery(),
+            &GatewayReconciliationIntentDelivery::Acknowledged
+        );
+        let expected_timing = match timing {
+            EarlyEffects::BeforeReservation => {
+                GatewayReconciliationEffectTiming::BeforeIntentReservation
+            }
+            EarlyEffects::BeforeAcknowledgement => {
+                GatewayReconciliationEffectTiming::BeforeIntentAcknowledgement
+            }
+        };
+        assert_eq!(outcomes[0].effect_timing(), expected_timing);
+        let GatewayReconciliationEffect::RejectedReport { report, .. } = outcomes[0].effect()
+        else {
+            panic!("effects before intent acknowledgement were accepted")
+        };
+        assert!(!report.validation().effects_followed_intent());
+        assert!(report.validation().effect_timing_matches_history());
+        assert_eq!(
+            report.cleanup(),
+            ReconciliationCleanupDecision::AdoptClaimed
+        );
+        drop(outcomes);
+        assert!(matches!(
+            gateway.startup().unwrap().phase(),
+            GatewayStartupPhase::Failed(_)
+        ));
+        gateway.stop_agents().unwrap();
+        assert_eq!(*host.stopped.lock().unwrap(), ["early-effects"]);
+    }
 }
 
 #[test]
@@ -1269,6 +1763,7 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
         })
     };
     a_entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    gateway.caller_resume_gate.arm();
 
     let (successor_result_tx, successor_result_rx) = mpsc::channel();
     let successor = {
@@ -1281,16 +1776,23 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
                 .unwrap();
         })
     };
-    let first = gateway.lifecycle.lock().unwrap().pending.clone().unwrap();
+    let first = gateway
+        .wait_for_pending_receipt()
+        .expect("configuration successor was not admitted");
     assert!(
         first.wait_for_waiter(),
         "configuration change did not wait for A"
     );
 
+    let (credential_result_tx, credential_result_rx) = mpsc::channel();
     let credential = {
         let gateway = gateway.clone();
         thread::spawn(move || {
-            tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Setup))
+            credential_result_tx
+                .send(tauri::async_runtime::block_on(
+                    gateway.wait_ready(BundledSurface::Setup),
+                ))
+                .unwrap();
         })
     };
     assert!(
@@ -1312,6 +1814,27 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
         Err(mpsc::TryRecvError::Empty)
     ));
 
+    successor_release_tx.send(()).unwrap();
+    assert!(
+        gateway.caller_resume_gate.wait_until_arrived(),
+        "successor caller resumed before its receipt settled"
+    );
+    credential_result_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    credential.join().unwrap();
+    assert!(matches!(
+        successor_result_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    gateway.caller_resume_gate.release();
+    successor_result_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    successor.join().unwrap();
+
     let (later_result_tx, later_result_rx) = mpsc::channel();
     let later = {
         let gateway = gateway.clone();
@@ -1323,17 +1846,6 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
                 .unwrap();
         })
     };
-    let later_receipt = gateway.lifecycle.lock().unwrap().pending.clone().unwrap();
-    assert!(later_receipt.wait_for_waiter());
-    assert_eq!(host.attempts.lock().unwrap().len(), 2);
-
-    successor_release_tx.send(()).unwrap();
-    successor_result_rx
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap();
-    successor.join().unwrap();
-    credential.join().unwrap().unwrap();
     later_entered_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
@@ -1375,7 +1887,7 @@ impl GatewayStartupEvents for RecordingEvents {
 }
 
 #[test]
-fn a_later_credential_load_retries_failed_startup_with_monotonic_events() {
+fn a_later_credential_load_retries_failed_startup_with_revisioned_events() {
     struct RecoveringHost(Mutex<Vec<Result<ReconciledGateway, GatewayError>>>);
 
     impl GatewayHost for RecoveringHost {
@@ -1424,13 +1936,14 @@ fn a_later_credential_load_retries_failed_startup_with_monotonic_events() {
     assert_eq!(ready.revision(), 3);
     assert_eq!(ready.phase(), &GatewayStartupPhase::Ready);
 
-    let revisions = events
+    let mut revisions = events
         .0
         .lock()
         .unwrap()
         .iter()
         .map(GatewayStartup::revision)
         .collect::<Vec<_>>();
+    revisions.sort_unstable();
     assert_eq!(revisions, [1, 2, 3]);
 }
 
@@ -1668,7 +2181,9 @@ fn panicking_predecessor_settles_and_promotes_the_exact_pending_receipt() {
             tauri::async_runtime::block_on(gateway.configuration_changed(BundledSurface::Main))
         })
     };
-    let pending = gateway.lifecycle.lock().unwrap().pending.clone().unwrap();
+    let pending = gateway
+        .wait_for_pending_receipt()
+        .expect("successor was not admitted");
     assert!(pending.wait_for_waiter());
     release_tx.send(()).unwrap();
     assert!(predecessor.join().unwrap().is_err());
@@ -1748,7 +2263,7 @@ fn concurrent_waiters_run_one_registration_and_share_its_ready_identity() {
 }
 
 #[test]
-fn cancelled_caller_does_not_cancel_or_duplicate_shared_reconciliation() {
+fn caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_receipt() {
     struct BlockingHost {
         entered: Mutex<Option<mpsc::Sender<()>>>,
         release: Mutex<mpsc::Receiver<()>>,
@@ -1795,14 +2310,20 @@ fn cancelled_caller_does_not_cancel_or_duplicate_shared_reconciliation() {
         "/runtime".into(),
         "ci".into(),
     ));
+    gateway.owner_launch_gate.arm();
 
     let cancelled = {
         let gateway = gateway.clone();
         tauri::async_runtime::spawn(async move { gateway.wait_ready(BundledSurface::Main).await })
     };
-    entered_rx.recv().unwrap();
+    assert!(
+        gateway.owner_launch_gate.wait_until_arrived(),
+        "receipt was not installed before owner launch"
+    );
     cancelled.abort();
     assert!(tauri::async_runtime::block_on(cancelled).is_err());
+    gateway.owner_launch_gate.release();
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
     let joined = {
         let gateway = gateway.clone();
@@ -1994,7 +2515,11 @@ fn partial_outcomes_preserve_each_confirmed_native_boundary() {
             attempt: &GatewayReconciliationAttempt,
             progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
-            admit(attempt, progress, "target");
+            if self.0.first() == Some(&ReconciliationHistoryFact::RetirementAcknowledged) {
+                admit(attempt, progress, "target");
+            } else {
+                admit_fresh(attempt, progress, "target");
+            }
             for fact in &self.0 {
                 progress.history_observed(*fact);
             }
@@ -2094,16 +2619,78 @@ fn malformed_success_is_audited_as_rejected_and_never_projects_ready() {
         gateway.startup().unwrap().phase(),
         GatewayStartupPhase::Failed(_)
     ));
-    assert!(matches!(
-        audit.outcomes.lock().unwrap()[0].effect(),
-        GatewayReconciliationEffect::RejectedReport {
-            trusted_history,
-            report: ReconciliationRejectedReport::InvalidHistory(
-                ReconciliationHistoryFact::BootstrapCommandSucceeded
-            ),
-            ..
-        } if trusted_history.facts().is_empty()
-    ));
+    let outcomes = audit.outcomes.lock().unwrap();
+    let GatewayReconciliationEffect::RejectedReport {
+        trusted_history,
+        report,
+        ..
+    } = outcomes[0].effect()
+    else {
+        panic!("malformed success was accepted")
+    };
+    assert!(trusted_history.facts().is_empty());
+    assert_eq!(
+        report.validation().rejected_history_fact(),
+        Some(ReconciliationHistoryFact::BootstrapCommandSucceeded)
+    );
+    drop(outcomes);
     gateway.stop_agents().unwrap();
     assert_eq!(*host.0.lock().unwrap(), ["malformed"]);
+}
+
+#[test]
+fn invalid_history_cannot_hide_an_ineligible_claimed_identity() {
+    struct ContradictoryHost;
+
+    impl GatewayHost for ContradictoryHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let admitted = reconciled("admitted");
+            let intent = GatewayReconciliationIntent::new(
+                attempt.clone(),
+                admitted.audit_identity().unwrap().target().clone(),
+                None,
+            )
+            .unwrap();
+            progress.intent_admitted(intent)?;
+            progress.history_observed(ReconciliationHistoryFact::BootstrapCommandSucceeded);
+            Ok(reconciled("wrong-target"))
+        }
+
+        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    let audit = Arc::new(RecordingAudit::default());
+    let gateway = Gateway::bootstrap(
+        Arc::new(ContradictoryHost),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    assert!(tauri::async_runtime::block_on(gateway.start()).is_err());
+    let outcomes = audit.outcomes.lock().unwrap();
+    let GatewayReconciliationEffect::RejectedReport { report, .. } = outcomes[0].effect() else {
+        panic!("contradictory report was accepted")
+    };
+    assert_eq!(
+        report.validation().rejected_history_fact(),
+        Some(ReconciliationHistoryFact::BootstrapCommandSucceeded)
+    );
+    assert!(!report.validation().target_matches());
+    assert!(!report.validation().candidate_eligible());
+    assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
+    drop(outcomes);
+    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
 }

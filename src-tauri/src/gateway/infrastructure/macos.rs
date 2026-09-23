@@ -30,7 +30,7 @@ mod startup;
 use control::{
     classify, forward_recovery, health, launchctl, legacy_listener_pid, lock_namespace,
     read_pending_retirement, read_retirement_evidence, retire, service_status, wait_fingerprint,
-    Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    Health, InstallFailure, ManagedRuntime, Registration, ServiceState, ServiceStatus,
 };
 use generation::service_generation;
 use install_attempt::{
@@ -101,7 +101,7 @@ impl GatewayHost for Launchd {
 
 fn matches_reconciled_gateway(
     gateway: &ReconciledGateway,
-    status: &control::ServiceStatus,
+    status: &ServiceStatus,
     health: Option<&Health>,
 ) -> bool {
     matches!(

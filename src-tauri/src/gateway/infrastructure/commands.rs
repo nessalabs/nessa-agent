@@ -10,7 +10,7 @@ use crate::{
     panel,
 };
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 pub(super) struct HostGatewayStartupEvents {
     app: AppHandle,
@@ -53,7 +53,7 @@ fn bundled_window(label: &str) -> Result<BundledSurface, String> {
 
 #[tauri::command]
 pub fn gateway_startup(
-    window: tauri::WebviewWindow,
+    window: WebviewWindow,
     deps: State<'_, HostDependencies>,
 ) -> Result<GatewayStartup, String> {
     bundled_window(window.label())?;
@@ -67,7 +67,7 @@ pub fn gateway_startup(
 
 #[tauri::command]
 pub async fn retry_gateway_startup(
-    window: tauri::WebviewWindow,
+    window: WebviewWindow,
     deps: State<'_, HostDependencies>,
 ) -> Result<(), String> {
     let surface = bundled_window(window.label())?;

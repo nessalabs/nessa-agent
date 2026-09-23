@@ -211,8 +211,13 @@ are written here.
   A generic HTTP 200 is insufficient.
 - Packaged gateway startup has one host owner. It begins independently of either
   webview, exposes a revisioned snapshot plus bundled-window events, and serializes
-  retries with credential-load reconciliation. A successful repeated validation
-  keeps the current ready revision; a failure and its retry advance it.
+  retries with credential-load reconciliation. Event callbacks may race the owner,
+  so consumers use revisions to discard stale delivery. A successful repeated
+  validation of the same readiness identity keeps the current ready revision;
+  a changed confirmed identity, a failure, and recovery from a failure advance it.
+  Attempt identifiers are allocated before lifecycle admission, and the lifecycle
+  lock alone selects the running receipt and its one pending successor. The receipt
+  owner is launched independently of the admitting caller.
 - launchd restarts the gateway when its process ended unsuccessfully, and only
   then. A failure that starting again cannot fix exits zero on purpose — the one
   status launchd reads as "do not start me again" — but only after the reason it

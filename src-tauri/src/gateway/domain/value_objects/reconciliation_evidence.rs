@@ -314,10 +314,6 @@ impl ReconciliationRequestRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationAttemptRecord {
     correlation: ReconciliationCorrelation,
-    #[expect(
-        dead_code,
-        reason = "origin evidence participates in record equality and audit meaning"
-    )]
     origin: ReconciliationRequestRecord,
 }
 
@@ -349,10 +345,6 @@ impl ReconciliationAttemptRecord {
 /// Validated intent whose prior incarnation, when known, belongs to its service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationIntentRecord {
-    #[expect(
-        dead_code,
-        reason = "attempt evidence participates in record equality and audit meaning"
-    )]
     attempt: ReconciliationAttemptRecord,
     target: ReconciliationTarget,
     before: Option<ReconciliationIncarnation>,
@@ -425,10 +417,13 @@ pub enum ReconciliationHistoryFact {
 pub struct ReconciliationHistory(Vec<ReconciliationHistoryFact>);
 
 impl ReconciliationHistory {
-    pub fn assess(facts: Vec<ReconciliationHistoryFact>) -> ReconciliationHistoryAssessment {
+    fn assess(
+        before: Option<&ReconciliationIncarnation>,
+        facts: &[ReconciliationHistoryFact],
+    ) -> ReconciliationHistoryAssessment {
         let mut trusted = Vec::new();
-        for fact in facts {
-            if !accepts_next(trusted.last().copied(), fact) {
+        for &fact in facts {
+            if !accepts_next(before.is_some(), &trusted, fact) {
                 return ReconciliationHistoryAssessment::Rejected {
                     trusted: Self(trusted),
                     rejected: fact,
@@ -441,11 +436,6 @@ impl ReconciliationHistory {
 
     pub fn facts(&self) -> &[ReconciliationHistoryFact] {
         &self.0
-    }
-
-    pub fn permits_confirmation(&self) -> bool {
-        self.0.is_empty()
-            || self.0.last() == Some(&ReconciliationHistoryFact::BootstrapCommandSucceeded)
     }
 
     pub fn proves_unloaded(&self) -> bool {
@@ -471,14 +461,160 @@ pub enum ReconciliationPhysicalRecord {
     Failed,
 }
 
-/// Why a terminal adapter report was rejected by domain consistency rules.
+/// Whether durable intent delivery completed before native effects were allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconciliationIntentDeliveryRecord {
+    Reserved,
+    Acknowledged,
+    Failed,
+}
+
+/// Earliest native effect timing relative to immutable intent acknowledgement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconciliationEffectTimingRecord {
+    NoEffectsObserved,
+    BeforeIntentReservation,
+    BeforeIntentAcknowledgement,
+    AfterIntentAcknowledgement,
+}
+
+/// Relationship between the claimed physical incarnation and the admitted intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconciliationRuntimeIdentity {
+    NotReported,
+    HealthyReuse,
+    FreshIncarnation,
+    Replacement,
+    ReusedRuntimeInstance,
+    ChangedProcessForRuntimeInstance,
+}
+
+/// Independent consistency facts derived from one terminal adapter report.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReconciliationRejectedReport {
-    InvalidHistory(ReconciliationHistoryFact),
-    ConfirmationWithoutCompleteHistory,
-    ConfirmedTargetMismatch(ReconciliationIncarnation),
-    HealthyReuseMismatch(ReconciliationIncarnation),
-    ReusedRuntimeInstance(ReconciliationIncarnation),
+pub struct ReconciliationValidationFacts {
+    rejected_history_fact: Option<ReconciliationHistoryFact>,
+    history_complete: bool,
+    target_matches: bool,
+    runtime_identity: ReconciliationRuntimeIdentity,
+    physical_report_agrees: bool,
+    effect_timing_matches_history: bool,
+    effects_followed_intent: bool,
+    candidate_eligible: bool,
+}
+
+impl ReconciliationValidationFacts {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn rejected_history_fact(&self) -> Option<ReconciliationHistoryFact> {
+        self.rejected_history_fact
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn history_complete(&self) -> bool {
+        self.history_complete
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn target_matches(&self) -> bool {
+        self.target_matches
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn runtime_identity(&self) -> ReconciliationRuntimeIdentity {
+        self.runtime_identity
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn physical_report_agrees(&self) -> bool {
+        self.physical_report_agrees
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn effect_timing_matches_history(&self) -> bool {
+        self.effect_timing_matches_history
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn effects_followed_intent(&self) -> bool {
+        self.effects_followed_intent
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn candidate_eligible(&self) -> bool {
+        self.candidate_eligible
+    }
+}
+
+/// How the host may update its prior physical authority after assessment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconciliationCleanupDecision {
+    RetainPrior,
+    ClearPrior,
+    AdoptClaimed,
+}
+
+/// A rejected terminal report with its original claim and independent checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconciliationRejectedReport {
+    claimed_physical: ReconciliationPhysicalRecord,
+    validation: ReconciliationValidationFacts,
+    cleanup: ReconciliationCleanupDecision,
+}
+
+impl ReconciliationRejectedReport {
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn claimed_physical(&self) -> &ReconciliationPhysicalRecord {
+        &self.claimed_physical
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn claimed_identity(&self) -> Option<&ReconciliationIncarnation> {
+        match &self.claimed_physical {
+            ReconciliationPhysicalRecord::Confirmed(identity) => Some(identity),
+            ReconciliationPhysicalRecord::Failed => None,
+        }
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn validation(&self) -> &ReconciliationValidationFacts {
+        &self.validation
+    }
+
+    pub fn cleanup(&self) -> ReconciliationCleanupDecision {
+        self.cleanup
+    }
 }
 
 /// Whether the terminal report agrees with the admitted intent and native history.
@@ -491,84 +627,143 @@ pub enum ReconciliationOutcomeDisposition {
 /// Validated agreement between an admitted intent and its physical result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconciliationOutcomeRecord {
-    #[expect(
-        dead_code,
-        reason = "intent evidence participates in record equality and audit meaning"
-    )]
     intent: ReconciliationIntentRecord,
+    intent_delivery: ReconciliationIntentDeliveryRecord,
+    effect_timing: ReconciliationEffectTimingRecord,
+    physical: ReconciliationPhysicalRecord,
+    reported_history: Vec<ReconciliationHistoryFact>,
     history: ReconciliationHistory,
+    validation: ReconciliationValidationFacts,
+    cleanup: ReconciliationCleanupDecision,
     disposition: ReconciliationOutcomeDisposition,
 }
 
 impl ReconciliationOutcomeRecord {
     pub fn assess(
         intent: ReconciliationIntentRecord,
+        intent_delivery: ReconciliationIntentDeliveryRecord,
+        effect_timing: ReconciliationEffectTimingRecord,
         facts: Vec<ReconciliationHistoryFact>,
         physical: ReconciliationPhysicalRecord,
     ) -> Self {
-        let confirmed_target_mismatch = match &physical {
-            ReconciliationPhysicalRecord::Confirmed(after) if after.target() != intent.target() => {
-                Some(after.clone())
-            }
-            _ => None,
+        let reported_history = facts;
+        let (history, rejected_history_fact) =
+            match ReconciliationHistory::assess(intent.before(), &reported_history) {
+                ReconciliationHistoryAssessment::Accepted(history) => (history, None),
+                ReconciliationHistoryAssessment::Rejected { trusted, rejected } => {
+                    (trusted, Some(rejected))
+                }
+            };
+        let history_complete = history.facts().last()
+            == Some(&ReconciliationHistoryFact::BootstrapCommandSucceeded)
+            || (history.facts().is_empty() && intent.before().is_some());
+        let target_matches = match &physical {
+            ReconciliationPhysicalRecord::Confirmed(after) => after.target() == intent.target(),
+            ReconciliationPhysicalRecord::Failed => true,
         };
-        let (history, disposition) = match ReconciliationHistory::assess(facts) {
-            ReconciliationHistoryAssessment::Rejected { trusted, rejected } => (
-                trusted,
-                ReconciliationOutcomeDisposition::Rejected(match confirmed_target_mismatch {
-                    Some(after) => ReconciliationRejectedReport::ConfirmedTargetMismatch(after),
-                    None => ReconciliationRejectedReport::InvalidHistory(rejected),
-                }),
-            ),
-            ReconciliationHistoryAssessment::Accepted(history) => {
-                let disposition = match confirmed_target_mismatch {
-                    Some(after) => ReconciliationOutcomeDisposition::Rejected(
-                        ReconciliationRejectedReport::ConfirmedTargetMismatch(after),
-                    ),
-                    None if matches!(&physical, ReconciliationPhysicalRecord::Confirmed(_))
-                        && !history.permits_confirmation() =>
-                    {
-                        ReconciliationOutcomeDisposition::Rejected(
-                            ReconciliationRejectedReport::ConfirmationWithoutCompleteHistory,
-                        )
-                    }
-                    None if matches!(&physical, ReconciliationPhysicalRecord::Confirmed(after)
-                            if history.facts().is_empty()
-                                && intent.before() != Some(after)) =>
-                    {
-                        let ReconciliationPhysicalRecord::Confirmed(after) = &physical else {
-                            unreachable!()
-                        };
-                        ReconciliationOutcomeDisposition::Rejected(
-                            ReconciliationRejectedReport::HealthyReuseMismatch(after.clone()),
-                        )
-                    }
-                    None if matches!(&physical, ReconciliationPhysicalRecord::Confirmed(after)
-                            if !history.facts().is_empty()
-                                && intent.before().is_some_and(|before|
-                                    before.runtime_instance() == after.runtime_instance())) =>
-                    {
-                        let ReconciliationPhysicalRecord::Confirmed(after) = &physical else {
-                            unreachable!()
-                        };
-                        ReconciliationOutcomeDisposition::Rejected(
-                            ReconciliationRejectedReport::ReusedRuntimeInstance(after.clone()),
-                        )
-                    }
-                    None => ReconciliationOutcomeDisposition::Accepted(physical),
-                };
-                (history, disposition)
-            }
+        let runtime_identity = runtime_identity(intent.before(), &history, &physical);
+        let physical_report_agrees = match &physical {
+            ReconciliationPhysicalRecord::Confirmed(_) => history_complete,
+            ReconciliationPhysicalRecord::Failed => rejected_history_fact.is_none(),
+        };
+        let expected_runtime_identity = if history.facts().is_empty() {
+            ReconciliationRuntimeIdentity::HealthyReuse
+        } else if intent.before().is_some() {
+            ReconciliationRuntimeIdentity::Replacement
+        } else {
+            ReconciliationRuntimeIdentity::FreshIncarnation
+        };
+        let history_proves_candidate = rejected_history_fact.is_none()
+            || history.facts().last()
+                == Some(&ReconciliationHistoryFact::BootstrapCommandSucceeded);
+        let candidate_eligible = matches!(physical, ReconciliationPhysicalRecord::Confirmed(_))
+            && history_proves_candidate
+            && target_matches
+            && physical_report_agrees
+            && runtime_identity == expected_runtime_identity;
+        let effect_timing_matches_history = matches!(
+            (reported_history.is_empty(), effect_timing),
+            (true, ReconciliationEffectTimingRecord::NoEffectsObserved)
+                | (
+                    false,
+                    ReconciliationEffectTimingRecord::BeforeIntentReservation
+                        | ReconciliationEffectTimingRecord::BeforeIntentAcknowledgement
+                        | ReconciliationEffectTimingRecord::AfterIntentAcknowledgement
+                )
+        );
+        let effects_followed_intent = matches!(
+            effect_timing,
+            ReconciliationEffectTimingRecord::NoEffectsObserved
+                | ReconciliationEffectTimingRecord::AfterIntentAcknowledgement
+        );
+        let validation = ReconciliationValidationFacts {
+            rejected_history_fact,
+            history_complete,
+            target_matches,
+            runtime_identity,
+            physical_report_agrees,
+            effect_timing_matches_history,
+            effects_followed_intent,
+            candidate_eligible,
+        };
+        let cleanup = if candidate_eligible {
+            ReconciliationCleanupDecision::AdoptClaimed
+        } else if history.proves_unloaded() {
+            ReconciliationCleanupDecision::ClearPrior
+        } else {
+            ReconciliationCleanupDecision::RetainPrior
+        };
+        let disposition = if (candidate_eligible
+            && intent_delivery == ReconciliationIntentDeliveryRecord::Acknowledged
+            && effect_timing_matches_history
+            && effects_followed_intent
+            && rejected_history_fact.is_none())
+            || (matches!(physical, ReconciliationPhysicalRecord::Failed)
+                && rejected_history_fact.is_none()
+                && effect_timing_matches_history
+                && physical_report_agrees)
+        {
+            ReconciliationOutcomeDisposition::Accepted(physical.clone())
+        } else {
+            ReconciliationOutcomeDisposition::Rejected(ReconciliationRejectedReport {
+                claimed_physical: physical.clone(),
+                validation: validation.clone(),
+                cleanup,
+            })
         };
         Self {
             intent,
+            intent_delivery,
+            effect_timing,
+            physical,
+            reported_history,
             history,
+            validation,
+            cleanup,
             disposition,
         }
     }
+
+    pub fn physical(&self) -> &ReconciliationPhysicalRecord {
+        &self.physical
+    }
+
+    pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {
+        &self.reported_history
+    }
+
     pub fn history(&self) -> &ReconciliationHistory {
         &self.history
     }
+
+    pub fn validation(&self) -> &ReconciliationValidationFacts {
+        &self.validation
+    }
+
+    pub fn cleanup(&self) -> ReconciliationCleanupDecision {
+        self.cleanup
+    }
+
     pub fn disposition(&self) -> &ReconciliationOutcomeDisposition {
         &self.disposition
     }
@@ -583,13 +778,6 @@ pub struct PendingReconciliation {
 impl PendingReconciliation {
     pub fn new(attempt: ReconciliationAttemptRecord) -> Self {
         Self { attempt }
-    }
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "pending attempt inspection is test-only")
-    )]
-    pub fn attempt(&self) -> &ReconciliationAttemptRecord {
-        &self.attempt
     }
     pub fn is_owned_by(&self, attempt: &ReconciliationAttemptRecord) -> bool {
         attempt == &self.attempt
@@ -623,39 +811,66 @@ impl Display for ReconciliationConsistencyError {
 impl Error for ReconciliationConsistencyError {}
 
 fn accepts_next(
-    previous: Option<ReconciliationHistoryFact>,
+    had_managed_incarnation: bool,
+    trusted: &[ReconciliationHistoryFact],
     next: ReconciliationHistoryFact,
 ) -> bool {
+    let previous = trusted.last().copied();
     matches!(
         (previous, next),
-        (None, ReconciliationHistoryFact::RetirementAcknowledged)
-            | (None, ReconciliationHistoryFact::OldServiceUnloaded)
-            | (None, ReconciliationHistoryFact::ServiceDefinitionPublished)
-            | (
-                Some(ReconciliationHistoryFact::RetirementAcknowledged),
-                ReconciliationHistoryFact::OldServiceUnloaded
-            )
-            | (
-                Some(ReconciliationHistoryFact::OldServiceUnloaded),
-                ReconciliationHistoryFact::ServiceDefinitionPublished
-            )
-            | (
-                Some(ReconciliationHistoryFact::ServiceDefinitionPublished),
-                ReconciliationHistoryFact::ServiceDefinitionDurable
-            )
-            | (
-                Some(ReconciliationHistoryFact::ServiceDefinitionDurable),
-                ReconciliationHistoryFact::BootstrapCommandRequested
-            )
-            | (
-                Some(ReconciliationHistoryFact::BootstrapCommandRequested),
-                ReconciliationHistoryFact::BootstrapCommandCompleted
-            )
-            | (
-                Some(ReconciliationHistoryFact::BootstrapCommandCompleted),
-                ReconciliationHistoryFact::BootstrapCommandSucceeded
-            )
+        (None, ReconciliationHistoryFact::RetirementAcknowledged) if had_managed_incarnation
+    ) || matches!(
+        (previous, next),
+        (None, ReconciliationHistoryFact::OldServiceUnloaded) if !had_managed_incarnation
+    ) || matches!(
+        (previous, next),
+        (None, ReconciliationHistoryFact::ServiceDefinitionPublished) if !had_managed_incarnation
+    ) || matches!(
+        (previous, next),
+        (
+            Some(ReconciliationHistoryFact::RetirementAcknowledged),
+            ReconciliationHistoryFact::OldServiceUnloaded
+        ) | (
+            Some(ReconciliationHistoryFact::OldServiceUnloaded),
+            ReconciliationHistoryFact::ServiceDefinitionPublished
+        ) | (
+            Some(ReconciliationHistoryFact::ServiceDefinitionPublished),
+            ReconciliationHistoryFact::ServiceDefinitionDurable
+        ) | (
+            Some(ReconciliationHistoryFact::ServiceDefinitionDurable),
+            ReconciliationHistoryFact::BootstrapCommandRequested
+        ) | (
+            Some(ReconciliationHistoryFact::BootstrapCommandRequested),
+            ReconciliationHistoryFact::BootstrapCommandCompleted
+        ) | (
+            Some(ReconciliationHistoryFact::BootstrapCommandCompleted),
+            ReconciliationHistoryFact::BootstrapCommandSucceeded
+        )
     )
+}
+
+fn runtime_identity(
+    before: Option<&ReconciliationIncarnation>,
+    history: &ReconciliationHistory,
+    physical: &ReconciliationPhysicalRecord,
+) -> ReconciliationRuntimeIdentity {
+    let ReconciliationPhysicalRecord::Confirmed(after) = physical else {
+        return ReconciliationRuntimeIdentity::NotReported;
+    };
+    let Some(before) = before else {
+        return ReconciliationRuntimeIdentity::FreshIncarnation;
+    };
+    if before.runtime_instance() != after.runtime_instance() {
+        return ReconciliationRuntimeIdentity::Replacement;
+    }
+    if before.process_id() != after.process_id() {
+        return ReconciliationRuntimeIdentity::ChangedProcessForRuntimeInstance;
+    }
+    if history.facts().is_empty() && before == after {
+        ReconciliationRuntimeIdentity::HealthyReuse
+    } else {
+        ReconciliationRuntimeIdentity::ReusedRuntimeInstance
+    }
 }
 
 fn canonical_uuid(value: &str) -> bool {
@@ -747,141 +962,52 @@ mod tests {
         );
     }
 
-    #[test]
-    fn related_evidence_and_pending_authority_agree_as_one_domain_rule() {
-        let request = ReconciliationRequestRecord::new(
-            ReconciliationCorrelation::parse("550e8400-e29b-41d4-a716-446655440000".into())
-                .unwrap(),
-            ReconciliationEvidence::new(
-                ReconciliationCause::ClaudeConfigurationChanged,
-                ReconciliationInitiator::BundledSurface(BundledSurface::Main),
-            )
-            .unwrap(),
-        );
-        assert_eq!(
-            ReconciliationAttemptRecord::new(request.correlation().clone(), request.clone()),
-            Err(ReconciliationConsistencyError::EqualRequestAndAttempt)
-        );
-        let attempt = ReconciliationAttemptRecord::new(
-            ReconciliationCorrelation::parse("550e8400-e29b-41d4-a716-446655440001".into())
-                .unwrap(),
-            request.clone(),
-        )
-        .unwrap();
-        let pending = PendingReconciliation::new(attempt.clone());
-        assert!(pending.is_owned_by(&attempt));
-        let predecessor_request = ReconciliationRequestRecord::new(
-            ReconciliationCorrelation::parse("550e8400-e29b-41d4-a716-446655440004".into())
-                .unwrap(),
-            ReconciliationEvidence::new(
-                ReconciliationCause::Startup,
-                ReconciliationInitiator::DesktopHost,
-            )
-            .unwrap(),
-        );
-        let predecessor = ReconciliationAttemptRecord::new(
-            ReconciliationCorrelation::parse("550e8400-e29b-41d4-a716-446655440005".into())
-                .unwrap(),
-            predecessor_request,
-        )
-        .unwrap();
-        assert!(!pending.is_owned_by(&predecessor));
-
-        let target =
-            ReconciliationTarget::new("service".into(), "a".repeat(64), "b".repeat(64)).unwrap();
-        let other =
-            ReconciliationTarget::new("other".into(), "a".repeat(64), "b".repeat(64)).unwrap();
-        let before = ReconciliationIncarnation::new(
-            other.clone(),
-            "550e8400-e29b-41d4-a716-446655440002".into(),
-            7,
-            7420,
-        )
-        .unwrap();
-        assert_eq!(
-            ReconciliationIntentRecord::new(attempt.clone(), target.clone(), Some(before)),
-            Err(ReconciliationConsistencyError::PriorServiceMismatch)
-        );
-        let intent = ReconciliationIntentRecord::new(attempt, target, None).unwrap();
-        let after = ReconciliationIncarnation::new(
-            other,
-            "550e8400-e29b-41d4-a716-446655440003".into(),
-            8,
-            7420,
-        )
-        .unwrap();
-        let rejected = ReconciliationOutcomeRecord::assess(
-            intent.clone(),
-            vec![
-                ReconciliationHistoryFact::BootstrapCommandCompleted,
-                ReconciliationHistoryFact::ServiceDefinitionPublished,
-            ],
-            ReconciliationPhysicalRecord::Failed,
-        );
-        assert!(matches!(
-            rejected.disposition(),
-            ReconciliationOutcomeDisposition::Rejected(
-                ReconciliationRejectedReport::InvalidHistory(
-                    ReconciliationHistoryFact::BootstrapCommandCompleted
-                )
-            )
-        ));
-        assert!(rejected.history().facts().is_empty());
-
-        let incomplete_success = ReconciliationOutcomeRecord::assess(
-            intent,
-            vec![
-                ReconciliationHistoryFact::ServiceDefinitionPublished,
-                ReconciliationHistoryFact::ServiceDefinitionDurable,
-            ],
-            ReconciliationPhysicalRecord::Confirmed(after),
-        );
-        assert!(matches!(
-            incomplete_success.disposition(),
-            ReconciliationOutcomeDisposition::Rejected(
-                ReconciliationRejectedReport::ConfirmedTargetMismatch(_)
-            )
-        ));
+    fn correlation(serial: u64) -> ReconciliationCorrelation {
+        ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}"))
+            .expect("correlation")
     }
 
-    #[test]
-    fn confirmation_preserves_incarnation_meaning_across_reuse_and_replacement() {
+    fn target(service: &str, fingerprint: char) -> ReconciliationTarget {
+        ReconciliationTarget::new(
+            service.into(),
+            fingerprint.to_string().repeat(64),
+            "b".repeat(64),
+        )
+        .expect("target")
+    }
+
+    fn incarnation(
+        target: ReconciliationTarget,
+        serial: u64,
+        process_id: u32,
+    ) -> ReconciliationIncarnation {
+        ReconciliationIncarnation::new(
+            target,
+            format!("00000000-0000-4000-8000-{serial:012x}"),
+            process_id,
+            7420,
+        )
+        .expect("incarnation")
+    }
+
+    fn intent(
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+    ) -> ReconciliationIntentRecord {
         let request = ReconciliationRequestRecord::new(
-            ReconciliationCorrelation::parse("550e8400-e29b-41d4-a716-446655440010".into())
-                .unwrap(),
+            correlation(1),
             ReconciliationEvidence::new(
                 ReconciliationCause::Startup,
                 ReconciliationInitiator::DesktopHost,
             )
-            .unwrap(),
+            .expect("evidence"),
         );
-        let attempt = ReconciliationAttemptRecord::new(
-            ReconciliationCorrelation::parse("550e8400-e29b-41d4-a716-446655440011".into())
-                .unwrap(),
-            request,
-        )
-        .unwrap();
-        let target =
-            ReconciliationTarget::new("service".into(), "a".repeat(64), "b".repeat(64)).unwrap();
-        let before = ReconciliationIncarnation::new(
-            target.clone(),
-            "550e8400-e29b-41d4-a716-446655440012".into(),
-            42,
-            7420,
-        )
-        .unwrap();
-        let intent =
-            ReconciliationIntentRecord::new(attempt, target.clone(), Some(before.clone())).unwrap();
-        assert!(matches!(
-            ReconciliationOutcomeRecord::assess(
-                intent.clone(),
-                Vec::new(),
-                ReconciliationPhysicalRecord::Confirmed(before.clone()),
-            )
-            .disposition(),
-            ReconciliationOutcomeDisposition::Accepted(_)
-        ));
-        let replacement_history = vec![
+        let attempt = ReconciliationAttemptRecord::new(correlation(2), request).expect("attempt");
+        ReconciliationIntentRecord::new(attempt, target, before).expect("intent")
+    }
+
+    fn replacement_history() -> Vec<ReconciliationHistoryFact> {
+        vec![
             ReconciliationHistoryFact::RetirementAcknowledged,
             ReconciliationHistoryFact::OldServiceUnloaded,
             ReconciliationHistoryFact::ServiceDefinitionPublished,
@@ -889,17 +1015,305 @@ mod tests {
             ReconciliationHistoryFact::BootstrapCommandRequested,
             ReconciliationHistoryFact::BootstrapCommandCompleted,
             ReconciliationHistoryFact::BootstrapCommandSucceeded,
-        ];
-        let reused = ReconciliationOutcomeRecord::assess(
+        ]
+    }
+
+    fn installation_history(unload_first: bool) -> Vec<ReconciliationHistoryFact> {
+        let mut facts = if unload_first {
+            vec![ReconciliationHistoryFact::OldServiceUnloaded]
+        } else {
+            Vec::new()
+        };
+        facts.extend([
+            ReconciliationHistoryFact::ServiceDefinitionPublished,
+            ReconciliationHistoryFact::ServiceDefinitionDurable,
+            ReconciliationHistoryFact::BootstrapCommandRequested,
+            ReconciliationHistoryFact::BootstrapCommandCompleted,
+            ReconciliationHistoryFact::BootstrapCommandSucceeded,
+        ]);
+        facts
+    }
+
+    fn assess(
+        intent: ReconciliationIntentRecord,
+        history: Vec<ReconciliationHistoryFact>,
+        physical: ReconciliationPhysicalRecord,
+    ) -> ReconciliationOutcomeRecord {
+        let effect_timing = if history.is_empty() {
+            ReconciliationEffectTimingRecord::NoEffectsObserved
+        } else {
+            ReconciliationEffectTimingRecord::AfterIntentAcknowledgement
+        };
+        ReconciliationOutcomeRecord::assess(
             intent,
-            replacement_history,
+            ReconciliationIntentDeliveryRecord::Acknowledged,
+            effect_timing,
+            history,
+            physical,
+        )
+    }
+
+    #[test]
+    fn request_attempt_and_pending_authority_remain_distinct() {
+        let request = ReconciliationRequestRecord::new(
+            correlation(1),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            ReconciliationAttemptRecord::new(correlation(1), request.clone()),
+            Err(ReconciliationConsistencyError::EqualRequestAndAttempt)
+        );
+        let attempt = ReconciliationAttemptRecord::new(correlation(2), request).unwrap();
+        let pending = PendingReconciliation::new(attempt.clone());
+        assert!(pending.is_owned_by(&attempt));
+        let other_request = ReconciliationRequestRecord::new(
+            correlation(3),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let other = ReconciliationAttemptRecord::new(correlation(4), other_request).unwrap();
+        assert!(!pending.is_owned_by(&other));
+    }
+
+    #[test]
+    fn accepts_healthy_reuse_fresh_install_replacement_and_unknown_unload() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let reuse = assess(
+            intent(expected.clone(), Some(before.clone())),
+            Vec::new(),
             ReconciliationPhysicalRecord::Confirmed(before),
         );
         assert!(matches!(
-            reused.disposition(),
-            ReconciliationOutcomeDisposition::Rejected(
-                ReconciliationRejectedReport::ReusedRuntimeInstance(_)
-            )
+            reuse.disposition(),
+            ReconciliationOutcomeDisposition::Accepted(_)
         ));
+        assert_eq!(reuse.cleanup(), ReconciliationCleanupDecision::AdoptClaimed);
+
+        for unload_first in [false, true] {
+            let fresh = assess(
+                intent(expected.clone(), None),
+                installation_history(unload_first),
+                ReconciliationPhysicalRecord::Confirmed(incarnation(expected.clone(), 11, 43)),
+            );
+            assert!(matches!(
+                fresh.disposition(),
+                ReconciliationOutcomeDisposition::Accepted(_)
+            ));
+        }
+
+        let before = incarnation(expected.clone(), 12, 44);
+        let replacement = assess(
+            intent(expected.clone(), Some(before)),
+            replacement_history(),
+            ReconciliationPhysicalRecord::Confirmed(incarnation(expected, 13, 45)),
+        );
+        assert!(matches!(
+            replacement.disposition(),
+            ReconciliationOutcomeDisposition::Accepted(_)
+        ));
+    }
+
+    #[test]
+    fn every_valid_failed_prefix_remains_a_failure_report() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let replacement = replacement_history();
+        for length in 0..=replacement.len() {
+            let outcome = assess(
+                intent(expected.clone(), Some(before.clone())),
+                replacement[..length].to_vec(),
+                ReconciliationPhysicalRecord::Failed,
+            );
+            assert!(matches!(
+                outcome.disposition(),
+                ReconciliationOutcomeDisposition::Accepted(ReconciliationPhysicalRecord::Failed)
+            ));
+        }
+        for unload_first in [false, true] {
+            let installation = installation_history(unload_first);
+            for length in 0..=installation.len() {
+                let outcome = assess(
+                    intent(expected.clone(), None),
+                    installation[..length].to_vec(),
+                    ReconciliationPhysicalRecord::Failed,
+                );
+                assert!(matches!(
+                    outcome.disposition(),
+                    ReconciliationOutcomeDisposition::Accepted(
+                        ReconciliationPhysicalRecord::Failed
+                    )
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn known_incarnation_cannot_be_replaced_without_retirement_and_unload() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let outcome = assess(
+            intent(expected.clone(), Some(before)),
+            installation_history(false),
+            ReconciliationPhysicalRecord::Confirmed(incarnation(expected, 11, 43)),
+        );
+        let ReconciliationOutcomeDisposition::Rejected(report) = outcome.disposition() else {
+            panic!("replacement without retirement was accepted");
+        };
+        assert_eq!(
+            report.validation().rejected_history_fact(),
+            Some(ReconciliationHistoryFact::ServiceDefinitionPublished)
+        );
+        assert!(!report.validation().candidate_eligible());
+        assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
+    }
+
+    #[test]
+    fn malformed_history_does_not_mask_identity_contradictions_or_claim() {
+        let expected = target("service", 'a');
+        let other = target("other", 'c');
+        let before = incarnation(expected.clone(), 10, 42);
+        let changed_process = incarnation(other, 10, 99);
+        let reported = vec![
+            ReconciliationHistoryFact::BootstrapCommandCompleted,
+            ReconciliationHistoryFact::ServiceDefinitionPublished,
+        ];
+        let outcome = assess(
+            intent(expected, Some(before)),
+            reported.clone(),
+            ReconciliationPhysicalRecord::Confirmed(changed_process.clone()),
+        );
+        assert_eq!(outcome.reported_history(), reported);
+        assert!(outcome.history().facts().is_empty());
+        let ReconciliationOutcomeDisposition::Rejected(report) = outcome.disposition() else {
+            panic!("contradictory report was accepted");
+        };
+        assert_eq!(report.claimed_identity(), Some(&changed_process));
+        assert!(!report.validation().target_matches());
+        assert_eq!(
+            report.validation().runtime_identity(),
+            ReconciliationRuntimeIdentity::ChangedProcessForRuntimeInstance
+        );
+        assert_eq!(
+            report.validation().rejected_history_fact(),
+            Some(ReconciliationHistoryFact::BootstrapCommandCompleted)
+        );
+        assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
+    }
+
+    #[test]
+    fn reused_runtime_instance_is_independent_of_malformed_history() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let outcome = assess(
+            intent(expected, Some(before.clone())),
+            vec![
+                ReconciliationHistoryFact::RetirementAcknowledged,
+                ReconciliationHistoryFact::BootstrapCommandSucceeded,
+            ],
+            ReconciliationPhysicalRecord::Confirmed(before),
+        );
+        assert_eq!(
+            outcome.validation().runtime_identity(),
+            ReconciliationRuntimeIdentity::ReusedRuntimeInstance
+        );
+        assert_eq!(
+            outcome.validation().rejected_history_fact(),
+            Some(ReconciliationHistoryFact::BootstrapCommandSucceeded)
+        );
+        assert!(!outcome.validation().candidate_eligible());
+    }
+
+    #[test]
+    fn invalid_history_cannot_turn_exact_identity_into_healthy_reuse() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let outcome = assess(
+            intent(expected, Some(before.clone())),
+            vec![ReconciliationHistoryFact::BootstrapCommandSucceeded],
+            ReconciliationPhysicalRecord::Confirmed(before),
+        );
+        assert_eq!(
+            outcome.validation().runtime_identity(),
+            ReconciliationRuntimeIdentity::HealthyReuse
+        );
+        assert!(!outcome.validation().candidate_eligible());
+        assert_eq!(
+            outcome.cleanup(),
+            ReconciliationCleanupDecision::RetainPrior
+        );
+    }
+
+    #[test]
+    fn failed_intent_delivery_blocks_acceptance_but_preserves_cleanup_authority() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let after = incarnation(expected.clone(), 11, 43);
+        let outcome = ReconciliationOutcomeRecord::assess(
+            intent(expected, Some(before)),
+            ReconciliationIntentDeliveryRecord::Failed,
+            ReconciliationEffectTimingRecord::BeforeIntentAcknowledgement,
+            replacement_history(),
+            ReconciliationPhysicalRecord::Confirmed(after.clone()),
+        );
+        let ReconciliationOutcomeDisposition::Rejected(report) = outcome.disposition() else {
+            panic!("failed intent delivery accepted physical success");
+        };
+        assert_eq!(report.claimed_identity(), Some(&after));
+        assert!(report.validation().candidate_eligible());
+        assert_eq!(
+            report.cleanup(),
+            ReconciliationCleanupDecision::AdoptClaimed
+        );
+    }
+
+    #[test]
+    fn effect_timing_must_agree_with_reported_history() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let outcome = ReconciliationOutcomeRecord::assess(
+            intent(expected, Some(before)),
+            ReconciliationIntentDeliveryRecord::Acknowledged,
+            ReconciliationEffectTimingRecord::NoEffectsObserved,
+            vec![ReconciliationHistoryFact::RetirementAcknowledged],
+            ReconciliationPhysicalRecord::Failed,
+        );
+        assert!(!outcome.validation().effect_timing_matches_history());
+        assert!(matches!(
+            outcome.disposition(),
+            ReconciliationOutcomeDisposition::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn invalid_suffix_is_retained_without_erasing_proven_candidate() {
+        let expected = target("service", 'a');
+        let before = incarnation(expected.clone(), 10, 42);
+        let after = incarnation(expected.clone(), 11, 43);
+        let mut reported = replacement_history();
+        reported.push(ReconciliationHistoryFact::BootstrapCommandSucceeded);
+        let outcome = assess(
+            intent(expected, Some(before)),
+            reported.clone(),
+            ReconciliationPhysicalRecord::Confirmed(after.clone()),
+        );
+        assert_eq!(outcome.reported_history(), reported);
+        assert_eq!(outcome.history().facts(), replacement_history());
+        let ReconciliationOutcomeDisposition::Rejected(report) = outcome.disposition() else {
+            panic!("invalid suffix was accepted");
+        };
+        assert_eq!(report.claimed_identity(), Some(&after));
+        assert!(report.validation().candidate_eligible());
+        assert_eq!(
+            report.cleanup(),
+            ReconciliationCleanupDecision::AdoptClaimed
+        );
     }
 }

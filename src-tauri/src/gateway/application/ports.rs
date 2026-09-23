@@ -1,9 +1,10 @@
 use crate::gateway::domain::value_objects::{
-    ReconciliationAttemptRecord, ReconciliationCorrelation, ReconciliationEvidence,
-    ReconciliationHistory, ReconciliationHistoryFact, ReconciliationIncarnation,
+    ReconciliationAttemptRecord, ReconciliationCleanupDecision, ReconciliationCorrelation,
+    ReconciliationEffectTimingRecord, ReconciliationEvidence, ReconciliationHistory,
+    ReconciliationHistoryFact, ReconciliationIncarnation, ReconciliationIntentDeliveryRecord,
     ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
     ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
-    ReconciliationTarget, SearchPath, SearchPathError,
+    ReconciliationTarget, ReconciliationValidationFacts, SearchPath, SearchPathError,
 };
 use std::{error::Error, fmt, path::Path};
 
@@ -250,7 +251,7 @@ pub trait GatewayReconciliationIds: Send + Sync {
     fn next(&self) -> Result<ReconciliationCorrelation, GatewayError>;
 }
 
-/// Durable intent written before a reconciliation effect is admitted.
+/// Immutable intent reserved before delivery decides whether effects may proceed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayReconciliationIntent {
     record: ReconciliationIntentRecord,
@@ -323,21 +324,65 @@ pub enum GatewayReconciliationEffect {
     },
 }
 
-/// Final audit record for one admitted attempt.
+/// Delivery state of the immutable intent record reserved before native effects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GatewayReconciliationIntentDelivery {
+    Reserved,
+    Acknowledged,
+    Failed(GatewayError),
+}
+
+impl GatewayReconciliationIntentDelivery {
+    fn domain_record(&self) -> ReconciliationIntentDeliveryRecord {
+        match self {
+            Self::Reserved => ReconciliationIntentDeliveryRecord::Reserved,
+            Self::Acknowledged => ReconciliationIntentDeliveryRecord::Acknowledged,
+            Self::Failed(_) => ReconciliationIntentDeliveryRecord::Failed,
+        }
+    }
+}
+
+/// Earliest native effect timing relative to immutable intent acknowledgement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayReconciliationEffectTiming {
+    NoEffectsObserved,
+    BeforeIntentReservation,
+    BeforeIntentAcknowledgement,
+    AfterIntentAcknowledgement,
+}
+
+impl GatewayReconciliationEffectTiming {
+    fn domain_record(self) -> ReconciliationEffectTimingRecord {
+        match self {
+            Self::NoEffectsObserved => ReconciliationEffectTimingRecord::NoEffectsObserved,
+            Self::BeforeIntentReservation => {
+                ReconciliationEffectTimingRecord::BeforeIntentReservation
+            }
+            Self::BeforeIntentAcknowledgement => {
+                ReconciliationEffectTimingRecord::BeforeIntentAcknowledgement
+            }
+            Self::AfterIntentAcknowledgement => {
+                ReconciliationEffectTimingRecord::AfterIntentAcknowledgement
+            }
+        }
+    }
+}
+
+/// Final audit record for one attempt that reserved immutable intent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayReconciliationOutcome {
-    #[expect(
-        dead_code,
-        reason = "the validated record stays attached to the application outcome"
-    )]
     record: ReconciliationOutcomeRecord,
     intent: GatewayReconciliationIntent,
+    intent_delivery: GatewayReconciliationIntentDelivery,
+    effect_timing: GatewayReconciliationEffectTiming,
     effect: GatewayReconciliationEffect,
 }
 
 impl GatewayReconciliationOutcome {
     pub fn assess(
         intent: GatewayReconciliationIntent,
+        intent_delivery: GatewayReconciliationIntentDelivery,
+        effect_timing: GatewayReconciliationEffectTiming,
         facts: Vec<ReconciliationHistoryFact>,
         physical: Result<ReconciliationIncarnation, GatewayError>,
     ) -> Self {
@@ -345,8 +390,13 @@ impl GatewayReconciliationOutcome {
             Ok(after) => ReconciliationPhysicalRecord::Confirmed(after.clone()),
             Err(_) => ReconciliationPhysicalRecord::Failed,
         };
-        let record =
-            ReconciliationOutcomeRecord::assess(intent.record().clone(), facts, physical_record);
+        let record = ReconciliationOutcomeRecord::assess(
+            intent.record().clone(),
+            intent_delivery.domain_record(),
+            effect_timing.domain_record(),
+            facts,
+            physical_record,
+        );
         let effect = match (record.disposition(), physical) {
             (
                 ReconciliationOutcomeDisposition::Accepted(
@@ -368,24 +418,29 @@ impl GatewayReconciliationOutcome {
                 GatewayReconciliationEffect::RejectedReport {
                     trusted_history: record.history().clone(),
                     report: report.clone(),
-                    error: physical.err().unwrap_or_else(|| {
-                        GatewayError::Registration(
-                            "gateway host returned a contradictory success report".into(),
-                        )
+                    error: physical.err().unwrap_or_else(|| match &intent_delivery {
+                        GatewayReconciliationIntentDelivery::Failed(error) => error.clone(),
+                        GatewayReconciliationIntentDelivery::Reserved => {
+                            GatewayError::Registration(
+                                "gateway host reported success before intent delivery completed"
+                                    .into(),
+                            )
+                        }
+                        GatewayReconciliationIntentDelivery::Acknowledged => {
+                            GatewayError::Registration(
+                                "gateway host returned a contradictory success report".into(),
+                            )
+                        }
                     }),
                 }
             }
-            _ => GatewayReconciliationEffect::RejectedReport {
-                trusted_history: record.history().clone(),
-                report: ReconciliationRejectedReport::ConfirmationWithoutCompleteHistory,
-                error: GatewayError::Registration(
-                    "gateway host returned an incomplete terminal report".into(),
-                ),
-            },
+            _ => unreachable!("domain assessment preserves the supplied physical report"),
         };
         Self {
             record,
             intent,
+            intent_delivery,
+            effect_timing,
             effect,
         }
     }
@@ -404,6 +459,50 @@ impl GatewayReconciliationOutcome {
     )]
     pub fn intent(&self) -> &GatewayReconciliationIntent {
         &self.intent
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn intent_delivery(&self) -> &GatewayReconciliationIntentDelivery {
+        &self.intent_delivery
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn effect_timing(&self) -> GatewayReconciliationEffectTiming {
+        self.effect_timing
+    }
+
+    pub fn cleanup(&self) -> ReconciliationCleanupDecision {
+        self.record.cleanup()
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn physical(&self) -> &ReconciliationPhysicalRecord {
+        self.record.physical()
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {
+        self.record.reported_history()
+    }
+
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+    )]
+    pub fn validation(&self) -> &ReconciliationValidationFacts {
+        self.record.validation()
     }
 
     pub fn effect(&self) -> &GatewayReconciliationEffect {
@@ -578,5 +677,137 @@ pub(crate) mod testing {
 
     pub(crate) fn discard_reconciliation_audit() -> Arc<dyn GatewayReconciliationAudit> {
         Arc::new(DiscardReconciliationAudit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::domain::value_objects::{
+        BundledSurface, ReconciliationCause, ReconciliationInitiator, ReconciliationRuntimeIdentity,
+    };
+
+    fn correlation(serial: u64) -> ReconciliationCorrelation {
+        ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}"))
+            .expect("correlation")
+    }
+
+    fn target(service: &str) -> ReconciliationTarget {
+        ReconciliationTarget::new(service.into(), "a".repeat(64), "b".repeat(64)).expect("target")
+    }
+
+    fn incarnation(
+        target: ReconciliationTarget,
+        serial: u64,
+        process_id: u32,
+    ) -> ReconciliationIncarnation {
+        ReconciliationIncarnation::new(
+            target,
+            format!("00000000-0000-4000-8000-{serial:012x}"),
+            process_id,
+            7420,
+        )
+        .expect("incarnation")
+    }
+
+    fn intent(
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+    ) -> GatewayReconciliationIntent {
+        let evidence = ReconciliationEvidence::new(
+            ReconciliationCause::ExplicitRetry,
+            ReconciliationInitiator::BundledSurface(BundledSurface::Main),
+        )
+        .expect("evidence");
+        let request = GatewayReconciliationRequest::new(correlation(1), evidence);
+        let attempt = GatewayReconciliationAttempt::new(correlation(2), request).expect("attempt");
+        GatewayReconciliationIntent::new(attempt, target, before).expect("intent")
+    }
+
+    fn replacement_history() -> Vec<ReconciliationHistoryFact> {
+        vec![
+            ReconciliationHistoryFact::RetirementAcknowledged,
+            ReconciliationHistoryFact::OldServiceUnloaded,
+            ReconciliationHistoryFact::ServiceDefinitionPublished,
+            ReconciliationHistoryFact::ServiceDefinitionDurable,
+            ReconciliationHistoryFact::BootstrapCommandRequested,
+            ReconciliationHistoryFact::BootstrapCommandCompleted,
+            ReconciliationHistoryFact::BootstrapCommandSucceeded,
+        ]
+    }
+
+    #[test]
+    fn application_mapping_cannot_accept_success_after_failed_intent_delivery() {
+        let expected = target("service");
+        let before = incarnation(expected.clone(), 10, 42);
+        let after = incarnation(expected.clone(), 11, 43);
+        let outcome = GatewayReconciliationOutcome::assess(
+            intent(expected, Some(before)),
+            GatewayReconciliationIntentDelivery::Failed(GatewayError::Registration(
+                "intent audit failed".into(),
+            )),
+            GatewayReconciliationEffectTiming::BeforeIntentAcknowledgement,
+            replacement_history(),
+            Ok(after.clone()),
+        );
+        let GatewayReconciliationEffect::RejectedReport { report, error, .. } = outcome.effect()
+        else {
+            panic!("application mapping bypassed the domain assessment");
+        };
+        assert_eq!(
+            error,
+            &GatewayError::Registration("intent audit failed".into())
+        );
+        assert_eq!(report.claimed_identity(), Some(&after));
+        assert!(report.validation().candidate_eligible());
+        assert_eq!(
+            outcome.cleanup(),
+            ReconciliationCleanupDecision::AdoptClaimed
+        );
+    }
+
+    #[test]
+    fn application_mapping_preserves_independent_rejection_facts() {
+        let expected = target("service");
+        let before = incarnation(expected.clone(), 10, 42);
+        let claimed = incarnation(target("other"), 10, 99);
+        let reported = vec![ReconciliationHistoryFact::BootstrapCommandCompleted];
+        let outcome = GatewayReconciliationOutcome::assess(
+            intent(expected, Some(before)),
+            GatewayReconciliationIntentDelivery::Acknowledged,
+            GatewayReconciliationEffectTiming::BeforeIntentReservation,
+            reported.clone(),
+            Ok(claimed.clone()),
+        );
+        let GatewayReconciliationEffect::RejectedReport { report, .. } = outcome.effect() else {
+            panic!("application mapping bypassed the domain assessment");
+        };
+        assert_eq!(outcome.reported_history(), reported);
+        assert_eq!(report.claimed_identity(), Some(&claimed));
+        assert!(!report.validation().target_matches());
+        assert_eq!(
+            report.validation().runtime_identity(),
+            ReconciliationRuntimeIdentity::ChangedProcessForRuntimeInstance
+        );
+        assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
+    }
+
+    #[test]
+    fn post_bootstrap_readiness_failure_remains_an_honest_physical_failure() {
+        let expected = target("service");
+        let before = incarnation(expected.clone(), 10, 42);
+        let outcome = GatewayReconciliationOutcome::assess(
+            intent(expected, Some(before)),
+            GatewayReconciliationIntentDelivery::Acknowledged,
+            GatewayReconciliationEffectTiming::AfterIntentAcknowledgement,
+            replacement_history(),
+            Err(GatewayError::Registration("readiness failed".into())),
+        );
+        assert!(matches!(
+            outcome.effect(),
+            GatewayReconciliationEffect::Failed { error, .. }
+                if error == &GatewayError::Registration("readiness failed".into())
+        ));
+        assert_eq!(outcome.cleanup(), ReconciliationCleanupDecision::ClearPrior);
     }
 }

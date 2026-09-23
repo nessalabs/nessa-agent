@@ -2,11 +2,12 @@
 mod reconciliation_evidence;
 pub use reconciliation_evidence::{
     BundledSurface, PendingReconciliation, ReconciliationAttemptRecord, ReconciliationCause,
-    ReconciliationCorrelation, ReconciliationEvidence, ReconciliationHistory,
-    ReconciliationHistoryFact, ReconciliationIncarnation, ReconciliationInitiator,
+    ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEffectTimingRecord,
+    ReconciliationEvidence, ReconciliationHistory, ReconciliationHistoryFact,
+    ReconciliationIncarnation, ReconciliationInitiator, ReconciliationIntentDeliveryRecord,
     ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
     ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
-    ReconciliationTarget,
+    ReconciliationRuntimeIdentity, ReconciliationTarget, ReconciliationValidationFacts,
 };
 mod search_path;
 pub use search_path::{SearchPath, SearchPathError};
