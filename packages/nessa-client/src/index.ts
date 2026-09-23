@@ -157,6 +157,11 @@ export {
 } from "./protocol/attachment-validate.js"
 export type {
   ConversationView,
+  ConversationLifecycle,
+  ConversationLifecyclePhase,
+  ConversationStartupFailure,
+  ConversationStartupFailureCode,
+  ConversationAttachmentEvidenceFailure,
   ImageAttachment,
   LinkedFile,
   ConversationMessage,

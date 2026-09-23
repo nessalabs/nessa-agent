@@ -333,7 +333,7 @@ it("shows queued input before an assistant row without inventing activity or dup
         executionId: "queued-run",
         text: "Done",
         status: "completed",
-        parts: [{ offset: 0, kind: "text", text: "Done", toolId: "" }],
+        parts: [{ offset: 0, kind: "text", text: "Done", toolId: "", noticeId: "" }],
       },
     ],
     remote: queued.remote
