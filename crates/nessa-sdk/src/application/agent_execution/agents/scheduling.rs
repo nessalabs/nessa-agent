@@ -1302,9 +1302,6 @@ impl Agent {
             return recovered;
         }
         let close_notice = self.inner.lifecycle.close_notice();
-        if !self.inner.lifecycle.accepts_queued() {
-            return Err(AgentError::Closed);
-        }
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
         scheduler
             .queue

@@ -6,11 +6,13 @@ async fn assert_permissions_fenced(
     backend: &Probe,
     calls: usize,
     expected: AgentError,
+    stage: &str,
 ) {
     for operation in [ProviderControl::Answer, ProviderControl::CancelPermission] {
         assert_eq!(
             invoke_control(agent, operation).await,
-            Err(expected.clone())
+            Err(expected.clone()),
+            "{stage}: {operation:?}"
         );
     }
     assert_eq!(backend.controls.load(Ordering::SeqCst), calls);
@@ -47,6 +49,7 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
             &backend,
             calls,
             AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
+            "after the cleanup-reporting control",
         )
         .await;
         // Steering after cleanup queues for preparation instead of targeting the retired context.
@@ -68,6 +71,7 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
             &backend,
             calls,
             AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
+            "while replacement preparation is gated",
         )
         .await;
         *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
@@ -125,6 +129,7 @@ async fn already_pending_permission_cannot_resume_against_a_cleaned_generation()
             } else {
                 AgentError::AttachmentUnavailable(AttachmentPhase::Absent)
             },
+            "after an already-admitted control is interrupted",
         )
         .await;
         let expected_close = if audit_failure {
@@ -166,7 +171,14 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
             assert_eq!(invoke_control(&agent, source).await, Err(expected.clone()));
             let calls = backend.controls.load(Ordering::SeqCst);
             let admission_error = AgentError::AuditFailure;
-            assert_permissions_fenced(&agent, &backend, calls, AgentError::AuditFailure).await;
+            assert_permissions_fenced(
+                &agent,
+                &backend,
+                calls,
+                AgentError::AuditFailure,
+                "after confirmed cleanup whose audit failed",
+            )
+            .await;
             // A later successful physical-cleanup report from the already-running
             // execution must not acknowledge the control's earlier failed audit.
             if later_success_report {
@@ -223,7 +235,14 @@ async fn restoration_cannot_erase_confirmed_cleanup_audit_failure() {
                         Some(Err(AgentError::AuditFailure))
                     );
                 }
-                assert_permissions_fenced(&agent, &backend, calls, admission_error.clone()).await;
+                assert_permissions_fenced(
+                    &agent,
+                    &backend,
+                    calls,
+                    admission_error.clone(),
+                    "after a blocked direct invocation",
+                )
+                .await;
             }
             assert_eq!(
                 backend.steers.load(Ordering::SeqCst),

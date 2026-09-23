@@ -724,7 +724,10 @@ async fn scheduling_close_wins_when_stalled_native_steering_returns_prompt_requi
     while agent.attachment_status().phase() != AttachmentPhase::Absent {
         tokio::task::yield_now().await;
     }
-    release.send(()).unwrap();
+    assert!(
+        release.send(()).is_err(),
+        "close drops the provider wait after owning its cancellation"
+    );
     assert!(matches!(
         within(steering).await.unwrap(),
         Err(AgentError::Closed)
