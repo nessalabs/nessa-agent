@@ -53,6 +53,7 @@ const view: ConversationView = {
       details: "",
       toolId: "tool",
       title: "Read",
+      kind: "read",
       status: "pending",
     },
   ],

@@ -296,13 +296,28 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   const toolIds = new Set<string>()
   for (const tool of items(item, "tools", 128)) {
-    exact(tool, ["executionId", "toolId", "title", "status", "details", "input"])
+    exact(tool, ["executionId", "toolId", "title", "kind", "status", "details", "input"])
     identity(tool, "executionId")
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])
     if (toolIds.has(toolKey)) throw new Error("Conversation response repeats a tool")
     toolIds.add(toolKey)
     text(tool, "title", 2048)
+    // The provider's own category, empty until it says. The schema names the
+    // values, so an unknown one is a gateway this client does not understand.
+    oneOf(text(tool, "kind", 32), [
+      "",
+      "read",
+      "edit",
+      "search",
+      "fetch",
+      "execute",
+      "think",
+      "delete",
+      "move",
+      "switch_mode",
+      "other",
+    ])
     text(tool, "status", 64)
     text(tool, "details", 16384)
     text(tool, "input", 32768)

@@ -212,10 +212,16 @@ for (const [message, registry, machine] of REFUSALS) {
 try {
   // An agent Nessa pins nothing for. The refusal names it, and the one thing
   // that must not happen is a reader being handed a line that is not a report.
-  const unknown = install("claude")
+  //
+  // Claude was this example until it stopped being true: all three agents Nessa
+  // drives are pinned now, so asking for Claude here gets the *other* refusal
+  // on a machine with no build for it, and on a macOS arm64 runner it gets an
+  // 87 MB download this script has no reason to fetch. An agent nessa does not
+  // drive is the only thing that still asks the question this case is asking.
+  const unknown = install("gemini")
   assert.equal(unknown.status, 25, `expected the agent exit code: ${unknown.stderr}`)
   assert.equal(unknown.stdout, "", `a refusal wrote to stdout: ${unknown.stdout}`)
-  assert.match(unknown.stderr, /claude is not an agent nessa installs/)
+  assert.match(unknown.stderr, /gemini is not an agent nessa installs/)
 
   // A command line this binary cannot run at all. Refused before anything is
   // dispatched, so stdout is untouched for a second reason, and the exit code

@@ -58,7 +58,7 @@ impl fmt::Display for Libc {
 /// decline a name: at 1.18.31 Opencode's three `-baseline` archives hold the
 /// same bytes as their AVX2 siblings, so what those bytes need is unsettled,
 /// none of them is pinned, and a machine without AVX2 matches nothing rather
-/// than matching a build named for it. `scripts/agents/pin-opencode.mjs`
+/// than matching a build named for it. `scripts/agents/pin-agents.mjs`
 /// records the measurement and why it does not decide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReleaseRequirements {

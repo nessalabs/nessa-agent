@@ -34,6 +34,7 @@ opinion rather than the product's.
 | File | Owns |
 | --- | --- |
 | `main.rs` | The entry point. Assembles `HostDependencies` in `setup`, wires the tray, shortcut, and window, and hands the bundle on. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
+| `launch.rs` | The desktop executable's empty command-line contract. It refuses the first supplied argument before Tauri or a platform window host is initialized. |
 | `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the gateway, the release source — and the bundle every command and menu is given. Nothing below it reaches back for a dependency. |
 | `updater.rs` | Whether a newer Nessa is published and installing it. `ReleaseSource`, `CheckOutcome`, `Installer` and `Restarter` are its ports; the decisions are pure and tested, and the module header states which adapters are not. |
 | `attachments/` | Choosing files to attach, and reading the ones that turn out to be images. Four ports, because they are four different outside things: `FilePicker` is the OS dialog, `ChosenFiles` is the filesystem (a chosen file's kind, length and bytes, which fail the same ways at the same moment), `AttachmentTickets` is the desk that mints and spends the one-shot tickets — the operating system's randomness and clock, and the port that carries the rule that a page cannot name a path — and `ContentTypes` is the platform's type database — Launch Services on macOS, shared-mime-info on Linux, nothing elsewhere — so a `.ico` or `.svgz` is recognised as an image without this app keeping a list of formats. That answer goes where a dropped file's `type` goes, which is what keeps one file from taking two routes. Anything that is not a regular file is refused before it is opened, and both the look and the read have deadlines on their own threads, so a FIFO or a stalled mount cannot wedge the panel. A read is authorised by a one-shot ticket the picker minted, never by a path the page names. The page calls `choose_attachment_files` and `read_attachment_bytes`; the host calls the dialog plugin, so `capabilities/` grants the webview nothing. |
@@ -61,7 +62,7 @@ opinion rather than the product's.
 | --- | --- |
 | `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
 | `conversation/` | The conversation vertical. See the table below. |
-| `session/` | Authenticated wire session to `nessa-server` via `@nessa/client`, including health and reconnect lifecycle. |
+| `session/` | Authenticated wire session to `nessa-server` via `@nessa/client`, including verified local endpoint discovery, health, and reconnect lifecycle. |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
 
@@ -90,7 +91,7 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | `SessionPhase`, status copy for the empty state. |
-| `adapters/client/` | `connectDevSession` (native credential loading, authenticated session, health; closes on probe failure) + injected session handle (live client outside Redux). |
+| `adapters/client/` | `connectDevSession` (injected native endpoint and credential loading, authenticated session, health; closes on probe failure) + injected session handle (live client outside Redux). |
 | `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
 | `adapters/lifecycle/` | React lifetime plus `supervisor.ts`: fresh connections after typed transient startup failures or exhausted SDK retries, capped backoff, stale callback disposal, explicit retry for terminal errors. No message replay. |
 | `ui/use-session.ts` | Hook the panel reads for status. |

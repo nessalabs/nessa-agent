@@ -1,8 +1,39 @@
-import type { AgentEvent, AgentEventPayload, JsonValue } from "@nessalabs/agent-stream"
+import type {
+  AgentEvent,
+  AgentEventPayload,
+  JsonValue,
+  ToolKind,
+} from "@nessalabs/agent-stream"
 import { TranscriptBuilder, type Transcript } from "@nessalabs/agent-stream/transcript"
 import { contentText, type Turn } from "../../model"
 import type { ConversationView } from "../../application/view"
 
+/**
+ * The provider's own word for what a call does, in the stream's vocabulary.
+ * A title cannot stand in for it — "grep -l" and "Find" are both searches
+ * and neither title says so — and an unsaid kind stays `other` rather than
+ * being guessed at.
+ */
+function toolKind(kind: string): ToolKind {
+  switch (kind) {
+    case "read":
+      return "file_read"
+    case "edit":
+    case "delete":
+    case "move":
+      return "file_edit"
+    case "search":
+      return "search"
+    case "fetch":
+      return "web"
+    case "execute":
+      return "shell"
+    case "think":
+      return "plan"
+    default:
+      return "other"
+  }
+}
 /** Map a bounded replacement view, never append polling snapshots to a live log.
  * Provider offsets preserve observation order; steering offsets mark local admission.
  * Raw DTOs retain details the common contract does not model, such as partial output.
@@ -146,7 +177,7 @@ export function agentTranscript(
             type: "tool_call_started",
             callId,
             name: tool.title,
-            kind: "other",
+            kind: toolKind(tool.kind),
             title: tool.title,
             input,
           },

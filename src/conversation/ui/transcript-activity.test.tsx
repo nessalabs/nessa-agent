@@ -84,6 +84,7 @@ function workingConversation(id: string): Conversation {
           executionId: "run",
           toolId: "one",
           title: "Search",
+          kind: "search",
           status: "failed",
           input: "needle",
           details: "No matches",
@@ -92,6 +93,7 @@ function workingConversation(id: string): Conversation {
           executionId: "run",
           toolId: "two",
           title: "Read",
+          kind: "read",
           status: "running",
           input: "README.md",
           details: "Project notes",
@@ -111,6 +113,26 @@ function workingConversation(id: string): Conversation {
     },
   }
 }
+
+/** The same turn once it has finished: the line is now a way in. */
+const settled = (value: Conversation): Conversation => ({
+  ...value,
+  phase: "idle",
+  turns: value.turns.map((turn) =>
+    turn.from === "assistant" ? { ...turn, status: "completed" } : turn,
+  ),
+  remote: value.remote
+    ? {
+        ...value.remote,
+        running: false,
+        permissions: [],
+        tools: value.remote.tools.map((tool) => ({
+          ...tool,
+          status: tool.status === "running" ? "completed" : tool.status,
+        })),
+      }
+    : undefined,
+})
 
 const withoutActivity = (value: Conversation): Conversation => ({
   ...value,
@@ -235,15 +257,25 @@ afterEach(async () => {
   container.remove()
 })
 
-it("renders one turn activity, keeps details and permission controls reachable, and clears stale selection", async () => {
-  const conversation = workingConversation("first")
+it("renders one working status, with permission controls still reachable", async () => {
+  await render(workingConversation("first"))
+
+  const activities = container.querySelectorAll('[data-slot="agent-activity"]')
+  expect(activities).toHaveLength(1)
+  // While the turn runs the line is a status, not a control: nothing to open.
+  expect(activities.item(0).textContent).toBe("Running")
+  expect(activities.item(0).querySelector("button")).toBeNull()
+  expect(container.querySelector('[aria-label="Approve Approve shell"]')).not.toBeNull()
+})
+
+it("opens a finished turn's working in order, and clears a stale or foreign selection", async () => {
+  const conversation = settled(workingConversation("first"))
   await render(conversation)
 
   const activities = container.querySelectorAll('[data-slot="agent-activity"]')
   expect(activities).toHaveLength(1)
   const trigger = requiredElement(activities.item(0), "button")
-  expect(trigger.textContent).toBe("Running…")
-  expect(container.querySelector('[aria-label="Approve Approve shell"]')).not.toBeNull()
+  expect(trigger.textContent).toBe("Ran 2 tools · 1 read")
 
   await click(trigger)
   await waitForText("First thought")
@@ -259,22 +291,19 @@ it("renders one turn activity, keeps details and permission controls reachable, 
   await click(requiredElement(failedTool, "button"))
   expect(document.body.textContent).toContain("needle")
   expect(document.body.textContent).toContain("No matches")
-  expect(
-    document.body.querySelector('[aria-label="Approve Approve shell"]'),
-  ).not.toBeNull()
 
   // Both conversations deliberately reuse the turn, tool, and activity ids.
   // A selected segment belongs to the conversation that opened it, so an
   // immediate tab switch must not retarget the open sheet to the collision.
-  await render(workingConversation("second"))
-  expect(document.body.querySelector('[aria-label="Turn activity"]')).toBeNull()
+  await render(settled(workingConversation("second")))
+  expect(document.body.querySelector('[aria-label="Agent working"]')).toBeNull()
 
   await render(conversation)
   await click(requiredElement(container, '[data-slot="agent-activity"] button'))
   await waitForText("First thought")
   await render(withoutActivity(conversation))
   await React.act(async () => {})
-  expect(document.body.querySelector('[aria-label="Turn activity"]')).toBeNull()
+  expect(document.body.querySelector('[aria-label="Agent working"]')).toBeNull()
 })
 
 it.each([
@@ -284,7 +313,9 @@ it.each([
   "renders one accessible %s notice for a terminal turn with no text",
   async (status, label) => {
     await render(terminalConversation(status, []))
-    const notices = container.querySelectorAll('p[role="status"]')
+    const notices = container.querySelectorAll(
+      '[data-slot="transcript-divider"][role="status"]',
+    )
     expect(notices).toHaveLength(1)
     expect(notices.item(0).textContent).toBe(label)
     expect(container.querySelector('[aria-label="Nessa is typing"]')).toBeNull()
@@ -301,6 +332,7 @@ it("renders one terminal notice beside a tools-only turn", async () => {
           executionId: "run",
           toolId: "shell",
           title: "Shell",
+          kind: "execute",
           status: "failed",
           input: "false",
           details: "exit 1",
@@ -309,8 +341,13 @@ it("renders one terminal notice beside a tools-only turn", async () => {
     ),
   )
   expect(container.querySelectorAll('[data-slot="agent-activity"]')).toHaveLength(1)
-  expect(container.querySelectorAll('p[role="status"]')).toHaveLength(1)
-  expect(requiredElement(container, 'p[role="status"]').textContent).toBe("failed")
+  expect(
+    container.querySelectorAll('[data-slot="transcript-divider"][role="status"]'),
+  ).toHaveLength(1)
+  expect(
+    requiredElement(container, '[data-slot="transcript-divider"][role="status"]')
+      .textContent,
+  ).toBe("failed")
 })
 
 it("renders a local decline once without implying terminal failure or ongoing typing", async () => {
@@ -325,6 +362,85 @@ it("renders a local decline once without implying terminal failure or ongoing ty
   expect(statuses.item(0).textContent).toBe(notice)
   expect(container.querySelector('[aria-label="Nessa is typing"]')).toBeNull()
   expect(container.textContent).not.toContain("failed")
+})
+
+it("keeps work and distinct local declines ordered across updates and repeated renders", async () => {
+  const conversation = (firstNotice: string, revision: string) => ({
+    ...terminalConversation(
+      "completed",
+      [
+        {
+          offset: 0,
+          kind: "thought" as const,
+          text: "Before",
+          toolId: "",
+          noticeId: "",
+        },
+        { offset: 1, kind: "tool" as const, text: "", toolId: "one", noticeId: "" },
+        {
+          offset: 2,
+          kind: "local_notice" as const,
+          text: firstNotice,
+          toolId: "",
+          noticeId: "1",
+        },
+        {
+          offset: 3,
+          kind: "thought" as const,
+          text: "After",
+          toolId: "",
+          noticeId: "",
+        },
+        { offset: 4, kind: "tool" as const, text: "", toolId: "two", noticeId: "" },
+        {
+          offset: 5,
+          kind: "local_notice" as const,
+          text: "Nessa declined the same review again.",
+          toolId: "",
+          noticeId: "2",
+        },
+      ],
+      ["one", "two"].map((toolId) => ({
+        executionId: "run",
+        toolId,
+        title: toolId === "one" ? "Read" : "Shell",
+        kind: "execute",
+        status: "completed",
+        input: "{}",
+        details: "done",
+      })),
+    ),
+    revision,
+  })
+  const selected =
+    "Nessa declined the review. Nessa has not confirmed sending the response."
+  const confirmed = "Nessa declined the review."
+
+  for (let renderCount = 0; renderCount < 3; renderCount++) {
+    await render(conversation(selected, `selected-${renderCount}`))
+    const siblings = container.querySelectorAll(
+      '[data-slot="agent-activity"], p[role="status"]',
+    )
+    expect([...siblings].map((element) => element.textContent)).toEqual([
+      "Ran 1 tool",
+      selected,
+      "Ran 1 tool",
+      "Nessa declined the same review again.",
+    ])
+  }
+
+  await render(conversation(confirmed, "confirmed"))
+  const siblings = container.querySelectorAll(
+    '[data-slot="agent-activity"], p[role="status"]',
+  )
+  expect([...siblings].map((element) => element.textContent)).toEqual([
+    "Ran 1 tool",
+    confirmed,
+    "Ran 1 tool",
+    "Nessa declined the same review again.",
+  ])
+  expect(container.textContent).not.toContain(selected)
+  expect(container.querySelectorAll('p[role="status"]')).toHaveLength(2)
 })
 
 it("renders one terminal notice across multiple text rows and repeated renders", async () => {
@@ -348,10 +464,15 @@ it("renders one terminal notice across multiple text rows and repeated renders",
   ])
   for (let renderCount = 0; renderCount < 3; renderCount++) {
     await render({ ...conversation, revision: String(renderCount) })
-    const notices = container.querySelectorAll('p[role="status"]')
+    const notices = container.querySelectorAll(
+      '[data-slot="transcript-divider"][role="status"]',
+    )
     expect(notices).toHaveLength(1)
     expect(notices.item(0).textContent).toBe("failed")
   }
-  expect(container.textContent).toContain("First.")
+  // The answer stays in the conversation; what the turn said on the way is
+  // working, one line behind the cue rather than a second bubble.
   expect(container.textContent).toContain("Second.")
+  expect(container.textContent).not.toContain("First.")
+  expect(container.querySelectorAll('[data-slot="agent-activity"]')).toHaveLength(1)
 })

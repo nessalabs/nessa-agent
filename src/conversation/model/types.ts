@@ -205,6 +205,8 @@ type ConversationState = {
       executionId: string
       toolId: string
       title: string
+      /** What the call does, as the provider categorised it; empty until it says. */
+      kind: string
       status: string
       input: string
       details: string

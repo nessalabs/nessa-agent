@@ -47,6 +47,7 @@ const connected = (wire = new Transport()): ConnectedSession & { wire: Transport
   wire,
   ready: { sessionId: "fixture" } as unknown as ProductSessionReady,
   profile: "product",
+  url: "ws://127.0.0.1:7421/session",
 })
 const flush = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve()

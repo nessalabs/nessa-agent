@@ -3,6 +3,7 @@ use super::error::EnvironmentError;
 use super::source::EnvSource;
 use super::stage::Stage;
 use super::stage_port::stage_port;
+use std::path::PathBuf;
 
 /// Fully parsed runtime configuration for this process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +16,8 @@ pub struct Environment {
     pub uptime_backend: super::UptimeBackend,
     /// Private product auth directory, resolved from typed startup configuration.
     /// None is valid for isolated config tests; serving requires a data root.
-    pub auth_directory: Option<std::path::PathBuf>,
+    pub auth_directory: Option<PathBuf>,
+    endpoint_storage: Option<(PathBuf, PathBuf)>,
 }
 
 impl Environment {
@@ -49,6 +51,7 @@ impl Environment {
             read_optional(source, key::UPTIME_FIXED_MS)?.as_deref(),
         )?;
         let auth_directory = load_auth_directory(source, stage)?;
+        let endpoint_storage = load_endpoint_storage(source, stage)?;
 
         Ok(Self {
             stage,
@@ -57,11 +60,12 @@ impl Environment {
             version: config::VERSION,
             uptime_backend,
             auth_directory,
+            endpoint_storage,
         })
     }
 
     /// Resolve offline administration paths for the selected stage and instance.
-    pub fn auth_directory_from_system() -> Result<std::path::PathBuf, EnvironmentError> {
+    pub fn auth_directory_from_system() -> Result<PathBuf, EnvironmentError> {
         let source = super::source::SystemEnv;
         load_auth_directory(&source, load_stage(&source)?)?.ok_or(EnvironmentError::Backend(
             "set NESSA_DATA_DIR or the OS home directory (USERPROFILE on Windows, HOME on Unix) for local credentials",
@@ -75,7 +79,7 @@ impl Environment {
     /// wrote down about giving up — has to be dealt with even when the reason
     /// this run is ending is that its configuration would not parse. `None` is
     /// a process with no data root at all, which has no such directory.
-    pub fn log_directory_from_system() -> Result<Option<std::path::PathBuf>, EnvironmentError> {
+    pub fn log_directory_from_system() -> Result<Option<PathBuf>, EnvironmentError> {
         let source = super::source::SystemEnv;
         let stage = load_stage(&source)?;
         super::paths::log_directory(
@@ -105,12 +109,34 @@ impl Environment {
     pub fn listen_addr(&self) -> String {
         format_socket_addr(&self.bind_host, self.port)
     }
+
+    /// The log directory in this already-resolved stage and instance namespace.
+    ///
+    /// Authentication composition requires `auth_directory` before serving, so
+    /// its parent is the one namespace authority. Endpoint publication uses the
+    /// sibling log directory without re-reading or re-interpreting environment
+    /// variables.
+    pub(crate) fn gateway_endpoint_storage(&self) -> Option<(PathBuf, PathBuf)> {
+        self.endpoint_storage.clone()
+    }
+}
+
+fn load_endpoint_storage(
+    source: &impl EnvSource,
+    stage: Stage,
+) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
+    super::paths::endpoint_storage(
+        read_optional(source, key::DATA_DIR)?.as_deref(),
+        read_optional(source, home_variable())?.as_deref(),
+        stage.as_str(),
+        read_optional(source, key::INSTANCE)?.as_deref(),
+    )
 }
 
 fn load_auth_directory(
     source: &impl EnvSource,
     stage: Stage,
-) -> Result<Option<std::path::PathBuf>, EnvironmentError> {
+) -> Result<Option<PathBuf>, EnvironmentError> {
     super::paths::auth_directory(
         read_optional(source, key::DATA_DIR)?.as_deref(),
         read_optional(source, home_variable())?.as_deref(),
@@ -296,5 +322,27 @@ mod tests {
     fn formats_ipv6_loopback_listen_addr() {
         let config = Environment::load(&MockEnv::new().set(HOST, "::1")).expect("ipv6");
         assert_eq!(config.listen_addr(), "[::1]:7421");
+    }
+
+    #[test]
+    fn endpoint_publication_uses_the_resolved_auth_namespace() {
+        let directory = tempfile::tempdir().expect("temporary data root");
+        let data_root = directory.path().to_path_buf();
+        let config = Environment::load(
+            &MockEnv::new()
+                .set("NESSA_DATA_DIR", data_root.to_string_lossy().into_owned())
+                .set(STAGE, "ci")
+                .set("NESSA_INSTANCE", "worker-7"),
+        )
+        .unwrap();
+        let (resolved_root, relative_namespace) = config.gateway_endpoint_storage().unwrap();
+        assert_eq!(resolved_root, data_root);
+        assert_eq!(
+            relative_namespace,
+            PathBuf::from("ci")
+                .join("instances")
+                .join("worker-7")
+                .join("logs")
+        );
     }
 }

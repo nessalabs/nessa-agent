@@ -14,15 +14,19 @@ import { fileURLToPath } from "node:url"
 import test from "node:test"
 import { createHash } from "node:crypto"
 import {
+  AGENTS,
   EXECUTABLE,
-  PLATFORMS,
+  agreesWithLockfile,
   agreesWithRegistry,
   entryName,
   executableDigest,
   kind,
+  lockedDependency,
+  ownerMayRun,
+  releaseFiles,
   storedName,
   sameBinaryUnderDifferentClaims,
-} from "./pin-opencode.mjs"
+} from "./pin-agents.mjs"
 
 /**
  * Bytes that begin the way a program does, which pinning now requires.
@@ -351,19 +355,18 @@ test("builds that differ, and ones that agree about what they are, pin", (t) => 
  * longer match the table they came from is exactly the case the Rust side
  * cannot see either — it reads the file as ground truth.
  *
- * The three fields compared are the three the generator does not measure. The
- * digest, the URL and the version come off the registry and can only be
- * rechecked by fetching, which is what `pin-opencode` is for; the platform,
- * the C library, the AVX2 requirement and the entry path come out of
- * `PLATFORMS` and `EXECUTABLE` and are copied verbatim, so a file that
- * disagrees with them was edited after it was generated.
+ * The fields compared are the ones the generator does not measure. The digest,
+ * the size, the URL and the version come off the registry and can only be
+ * rechecked by fetching, which is what this script is for; the platform, the C
+ * library and the AVX2 requirement are copied verbatim out of the table, so a
+ * file that disagrees with them was edited after it was generated.
  *
  * The set is compared too, not just the entries in it. A dropped build leaves
  * every remaining entry agreeing perfectly and a whole class of machine with
  * nothing to install, and an added one is a claim the generator never made.
  */
-test("the pinned releases are the ones this table describes", () => {
-  const pins = JSON.parse(
+function pinFile() {
+  return JSON.parse(
     readFileSync(
       join(
         dirname(fileURLToPath(import.meta.url)),
@@ -371,33 +374,287 @@ test("the pinned releases are the ones this table describes", () => {
       ),
       "utf8",
     ),
-  ).agents.opencode
-  const named = (url) => url.split("/")[3]
-
-  assert.deepEqual(
-    pins.map((pin) => named(pin.archiveUrl)).sort(),
-    PLATFORMS.map((platform) => platform.package).sort(),
-    "the pin file and the generator's table describe different builds",
   )
+}
 
-  for (const pin of pins) {
-    const platform = PLATFORMS.find((entry) => entry.package === named(pin.archiveUrl))
-    assert.deepEqual(
-      {
-        operatingSystem: pin.operatingSystem,
-        architecture: pin.architecture,
-        libc: pin.libc,
-        requiresAvx2: pin.requiresAvx2,
-        executable: pin.executable,
-      },
-      {
-        operatingSystem: platform.operatingSystem,
-        architecture: platform.architecture,
-        libc: platform.libc,
-        requiresAvx2: platform.requiresAvx2,
-        executable: EXECUTABLE,
-      },
-      `${platform.package} is pinned as something other than what the table says it is`,
+test("every agent this generator pins is in the pin file, and no others", () => {
+  assert.deepEqual(
+    Object.keys(pinFile().agents).sort(),
+    AGENTS.map((agent) => agent.name).sort(),
+    "the pin file and the generator's table describe different agents",
+  )
+})
+
+test("the pinned releases are the ones this table describes", () => {
+  const pins = pinFile().agents
+
+  for (const agent of AGENTS) {
+    const releases = pins[agent.name]
+    assert.ok(releases?.length, `${agent.name} is not pinned`)
+    assert.equal(
+      releases.length,
+      agent.builds.length,
+      `${agent.name} is pinned for a different number of builds than the table names`,
     )
+
+    for (const [at, pin] of releases.entries()) {
+      // Compared by position, because the generator writes the builds in the
+      // order the table lists them and nothing reorders them afterwards.
+      const build = agent.builds[at]
+      assert.deepEqual(
+        {
+          operatingSystem: pin.operatingSystem,
+          architecture: pin.architecture,
+          libc: pin.libc,
+          requiresAvx2: pin.requiresAvx2,
+        },
+        {
+          operatingSystem: build.operatingSystem,
+          architecture: build.architecture,
+          libc: build.libc,
+          requiresAvx2: build.requiresAvx2,
+        },
+        `${build.package} is pinned as something other than what the table says it is`,
+      )
+      assert.ok(
+        pin.archiveUrl.startsWith("https://"),
+        `${build.package} is pinned over something other than https`,
+      )
+      assert.ok(
+        Number.isInteger(pin.archiveBytes) && pin.archiveBytes > 0,
+        `${build.package} is pinned without a measured archive length`,
+      )
+      assert.match(
+        pin.archiveDigest,
+        /^[0-9a-f]{64}$/,
+        `${build.package} is pinned without a sha-256`,
+      )
+
+      // The one field the table does state about contents: which file is
+      // launched. Its role has to be `launch` and there has to be exactly one.
+      const launches = pin.files.filter((file) => file.role === "launch")
+      assert.deepEqual(
+        launches.map((file) => file.path),
+        [agent.launch],
+        `${build.package} launches something other than what the table names`,
+      )
+      for (const file of pin.files)
+        assert.ok(
+          ["launch", "helper", "document"].includes(file.role),
+          `${build.package} pins ${file.path} in a role the server cannot read`,
+        )
+      // A "launch" agent pins one file; a "package" agent pins more than one,
+      // which is the whole reason the distinction exists.
+      if (agent.install === "launch")
+        assert.equal(
+          pin.files.length,
+          1,
+          `${build.package} pins more than the one program the table says it installs`,
+        )
+      else
+        assert.ok(
+          pin.files.length > 1,
+          `${build.package} is pinned as a package and installs one file`,
+        )
+      // Sorted, because that is the order `ReleaseContents` canonicalises to:
+      // a file written in another order would read back as different contents
+      // and cost a re-download to reach the state already on the disk.
+      assert.deepEqual(
+        pin.files.map((file) => file.path),
+        [...pin.files.map((file) => file.path)].sort(),
+        `${build.package} pins its files in an order the server would reorder`,
+      )
+    }
   }
+})
+
+test("claude and codex are pinned at the versions the harness lockfiles install", () => {
+  // The pin that matters most and is easiest to get wrong. Their JavaScript
+  // ships inside the application and expects the native package `npm ci`
+  // resolved beside it, so a pin naming any other version would install a
+  // binary the bundled wrapper is not the wrapper for.
+  const pins = pinFile().agents
+  for (const agent of AGENTS) {
+    if (agent.version.from !== "lockfile") continue
+    const lockfile = JSON.parse(
+      readFileSync(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "../../crates/nessa-sdk/harnesses",
+          agent.version.harness,
+          "package-lock.json",
+        ),
+        "utf8",
+      ),
+    )
+    const locked = lockedDependency(lockfile, agent.version.dependency)
+    for (const pin of pins[agent.name]) {
+      assert.equal(
+        pin.version,
+        locked.version,
+        `${agent.name} is pinned at a version the harness lockfile does not install`,
+      )
+      assert.equal(
+        pin.archiveUrl,
+        locked.resolved,
+        `${agent.name} is pinned at an archive the harness lockfile does not install`,
+      )
+    }
+  }
+})
+
+test("a lockfile that does not hold the dependency is an error rather than a guess", () => {
+  assert.throws(
+    () => lockedDependency({ packages: {} }, "@openai/codex-darwin-arm64"),
+    /is not in the lockfile/,
+  )
+  assert.deepEqual(
+    lockedDependency(
+      {
+        packages: {
+          "node_modules/@openai/codex-darwin-arm64": {
+            version: "0.154.0-darwin-arm64",
+            resolved:
+              "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-arm64.tgz",
+            integrity: "sha512-abc",
+          },
+        },
+      },
+      "@openai/codex-darwin-arm64",
+    ),
+    {
+      version: "0.154.0-darwin-arm64",
+      resolved:
+        "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-arm64.tgz",
+      integrity: "sha512-abc",
+    },
+  )
+})
+
+test("a coordinate that resolves elsewhere than the lockfile is refused", () => {
+  // The pin and the bundled JavaScript describing two different builds is the
+  // one failure unbundling must not introduce.
+  const locked = {
+    version: "0.154.0-darwin-arm64",
+    resolved: "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-arm64.tgz",
+    integrity: "sha512-right",
+  }
+  assert.doesNotThrow(() =>
+    agreesWithLockfile(
+      locked,
+      { tarball: locked.resolved, integrity: "sha512-right" },
+      "codex",
+    ),
+  )
+  assert.throws(
+    () =>
+      agreesWithLockfile(
+        locked,
+        { tarball: "https://registry.npmjs.org/@openai/codex/-/codex-other.tgz" },
+        "codex",
+      ),
+    /different builds/,
+  )
+  assert.throws(
+    () =>
+      agreesWithLockfile(
+        locked,
+        { tarball: locked.resolved, integrity: "sha512-wrong" },
+        "codex",
+      ),
+    /integrity the harness lockfile recorded/,
+  )
+  // Opencode has no lockfile to agree with, and that is not a failure.
+  assert.doesNotThrow(() => agreesWithLockfile(undefined, { tarball: "x" }, "opencode"))
+})
+
+/**
+ * What a release installs, read off a listing.
+ *
+ * Lines rather than an archive, for the reason the parsing tests above give:
+ * which kind of entry `tar -czf` writes is not this file's to decide, and the
+ * claim being tested is the reading.
+ */
+const CODEX_LISTING = [
+  "drwxr-xr-x  0 root   root        0 Oct 26  1985 package/",
+  "-rwxr-xr-x  0 root   root  2226552 Oct 26  1985 package/vendor/aarch64-apple-darwin/bin/codex",
+  "-rwxr-xr-x  0 root   root     4030 Oct 26  1985 package/vendor/aarch64-apple-darwin/codex-path/rg",
+  "-rw-r--r--  0 root   root      517 Oct 26  1985 package/package.json",
+].join("\n")
+
+test("a package pins every regular file, with the roles the listing shows", () => {
+  assert.deepEqual(
+    releaseFiles(CODEX_LISTING, {
+      launch: "package/vendor/aarch64-apple-darwin/bin/codex",
+      install: "package",
+    }).files,
+    [
+      { path: "package/package.json", role: "document" },
+      { path: "package/vendor/aarch64-apple-darwin/bin/codex", role: "launch" },
+      { path: "package/vendor/aarch64-apple-darwin/codex-path/rg", role: "helper" },
+    ],
+    "a package's files, sorted, with the executable bit deciding helper from document",
+  )
+})
+
+test("a launch-shaped release pins the one program and nothing else", () => {
+  // Opencode's shape. The archive holds metadata too; pinning it would claim
+  // it matters.
+  assert.deepEqual(
+    releaseFiles(
+      [
+        "-rwxr-xr-x  0 root   root  4600961 Oct 26  1985 package/bin/opencode",
+        "-rw-r--r--  0 root   root      140 Oct 26  1985 package/package.json",
+      ].join("\n"),
+      { launch: EXECUTABLE, install: "launch" },
+    ).files,
+    [{ path: EXECUTABLE, role: "launch" }],
+  )
+})
+
+test("a package holding a link is refused rather than pinned around", () => {
+  // The installer refuses a link entry outright, so pinning one would fail for
+  // every user rather than here, where a maintainer can still read the
+  // packaging change that introduced it.
+  const listing = [
+    "-rwxr-xr-x  0 root   root  2226552 Oct 26  1985 package/vendor/aarch64-apple-darwin/bin/codex",
+    "lrwxrwxrwx  0 root   root        0 Oct 26  1985 package/vendor/rg -> /usr/bin/rg",
+  ].join("\n")
+  assert.deepEqual(
+    releaseFiles(listing, {
+      launch: "package/vendor/aarch64-apple-darwin/bin/codex",
+      install: "package",
+    }),
+    {
+      refusal: "holds package/vendor/rg as a symbolic link rather than as a regular file",
+    },
+  )
+})
+
+test("a program the archive does not mark as one is refused", () => {
+  // The listing is the only thing that says which files are programs, and the
+  // installer takes the role from the pin rather than from the archive — so a
+  // release that shipped its binary unexecutable would install something that
+  // cannot start, with nothing downstream to notice.
+  assert.deepEqual(
+    releaseFiles("-rw-r--r--  0 root   root  4600961 Oct 26  1985 package/bin/opencode", {
+      launch: EXECUTABLE,
+      install: "launch",
+    }),
+    { refusal: "holds package/bin/opencode, which is not marked as a program" },
+  )
+  assert.ok(ownerMayRun("-rwxr-xr-x  0 root   root  1 Oct 26  1985 package/bin/opencode"))
+  assert.ok(
+    !ownerMayRun("-rw-r--r--  0 root   root  1 Oct 26  1985 package/package.json"),
+  )
+})
+
+test("a package that does not hold its program at all is refused", () => {
+  assert.deepEqual(
+    releaseFiles("-rw-r--r--  0 root   root  517 Oct 26  1985 package/package.json", {
+      launch: "package/vendor/bin/codex",
+      install: "package",
+    }),
+    { refusal: "does not hold package/vendor/bin/codex at all" },
+  )
 })

@@ -36,8 +36,31 @@ The generated symbol pages below explain the current methods and individual fiel
 Initialize local access and provision the surface using the repository's
 [local-auth guide](../../docs/guides/local-auth.md). Node automatically loads its
 assigned private `auth/surfaces/<client.id>.token` when `auth` is omitted. The desktop
-panel uses an injected native `CredentialSource`. Other hosts can inject their own
-source or pass `auth: { credential }`. Missing storage fails before opening a socket.
+panel uses injected native endpoint and credential sources. Before loading a
+credential, both hosts read the stage and instance's private
+`logs/gateway-endpoint.json` publication and require its process identity to agree
+with unauthenticated `/health`. This correlation prevents an honest stale or
+mismatched local listener from receiving a credential; it is not cryptographic
+authentication. The product handshake still authenticates the session.
+
+An explicit `url` is authoritative. When publication is absent or unreadable, dev
+retains the `ws://127.0.0.1:7421` fallback and other stages still require an
+explicit URL. A present malformed, stale, or mismatched publication fails before
+credential loading. Endpoint and credential sources are consulted again on every
+retry and reconnect. Attachment uploads follow only the newly authenticated
+session's endpoint. Other hosts can inject their own sources or pass `url` and
+`auth: { credential }`.
+
+On Unix, the built-in Node sources protect against another OS user redirecting
+these files: the selected data root and namespace directories must be owned by
+the current user and private, every acquisition-path component must be a real
+directory rather than a symbolic link, and the leaf is read from the same
+nonblocking, no-follow handle that is validated. Callers using a symbolic-link
+data root must inject a trusted source instead. This boundary does not protect
+against a privileged process or a concurrent process running under the same uid;
+either can already read the mode-0600 credential. Hosts that require stronger
+namespace confinement inject a trusted source. The native host uses the Rust
+handle-relative storage adapter.
 
 ```ts
 import {
@@ -49,10 +72,9 @@ async function run() {
   const client = await NessaClient.connect({
     profile: ConnectionProfile.Product,
     stage: Stage.Dev,
-    // The dev gateway. 7420 is the product port an installed Nessa holds
-    // through its background service; `protocol/defaults/gateway-ports.json`
-    // is the table, and `NESSA_PORT` overrides it.
-    url: "ws://127.0.0.1:7421/session",
+    // Omit `url` for verified local publication, with the dev table as the
+    // fallback when no publication is readable. An explicit URL bypasses
+    // client discovery.
     role: ClientRole.Surface,
     surface: { kind: SurfaceKind.Cli, instance: "terminal" },
     client: { id: "terminal", version: "1.0.0", platform: ClientPlatform.Node },
@@ -103,9 +125,10 @@ validated and frozen; create a new config to change settings for a new client.
 
 Both policies use capped exponential backoff, with jitter between half and all of
 each delay ceiling. Valid server `retryAfterMs` hints can extend that delay, up to
-60 seconds. Each retry opens a fresh socket, obtains a fresh challenge, and
-authenticates again. Reconnection uses the credential loaded or supplied for this `connect` call.
-Call `connect` again to load a newly provisioned credential.
+60 seconds. Each retry discovers the endpoint again, reloads the assigned
+credential when a source is in use, opens a fresh socket, obtains a fresh challenge,
+and authenticates again. An explicitly supplied credential remains fixed for this
+`connect` call.
 
 `connectionState` is `connected`, `reconnecting`, or `closed`.
 `onConnectionStateChange(handler)` reports subsequent transitions and returns an

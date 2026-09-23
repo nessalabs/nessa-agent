@@ -1111,6 +1111,23 @@
           "x-utf8MaxBytes": 2048,
           "description": "Provider tool title."
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "",
+            "read",
+            "edit",
+            "search",
+            "fetch",
+            "execute",
+            "think",
+            "delete",
+            "move",
+            "switch_mode",
+            "other"
+          ],
+          "description": "What the call does, as the provider categorised it. Empty until the provider has said, which is why a panel counts kinds it knows rather than assuming the rest are reads."
+        },
         "status": {
           "type": "string",
           "minLength": 0,
@@ -1131,7 +1148,15 @@
           "description": "Exact tool arguments observed through a permission request, or empty when unavailable."
         }
       },
-      "required": ["executionId", "toolId", "title", "status", "details", "input"]
+      "required": [
+        "executionId",
+        "toolId",
+        "title",
+        "kind",
+        "status",
+        "details",
+        "input"
+      ]
     },
     "ConversationView": {
       "type": "object",

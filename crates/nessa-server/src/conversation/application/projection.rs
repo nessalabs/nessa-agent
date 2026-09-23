@@ -12,7 +12,7 @@ use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
     prompts::UserMessage,
-    tools::{ToolContentView, ToolStatus},
+    tools::{ToolContentView, ToolKind, ToolStatus},
 };
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -560,12 +560,31 @@ impl Projection {
                         execution_id: id.into(),
                         tool_id: clipped(update.id().as_str(), 256),
                         title: "Tool".into(),
+                        kind: String::new(),
                         status: "pending".into(),
                     });
                     self.view.tools.last_mut().unwrap()
                 };
                 if let Some(title) = update.title() {
                     tool.title = clipped(title, 512);
+                }
+                // What a call does is the provider's own word for it. A panel
+                // cannot read it off the title — "grep -l" and "Find `**/*`"
+                // are both searches and neither says so.
+                if let Some(kind) = update.kind() {
+                    tool.kind = match kind {
+                        ToolKind::Read => "read",
+                        ToolKind::Edit => "edit",
+                        ToolKind::Search => "search",
+                        ToolKind::Fetch => "fetch",
+                        ToolKind::Execute => "execute",
+                        ToolKind::Think => "think",
+                        ToolKind::Delete => "delete",
+                        ToolKind::Move => "move",
+                        ToolKind::SwitchMode => "switch_mode",
+                        ToolKind::Other => "other",
+                    }
+                    .into();
                 }
                 if let Some(content) = update.content() {
                     let mut details = String::new();
