@@ -62,6 +62,7 @@ const protocolFailure = (): ConversationView => {
         executionId: "execution",
         toolId: "tool",
         title: "Shell",
+        kind: "execute",
         status: "running",
         input: "",
         details: "partial output",

@@ -9,16 +9,19 @@ import {
 export type AgentToolView = {
   callId: string
   title: string
+  /** What the call does, in the stream's vocabulary; `other` when unsaid. */
+  kind: string
   status: string
   input: string
   details: string
 }
-export type AgentTurnActivityItem =
-  | { key: string; kind: "thought"; text: string }
-  | { key: string; kind: "tool"; tool: AgentToolView }
-export type AgentTurnContentView =
-  | { key: string; text: string }
-  | { key: string; activity: AgentTurnActivityItem[]; running: boolean }
+/** One thing a turn did, in the order it did it. */
+export type WorkStep = {
+  key: string
+  text?: string
+  thought?: string
+  tool?: AgentToolView
+}
 function rawText(raw: JsonValue, key: string): string {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return ""
   if (!Object.hasOwn(raw, key)) return ""
@@ -74,8 +77,8 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
   const events: AgentEvent[] = turn.work.flatMap((item) =>
     isToolGroup(item) ? [...item.calls] : [item],
   )
-  // The builder separates finalText from work. Restore that event at its
-  // original position so a pre-tool message does not move below the tools.
+  // The builder separates finalText from work. Find the event it came from,
+  // so every other line of assistant text can be told apart from the answer.
   const nextTurn = transcript.turns[transcript.turns.indexOf(turn) + 1]
   const start = turn.prompt?.seq ?? events[0]?.seq ?? -1
   const end = nextTurn?.prompt?.seq ?? turn.completed?.seq ?? Infinity
@@ -88,10 +91,6 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
         event.payload.type === "assistant_text" &&
         event.payload.text === turn.finalText,
     )
-  if (finalEvent && !events.some((event) => event.id === finalEvent.id)) {
-    events.push(finalEvent)
-    events.sort((a, b) => a.seq - b.seq)
-  }
   const tools: AgentToolView[] = events.flatMap(({ payload, raw }) => {
     if (payload.type !== "tool_call_started") return []
     const result = transcript.resultByCallId.get(payload.callId)
@@ -99,6 +98,7 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       {
         callId: payload.callId,
         title: payload.title,
+        kind: payload.kind,
         status: result
           ? result.isError
             ? "failed"
@@ -121,65 +121,77 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       },
     ]
   })
-  const content: AgentTurnContentView[] = []
-  let activity: Extract<
-    AgentTurnContentView,
-    { activity: AgentTurnActivityItem[] }
-  > | null = null
-  let pendingThought: { key: string; text: string } | null = null
-  const completed = turn.completed?.payload
-  const execution = executionMetadata([
-    ...events,
-    ...(turn.completed ? [turn.completed] : []),
-  ])
-  const activityFor = (key: string) => {
-    if (!activity) {
-      if (!execution) throw new Error("Turn activity has no execution metadata")
-      activity = {
-        key,
-        activity: [],
-        running: execution.activityRunning,
-      }
-      content.push(activity)
-    }
-    return activity
-  }
-  const flushThought = () => {
-    if (pendingThought?.text.trim()) {
-      activityFor(pendingThought.key).activity.push({
-        key: pendingThought.key,
-        kind: "thought",
-        text: pendingThought.text,
-      })
-    }
-    pendingThought = null
+  /**
+   * A turn is two things in the transcript: what it worked through, and what
+   * it came back with. The working — every thought, every tool call, every
+   * line the agent said to itself on the way — is one collapsed segment, kept
+   * in the order it happened so a rationale still sits beside the call it
+   * explains. Only the answer is left outside, because the answer is what was
+   * asked for.
+   */
+  const steps: WorkStep[] = []
+  // A thought streams in as many events — "hello", " ", "world" — and is one
+  // thought. The run is gathered and written once something else happens, so
+  // a lone space joins its neighbours instead of being mistaken for nothing.
+  let thinking: { key: string; text: string } | null = null
+  const thought = () => {
+    // A run of nothing but whitespace is a disclosure over nothing, and the
+    // ends of a real one are blank lines the sheet would draw as a gap.
+    const text = thinking?.text.trim()
+    if (thinking && text) steps.push({ key: thinking.key, thought: text })
+    thinking = null
   }
   for (const event of events) {
     const payload = event.payload
-    if (payload.type === "assistant_text") {
-      flushThought()
-      content.push({ key: event.id, text: payload.text })
-    }
     if (payload.type === "reasoning") {
-      if (pendingThought) pendingThought.text += payload.text
-      else pendingThought = { key: event.id, text: payload.text }
+      if (thinking) thinking.text += payload.text
+      else thinking = { key: event.id, text: payload.text }
+      continue
     }
+    if (payload.type === "assistant_text" || payload.type === "tool_call_started")
+      thought()
+    // The final answer is the only text that stays in the conversation. What
+    // the agent said on the way is Markdown, where an indented code block or
+    // a trailing hard break is meaning: whitespace decides whether it counts,
+    // and is never cut from it. (A thought is plain text, and is trimmed.)
+    if (
+      payload.type === "assistant_text" &&
+      event.id !== finalEvent?.id &&
+      payload.text.trim()
+    )
+      steps.push({ key: event.id, text: payload.text })
     if (payload.type === "tool_call_started") {
-      flushThought()
       const tool = tools.find((tool) => tool.callId === payload.callId)
-      if (tool) {
-        activityFor(event.id).activity.push({ key: event.id, kind: "tool", tool })
-      }
+      if (tool) steps.push({ key: event.id, tool })
     }
   }
-  flushThought()
-  if (turn.finalText !== null && !finalEvent)
+  thought()
+  const content: { key: string; text?: string; work?: WorkStep[]; running?: boolean }[] =
+    []
+  if (steps.length) {
+    // Whether the working is still going is the adapter's fact about this
+    // turn's execution, not the turn's own status: a steered turn's activity
+    // settles while the conversation carries on.
+    const execution = executionMetadata([
+      ...events,
+      ...(turn.completed ? [turn.completed] : []),
+    ])
+    if (!execution) throw new Error("Turn activity has no execution metadata")
+    content.push({
+      key: `${turn.key}:work`,
+      work: steps,
+      running: execution.activityRunning,
+    })
+  }
+  // Keyed on the turn, not the event: which text is the answer changes while a
+  // turn runs, and a key that moved with it would remount the bubble.
+  if (turn.finalText !== null)
     content.push({ key: `${turn.key}:answer`, text: turn.finalText })
+  const completed = turn.completed?.payload
   return {
     content,
     key: turn.key,
     promptId: turn.prompt?.id,
-    text: turn.finalText ?? "",
     status:
       completed?.type === "turn_completed"
         ? (completed.terminalReason ?? completed.status)

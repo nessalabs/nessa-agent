@@ -815,6 +815,12 @@ body {
   background: var(--card);
   box-shadow: none;
 }
+/* A sheet holding one tool call is still a sheet. Without a floor it rises
+   barely past its own handle and reads as a torn strip rather than a surface
+   that was opened; the cap keeps a short panel from being swallowed by it. */
+.nessa-detail-sheet [data-slot="sheet-panel"][data-expanded="false"] {
+  min-height: min(18rem, 45%);
+}
 /* Detail content must cover the transcript in both clear and frosted windows.
    Native vibrancy belongs behind the window, not between two layers of text. */
 .nessa-pasted-pill:hover,

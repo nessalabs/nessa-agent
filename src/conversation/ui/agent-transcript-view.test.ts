@@ -5,6 +5,18 @@ import { textContent } from "../model"
 import { agentTurnView } from "./agent-transcript-view"
 
 type RawMutation = (raw: Record<string, JsonValue>) => JsonValue
+type Part = ReturnType<typeof agentTurnView>["content"][number]
+
+/** A part's working as a list of kinds, which is how these assertions read it. */
+function items(part: Part | undefined) {
+  return (part?.work ?? []).map((step) =>
+    step.tool
+      ? { key: step.key, kind: "tool" as const, tool: step.tool }
+      : step.thought !== undefined
+        ? { key: step.key, kind: "thought" as const, text: step.thought }
+        : { key: step.key, kind: "text" as const, text: step.text ?? "" },
+  )
+}
 
 function nullableMetadataTranscript() {
   const transcript = agentTranscript(
@@ -36,7 +48,7 @@ function mutateSecondMetadata(mutate: RawMutation) {
   return fixture.transcript
 }
 
-it("renders every message in observation order even when the builder extracts finalText", () => {
+it("leaves only the extracted answer outside the turn's one working segment", () => {
   const transcript = agentTranscript(
     "chat",
     [
@@ -73,6 +85,7 @@ it("renders every message in observation order even when the builder extracts fi
         executionId: "run",
         toolId: "tool",
         title: "Shell",
+        kind: "execute",
         input: "{}",
         details: "",
         status: "pending",
@@ -82,13 +95,13 @@ it("renders every message in observation order even when the builder extracts fi
   const row = agentTurnView(transcript.turns[0]!, transcript)
   expect(
     row.content.map((part) =>
-      "text" in part ? part.text : part.activity.map((item) => item.kind),
+      "text" in part ? part.text : items(part).map((item) => item.kind),
     ),
-  ).toEqual(["Checking.", ["tool"]])
-  const activity = row.content.find((part) => "activity" in part)
-  expect(
-    activity && "activity" in activity ? activity.activity[0] : undefined,
-  ).toMatchObject({
+    // The builder extracted "Checking." as this running turn's answer so far;
+    // everything else the turn did is the one working segment before it.
+  ).toEqual([["tool"], "Checking."])
+  const activity = row.content.find((part) => "work" in part)
+  expect(activity && "work" in activity ? items(activity)[0] : undefined).toMatchObject({
     kind: "tool",
     tool: { title: "Shell", status: "pending" },
   })
@@ -114,6 +127,7 @@ it.each(["pending", "running", "completed", "failed"])(
           executionId: "run",
           toolId: "tool",
           title: "Shell",
+          kind: "execute",
           input: "{}",
           details: "",
           status,
@@ -121,8 +135,8 @@ it.each(["pending", "running", "completed", "failed"])(
       ],
     )
     const row = agentTurnView(transcript.turns[0]!, transcript)
-    const activity = row.content.find((part) => "activity" in part)
-    const item = activity && "activity" in activity ? activity.activity[0] : undefined
+    const activity = row.content.find((part) => "work" in part)
+    const item = activity && "work" in activity ? items(activity)[0] : undefined
     expect(item?.kind === "tool" ? item.tool.status : undefined).toBe(
       status === "completed" || status === "failed" ? status : "stopped",
     )
@@ -173,6 +187,7 @@ it.each([
           executionId: "run",
           toolId: "tool",
           title: "Shell",
+          kind: "execute",
           input: "{}",
           details: "done",
           status: "completed",
@@ -184,10 +199,8 @@ it.each([
     expect(transcript.turns[0]?.completed).toBeNull()
     expect(Boolean(transcript.turns[1]?.completed)).toBe(terminal)
     const first = agentTurnView(transcript.turns[0]!, transcript)
-    const activity = first.content.find((part) => "activity" in part)
-    expect(activity && "activity" in activity ? activity.running : undefined).toBe(
-      running,
-    )
+    const activity = first.content.find((part) => "work" in part)
+    expect(activity && "work" in activity ? activity.running : undefined).toBe(running)
   },
 )
 
@@ -227,9 +240,9 @@ it("settles a thought-only activity from its source execution across steering", 
   )
 
   const first = agentTurnView(transcript.turns[0]!, transcript)
-  const activity = first.content.find((part) => "activity" in part)
+  const activity = first.content.find((part) => "work" in part)
   expect(activity).toMatchObject({
-    activity: [{ kind: "thought", text: "Considering" }],
+    work: [{ thought: "Considering" }],
     running: false,
   })
   expect(transcript.turns[0]?.completed).toBeNull()
@@ -258,7 +271,7 @@ it("uses the source turn identity when a local assistant has no execution id", (
     activityRunning: false,
   })
   const activity = agentTurnView(transcript.turns[0]!, transcript).content[0]
-  expect(activity && "activity" in activity ? activity.running : undefined).toBe(false)
+  expect(activity && "work" in activity ? activity.running : undefined).toBe(false)
 })
 
 it("accepts agreeing source rows with nullable execution identity and status", () => {
@@ -271,7 +284,7 @@ it("accepts agreeing source rows with nullable execution identity and status", (
   })
   const activity = agentTurnView(transcript.turns[0]!, transcript).content[0]
   expect(activity).toMatchObject({
-    activity: [{ kind: "thought", text: "First second" }],
+    work: [{ thought: "First second" }],
     running: true,
   })
 })
@@ -363,6 +376,7 @@ it("keeps streamed whitespace inside a thought and omits a whole whitespace-only
         executionId: "run",
         toolId: "tool",
         title: "Shell",
+        kind: "execute",
         input: "{}",
         details: "done",
         status: "completed",
@@ -377,11 +391,9 @@ it("keeps streamed whitespace inside a thought and omits a whole whitespace-only
       ),
   ).toEqual(["hello", " ", "world", "\n\n"])
   const row = agentTurnView(transcript.turns[0]!, transcript)
-  const activities = row.content.filter((part) => "activity" in part)
+  const activities = row.content.filter((part) => "work" in part)
   expect(activities).toHaveLength(1)
-  expect(
-    activities[0] && "activity" in activities[0] ? activities[0].activity : [],
-  ).toEqual([
+  expect(activities[0] && "work" in activities[0] ? items(activities[0]) : []).toEqual([
     { key: "assistant:0", kind: "thought", text: "hello world" },
     {
       key: '["run","tool"]:start',
@@ -415,6 +427,7 @@ it("projects alternating thoughts and tools into one ordered turn activity", () 
         executionId: "run",
         toolId: "one",
         title: "One",
+        kind: "execute",
         input: "",
         details: "first result",
         status: "failed",
@@ -423,6 +436,7 @@ it("projects alternating thoughts and tools into one ordered turn activity", () 
         executionId: "run",
         toolId: "two",
         title: "Two",
+        kind: "execute",
         input: "",
         details: "second result",
         status: "completed",
@@ -430,12 +444,12 @@ it("projects alternating thoughts and tools into one ordered turn activity", () 
     ],
   )
   const row = agentTurnView(transcript.turns[0]!, transcript)
-  const activities = row.content.filter((part) => "activity" in part)
+  const activities = row.content.filter((part) => "work" in part)
   expect(activities).toHaveLength(1)
   expect(
-    activities[0] && "activity" in activities[0]
-      ? activities[0].activity.map((item) =>
-          item.kind === "thought" ? item.text : `${item.tool.title}:${item.tool.status}`,
+    activities[0] && "work" in activities[0]
+      ? items(activities[0]).map((item) =>
+          item.kind === "tool" ? `${item.tool.title}:${item.tool.status}` : item.text,
         )
       : [],
   ).toEqual(["First", "One:failed", "Second", "Two:completed"])
@@ -474,4 +488,163 @@ it("keeps a row for a turn of images alone, so the transcript has a user turn to
   const rows = transcript.turns.map((turn) => agentTurnView(turn, transcript))
   // `Transcript` looks the user turn up by this id and renders its content.
   expect(rows.map((row) => row.promptId)).toEqual(["pictures"])
+})
+
+it("gathers a turn's thinking and tools into one segment, dropping empty thoughts", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "Done.",
+        status: "completed",
+        parts: [
+          { offset: 0, kind: "thought", text: "Looking.", toolId: "" },
+          { offset: 1, kind: "tool", text: "", toolId: "one" },
+          // Whitespace alone is a disclosure over nothing; it must not add a
+          // row, and must not survive as a gap when the adapter coalesces it
+          // onto the thought that follows.
+          { offset: 2, kind: "thought", text: "\n\n", toolId: "" },
+          { offset: 3, kind: "thought", text: "Wrong name.", toolId: "" },
+          { offset: 4, kind: "tool", text: "", toolId: "two" },
+          { offset: 5, kind: "text", text: "Done.", toolId: "" },
+        ],
+      },
+    ],
+    ["one", "two"].map((toolId) => ({
+      executionId: "run",
+      toolId,
+      title: "Shell",
+      kind: "execute",
+      input: "{}",
+      details: "",
+      status: "completed",
+    })),
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  // One row of working for the whole turn, whatever it took to get there, and
+  // in the order it happened so a thought still reads beside its call.
+  expect(row.content.map((part) => part.text ?? part.work?.length)).toEqual([4, "Done."])
+  expect(row.content[0]?.work?.map((step) => step.thought ?? step.tool?.title)).toEqual([
+    "Looking.",
+    "Shell",
+    "Wrong name.",
+    "Shell",
+  ])
+})
+
+it("keeps a failed tool in the expansion, where somebody can go looking for it", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "I could not read it.",
+        status: "completed",
+        parts: [
+          { offset: 0, kind: "tool", text: "", toolId: "tool" },
+          { offset: 1, kind: "text", text: "I could not read it.", toolId: "" },
+        ],
+      },
+    ],
+    [
+      {
+        executionId: "run",
+        toolId: "tool",
+        title: "Read",
+        kind: "execute",
+        input: "{}",
+        details: "No such file",
+        status: "failed",
+      },
+    ],
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  const [step] = row.content[0]?.work ?? []
+  expect(step?.tool?.status).toBe("failed")
+  expect(step?.tool?.details).toBe("No such file")
+})
+
+it("keeps what the agent said on the way apart from what it thought", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "All set.",
+        status: "completed",
+        parts: [
+          { offset: 0, kind: "text", text: "Let me check.", toolId: "" },
+          { offset: 1, kind: "thought", text: "The config moved.", toolId: "" },
+          { offset: 2, kind: "text", text: "All set.", toolId: "" },
+        ],
+      },
+    ],
+    [],
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  expect(row.content[0]?.work).toEqual([
+    { key: expect.any(String), text: "Let me check." },
+    { key: expect.any(String), thought: "The config moved." },
+  ])
+  expect(row.content[1]?.text).toBe("All set.")
+})
+
+it("keys the answer on the turn, so the bubble is not remounted as the turn goes on", () => {
+  const view = (
+    text: string,
+    parts: { offset: number; kind: "text"; text: string; toolId: string }[],
+  ) => {
+    const transcript = agentTranscript(
+      "chat",
+      [
+        {
+          id: "assistant",
+          from: "assistant",
+          executionId: "run",
+          text,
+          status: "running",
+          parts,
+        },
+      ],
+      [],
+    )
+    const row = agentTurnView(transcript.turns[0]!, transcript)
+    return row.content.find((part) => part.text !== undefined)?.key
+  }
+  const said = { offset: 0, kind: "text" as const, text: "Working on it.", toolId: "" }
+  // Which text is the answer changes while a turn runs; its key must not.
+  expect(view("Working on it.", [said])).toBe(
+    view("Here it is.", [said, { ...said, offset: 1, text: "Here it is." }]),
+  )
+})
+
+it("keeps interim Markdown exactly as written, boundary whitespace included", () => {
+  // Four leading spaces make a code block; two trailing make a hard break.
+  const said = "    const x = 1\nline one  \n"
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "Done.",
+        status: "completed",
+        parts: [
+          { offset: 0, kind: "text", text: said, messageId: "said", toolId: "" },
+          { offset: 1, kind: "text", text: "Done.", messageId: "answer", toolId: "" },
+        ],
+      },
+    ],
+    [],
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  expect(row.content[0]?.work).toEqual([{ key: expect.any(String), text: said }])
 })
