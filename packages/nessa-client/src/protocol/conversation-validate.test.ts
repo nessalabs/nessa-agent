@@ -52,6 +52,7 @@ function view() {
         executionId: "running",
         toolId: "tool",
         title: "Tool",
+        kind: "execute",
         status: "running",
         details: "",
         input: "{}",
@@ -270,5 +271,37 @@ describe("conversation view agreement", () => {
     expect(() =>
       conversationReorder({ requestId: "r", outcome: "applied", extra: true }, "r"),
     ).toThrow()
+  })
+})
+
+describe("a tool's kind", () => {
+  const withKind = (kind: unknown) => {
+    const value = view()
+    value.tools = [{ ...value.tools[0]!, kind } as (typeof value.tools)[number]]
+    return value
+  }
+
+  it.each(["", "read", "edit", "search", "execute", "switch_mode", "other"])(
+    "accepts the provider's category %j",
+    (kind) => {
+      expect(() => conversationView(withKind(kind), "conversation")).not.toThrow()
+    },
+  )
+
+  it.each([["guess"], [7], [null]])(
+    "rejects %j, which the schema does not name",
+    (kind) => {
+      expect(() => conversationView(withKind(kind), "conversation")).toThrow()
+    },
+  )
+
+  it("rejects a tool that leaves it out", () => {
+    const value = view()
+    const { kind: _kind, ...tool } = value.tools[0]!
+    value.tools = [tool as (typeof value.tools)[number]]
+    // Required, not optional: a gateway that stopped sending it has changed shape.
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "Invalid conversation kind",
+    )
   })
 })
