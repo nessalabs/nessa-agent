@@ -724,6 +724,73 @@ fn declined_reviews_upsert_by_identity_in_order_and_match_restoration() {
 }
 
 #[test]
+fn declined_review_replay_after_lag_preserves_one_final_notice_and_following_text() {
+    let selected = decline_event("1", ReviewDeclineStage::Selected);
+    let confirmed = decline_event("1", ReviewDeclineStage::WriteConfirmed);
+    let text = event(ExecutionUpdate::Message(MessageChunk::text("carried on")));
+    let finished = event(ExecutionUpdate::Finished(ExecutionOutcome::Completed));
+    let events = vec![selected.clone(), confirmed.clone(), text.clone(), finished];
+    let snapshot = completed_snapshot("execution", events.clone());
+    let mut live = projection();
+    live.event(&selected);
+    live.lagged();
+    live.event(&confirmed);
+    live.event(&text);
+    let lagged = live.read();
+    assert!(text_parts(&lagged, "execution").is_empty());
+    assert_eq!(
+        lagged.messages[0]
+            .parts
+            .iter()
+            .filter(|part| part.kind == "local_notice")
+            .count(),
+        1
+    );
+
+    live.settled("execution", Some(&snapshot));
+    let settled = live.read();
+    for buffered in &events {
+        live.event(buffered);
+    }
+    live.settled("execution", Some(&snapshot));
+    let repeated = live.read();
+    let restored = Projection::new(
+        "conversation".into(),
+        settled.capabilities.clone(),
+        Some(&snapshot),
+    )
+    .read();
+    for view in [&settled, &repeated, &restored] {
+        assert_eq!(view.messages.len(), 1);
+        let message = &view.messages[0];
+        assert_eq!(message.parts, settled.messages[0].parts);
+        assert_eq!(message.parts.len(), 2);
+        assert_eq!(message.parts[0].kind, "local_notice");
+        assert_eq!(message.parts[0].notice_id, "1");
+        assert_eq!(message.parts[0].offset, 0);
+        assert!(!message.parts[0].text.contains("has not confirmed"));
+        assert_eq!(message.parts[1].kind, "text");
+        assert_eq!(message.parts[1].offset, 2);
+        assert_eq!(message.parts[1].text, "carried on");
+        assert_eq!(message.event_count, events.len());
+        assert_eq!(message.status, ConversationMessageStatus::Completed);
+        assert!(message.error.is_none());
+        assert!(view.permissions.is_empty());
+        assert!(view.pending.is_empty());
+    }
+    // A recovered turn does not clear the session-wide live-lag warning. A fresh
+    // restored projection has no missed-live-observation history to report.
+    assert!(settled.truncated);
+    assert!(repeated.truncated);
+    assert_eq!(
+        settled.permission_view_error,
+        repeated.permission_view_error
+    );
+    assert!(!restored.truncated);
+    assert!(restored.permission_view_error.is_none());
+}
+
+#[test]
 fn local_notice_append_and_upsert_obey_the_message_text_budget() {
     let mut projection = projection();
     projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
