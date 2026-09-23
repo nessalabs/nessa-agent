@@ -217,13 +217,8 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     Poll::Ready(result) => result.map(|_| ()),
                     Poll::Pending => Err(AgentError::Deadline),
                 };
-                let result = result.map_err(|error| {
-                    worker.cover_failure(
-                        worker.settlement_facts.cursor(),
-                        OperationEffectPhase::Worker,
-                        error,
-                    )
-                });
+                let result = result
+                    .map_err(|error| worker.record_failure(OperationEffectPhase::Worker, error));
                 let completed = worker.finish(&mut execution, result, &mut None).await;
                 drop(control);
                 control_thread.join().unwrap();

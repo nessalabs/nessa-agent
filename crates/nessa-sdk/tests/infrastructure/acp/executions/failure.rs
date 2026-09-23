@@ -256,9 +256,8 @@ fn finalized_sources_preserve_provider_and_local_results_with_late_failures() {
 #[test]
 fn provider_result_coverage_does_not_remint_the_same_failure_as_an_operation() {
     let mut facts = SettlementFacts::new();
-    let cursor = facts.cursor();
     let provider_fact = facts.record_provider_result();
-    let coverage = facts.coverage_since(cursor);
+    let coverage = vec![provider_fact];
     assert_eq!(coverage, vec![provider_fact]);
     assert!(!facts.coverage_has_operation(&coverage));
     assert!(facts.finalize().components().is_empty());

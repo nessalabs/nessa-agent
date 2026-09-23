@@ -8,6 +8,8 @@ use super::super::{
         AcpConfig,
     },
 };
+#[cfg(test)]
+use super::failure::MAX_RETAINED_CATEGORY_FACTS;
 use super::{
     event_queue::{EventSender, QueueError},
     failure::{
@@ -120,10 +122,11 @@ impl DispatchCaller<'_> {
     }
 }
 /// What stopped a drain from reaching its dispatch boundary, if anything.
-fn interruption(readiness: &Result<DispatchReadiness, AgentError>) -> Option<&AgentError> {
+fn interruption(readiness: &Result<DispatchReadiness, WorkerFailure>) -> Option<&AgentError> {
     match readiness {
         Ok(DispatchReadiness::Ready) => None,
-        Ok(DispatchReadiness::Interrupted(error)) | Err(error) => Some(error),
+        Ok(DispatchReadiness::Interrupted(error)) => Some(error),
+        Err(failure) => Some(failure.error()),
     }
 }
 struct ActiveExecution {
@@ -1068,7 +1071,7 @@ impl<P: AcpProfile> Worker<P> {
         // Its admitted decisions precede aggregate closure even though the close
         // notification arrived over an independently ordered watch channel.
         self.commands.close();
-        let mut failure = None;
+        let mut failure: Option<WorkerFailure> = None;
         while let Some(command) = self.commands.recv().await {
             match command {
                 command @ (Command::Answer(..) | Command::CancelPermission(..)) => {
@@ -1103,7 +1106,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut ExecutionController,
         caller: &DispatchCaller<'_>,
         dispatch_deadline: Option<Instant>,
-    ) -> Result<DispatchReadiness, AgentError> {
+    ) -> Result<DispatchReadiness, WorkerFailure> {
         loop {
             for _ in 0..32 {
                 if self.close_requested.borrow().is_some()
@@ -1129,7 +1132,7 @@ impl<P: AcpProfile> Worker<P> {
                         PermissionCancellationReason::deadline_exceeded(),
                         CancellationOrigin::Runtime,
                     ));
-                    return Err(AgentError::Deadline);
+                    return Err(AgentError::Deadline.into());
                 }
                 let next = poll_fn(|cx| {
                     // One bounded reader poll must distinguish input readiness from
@@ -1180,7 +1183,7 @@ impl<P: AcpProfile> Worker<P> {
                                     PermissionCancellationReason::deadline_exceeded(),
                                     CancellationOrigin::Runtime,
                                 ));
-                                return Err(AgentError::Deadline);
+                                return Err(AgentError::Deadline.into());
                             }
                             message = self.reader.next() => message,
                         };
@@ -1249,7 +1252,7 @@ impl<P: AcpProfile> Worker<P> {
                 ))
             };
             let _ = reply.send(report);
-            return readiness.map(|_| ()).map_err(Into::into);
+            return readiness.map(|_| ());
         }
         if reply.is_closed() {
             return Ok(());
@@ -1331,7 +1334,7 @@ impl<P: AcpProfile> Worker<P> {
                 error.clone(),
                 ProviderSessionState::CleanupRequired,
             )));
-            return readiness.map(|_| ()).map_err(Into::into);
+            return readiness.map(|_| ());
         }
         if reply.is_closed() {
             return Ok(());
@@ -2206,7 +2209,7 @@ impl<P: AcpProfile> Worker<P> {
         records: Vec<ExecutionAuditRecord>,
     ) -> Result<(), WorkerFailure> {
         let mut permissions = Vec::new();
-        let mut failure = None;
+        let mut failure: Option<WorkerFailure> = None;
         for record in records {
             match record {
                 ExecutionAuditRecord::Cancelled(record) => permissions.push(record),
@@ -2232,7 +2235,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         records: Vec<PermissionCancellation>,
     ) -> Result<(), WorkerFailure> {
-        let mut failure = None;
+        let mut failure: Option<WorkerFailure> = None;
         // Attempt every record before publishing UI updates. A full/dropped UI queue
         // must not prevent audit capture of later cancellations in this batch.
         // Each sink call gets its own bound; one timeout cannot consume the

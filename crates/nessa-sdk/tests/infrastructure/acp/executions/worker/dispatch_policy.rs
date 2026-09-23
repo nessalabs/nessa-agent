@@ -1,14 +1,24 @@
 //! Ready wire policy evidence precedes prompt writes, including native steering.
 use super::*;
 use crate::application::agent_execution::{
-    agents::ProviderDiagnostic, executions::ExecutionRequest, tools::ToolReviewInput,
+    agents::ProviderDiagnostic,
+    executions::{ExecutionRequest, SubmissionMode},
+    permissions::ActionContext,
+    providers::{CloseOutcome, FinalizedExecutionProjection, ProviderIdentity},
+    sessions::storage::{
+        InvocationRecord, ProviderContext, SessionSnapshot, SessionStorage,
+        SubmissionAcknowledgement,
+    },
+    tools::ToolReviewInput,
 };
 use crate::domain::agent_execution::{
     prompts::{PromptText, UserMessage},
+    sessions::SessionId,
     tools::ToolCallUpdate,
 };
 use crate::infrastructure::acp::executions::event_queue::EventReceiver;
-use std::sync::Mutex;
+use crate::infrastructure::session_storage::InMemoryStorage;
+use std::sync::{atomic::AtomicBool, Mutex};
 
 struct PolicyProfile {
     inner: TestAcpProfile,
@@ -18,6 +28,43 @@ struct PolicyProfile {
         u64,
         Mutex<Option<oneshot::Receiver<ProviderExecutionReply>>>,
     )>,
+}
+
+async fn assert_worker_projection_survives_reload(projection: FinalizedExecutionProjection) {
+    let report = ExecutionReport::finalized_provider(
+        None,
+        ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+        None,
+        projection,
+    );
+    let session_id = SessionId::new("worker-projection").unwrap();
+    let snapshot = SessionSnapshot {
+        queue_history: Vec::new(),
+        id: session_id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("context").unwrap()),
+        invocations: vec![InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: request(),
+            actor: ActionContext::new("user", "test", "invoke").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Acknowledged,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: Some(report.clone()),
+            local_cancellation: None,
+            local_outcome: None,
+            result: Some(report.clone().into_result()),
+        }],
+    };
+    let storage = InMemoryStorage::new();
+    let lease = storage.open(session_id).await.unwrap();
+    lease.save(snapshot).await.unwrap();
+    assert_eq!(
+        lease.load().await.unwrap().unwrap().invocations[0].provider_report,
+        Some(report)
+    );
 }
 impl AcpProfile for PolicyProfile {
     fn validate_initialize(&self, value: &Value) -> Result<(), AgentError> {
@@ -218,6 +265,19 @@ impl ExecutionAudit for AcceptingDeclineAudit {
     }
 }
 
+struct SwitchingAudit(AtomicBool);
+impl ExecutionAudit for SwitchingAudit {
+    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if self.0.load(Ordering::SeqCst) {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
 #[tokio::test]
 async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
     let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
@@ -267,6 +327,118 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
+    let projection =
+        std::mem::replace(&mut worker.settlement_facts, SettlementFacts::new()).finalize();
+    assert_eq!(
+        projection.components(),
+        &[FinalizedFailureComponent::Operation(
+            AgentError::Backpressure
+        )]
+    );
+    assert_worker_projection_survives_reload(projection).await;
+}
+
+#[tokio::test]
+async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
+    let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
+    let (events, _observations) = EventQueueBudget::new().channel(2 * MAX_RETAINED_CATEGORY_FACTS);
+    worker.events = events;
+    let audit = Arc::new(SwitchingAudit(AtomicBool::new(false)));
+    worker.audit = audit.clone();
+    let mut controller =
+        ExecutionController::new(ExecutionSessionId::new("audit-context").unwrap());
+    let execution_id = ExecutionId::new("active").unwrap();
+    controller.begin_execution(execution_id.clone()).unwrap();
+    let (reply, _result) = oneshot::channel();
+    worker.active = Some(ActiveExecution {
+        id: 8,
+        execution_id,
+        reply,
+        deadline: None,
+    });
+    for sequence in 0..MAX_RETAINED_CATEGORY_FACTS {
+        let params = json!({
+            "sessionId":"audit-context",
+            "toolCall":{
+                "toolCallId":format!("tool-{sequence}"),
+                "title":"Read",
+                "kind":"read",
+                "status":"pending",
+                "rawInput":{"target":"/tmp/file"}
+            },
+            "options":[
+                {"optionId":"allow","name":"Allow","kind":"allow_once"},
+                {"optionId":"deny","name":"Deny","kind":"reject_once"}
+            ]
+        });
+        assert!(worker
+            .permission(
+                &mut controller,
+                RpcId::Number(i64::try_from(sequence).unwrap()),
+                params,
+                None,
+            )
+            .await
+            .is_ok());
+    }
+    assert_eq!(worker.permissions.len(), MAX_RETAINED_CATEGORY_FACTS);
+    let records = controller
+        .close(
+            PermissionCancellationReason::session_closed(),
+            CancellationOrigin::Runtime,
+        )
+        .unwrap();
+    let mut cancellations = Vec::new();
+    let mut finished = None;
+    for record in records {
+        match record {
+            ExecutionAuditRecord::Cancelled(record) => cancellations.push(record),
+            record @ ExecutionAuditRecord::Finished(_) => finished = Some(record),
+            ExecutionAuditRecord::SessionClosed(_) => {}
+            _ => panic!("closing pending reviews emitted an unrelated record"),
+        }
+    }
+    assert_eq!(cancellations.len(), MAX_RETAINED_CATEGORY_FACTS);
+    audit.0.store(true, Ordering::SeqCst);
+    assert!(worker.record_cancellations(cancellations).await.is_err());
+    let failure = match worker
+        .record_audit(
+            finished.expect("finished record"),
+            AuditEffectPhase::Lifecycle,
+        )
+        .await
+    {
+        Err(failure) => failure,
+        Ok(()) => panic!("late finished audit must retain sink rejection"),
+    };
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert!(!worker
+        .settlement_facts
+        .coverage_has_operation(failure.coverage()));
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+    let projection =
+        std::mem::replace(&mut worker.settlement_facts, SettlementFacts::new()).finalize();
+    assert_eq!(
+        projection
+            .components()
+            .iter()
+            .filter(|component| matches!(component, FinalizedFailureComponent::Audit))
+            .count(),
+        MAX_RETAINED_CATEGORY_FACTS
+    );
+    assert_eq!(
+        projection.components().last(),
+        Some(&FinalizedFailureComponent::AuditOverflow)
+    );
+    assert!(projection.components().iter().all(|component| !matches!(
+        component,
+        FinalizedFailureComponent::Operation(_) | FinalizedFailureComponent::OperationOverflow
+    )));
+    assert_worker_projection_survives_reload(projection).await;
 }
 
 #[tokio::test]
@@ -492,7 +664,8 @@ async fn exhausted_task_budget_does_not_hide_ready_policy_frames() {
             &mut execution,
             Command::ExecutionRequest(dispatched(request(), None), reply),
         )
-        .await;
+        .await
+        .map_err(WorkerFailure::into_error);
     worker
         .scope
         .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -644,7 +817,7 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
-    assert_eq!(operation, Ok(()));
+    assert!(operation.is_ok());
     assert_eq!(
         result.await.unwrap().unwrap(),
         SteeringOutcome::PromptRequired
@@ -691,7 +864,8 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
                         reply,
                     )
                 )
-                .await,
+                .await
+                .map_err(WorkerFailure::into_error),
             Ok(())
         );
         let failure = result.await.unwrap().unwrap_err();
@@ -745,7 +919,8 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
                 &mut execution,
                 Command::ExecutionRequest(dispatched(request(), None), reply)
             )
-            .await,
+            .await
+            .map_err(WorkerFailure::into_error),
         Ok(())
     );
     assert_eq!(worker.profile.updates.load(Ordering::SeqCst), 3);
@@ -760,7 +935,8 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
                 &mut execution,
                 Command::ExecutionRequest(dispatched(request(), None), reply)
             )
-            .await,
+            .await
+            .map_err(WorkerFailure::into_error),
         Ok(())
     );
     assert_eq!(worker.sequence, 1);

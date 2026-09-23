@@ -134,7 +134,10 @@ async fn live_nested_responses_observe_earliest_execution_or_steering_deadline()
             .unwrap();
             worker.config.tools_enabled = false;
             let deadline = worker.current_deadline();
-            let result = worker.message(&mut execution, message, deadline).await;
+            let result = worker
+                .message(&mut execution, message, deadline)
+                .await
+                .map_err(WorkerFailure::into_error);
             let elapsed = Instant::now() - began;
             tokio::time::resume();
             worker
@@ -171,6 +174,7 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
         worker
             .permission(&mut execution, RpcId::Number(77), permission_params(), None)
             .await
+            .map_err(WorkerFailure::into_error)
             .unwrap();
         assert_eq!(worker.permissions.len(), 1);
         tokio::time::pause();
@@ -180,7 +184,10 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
         )
         .unwrap();
         assert_eq!(
-            worker.message(&mut execution, message, None).await,
+            worker
+                .message(&mut execution, message, None)
+                .await
+                .map_err(WorkerFailure::into_error),
             Err(AgentError::Deadline)
         );
         assert_eq!(
@@ -200,11 +207,7 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
         );
         tokio::time::resume();
         audit.reject.store(reject_audit, Ordering::SeqCst);
-        let failure = worker.cover_failure(
-            worker.settlement_facts.cursor(),
-            OperationEffectPhase::Worker,
-            AgentError::Deadline,
-        );
+        let failure = worker.record_failure(OperationEffectPhase::Worker, AgentError::Deadline);
         let completed = worker
             .finish(&mut Some(execution), Err(failure), &mut None)
             .await;
@@ -294,7 +297,11 @@ async fn successful_completion_releases_its_temporary_shutdown_deadline() {
     let message =
         serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}))
             .unwrap();
-    worker.message(&mut execution, message, None).await.unwrap();
+    worker
+        .message(&mut execution, message, None)
+        .await
+        .map_err(WorkerFailure::into_error)
+        .unwrap();
     assert_eq!(worker.shutdown_deadline, None);
     assert!(worker.active.is_none());
     // A later turn must use its own budget, not the completed turn's grace.
@@ -377,7 +384,10 @@ async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
         dispatched(request("steer"), Some(began + remaining)),
         reply,
     );
-    let result = worker.command(&mut execution, command).await;
+    let result = worker
+        .command(&mut execution, command)
+        .await
+        .map_err(WorkerFailure::into_error);
     let elapsed = Instant::now() - began;
     tokio::time::resume();
     worker
@@ -412,7 +422,10 @@ async fn an_execution_write_is_armed_with_what_the_read_left() {
     let (reply, _result) = oneshot::channel();
     let command =
         Command::ExecutionRequest(dispatched(request("next"), Some(began + remaining)), reply);
-    let result = worker.command(&mut execution, command).await;
+    let result = worker
+        .command(&mut execution, command)
+        .await
+        .map_err(WorkerFailure::into_error);
     let elapsed = Instant::now() - began;
     tokio::time::resume();
     worker

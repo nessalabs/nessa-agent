@@ -129,34 +129,43 @@ async fn confirmed_cleanup_supervision_failure_survives_restoration() {
         Arc::new(InMemoryStorage::new()),
         Arc::new(LocalFileStorage::new(root.path().join("cleanup-supervision")).unwrap()),
     ];
-    for storage in stores {
+    for (index, storage) in stores.into_iter().enumerate() {
         let lease = storage
-            .open(SessionId::new("cleanup-supervision").unwrap())
+            .open(SessionId::new(format!("cleanup-supervision-{index}")).unwrap())
             .await
             .unwrap();
-        let report = CleanupReport::confirmed(CloseOutcome { forced: false })
-            .with_completion_failure(Some(AgentError::CleanupUncertain));
-        let mut value = snapshot("cleanup-supervision");
-        value.invocations[0].events.clear();
-        value.invocations[0].result = Some(Err(AgentError::CleanupUncertain));
-        value.invocations[0].local_cancellation = Some(InvocationCancellationEvent {
-            cause: SchedulingCause::SessionClosed,
-            actor: Some(ActionContext::new("closer", "test", "close").unwrap()),
-        });
-        value.invocations[0].provider_report =
-            Some(ExecutionReport::cancelled_locally(report.clone()));
-        lease.save(value).await.unwrap();
+        for first_error in [
+            AgentError::Transport("cleanup completion failed".into()),
+            AgentError::CleanupUncertain,
+        ] {
+            let completion = AgentError::MultipleOperationFailures {
+                first_error: Box::new(first_error),
+                subsequent_error: Box::new(AgentError::CleanupUncertain),
+            };
+            let report = CleanupReport::confirmed(CloseOutcome { forced: false })
+                .with_completion_failure(Some(completion.clone()));
+            let mut value = snapshot(&format!("cleanup-supervision-{index}"));
+            value.invocations[0].events.clear();
+            value.invocations[0].result = Some(Err(completion.clone()));
+            value.invocations[0].local_cancellation = Some(InvocationCancellationEvent {
+                cause: SchedulingCause::SessionClosed,
+                actor: Some(ActionContext::new("closer", "test", "close").unwrap()),
+            });
+            value.invocations[0].provider_report =
+                Some(ExecutionReport::cancelled_locally(report.clone()));
+            lease.save(value).await.unwrap();
 
-        let restored = lease.load().await.unwrap().unwrap();
-        let restored = restored.invocations[0]
-            .provider_report
-            .clone()
-            .expect("restored cleanup report");
-        assert_eq!(
-            restored.session_state(),
-            &ProviderSessionState::CleanupReported(report)
-        );
-        assert_eq!(restored.into_result(), Err(AgentError::CleanupUncertain));
+            let restored = lease.load().await.unwrap().unwrap();
+            let restored = restored.invocations[0]
+                .provider_report
+                .clone()
+                .expect("restored cleanup report");
+            assert_eq!(
+                restored.session_state(),
+                &ProviderSessionState::CleanupReported(report)
+            );
+            assert_eq!(restored.into_result(), Err(completion));
+        }
     }
 }
 

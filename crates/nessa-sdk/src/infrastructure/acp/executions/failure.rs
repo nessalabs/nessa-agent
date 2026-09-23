@@ -6,7 +6,7 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::permissions::PermissionCancellationReason;
 
-const MAX_RETAINED_CATEGORY_FACTS: usize = 128;
+pub(super) const MAX_RETAINED_CATEGORY_FACTS: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct FactId(u64);
