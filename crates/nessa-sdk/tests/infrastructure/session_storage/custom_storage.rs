@@ -119,17 +119,21 @@ pub(super) async fn assert_custom_retention_admission(
         .await
         .unwrap();
     let prepared = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit)).await;
-    if accepted {
+    let error = if accepted {
         let agent = prepared.expect("valid custom snapshot must prepare");
         let authorization = agent
             .authorize_attachment(AttachmentRequest::CallerRequested(
                 ActionContext::new("test", "custom-storage", "attach").unwrap(),
             ))
             .unwrap();
-        assert_eq!(
-            agent.start_attachment(authorization).unwrap().wait().await,
-            Err(AgentError::Unsupported("opening probe".into()))
-        );
+        let error = agent
+            .start_attachment(authorization)
+            .unwrap()
+            .wait()
+            .await
+            .expect_err("opening probe must reject attachment");
+        assert_eq!(error, AgentError::Unsupported("opening probe".into()));
+        error
     } else {
         let error = prepared
             .err()
@@ -139,12 +143,13 @@ pub(super) async fn assert_custom_retention_admission(
             "{:?}",
             error.cause()
         );
-    }
+        error.cause().clone()
+    };
     assert_eq!(provider.opens.load(Ordering::SeqCst), usize::from(accepted));
     assert_eq!(saves.load(Ordering::SeqCst), 0);
     let lease = storage.open(value.id.clone()).await.unwrap();
     assert_same(&lease.load().await.unwrap().unwrap(), &value);
-    error.cause().clone()
+    error
 }
 
 // Unlike the usual fixture, this lease transfers the exact snapshot allocation.

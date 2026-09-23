@@ -587,13 +587,13 @@ impl SessionLifecycle {
         &self,
         generation: u64,
         attached: AttachedProvider,
-    ) -> Result<(), AttachedProvider> {
+    ) -> Result<(), Box<AttachedProvider>> {
         let mut state = self.state.lock().expect("session lifecycle");
         if state.attachment_generation != generation
             || !matches!(state.work_status, WorkStatus::Open)
             || !matches!(state.attachment, AttachmentState::Starting { generation: current, .. } if current == generation)
         {
-            return Err(attached);
+            return Err(Box::new(attached));
         }
         let cause = match &state.attachment {
             AttachmentState::Starting { cause, .. } => *cause,

@@ -130,6 +130,7 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
         let delivery = timeout(Duration::from_secs(2), steering)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
         assert!(matches!(
             &delivery,

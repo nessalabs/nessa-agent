@@ -495,7 +495,8 @@ async fn a_retry_of_a_delivered_image_turn_does_not_depend_on_its_upload_still_b
 async fn an_agent_that_advertises_images_in_front_of_a_model_offered_none_takes_no_images() {
     // Each fact is valid alone; together they describe an image nobody can see.
     let attachments = Arc::new(MemoryAttachments::default());
-    let (service, _, _, _) = image_fixture_with_model(true, false, Some(attachments.clone()));
+    let (service, provider, _, _) =
+        image_fixture_with_model(true, false, Some(attachments.clone()));
     let id = new_id();
     service
         .create(id.clone(), caller("panel", "create"), None)

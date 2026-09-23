@@ -34,7 +34,8 @@ impl ExecutionAudit for AttachmentAuditProbe {
                 self.records.lock().unwrap().push(record.clone());
                 if gated {
                     self.entered.notify_one();
-                    if let Some(release) = self.release.lock().unwrap().take() {
+                    let release = { self.release.lock().unwrap().take() };
+                    if let Some(release) = release {
                         let _ = release.await;
                     }
                 }
