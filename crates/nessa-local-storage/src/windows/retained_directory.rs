@@ -23,7 +23,7 @@ use std::{
     path::{Component, Path, PathBuf},
     ptr::{addr_of_mut, null, null_mut},
 };
-use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
+use windows_sys::Win32::{Foundation::*, Security::SECURITY_ATTRIBUTES, Storage::FileSystem::*};
 
 struct DirectoryBinding {
     path: PathBuf,

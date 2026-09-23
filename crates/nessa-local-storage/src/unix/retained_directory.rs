@@ -138,7 +138,7 @@ impl RetainedDirectory {
         let status = unsafe { status.assume_init() };
         let identity = self.file_identity(file)?;
         Ok(file_type(status.st_mode) == PrivateFileType::RegularFile
-            && identity == PrivateFileIdentity::from_u64s(status.st_dev as u64, status.st_ino))
+            && identity == identity_from_status(&status))
     }
 
     pub fn verify_binding(&self) -> io::Result<()> {
@@ -166,8 +166,7 @@ impl RetainedDirectory {
             }
             let status = unsafe { status.assume_init() };
             if file_type(status.st_mode) != PrivateFileType::Directory
-                || PrivateFileIdentity::from_u64s(status.st_dev as u64, status.st_ino)
-                    != child.identity
+                || identity_from_status(&status) != child.identity
             {
                 return Err(unsafe_file());
             }
@@ -308,6 +307,19 @@ fn directory_identity(file: &File) -> io::Result<PrivateFileIdentity> {
         metadata.dev(),
         metadata.ino(),
     ))
+}
+
+#[cfg(target_os = "linux")]
+fn identity_from_status(status: &libc::stat) -> PrivateFileIdentity {
+    PrivateFileIdentity::from_u64s(status.st_dev, status.st_ino)
+}
+
+#[cfg(target_vendor = "apple")]
+fn identity_from_status(status: &libc::stat) -> PrivateFileIdentity {
+    // Apple exposes `dev_t` as signed i32. Device identity is its native
+    // 32-bit representation, including the high bit, widened without loss.
+    let device = u64::from(u32::from_ne_bytes(status.st_dev.to_ne_bytes()));
+    PrivateFileIdentity::from_u64s(device, status.st_ino)
 }
 
 fn file_type(mode: libc::mode_t) -> PrivateFileType {
