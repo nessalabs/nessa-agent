@@ -3,7 +3,9 @@ use super::*;
 use crate::application::agent_execution::{
     agents::AgentFuture,
     executions::{ExecutionAudit, QueueSettlementRecord},
-    providers::{AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture},
+    providers::{
+        AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
+    },
     sessions::{
         SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture,
     },
@@ -12,7 +14,7 @@ use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
 use crate::domain::agent_execution::{
     executions::{QueueMutation, QueueRemovalCause, SchedulingInitiator},
     prompts::{PromptText, UserMessage},
-    sessions::{ExecutionSessionId, SessionId},
+    sessions::SessionId,
 };
 use crate::domain::{
     effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},

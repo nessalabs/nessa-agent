@@ -145,7 +145,6 @@ enum AttachmentState {
         generation: u64,
         cause: AttachmentCause,
         recorded: bool,
-        result: watch::Sender<Option<Result<(), AgentError>>>,
         open_stop: watch::Sender<Option<SessionCloseRequest>>,
     },
     Attached {
@@ -422,7 +421,7 @@ impl SessionLifecycle {
             generation: state.attachment_generation,
             cause: authorization.cause,
             actor: authorization.actor.clone(),
-            result: result.clone(),
+            result,
             open_control: ProviderOpenControl::new(open_control),
         };
         // Starting a replacement establishes its resource generation before
@@ -433,7 +432,6 @@ impl SessionLifecycle {
             generation: start.generation,
             cause: start.cause,
             recorded: !matches!(start.cause, AttachmentCause::Initial),
-            result,
             open_stop,
         };
         Ok((start, AttachmentWait { result: wait }))
