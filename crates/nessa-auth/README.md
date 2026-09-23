@@ -32,6 +32,8 @@ Composition → verifier + access reader + clock → AuthenticateSession
   admin membership does not authorize storing it; that belongs in a trusted use case.
 - `application/ports.rs`: object-safe asynchronous verification/state ports,
   an absolute-time clock, and a policy evaluator contract. No runtime is required.
+- `application/credential_registry.rs`: typed, secret-free refusal evidence and
+  the audit port used when registry bytes cannot be trusted.
 - `application/session.rs`: verify evidence, load one committed access snapshot,
   check IDs/audience/membership/time, then construct a context with bounded expiry.
 - `application/authorization.rs`: re-read current state and check lifetime/linkage
@@ -75,6 +77,18 @@ Issue, bootstrap, and revoke results carry their committed transitions, and the
 `CredentialTransitionReader` port lists them per organization. See
 [credential transition audit](../../docs/design/auth/credential-transition-audit.md)
 for the decisions.
+
+Opening an invalid registry authority file is a separate audited event because
+no registry state can be trusted enough to append evidence to it. The local
+adapter reports the exact path, the registry-or-lock role, and a bounded
+structural fault without including rejected values. The application derives a
+role-specific preserved transition and records it with cause and the known
+initiator in a private sibling audit directory. Audit failure remains visible
+beside the original refusal. Neither path edits or deletes the registry.
+The local refusal sink addresses every directory and record beneath the verified
+auth root and refuses symbolic-link ancestry. Unix syncs each parent after
+creating its child; Windows revalidates the tree, flushes the record file, and
+uses a write-through move because it has no directory-fsync equivalent.
 
 ## Authentication is not ongoing authorization
 
