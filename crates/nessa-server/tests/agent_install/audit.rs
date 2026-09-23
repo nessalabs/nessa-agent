@@ -66,7 +66,10 @@ fn replacement_keeps_the_exact_previous_and_new_artifacts() {
         &platform(),
     ));
     let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
-    attempt.verified().unwrap();
+    assert_eq!(
+        attempt.verified().unwrap().kind(),
+        InstallTransitionKind::Verified
+    );
     let replaced = attempt.replaced(previous).unwrap();
     let value = record_value(&replaced);
 
@@ -84,7 +87,10 @@ fn replacement_keeps_the_exact_previous_and_new_artifacts() {
 #[test]
 fn rollback_says_when_no_prior_runtime_was_restored() {
     let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
-    attempt.verified().unwrap();
+    assert_eq!(
+        attempt.verified().unwrap().kind(),
+        InstallTransitionKind::Verified
+    );
     let rolled_back = attempt
         .rolled_back(RollbackState::NoInstalledRuntime)
         .unwrap();
@@ -97,7 +103,10 @@ fn rollback_says_when_no_prior_runtime_was_restored() {
 #[test]
 fn incomplete_recovery_keeps_uncertain_state_and_each_failure_stage() {
     let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
-    attempt.verified().unwrap();
+    assert_eq!(
+        attempt.verified().unwrap().kind(),
+        InstallTransitionKind::Verified
+    );
     let failures = RecoveryFailureEvidence::new(
         InstallFailureEvidence::new(InstallFailureKind::Unwritable, "record sync"),
         Some(InstallFailureEvidence::new(

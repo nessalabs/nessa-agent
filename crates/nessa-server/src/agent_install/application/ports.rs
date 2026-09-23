@@ -234,7 +234,7 @@ pub enum PublicationRecovery {
 /// A publication failure, including a rollback the store actually performed.
 pub struct PublishFailure {
     failure: StoreFailure,
-    recovery: PublicationRecovery,
+    recovery: Box<PublicationRecovery>,
     _lease: Box<dyn PublicationLease>,
 }
 
@@ -242,7 +242,7 @@ impl PublishFailure {
     pub fn unchanged(failure: StoreFailure) -> Self {
         Self {
             failure,
-            recovery: PublicationRecovery::NotRequired,
+            recovery: Box::new(PublicationRecovery::NotRequired),
             _lease: Box::new(()),
         }
     }
@@ -254,7 +254,7 @@ impl PublishFailure {
     ) -> Self {
         Self {
             failure,
-            recovery: PublicationRecovery::RolledBack(rollback),
+            recovery: Box::new(PublicationRecovery::RolledBack(rollback)),
             _lease: lease,
         }
     }
@@ -267,7 +267,7 @@ impl PublishFailure {
     ) -> Self {
         Self {
             failure,
-            recovery: PublicationRecovery::Incomplete { rollback, cleanup },
+            recovery: Box::new(PublicationRecovery::Incomplete { rollback, cleanup }),
             _lease: lease,
         }
     }
@@ -277,7 +277,7 @@ impl PublishFailure {
     }
 
     pub fn recovery(&self) -> &PublicationRecovery {
-        &self.recovery
+        self.recovery.as_ref()
     }
 }
 

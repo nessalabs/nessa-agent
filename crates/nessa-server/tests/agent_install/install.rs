@@ -750,7 +750,7 @@ fn cleanup_failure_is_visible_without_replacing_the_publication_failure() {
         failure,
         InstallFailure::Recovery {
             operation,
-            cleanup: cleanup_evidence,
+            cleanup: Box::new(cleanup_evidence),
         }
     );
     assert_eq!(
@@ -865,7 +865,7 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
         *audited_operation,
         InstallFailure::Recovery {
             operation,
-            cleanup: cleanup_evidence,
+            cleanup: Box::new(cleanup_evidence),
         }
     );
     let transition = audit.records().pop().unwrap();

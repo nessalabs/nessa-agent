@@ -1414,10 +1414,7 @@ fn withdrawal_failure_is_visible_while_the_restored_runtime_is_confirmed() {
         } if artifact == &RuntimeArtifact::for_release(&previous)
             && cleanup.withdrawal().is_some_and(|failure| failure.to_string().contains("withdrawal failed"))
     ));
-    assert_eq!(
-        store.installed(&agent(), &previous).unwrap().is_some(),
-        true
-    );
+    assert!(store.installed(&agent(), &previous).unwrap().is_some());
 }
 
 #[test]

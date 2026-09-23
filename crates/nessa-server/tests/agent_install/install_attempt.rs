@@ -40,14 +40,20 @@ fn a_matching_digest_cannot_be_recorded_as_rejected() {
 fn an_artifact_cannot_replace_or_restore_itself() {
     let target = artifact("1.18.31", PINNED_DIGEST);
     let (mut replacement, _) = InstallAttempt::start(agent(), target.clone(), request());
-    replacement.verified().unwrap();
+    assert_eq!(
+        replacement.verified().unwrap().kind(),
+        InstallTransitionKind::Verified
+    );
     assert!(matches!(
         replacement.replaced(target.clone()),
         Err(InstallAttemptError::Contradictory(_))
     ));
 
     let (mut rollback, _) = InstallAttempt::start(agent(), target.clone(), request());
-    rollback.verified().unwrap();
+    assert_eq!(
+        rollback.verified().unwrap().kind(),
+        InstallTransitionKind::Verified
+    );
     assert!(matches!(
         rollback.rolled_back(RollbackState::Restored(target)),
         Err(InstallAttemptError::Contradictory(_))
@@ -70,7 +76,10 @@ fn rejection_requires_the_started_state_and_preserves_both_digests() {
 fn incomplete_recovery_rejects_a_target_reported_as_restored_without_ending_the_attempt() {
     let target = artifact("1.18.31", PINNED_DIGEST);
     let (mut attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
-    attempt.verified().unwrap();
+    assert_eq!(
+        attempt.verified().unwrap().kind(),
+        InstallTransitionKind::Verified
+    );
     let failures = RecoveryFailureEvidence::new(
         InstallFailureEvidence::new(InstallFailureKind::Unwritable, "publish"),
         Some(InstallFailureEvidence::new(

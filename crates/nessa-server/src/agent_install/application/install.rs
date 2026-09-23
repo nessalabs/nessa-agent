@@ -65,7 +65,7 @@ pub enum InstallFailure {
     /// and cleanup failures remain separate facts.
     Recovery {
         operation: StoreFailure,
-        cleanup: PublicationCleanupFailure,
+        cleanup: Box<PublicationCleanupFailure>,
     },
 }
 
@@ -284,7 +284,7 @@ impl InstallAgentRuntime<'_> {
                             .map_err(InstallFailure::Evidence)?;
                         let outcome = InstallFailure::Recovery {
                             operation: publish.failure().clone(),
-                            cleanup: cleanup.clone(),
+                            cleanup: Box::new(cleanup.clone()),
                         };
                         (transition, runtime_state, outcome)
                     }
