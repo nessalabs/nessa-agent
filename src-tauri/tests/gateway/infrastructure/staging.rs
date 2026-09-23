@@ -182,22 +182,21 @@ fn measured_copy(
     (elapsed, profile)
 }
 
-fn measurement_provenance() {
-    let build_head = option_env!("NESSA_STAGING_BUILD_HEAD").expect(
+fn measurement_provenance() -> Result<(), &'static str> {
+    let build_head = option_env!("NESSA_STAGING_BUILD_HEAD").ok_or(
         "build this ignored harness with NESSA_STAGING_BUILD_HEAD set to the checkout commit",
-    );
-    assert!(
-        matches!(build_head.len(), 40 | 64)
-            && build_head.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "NESSA_STAGING_BUILD_HEAD must be a full Git object ID"
-    );
-    let build_invocation = option_env!("NESSA_STAGING_BUILD_INVOCATION").expect(
+    )?;
+    if !matches!(build_head.len(), 40 | 64)
+        || !build_head.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("NESSA_STAGING_BUILD_HEAD must be a full Git object ID");
+    }
+    let build_invocation = option_env!("NESSA_STAGING_BUILD_INVOCATION").ok_or(
         "build this ignored harness with NESSA_STAGING_BUILD_INVOCATION set to the exact Cargo command",
-    );
-    assert!(
-        !build_invocation.trim().is_empty(),
-        "NESSA_STAGING_BUILD_INVOCATION must not be empty"
-    );
+    )?;
+    if build_invocation.trim().is_empty() {
+        return Err("NESSA_STAGING_BUILD_INVOCATION must not be empty");
+    }
     let binary = std::env::current_exe()
         .and_then(|path| path.canonicalize())
         .expect("the running test binary path must be available");
@@ -210,6 +209,7 @@ fn measurement_provenance() {
         cfg!(debug_assertions),
         build_invocation,
     );
+    Ok(())
 }
 
 fn comparison_schedule(repetition: usize) -> ([(&'static str, CloneFile); 2], [bool; 2]) {
@@ -312,7 +312,7 @@ fn runtime_inventory_limits_are_enforced_at_the_increment_boundary() {
 #[test]
 #[ignore = "copies and validates a packaged runtime supplied by the caller"]
 fn measure_packaged_runtime_staging_phases() {
-    measurement_provenance();
+    measurement_provenance().expect("measurement build provenance must be embedded and valid");
     let source = std::env::var_os("NESSA_STAGING_MEASUREMENT_RUNTIME")
         .map(PathBuf::from)
         .expect("NESSA_STAGING_MEASUREMENT_RUNTIME must name a packaged runtime");
@@ -395,7 +395,7 @@ fn compare_packaged_runtime_clone_and_byte_copy_profiles() {
     const DEFAULT_REPETITIONS: usize = 4;
     const MOST_REPETITIONS: usize = 10;
 
-    measurement_provenance();
+    measurement_provenance().expect("measurement build provenance must be embedded and valid");
     let source = std::env::var_os("NESSA_STAGING_MEASUREMENT_RUNTIME")
         .map(PathBuf::from)
         .expect("NESSA_STAGING_MEASUREMENT_RUNTIME must name a packaged runtime")
