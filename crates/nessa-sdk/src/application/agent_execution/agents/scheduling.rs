@@ -646,7 +646,7 @@ impl Agent {
         actor: ActionContext,
         kind: InvocationKind,
     ) -> Result<QueueAdmission, AgentError> {
-        validate_configured_input(&self.inner.capabilities, &input)?;
+        validate_configured_input(self.capabilities(), &input)?;
         let mut scheduler = self.inner.scheduler.lock().await;
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
