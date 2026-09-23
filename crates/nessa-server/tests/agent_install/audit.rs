@@ -12,7 +12,14 @@ use crate::agent_install_test_support::{
     agent, platform, release, request, temporary_root, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
-use std::sync::{Arc, Barrier};
+use serde::{ser::SerializeSeq, Serialize, Serializer};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{Arc, Barrier},
+};
+#[cfg(unix)]
+use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 use uuid::Uuid;
 
 struct FixedClock;
@@ -564,18 +571,15 @@ fn writer_refuses_an_encoded_record_over_its_reader_limit_before_reservation() {
 
 #[test]
 fn bounded_encoder_stops_lazy_serialization_before_visiting_all_input() {
-    use serde::ser::SerializeSeq;
-    use std::{cell::Cell, rc::Rc};
-
     struct CountedSequence {
         visits: Rc<Cell<usize>>,
         total: usize,
     }
 
-    impl serde::Serialize for CountedSequence {
+    impl Serialize for CountedSequence {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
-            S: serde::Serializer,
+            S: Serializer,
         {
             let mut sequence = serializer.serialize_seq(Some(self.total))?;
             for _ in 0..self.total {
@@ -776,12 +780,10 @@ fn storage_publication_stages_preserve_post_rename_identity_and_cleanup_independ
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_record_name_is_rejected_without_lossy_aliasing() {
-    use std::os::unix::ffi::OsStringExt;
-
     let root = temporary_root();
     let directory = root.path().join("audit");
     let audit = audit_at(root.path());
-    let name = std::ffi::OsString::from_vec(vec![b'0', 0xff, b'.', b'j', b's', b'o', b'n']);
+    let name = OsString::from_vec(vec![b'0', 0xff, b'.', b'j', b's', b'o', b'n']);
     match std::fs::write(directory.join(name), b"{}") {
         Ok(()) => {
             let (_, started) = InstallAttempt::start(agent(), target(), request());

@@ -465,7 +465,12 @@ impl PublishFailure {
         self.recovery.as_ref()
     }
 
-    /// Consume the failure without cloning its diagnostic, recovery facts, or lease.
+    /// Consume the failure into its full-sized store diagnostic, recovery
+    /// facts, and publication lease without cloning them.
+    ///
+    /// The caller must keep the returned lease alive through its immediate
+    /// audit attempt, including construction of the bounded domain evidence
+    /// projected from the original diagnostic and cleanup failures.
     pub fn into_parts(self) -> (StoreFailure, PublicationRecovery, Box<dyn PublicationLease>) {
         (self.failure, *self.recovery, self._lease)
     }

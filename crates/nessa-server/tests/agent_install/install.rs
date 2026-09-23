@@ -71,6 +71,7 @@ impl Drop for SignallingLease {
 struct LeaseCheckingAudit {
     target: InstallTransitionKind,
     dropped: Mutex<mpsc::Receiver<()>>,
+    recorded: Mutex<Vec<InstallTransition>>,
     fail: bool,
 }
 
@@ -81,6 +82,7 @@ impl InstallAudit for LeaseCheckingAudit {
                 self.dropped.lock().unwrap().try_recv(),
                 Err(mpsc::TryRecvError::Empty)
             ));
+            self.recorded.lock().unwrap().push(transition.clone());
             if self.fail {
                 return Err(AuditFailure::new(
                     AuditFailureStage::AcknowledgeRecord,
@@ -137,6 +139,40 @@ fn store_failure_detail(failure: &StoreFailure) -> &str {
         | StoreFailure::IncompleteArchive(detail)
         | StoreFailure::MalformedArchive(detail) => detail,
     }
+}
+
+fn assert_incomplete_transition(transition: &InstallTransition) {
+    assert_eq!(transition.kind(), InstallTransitionKind::RecoveryIncomplete);
+    let (state, evidence) = transition.recovery().unwrap();
+    assert_eq!(state, &RecoveryState::Unconfirmed);
+    for retained in [
+        evidence.publication(),
+        evidence.withdrawal().unwrap(),
+        evidence.restoration().unwrap(),
+        evidence.confirmation().unwrap(),
+    ] {
+        assert_eq!(
+            retained.detail().len(),
+            InstallFailureEvidence::MAX_DETAIL_BYTES
+        );
+        assert!(retained.truncated());
+    }
+    assert_eq!(
+        evidence.publication().kind(),
+        InstallFailureKind::Unwritable
+    );
+    assert_eq!(
+        evidence.withdrawal().unwrap().kind(),
+        InstallFailureKind::Unwritable
+    );
+    assert_eq!(
+        evidence.restoration().unwrap().kind(),
+        InstallFailureKind::Unreadable
+    );
+    assert_eq!(
+        evidence.confirmation().unwrap().kind(),
+        InstallFailureKind::MalformedArchive
+    );
 }
 
 fn journal_identities(root: &std::path::Path) -> Vec<(u64, String, String)> {
@@ -888,133 +924,36 @@ fn retained_pending_transition_can_be_redelivered_without_repeating_install_effe
 
 #[test]
 fn incomplete_publication_moves_full_diagnostics_and_bounds_only_audit_evidence() {
-    let root = tempfile::tempdir().unwrap();
-    let (lease_dropped, dropped) = mpsc::channel();
-    let publication = StoreFailure::Unwritable("p".repeat(5_000));
-    let withdrawal = StoreFailure::Unwritable("w".repeat(5_000));
-    let restoration = StoreFailure::Unreadable("r".repeat(5_000));
-    let confirmation = StoreFailure::MalformedArchive("c".repeat(5_000));
-    let pointers = [
-        store_failure_detail(&publication).as_ptr(),
-        store_failure_detail(&withdrawal).as_ptr(),
-        store_failure_detail(&restoration).as_ptr(),
-        store_failure_detail(&confirmation).as_ptr(),
-    ];
-    let cleanup =
-        PublicationCleanupFailure::new(Some(withdrawal), Some(restoration), Some(confirmation))
-            .unwrap();
-    let store = OneShotFailureStore {
-        inner: FakeStore::empty(root.path()),
-        failure: Mutex::new(Some(PublishFailure::incomplete(
-            publication,
-            None,
-            cleanup,
-            Box::new(SignallingLease(lease_dropped)),
-        ))),
-    };
-    let audit = LeaseCheckingAudit {
-        target: InstallTransitionKind::RecoveryIncomplete,
-        dropped: Mutex::new(dropped),
-        fail: true,
-    };
-
-    let failure = InstallAgentRuntime {
-        source: &FakeSource::serving(b"archive bytes"),
-        store: &store,
-        audit: &audit,
-    }
-    .execute(
-        &agent(),
-        &release("1.18.31", PINNED_DIGEST, &platform()),
-        &host(),
-        &request(),
-    )
-    .unwrap_err();
-
-    let InstallFailure::Audit(delivery) = &failure else {
-        panic!("expected nested audit failure: {failure:?}");
-    };
-    let Some(InstallFailure::Recovery { operation, cleanup }) = delivery.operation() else {
-        panic!("expected retained recovery failure: {delivery:?}");
-    };
-    assert_eq!(store_failure_detail(operation).as_ptr(), pointers[0]);
-    assert_eq!(
-        store_failure_detail(cleanup.withdrawal().unwrap()).as_ptr(),
-        pointers[1]
-    );
-    assert_eq!(
-        store_failure_detail(cleanup.restoration().unwrap()).as_ptr(),
-        pointers[2]
-    );
-    assert_eq!(
-        store_failure_detail(cleanup.confirmation().unwrap()).as_ptr(),
-        pointers[3]
-    );
-    let (state, evidence) = delivery.pending().recovery().unwrap();
-    assert_eq!(state, &RecoveryState::Unconfirmed);
-    for retained in [
-        evidence.publication(),
-        evidence.withdrawal().unwrap(),
-        evidence.restoration().unwrap(),
-        evidence.confirmation().unwrap(),
-    ] {
-        assert_eq!(
-            retained.detail().len(),
-            InstallFailureEvidence::MAX_DETAIL_BYTES
-        );
-        assert!(retained.truncated());
-    }
-    assert_eq!(
-        evidence.publication().kind(),
-        InstallFailureKind::Unwritable
-    );
-    assert_eq!(
-        evidence.withdrawal().unwrap().kind(),
-        InstallFailureKind::Unwritable
-    );
-    assert_eq!(
-        evidence.restoration().unwrap().kind(),
-        InstallFailureKind::Unreadable
-    );
-    assert_eq!(
-        evidence.confirmation().unwrap().kind(),
-        InstallFailureKind::MalformedArchive
-    );
-    assert!(matches!(audit.dropped.lock().unwrap().try_recv(), Ok(())));
-}
-
-#[test]
-fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
-    for (recovery, target) in [
-        (PublicationRecovery::NotRequired, None),
-        (
-            PublicationRecovery::RolledBack(RollbackChange::NoInstalledRuntime),
-            Some(InstallTransitionKind::RolledBack),
-        ),
-    ] {
+    for sink_fails in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let (lease_dropped, dropped) = mpsc::channel();
-        let operation = StoreFailure::Unwritable("owned diagnostic".into());
-        let pointer = store_failure_detail(&operation).as_ptr();
-        let publish = match recovery {
-            PublicationRecovery::NotRequired => {
-                PublishFailure::unchanged(operation, Box::new(SignallingLease(lease_dropped)))
-            }
-            PublicationRecovery::RolledBack(rollback) => PublishFailure::rolled_back(
-                operation,
-                rollback,
-                Box::new(SignallingLease(lease_dropped)),
-            ),
-            PublicationRecovery::Incomplete { .. } => unreachable!(),
-        };
+        let publication = StoreFailure::Unwritable("p".repeat(5_000));
+        let withdrawal = StoreFailure::Unwritable("w".repeat(5_000));
+        let restoration = StoreFailure::Unreadable("r".repeat(5_000));
+        let confirmation = StoreFailure::MalformedArchive("c".repeat(5_000));
+        let pointers = [
+            store_failure_detail(&publication).as_ptr(),
+            store_failure_detail(&withdrawal).as_ptr(),
+            store_failure_detail(&restoration).as_ptr(),
+            store_failure_detail(&confirmation).as_ptr(),
+        ];
+        let cleanup =
+            PublicationCleanupFailure::new(Some(withdrawal), Some(restoration), Some(confirmation))
+                .unwrap();
         let store = OneShotFailureStore {
             inner: FakeStore::empty(root.path()),
-            failure: Mutex::new(Some(publish)),
+            failure: Mutex::new(Some(PublishFailure::incomplete(
+                publication,
+                None,
+                cleanup,
+                Box::new(SignallingLease(lease_dropped)),
+            ))),
         };
         let audit = LeaseCheckingAudit {
-            target: target.unwrap_or(InstallTransitionKind::RecoveryIncomplete),
+            target: InstallTransitionKind::RecoveryIncomplete,
             dropped: Mutex::new(dropped),
-            fail: false,
+            recorded: Mutex::new(Vec::new()),
+            fail: sink_fails,
         };
 
         let failure = InstallAgentRuntime {
@@ -1030,10 +969,141 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
         )
         .unwrap_err();
 
+        let operation_failure = match &failure {
+            InstallFailure::Audit(delivery) if sink_fails => {
+                assert_eq!(delivery.runtime_state(), &RuntimeStateEvidence::Unconfirmed);
+                assert_incomplete_transition(delivery.pending());
+                delivery.operation().unwrap()
+            }
+            InstallFailure::Recovery { .. } if !sink_fails => &failure,
+            _ => panic!("unexpected incomplete recovery result: {failure:?}"),
+        };
+        let InstallFailure::Recovery { operation, cleanup } = operation_failure else {
+            panic!("expected retained recovery failure: {operation_failure:?}");
+        };
+        assert_eq!(store_failure_detail(operation).as_ptr(), pointers[0]);
+        assert_eq!(
+            store_failure_detail(cleanup.withdrawal().unwrap()).as_ptr(),
+            pointers[1]
+        );
+        assert_eq!(
+            store_failure_detail(cleanup.restoration().unwrap()).as_ptr(),
+            pointers[2]
+        );
+        assert_eq!(
+            store_failure_detail(cleanup.confirmation().unwrap()).as_ptr(),
+            pointers[3]
+        );
+        let recorded = audit.recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_incomplete_transition(&recorded[0]);
+        assert!(matches!(audit.dropped.lock().unwrap().try_recv(), Ok(())));
+    }
+}
+
+#[test]
+fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
+    {
+        let root = tempfile::tempdir().unwrap();
+        let (lease_dropped, dropped) = mpsc::channel();
+        let operation = StoreFailure::Unwritable("n".repeat(5_000));
+        let pointer = store_failure_detail(&operation).as_ptr();
+        let store = OneShotFailureStore {
+            inner: FakeStore::empty(root.path()),
+            failure: Mutex::new(Some(PublishFailure::unchanged(
+                operation,
+                Box::new(SignallingLease(lease_dropped)),
+            ))),
+        };
+        let audit = RecordingAudit::default();
+        let failure = InstallAgentRuntime {
+            source: &FakeSource::serving(b"archive bytes"),
+            store: &store,
+            audit: &audit,
+        }
+        .execute(
+            &agent(),
+            &release("1.18.31", PINNED_DIGEST, &platform()),
+            &host(),
+            &request(),
+        )
+        .unwrap_err();
         let InstallFailure::Store(operation) = failure else {
-            panic!("expected original store failure: {failure:?}");
+            panic!("expected original unchanged store failure: {failure:?}");
         };
         assert_eq!(store_failure_detail(&operation).as_ptr(), pointer);
+        assert_eq!(
+            audit
+                .records()
+                .iter()
+                .map(InstallTransition::kind)
+                .collect::<Vec<_>>(),
+            vec![
+                InstallTransitionKind::Started,
+                InstallTransitionKind::Verified,
+            ]
+        );
+        assert_eq!(dropped.try_recv(), Ok(()));
+    }
+
+    for sink_fails in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let (lease_dropped, dropped) = mpsc::channel();
+        let operation = StoreFailure::Unwritable("r".repeat(5_000));
+        let pointer = store_failure_detail(&operation).as_ptr();
+        let store = OneShotFailureStore {
+            inner: FakeStore::empty(root.path()),
+            failure: Mutex::new(Some(PublishFailure::rolled_back(
+                operation,
+                RollbackChange::NoInstalledRuntime,
+                Box::new(SignallingLease(lease_dropped)),
+            ))),
+        };
+        let audit = LeaseCheckingAudit {
+            target: InstallTransitionKind::RolledBack,
+            dropped: Mutex::new(dropped),
+            recorded: Mutex::new(Vec::new()),
+            fail: sink_fails,
+        };
+
+        let failure = InstallAgentRuntime {
+            source: &FakeSource::serving(b"archive bytes"),
+            store: &store,
+            audit: &audit,
+        }
+        .execute(
+            &agent(),
+            &release("1.18.31", PINNED_DIGEST, &platform()),
+            &host(),
+            &request(),
+        )
+        .unwrap_err();
+
+        let operation_failure = match &failure {
+            InstallFailure::Audit(delivery) if sink_fails => {
+                assert_eq!(
+                    delivery.runtime_state(),
+                    &RuntimeStateEvidence::NoInstalledRuntime
+                );
+                assert_eq!(
+                    delivery.pending().rollback(),
+                    Some(&RollbackState::NoInstalledRuntime)
+                );
+                delivery.operation().unwrap()
+            }
+            InstallFailure::Store(_) if !sink_fails => &failure,
+            _ => panic!("unexpected rolled-back result: {failure:?}"),
+        };
+        let InstallFailure::Store(operation) = operation_failure else {
+            panic!("expected retained store failure: {operation_failure:?}");
+        };
+        assert_eq!(store_failure_detail(operation).as_ptr(), pointer);
+        let recorded = audit.recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].rollback(),
+            Some(&RollbackState::NoInstalledRuntime)
+        );
         assert!(matches!(audit.dropped.lock().unwrap().try_recv(), Ok(())));
     }
 }
