@@ -927,7 +927,12 @@ or an explicit unconfirmed state. `entities/install_attempt.rs` is the sequence
 owner: started may become verified or rejected, and only verified may become
 installed, replaced, rolled back, or incomplete recovery. Application and
 infrastructure cannot construct contradictory before/after evidence around that
-owner.
+owner. The request's account and invocation identity plus the domain-owned
+started, verification-outcome, or completion-outcome slot identify one logical
+event. The same owner admits live and restored facts, accepts an exact replay
+even after a later event, and rejects different facts in the same slot. A
+record's random UUID, sequence, and observation time describe its physical
+publication and do not change that semantic identity.
 
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
 does installed-already, then download, hash, accept, publish, and never unpacks
@@ -942,13 +947,18 @@ cannot report effects in an order that contradicts their before/after chain.
 Audit failure stays visible and carries typed state evidence: unchanged, the
 target installed, the prior artifact restored, no runtime installed, or
 unconfirmed. It therefore does not turn an uncertain cleanup into a claim that
-nothing is installed.
+nothing is installed. It also retains the exact transition whose
+acknowledgement failed. `retry_audit` redelivers only that transition and never
+repeats download or publication. A normal `execute` reports a typed reused
+request when its initial started event was replayed, before any install effect;
+a genuinely new invocation uses a new request identity.
 If publication durability fails, the store removes only the target it computed
 from the accepted pin, restores only a prior record whose validated artifact
-still had a private nonempty executable, and re-reads installed state under the
-same lease. The original failure, every cleanup failure, and the confirmed or
-explicitly unconfirmed remaining state travel as separate typed facts through
-the audit attempt and back to the caller when the sink also fails.
+still had every private nonempty file named by its `ReleaseContents`, and
+re-reads installed state under the same lease. The original failure, every
+cleanup failure, and the confirmed or explicitly unconfirmed remaining state
+travel as separate typed facts through the audit attempt and back to the caller
+when the sink also fails.
 
 `infrastructure/` holds the four outside things: `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
@@ -966,13 +976,23 @@ crate's `*_beneath` primitives, which walk down one verified component at a
 time; the root itself, which composition owns, is the single path resolved the
 ordinary way. So no symbolic link between the root and a runtime can send a
 read, a write or a removal outside the store, and the installed executable is
-private to its owner like everything else there. `audit.rs` creates its nested
-directory durably beneath the data root, then uses a filesystem lock shared by
-CLI processes to write monotonically sequenced private JSON records. It syncs
-each record and the journal directory before acknowledging it, and refuses a
-corrupt or discontinuous journal rather than silently appending past it.
-Observation time is descriptive; the durable sequence and domain before/after
-chain establish order.
+private to its owner like everything else there. `audit/journal.rs` retains one
+opened directory authority and the original lock-file identity, then takes a
+fresh handle to that same lock for each record so CLI processes serialize one
+monotonically sequenced journal. `audit/record.rs` owns its private JSON mapping
+and reconstructs semantic facts through domain constructors. Exact replay
+reopens and re-syncs the original immutable record under the same authority;
+conflicting facts are rejected without claiming the incoming event was
+published. The adapter syncs each record and the journal directory before
+acknowledging it, and refuses corrupt, non-regular, non-canonical, or
+discontinuous entries rather than appending past them. Observation time is
+descriptive; the durable sequence and domain before/after chain establish
+order. Directory sync is unavailable on Windows, so its power-loss guarantee
+remains limited to the storage primitive's documented file behavior there.
+The stable lock excludes every cooperating writer. On Unix it does not protect
+the check/effect interval inside the journal leaf from a malicious process
+running as the same user and deliberately ignoring that advisory lock; detected
+directory, lock, or record replacement is still refused.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases

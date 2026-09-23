@@ -2,8 +2,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::ports::{
-    ArchiveSource, AuditFailure, InstallAudit, PublicationChange, PublicationCleanupFailure,
-    PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, PublicationChange,
+    PublicationCleanupFailure, PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure,
+    StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError,
@@ -53,12 +54,18 @@ pub enum InstallFailure {
     Store(StoreFailure),
     /// A store result contradicted the legal install sequence.
     Evidence(InstallAttemptError),
+    /// This request identity already began an attempt and must not repeat its
+    /// install effects. A new user invocation needs a new request identity;
+    /// an audit failure is retried through [`InstallAgentRuntime::retry_audit`].
+    AttemptReused(InstallRequest),
     /// Durable evidence was not acknowledged. `operation` preserves an
     /// installation failure that happened too, and `runtime_state` retains
     /// exactly what was established before the audit attempt.
     Audit {
         operation: Option<Box<InstallFailure>>,
         runtime_state: RuntimeStateEvidence,
+        /// The exact event whose acknowledgement is safe to retry.
+        pending: InstallTransition,
         failure: AuditFailure,
     },
     /// Publication failed and its cleanup also failed. The original operation
@@ -94,9 +101,15 @@ impl fmt::Display for InstallFailure {
             Self::Rejected(rejection) => rejection.fmt(f),
             Self::Store(failure) => failure.fmt(f),
             Self::Evidence(failure) => failure.fmt(f),
+            Self::AttemptReused(request) => write!(
+                f,
+                "install request {} has already begun",
+                request.request_id()
+            ),
             Self::Audit {
                 operation,
                 runtime_state,
+                pending: _,
                 failure,
             } => {
                 if let Some(operation) = operation {
@@ -173,7 +186,9 @@ impl InstallAgentRuntime<'_> {
         }
         let target = RuntimeArtifact::for_release(release);
         let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
-        self.audit(started)?;
+        if self.audit(started)? == AuditAcknowledgement::Replayed {
+            return Err(InstallFailure::AttemptReused(request.clone()));
+        }
         if let Some(runtime) = self.already_installed(agent, release)? {
             return Ok(runtime);
         }
@@ -231,16 +246,17 @@ impl InstallAgentRuntime<'_> {
         if let Err(rejection) = release.accept(&digest) {
             let operation = InstallFailure::Rejected(rejection);
             let transition = attempt.rejected(digest).map_err(InstallFailure::Evidence)?;
-            return match self.audit.record(transition) {
-                Ok(()) => Err(operation),
+            return match self.audit.record(transition.clone()) {
+                Ok(_) => Err(operation),
                 Err(failure) => Err(with_audit_failure(
                     operation,
                     RuntimeStateEvidence::Unchanged,
+                    transition,
                     failure,
                 )),
             };
         }
-        self.audit(attempt.verified().map_err(InstallFailure::Evidence)?)?;
+        let _ = self.audit(attempt.verified().map_err(InstallFailure::Evidence)?)?;
         match self.store.publish(agent, release, staged) {
             Ok(publication) => {
                 let transition = match publication.change() {
@@ -256,10 +272,11 @@ impl InstallAgentRuntime<'_> {
                         .map_err(InstallFailure::Evidence)?,
                 };
                 self.audit
-                    .record(transition)
+                    .record(transition.clone())
                     .map_err(|failure| InstallFailure::Audit {
                         operation: None,
                         runtime_state: RuntimeStateEvidence::TargetInstalled,
+                        pending: transition,
                         failure,
                     })?;
                 Ok(publication.executable().to_owned())
@@ -296,24 +313,65 @@ impl InstallAgentRuntime<'_> {
                         (transition, runtime_state, outcome)
                     }
                 };
-                match self.audit.record(transition) {
-                    Ok(()) => Err(outcome),
-                    Err(failure) => Err(with_audit_failure(outcome, runtime_state, failure)),
+                match self.audit.record(transition.clone()) {
+                    Ok(_) => Err(outcome),
+                    Err(failure) => Err(with_audit_failure(
+                        outcome,
+                        runtime_state,
+                        transition,
+                        failure,
+                    )),
                 }
             }
         }
     }
 
-    fn audit(&self, transition: InstallTransition) -> Result<(), InstallFailure> {
+    fn audit(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, InstallFailure> {
         self.audit
-            .record(transition)
+            .record(transition.clone())
             .map_err(|failure| InstallFailure::Audit {
                 operation: None,
                 runtime_state: RuntimeStateEvidence::Unchanged,
+                pending: transition,
                 failure,
             })
     }
+
+    /// Retry only the durable acknowledgement retained by an audit failure.
+    ///
+    /// This never repeats download, verification, publication, or rollback.
+    pub fn retry_audit(
+        &self,
+        failure: &InstallFailure,
+    ) -> Result<AuditAcknowledgement, AuditRetryError> {
+        let InstallFailure::Audit { pending, .. } = failure else {
+            return Err(AuditRetryError::NotPending);
+        };
+        self.audit
+            .record(pending.clone())
+            .map_err(AuditRetryError::Failed)
+    }
 }
+
+/// Why bounded redelivery of retained audit evidence did not complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditRetryError {
+    /// The supplied install failure does not contain pending audit evidence.
+    NotPending,
+    /// Redelivery reached the audit adapter and still was not acknowledged.
+    Failed(AuditFailure),
+}
+
+impl fmt::Display for AuditRetryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotPending => formatter.write_str("install failure has no pending audit event"),
+            Self::Failed(failure) => failure.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for AuditRetryError {}
 
 fn rollback_state(rollback: &RollbackChange) -> RollbackState {
     match rollback {
@@ -346,7 +404,7 @@ fn failure_evidence(failure: &StoreFailure) -> InstallFailureEvidence {
     let (kind, detail) = match failure {
         StoreFailure::Unwritable(detail) => (InstallFailureKind::Unwritable, detail),
         StoreFailure::Unreadable(detail) => (InstallFailureKind::Unreadable, detail),
-        StoreFailure::MissingExecutable(detail) => (InstallFailureKind::MissingExecutable, detail),
+        StoreFailure::IncompleteArchive(detail) => (InstallFailureKind::IncompleteArchive, detail),
         StoreFailure::MalformedArchive(detail) => (InstallFailureKind::MalformedArchive, detail),
     };
     InstallFailureEvidence::new(kind, detail.clone())
@@ -355,11 +413,13 @@ fn failure_evidence(failure: &StoreFailure) -> InstallFailureEvidence {
 fn with_audit_failure(
     operation: InstallFailure,
     runtime_state: RuntimeStateEvidence,
+    pending: InstallTransition,
     failure: AuditFailure,
 ) -> InstallFailure {
     InstallFailure::Audit {
         operation: Some(Box::new(operation)),
         runtime_state,
+        pending,
         failure,
     }
 }

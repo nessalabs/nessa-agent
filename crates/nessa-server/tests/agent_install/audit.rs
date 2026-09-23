@@ -1,14 +1,17 @@
 use super::*;
-use crate::agent_install::domain::{
-    InstallAttempt, InstallFailureEvidence, InstallFailureKind, InstallTransitionKind,
-    RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
+use crate::agent_install::{
+    application::{AuditAcknowledgement, AuditFailureStage, AuditRecordEvidence},
+    domain::{
+        ArchiveDigest, InstallAttempt, InstallAttemptError, InstallEventIdentity, InstallEventSlot,
+        InstallRequest, RuntimeArtifact,
+    },
 };
 use crate::agent_install_test_support::{
-    agent, platform, release, request, temporary_root, PINNED_DIGEST,
+    OTHER_DIGEST, PINNED_DIGEST, agent, platform, release, request, temporary_root,
 };
 use nessa_auth::application::ports::Clock;
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier};
+use uuid::Uuid;
 
 struct FixedClock;
 
@@ -22,218 +25,177 @@ fn target() -> RuntimeArtifact {
     RuntimeArtifact::for_release(&release("1.18.31", PINNED_DIGEST, &platform()))
 }
 
-#[test]
-fn a_record_is_private_durable_json_with_adapter_owned_identity_and_time() {
-    let root = temporary_root();
-    let directory = root.path().join("audit");
-    let audit = DurableInstallAudit::new(
-        root.path(),
-        std::path::Path::new("audit"),
-        Arc::new(FixedClock),
-    )
-    .unwrap();
-    let (_, started) = InstallAttempt::start(agent(), target(), request());
+fn audit_at(root: &std::path::Path) -> DurableInstallAudit {
+    DurableInstallAudit::new(root, std::path::Path::new("audit"), Arc::new(FixedClock)).unwrap()
+}
 
-    audit.record(started).unwrap();
-
-    let entries: Vec<_> = std::fs::read_dir(&directory)
+fn json_records(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut records = std::fs::read_dir(directory)
         .unwrap()
-        .filter(|entry| {
-            entry
-                .as_ref()
-                .unwrap()
-                .path()
-                .extension()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
                 .is_some_and(|extension| extension == "json")
         })
-        .collect();
-    assert_eq!(entries.len(), 1);
-    let entry = entries[0].as_ref().unwrap();
+        .collect::<Vec<_>>();
+    records.sort();
+    records
+}
+
+#[test]
+fn a_record_contains_stable_event_identity_full_artifact_and_physical_metadata() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+
+    assert_eq!(
+        audit.record(started).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+
+    let records = json_records(&directory);
+    assert_eq!(records.len(), 1);
     let record: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(&records[0]).unwrap()).unwrap();
     assert_eq!(record["observedAtMs"], 42);
     assert_eq!(record["sequence"], 1);
-    assert!(record["recordId"].as_str().is_some_and(|id| !id.is_empty()));
-    assert_eq!(record["initiator"]["accountId"], "unix:501");
-    assert_eq!(record["correlationId"], "install-request-1");
-}
-
-#[test]
-fn replacement_keeps_the_exact_previous_and_new_artifacts() {
-    let previous = RuntimeArtifact::for_release(&release(
-        "1.17.0",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-        &platform(),
-    ));
-    let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
+    assert!(Uuid::parse_str(record["recordId"].as_str().unwrap()).is_ok());
+    assert_eq!(record["event"]["accountId"], "unix:501");
+    assert_eq!(record["event"]["requestId"], "install-request-1");
+    assert_eq!(record["event"]["slot"], "started");
     assert_eq!(
-        attempt.verified().unwrap().kind(),
-        InstallTransitionKind::Verified
-    );
-    let replaced = attempt.replaced(previous).unwrap();
-    let value = record_value(&replaced);
-
-    assert_eq!(value["kind"], "agent_runtime_replaced");
-    assert_eq!(
-        value["transition"]["before"]["artifact"]["version"],
-        "1.17.0"
-    );
-    assert_eq!(
-        value["transition"]["after"]["artifact"]["version"],
-        "1.18.31"
+        record["transition"]["target"]["files"][0]["path"],
+        "package/bin/opencode"
     );
 }
 
 #[test]
-fn rollback_says_when_no_prior_runtime_was_restored() {
-    let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
-    assert_eq!(
-        attempt.verified().unwrap().kind(),
-        InstallTransitionKind::Verified
-    );
-    let rolled_back = attempt
-        .rolled_back(RollbackState::NoInstalledRuntime)
-        .unwrap();
-    assert_eq!(rolled_back.kind(), InstallTransitionKind::RolledBack);
-    let value = record_value(&rolled_back);
-    assert_eq!(value["transition"]["after"]["state"], "not_installed");
-    assert_eq!(value["cause"], "publication_failed");
-}
-
-#[test]
-fn incomplete_recovery_keeps_uncertain_state_and_each_failure_stage() {
-    let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
-    assert_eq!(
-        attempt.verified().unwrap().kind(),
-        InstallTransitionKind::Verified
-    );
-    let failures = RecoveryFailureEvidence::new(
-        InstallFailureEvidence::new(InstallFailureKind::Unwritable, "record sync"),
-        Some(InstallFailureEvidence::new(
-            InstallFailureKind::Unwritable,
-            "withdrawal",
-        )),
-        None,
-        Some(InstallFailureEvidence::new(
-            InstallFailureKind::Unreadable,
-            "confirmation",
-        )),
-    )
-    .unwrap();
-    let transition = attempt
-        .recovery_incomplete(RecoveryState::Unconfirmed, failures)
-        .unwrap();
-
-    let value = record_value(&transition);
-
-    assert_eq!(value["kind"], "agent_runtime_install_recovery_incomplete");
-    assert_eq!(value["transition"]["after"]["state"], "unconfirmed");
-    assert_eq!(value["cause"], "publication_cleanup_failed");
-    assert_eq!(value["failures"]["publication"]["detail"], "record sync");
-    assert_eq!(value["failures"]["withdrawal"]["detail"], "withdrawal");
-    assert!(value["failures"]["restoration"].is_null());
-    assert_eq!(value["failures"]["confirmation"]["detail"], "confirmation");
-}
-
-#[test]
-fn a_durability_failure_is_reported_to_the_use_case() {
+fn exact_replay_after_later_evidence_resyncs_the_original_record_without_append() {
     let root = temporary_root();
     let directory = root.path().join("audit");
-    let audit = DurableInstallAudit::new(
-        root.path(),
-        std::path::Path::new("audit"),
-        Arc::new(FixedClock),
-    )
-    .unwrap();
-    std::fs::remove_file(directory.join("audit.lock")).unwrap();
-    std::fs::remove_dir(&directory).unwrap();
-    let (_, started) = InstallAttempt::start(agent(), target(), request());
-
-    let failure = audit.record(started).unwrap_err();
-
-    assert!(!failure.0.is_empty());
-    assert!(!directory.exists());
-}
-
-struct SequenceClock(Mutex<VecDeque<u64>>);
-
-impl Clock for SequenceClock {
-    fn unix_milliseconds(&self) -> u64 {
-        self.0.lock().unwrap().pop_front().unwrap()
-    }
-}
-
-#[test]
-fn durable_sequence_orders_records_when_the_clock_moves_backwards() {
-    let root = temporary_root();
-    let directory = root.path().join("audit");
-    let clock = SequenceClock(Mutex::new(VecDeque::from([100, 50])));
-    let audit =
-        DurableInstallAudit::new(root.path(), std::path::Path::new("audit"), Arc::new(clock))
-            .unwrap();
+    let audit = audit_at(root.path());
     let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
-    audit.record(started).unwrap();
+    audit.record(started.clone()).unwrap();
     audit.record(attempt.verified().unwrap()).unwrap();
+    let original = std::fs::read(directory.join("00000000000000000001.json")).unwrap();
 
-    let first: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(directory.join("00000000000000000001.json")).unwrap(),
-    )
-    .unwrap();
-    let second: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(directory.join("00000000000000000002.json")).unwrap(),
-    )
-    .unwrap();
     assert_eq!(
-        (first["sequence"].as_u64(), second["sequence"].as_u64()),
-        (Some(1), Some(2))
+        audit.record(started).unwrap(),
+        AuditAcknowledgement::Replayed
     );
+
+    assert_eq!(json_records(&directory).len(), 2);
     assert_eq!(
-        (
-            first["observedAtMs"].as_u64(),
-            second["observedAtMs"].as_u64()
-        ),
-        (Some(100), Some(50))
+        std::fs::read(directory.join("00000000000000000001.json")).unwrap(),
+        original
     );
 }
 
 #[test]
-fn a_corrupt_tail_prevents_a_later_record_from_being_acknowledged() {
+fn post_publish_ack_failure_retries_to_one_physical_record() {
     let root = temporary_root();
     let directory = root.path().join("audit");
-    let audit = DurableInstallAudit::new(
-        root.path(),
-        std::path::Path::new("audit"),
-        Arc::new(FixedClock),
-    )
-    .unwrap();
-    std::fs::write(directory.join("00000000000000000001.json"), b"{").unwrap();
+    let audit = audit_at(root.path());
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+
+    let failure = audit
+        .record_with_acknowledger(started.clone(), |_, _, published| {
+            Err(published_failure(
+                published.clone(),
+                "injected acknowledgement failure",
+            ))
+        })
+        .unwrap_err();
+    assert_eq!(failure.stage(), AuditFailureStage::AcknowledgeRecord);
+    assert!(matches!(
+        failure.record(),
+        Some(AuditRecordEvidence::IncomingPublished(_))
+    ));
+
+    assert_eq!(
+        audit.record(started).unwrap(),
+        AuditAcknowledgement::Replayed
+    );
+    assert_eq!(json_records(&directory).len(), 1);
+}
+
+#[test]
+fn contradictory_facts_in_one_domain_slot_are_rejected_without_claiming_incoming_publication() {
+    let root = temporary_root();
+    let audit = audit_at(root.path());
+    let (mut accepted, started) = InstallAttempt::start(agent(), target(), request());
+    audit.record(started).unwrap();
+    audit.record(accepted.verified().unwrap()).unwrap();
+    let (mut conflicting, _) = InstallAttempt::start(agent(), target(), request());
+    let rejected = conflicting
+        .rejected(ArchiveDigest::parse(OTHER_DIGEST).unwrap())
+        .unwrap();
+
+    let failure = audit.record(rejected).unwrap_err();
+
+    assert_eq!(failure.stage(), AuditFailureStage::ReconcileRecord);
+    assert_eq!(
+        failure.semantic_conflict_kind(),
+        Some(InstallAttemptError::ConflictingEvent)
+    );
+    assert!(matches!(
+        failure.record(),
+        Some(AuditRecordEvidence::ExistingConflict(record))
+            if record.event().slot() == InstallEventSlot::VerificationOutcome
+    ));
+}
+
+#[test]
+fn replacing_the_named_lock_is_detected_before_append() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    std::fs::remove_file(directory.join(LOCK_NAME)).unwrap();
+    std::fs::write(directory.join(LOCK_NAME), b"").unwrap();
     let (_, started) = InstallAttempt::start(agent(), target(), request());
 
     let failure = audit.record(started).unwrap_err();
 
-    assert!(failure.to_string().contains("invalid audit record"));
-    assert!(!directory.join("00000000000000000002.json").exists());
+    assert_eq!(failure.stage(), AuditFailureStage::VerifyAuthority);
+    assert!(json_records(&directory).is_empty());
 }
 
 #[test]
-fn concurrent_audit_instances_allocate_distinct_durable_sequences() {
+fn renaming_the_retained_directory_cannot_redirect_append_to_a_replacement() {
     let root = temporary_root();
     let directory = root.path().join("audit");
-    let first = DurableInstallAudit::new(
-        root.path(),
-        std::path::Path::new("audit"),
-        Arc::new(FixedClock),
-    )
-    .unwrap();
-    let second = DurableInstallAudit::new(
-        root.path(),
-        std::path::Path::new("audit"),
-        Arc::new(FixedClock),
-    )
-    .unwrap();
-    let barrier = std::sync::Barrier::new(3);
-    let (_, first_transition) = InstallAttempt::start(agent(), target(), request());
-    let (_, second_transition) = InstallAttempt::start(agent(), target(), request());
+    let moved = root.path().join("moved-audit");
+    let audit = audit_at(root.path());
+    std::fs::rename(&directory, &moved).unwrap();
+    std::fs::create_dir(&directory).unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+
+    let failure = audit.record(started).unwrap_err();
+
+    assert_eq!(failure.stage(), AuditFailureStage::VerifyAuthority);
+    assert!(json_records(&directory).is_empty());
+    assert!(json_records(&moved).is_empty());
+}
+
+#[test]
+fn concurrent_instances_serialize_distinct_attempts_into_contiguous_records() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let first = audit_at(root.path());
+    let second = audit_at(root.path());
+    let barrier = Barrier::new(3);
+    let (_, first_transition) = InstallAttempt::start(
+        agent(),
+        target(),
+        InstallRequest::new("unix:501", "first").unwrap(),
+    );
+    let (_, second_transition) = InstallAttempt::start(
+        agent(),
+        target(),
+        InstallRequest::new("unix:501", "second").unwrap(),
+    );
 
     std::thread::scope(|threads| {
         threads.spawn(|| {
@@ -247,8 +209,81 @@ fn concurrent_audit_instances_allocate_distinct_durable_sequences() {
         barrier.wait();
     });
 
+    assert_eq!(json_records(&directory).len(), 2);
     assert!(directory.join("00000000000000000001.json").is_file());
     assert!(directory.join("00000000000000000002.json").is_file());
+}
+
+#[test]
+fn corrupt_or_non_regular_entries_stop_reconciliation() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    std::fs::write(directory.join("00000000000000000001.json"), b"{").unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+    assert_eq!(
+        audit.record(started).unwrap_err().stage(),
+        AuditFailureStage::ReadJournal
+    );
+
+    std::fs::remove_file(directory.join("00000000000000000001.json")).unwrap();
+    std::fs::create_dir(directory.join("00000000000000000001.json")).unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+    assert_eq!(
+        audit.record(started).unwrap_err().stage(),
+        AuditFailureStage::ReadJournal
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_record_is_never_followed() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let outside = root.path().join("outside.json");
+    let audit = audit_at(root.path());
+    std::fs::write(&outside, b"outside").unwrap();
+    std::os::unix::fs::symlink(&outside, directory.join("00000000000000000001.json")).unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+
+    assert_eq!(
+        audit.record(started).unwrap_err().stage(),
+        AuditFailureStage::ReadJournal
+    );
+    assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+}
+
+#[test]
+fn domain_restore_preserves_replacement_artifacts_and_rejects_duplicate_physical_events() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let previous = RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform()));
+    let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
+    audit.record(started).unwrap();
+    audit.record(attempt.verified().unwrap()).unwrap();
+    let replaced = attempt.replaced(previous).unwrap();
+    audit.record(replaced).unwrap();
+
+    let mut third: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(directory.join("00000000000000000003.json")).unwrap(),
+    )
+    .unwrap();
+    third["sequence"] = 4.into();
+    std::fs::write(
+        directory.join("00000000000000000004.json"),
+        serde_json::to_vec(&third).unwrap(),
+    )
+    .unwrap();
+    let (_, next) = InstallAttempt::start(
+        agent(),
+        target(),
+        InstallRequest::new("unix:501", "next").unwrap(),
+    );
+    assert_eq!(
+        audit.record(next).unwrap_err().stage(),
+        AuditFailureStage::ReadJournal
+    );
 }
 
 #[test]
@@ -262,8 +297,123 @@ fn nested_audit_directory_is_created_beneath_the_trusted_root() {
     .unwrap();
     let (_, started) = InstallAttempt::start(agent(), target(), request());
     audit.record(started).unwrap();
-    assert!(root
-        .path()
-        .join("audit/agent-install/00000000000000000001.json")
-        .is_file());
+    assert!(
+        root.path()
+            .join("audit/agent-install/00000000000000000001.json")
+            .is_file()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cross_process_writers_use_one_file_lock_and_contiguous_sequence() {
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let _audit = audit_at(root.path());
+    let executable = std::env::current_exe().unwrap();
+    let mut children = ["process-one", "process-two"].map(|request_id| {
+        std::process::Command::new(&executable)
+            .args(["--ignored", "cross_process_writer_child"])
+            .env("NESSA_AUDIT_CHILD_ROOT", root.path())
+            .env("NESSA_AUDIT_CHILD_REQUEST", request_id)
+            .spawn()
+            .unwrap()
+    });
+    for child in &mut children {
+        assert!(child.wait().unwrap().success());
+    }
+    assert_eq!(json_records(&directory).len(), 2);
+    assert!(directory.join("00000000000000000001.json").is_file());
+    assert!(directory.join("00000000000000000002.json").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "subprocess helper invoked by cross_process_writers_use_one_file_lock_and_contiguous_sequence"]
+fn cross_process_writer_child() {
+    let Some(root) = std::env::var_os("NESSA_AUDIT_CHILD_ROOT") else {
+        return;
+    };
+    let request_id = std::env::var("NESSA_AUDIT_CHILD_REQUEST").unwrap();
+    let audit = audit_at(std::path::Path::new(&root));
+    let (_, started) = InstallAttempt::start(
+        agent(),
+        target(),
+        InstallRequest::new("unix:501", request_id).unwrap(),
+    );
+    assert_eq!(
+        audit.record(started).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+}
+
+#[test]
+fn storage_publication_stages_preserve_post_rename_identity_and_cleanup_independently() {
+    let event = InstallEventIdentity::new(request(), InstallEventSlot::Started);
+    for stage in [
+        PrivatePublicationStage::ValidateDestination,
+        PrivatePublicationStage::VerifyOriginBinding,
+        PrivatePublicationStage::ValidateReservation,
+        PrivatePublicationStage::FlushBeforeRename,
+        PrivatePublicationStage::Rename,
+    ] {
+        let failure = publication_failure(
+            stage,
+            "injected".into(),
+            PublishedAuditRecord::new(
+                event.clone(),
+                Uuid::new_v4().to_string(),
+                1,
+                "00000000000000000001.json".into(),
+            ),
+            false,
+            Some("cleanup".into()),
+        );
+        assert_eq!(failure.stage(), AuditFailureStage::PublishRecord);
+        assert!(failure.record().is_none());
+        assert_eq!(failure.cleanup(), Some("cleanup"));
+    }
+    for stage in [
+        PrivatePublicationStage::FlushAfterRename,
+        PrivatePublicationStage::ValidatePublishedDestination,
+        PrivatePublicationStage::VerifyPublishedBinding,
+        PrivatePublicationStage::SyncDirectory,
+    ] {
+        let failure = publication_failure(
+            stage,
+            "injected".into(),
+            PublishedAuditRecord::new(
+                event.clone(),
+                Uuid::new_v4().to_string(),
+                1,
+                "00000000000000000001.json".into(),
+            ),
+            true,
+            None,
+        );
+        assert_eq!(failure.stage(), AuditFailureStage::AcknowledgeRecord);
+        assert!(matches!(
+            failure.record(),
+            Some(AuditRecordEvidence::IncomingPublished(_))
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_record_name_is_rejected_without_lossy_aliasing() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = temporary_root();
+    let directory = root.path().join("audit");
+    let audit = audit_at(root.path());
+    let name = std::ffi::OsString::from_vec(vec![b'0', 0xff, b'.', b'j', b's', b'o', b'n']);
+    std::fs::write(directory.join(name), b"{}").unwrap();
+    let (_, started) = InstallAttempt::start(agent(), target(), request());
+
+    assert_eq!(
+        audit.record(started).unwrap_err().stage(),
+        AuditFailureStage::ReadJournal
+    );
+    assert!(json_records(&directory).is_empty());
 }

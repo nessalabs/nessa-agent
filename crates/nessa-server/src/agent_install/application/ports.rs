@@ -3,7 +3,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, InstallTransition, PinnedRelease, RuntimeArtifact,
+    AgentName, ArchiveDigest, InstallAttemptError, InstallEventIdentity, InstallTransition,
+    PinnedRelease, RuntimeArtifact,
 };
 
 /// Why an archive could not be fetched.
@@ -101,6 +102,8 @@ pub enum AuditFailureStage {
     VerifyAuthority,
     /// Existing durable records could not be enumerated or validated.
     ReadJournal,
+    /// Existing durable facts conflict with the incoming logical event.
+    ReconcileRecord,
     /// The next record could not be encoded or written to its reservation.
     WriteRecord,
     /// The reserved record could not be renamed to its immutable destination.
@@ -112,6 +115,7 @@ pub enum AuditFailureStage {
 /// Logical identity of an audit record whose destination rename occurred.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedAuditRecord {
+    event: InstallEventIdentity,
     record_id: String,
     sequence: u64,
     destination: String,
@@ -119,12 +123,23 @@ pub struct PublishedAuditRecord {
 
 impl PublishedAuditRecord {
     /// Describe the logical record that reached its immutable destination.
-    pub fn new(record_id: String, sequence: u64, destination: String) -> Self {
+    pub fn new(
+        event: InstallEventIdentity,
+        record_id: String,
+        sequence: u64,
+        destination: String,
+    ) -> Self {
         Self {
+            event,
             record_id,
             sequence,
             destination,
         }
+    }
+
+    /// Return the domain-owned stable identity represented by this record.
+    pub fn event(&self) -> &InstallEventIdentity {
+        &self.event
     }
 
     /// Return the adapter-owned identity written into the record.
@@ -143,6 +158,25 @@ impl PublishedAuditRecord {
     }
 }
 
+/// Whether durable acknowledgement created a record or re-acknowledged the
+/// already-published record for the same logical event and facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditAcknowledgement {
+    /// A new immutable physical record was durably acknowledged.
+    Recorded,
+    /// The original physical record for identical semantic facts was re-synced.
+    Replayed,
+}
+
+/// Record evidence attached to an audit failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditRecordEvidence {
+    /// This call renamed the incoming event's record into place.
+    IncomingPublished(PublishedAuditRecord),
+    /// A different durable record occupied the same logical event identity.
+    ExistingConflict(PublishedAuditRecord),
+}
+
 /// The durable audit sink did not acknowledge install evidence.
 ///
 /// A destination rename, the primary failure, and reservation cleanup are
@@ -152,7 +186,8 @@ impl PublishedAuditRecord {
 pub struct AuditFailure {
     stage: AuditFailureStage,
     detail: String,
-    published: Option<PublishedAuditRecord>,
+    record: Option<AuditRecordEvidence>,
+    semantic_conflict: Option<InstallAttemptError>,
     cleanup: Option<String>,
 }
 
@@ -161,14 +196,31 @@ impl AuditFailure {
     pub fn new(
         stage: AuditFailureStage,
         detail: String,
-        published: Option<PublishedAuditRecord>,
+        record: Option<AuditRecordEvidence>,
         cleanup: Option<String>,
     ) -> Self {
         Self {
             stage,
             detail,
-            published,
+            record,
+            semantic_conflict: None,
             cleanup,
+        }
+    }
+
+    /// Build a typed semantic conflict without reducing its cause to text.
+    pub fn semantic_conflict(
+        stage: AuditFailureStage,
+        detail: String,
+        record: Option<AuditRecordEvidence>,
+        conflict: InstallAttemptError,
+    ) -> Self {
+        Self {
+            stage,
+            detail,
+            record,
+            semantic_conflict: Some(conflict),
+            cleanup: None,
         }
     }
 
@@ -182,9 +234,14 @@ impl AuditFailure {
         &self.detail
     }
 
-    /// Return the logical record when its destination rename already occurred.
-    pub fn published(&self) -> Option<&PublishedAuditRecord> {
-        self.published.as_ref()
+    /// Return publication or conflict evidence for a physical record, if known.
+    pub fn record(&self) -> Option<&AuditRecordEvidence> {
+        self.record.as_ref()
+    }
+
+    /// Return the domain admission error when semantic reconciliation failed.
+    pub fn semantic_conflict_kind(&self) -> Option<InstallAttemptError> {
+        self.semantic_conflict
     }
 
     /// Return an independent reservation-cleanup failure.
@@ -411,7 +468,7 @@ impl fmt::Debug for PublishFailure {
 /// Durable evidence for agent-runtime installation transitions.
 pub trait InstallAudit: Send + Sync {
     /// Commit one immutable transition before the install reports its outcome.
-    fn record(&self, transition: InstallTransition) -> Result<(), AuditFailure>;
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure>;
 }
 
 /// The private file one install downloads its archive into.

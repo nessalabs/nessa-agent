@@ -3,17 +3,17 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent_install::application::{
     InstallAgentRuntime, InstallFailure, InstalledRuntime, RuntimeStateEvidence, SourceFailure,
     StoreFailure,
 };
 use crate::agent_install::domain::{
-    preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease,
+    AgentName, HostPlatform, InstallRequest, PinnedRelease, preferred_release,
 };
 use crate::agent_install::infrastructure::{
-    host_platform, releases_for, DurableInstallAudit, HttpsArchives, ManagedRuntimes,
+    DurableInstallAudit, HttpsArchives, ManagedRuntimes, host_platform, releases_for,
 };
 use crate::core::RunError;
 use crate::env::Environment;
@@ -186,6 +186,9 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::Store(failure) => format!("{failure}; nothing was installed"),
         InstallFailure::Recovery { .. } => failure.to_string(),
         InstallFailure::Evidence(_) => format!("{failure}; the install result was not reported"),
+        InstallFailure::AttemptReused(_) => {
+            format!("{failure}; retry retained audit evidence or begin a new invocation")
+        }
         InstallFailure::Audit {
             runtime_state: RuntimeStateEvidence::Unchanged,
             ..

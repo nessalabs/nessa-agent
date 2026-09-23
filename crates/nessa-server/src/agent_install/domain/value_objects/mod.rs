@@ -19,9 +19,10 @@ mod release_contents;
 pub use agent_name::{AgentName, NotAnAgentName};
 pub use host_platform::{HostPlatform, Libc, ReleaseRequirements};
 pub use install_transition::{
-    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallRequestError,
-    InstallTransition, InstallTransitionError, InstallTransitionKind, RecoveryFailureEvidence,
-    RecoveryState, RollbackState, RuntimeArtifact,
+    InstallEventIdentity, InstallEventSlot, InstallFailureEvidence, InstallFailureKind,
+    InstallRequest, InstallRequestError, InstallTransition, InstallTransitionError,
+    InstallTransitionFacts, InstallTransitionKind, RecoveryFailureEvidence, RecoveryState,
+    RollbackState, RuntimeArtifact,
 };
 pub use pinned_release::{
     ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, PinRejected, PinnedRelease,

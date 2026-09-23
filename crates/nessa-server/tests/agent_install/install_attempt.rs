@@ -4,7 +4,7 @@ use crate::agent_install::domain::{
     InstallTransitionKind, RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{
-    agent, platform, release, request, OTHER_DIGEST, PINNED_DIGEST,
+    OTHER_DIGEST, PINNED_DIGEST, agent, platform, release, request,
 };
 
 fn artifact(version: &str, digest: &str) -> RuntimeArtifact {
@@ -100,9 +100,11 @@ fn incomplete_recovery_rejects_a_target_reported_as_restored_without_ending_the_
             InstallTransitionError::TargetReportedRestored
         ))
     );
-    assert!(attempt
-        .rolled_back(RollbackState::NoInstalledRuntime)
-        .is_ok());
+    assert!(
+        attempt
+            .rolled_back(RollbackState::NoInstalledRuntime)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -115,4 +117,59 @@ fn incomplete_recovery_requires_at_least_one_cleanup_failure() {
     );
 
     assert_eq!(failure, Err(InstallTransitionError::MissingCleanupFailure));
+}
+
+#[test]
+fn restored_history_uses_the_same_admission_rule_and_accepts_exact_replay_after_terminal() {
+    let target = artifact("1.18.31", PINNED_DIGEST);
+    let (mut live, started) = InstallAttempt::start(agent(), target, request());
+    let verified = live.verified().unwrap();
+    let installed = live.installed().unwrap();
+    let mut restored = InstallAttempt::from_started(started.clone()).unwrap();
+
+    assert_eq!(
+        restored.admit(verified.clone()),
+        Ok(InstallEventAdmission::Added)
+    );
+    assert_eq!(restored.admit(installed), Ok(InstallEventAdmission::Added));
+    assert_eq!(restored.admit(started), Ok(InstallEventAdmission::Replay));
+    assert_eq!(restored.admit(verified), Ok(InstallEventAdmission::Replay));
+}
+
+#[test]
+fn one_slot_rejects_contradictory_facts_and_attempt_facts_are_immutable() {
+    let target = artifact("1.18.31", PINNED_DIGEST);
+    let (mut live, started) = InstallAttempt::start(agent(), target.clone(), request());
+    let verified = live.verified().unwrap();
+    let (mut conflicting, _) = InstallAttempt::start(agent(), target.clone(), request());
+    let rejected = conflicting
+        .rejected(ArchiveDigest::parse(OTHER_DIGEST).unwrap())
+        .unwrap();
+    let mut restored = InstallAttempt::from_started(started).unwrap();
+    restored.admit(verified).unwrap();
+
+    assert_eq!(
+        restored.admit(rejected),
+        Err(InstallAttemptError::ConflictingEvent)
+    );
+
+    let other_agent = AgentName::parse("codex").unwrap();
+    let (_, other_started) = InstallAttempt::start(other_agent, target, request());
+    assert_eq!(
+        restored.admit(other_started),
+        Err(InstallAttemptError::ConflictingAttempt)
+    );
+}
+
+#[test]
+fn account_identity_is_part_of_the_stable_event_identity() {
+    let target = artifact("1.18.31", PINNED_DIGEST);
+    let (_, first) = InstallAttempt::start(agent(), target.clone(), request());
+    let (_, second) = InstallAttempt::start(
+        agent(),
+        target,
+        InstallRequest::new("unix:502", "install-request-1").unwrap(),
+    );
+
+    assert_ne!(first.event_identity(), second.event_identity());
 }

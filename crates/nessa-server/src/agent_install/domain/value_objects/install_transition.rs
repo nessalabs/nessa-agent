@@ -1,51 +1,59 @@
 use std::fmt;
 
-use super::{AgentName, ArchiveDigest, ArchivePath, PinnedRelease, ReleaseVersion};
+use super::{AgentName, ArchiveDigest, PinnedRelease, ReleaseContents, ReleaseVersion};
 
-/// The pinned artifact an install changes or observes.
+/// The complete installed artifact an install changes or observes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeArtifact {
     version: ReleaseVersion,
     digest: ArchiveDigest,
-    executable: ArchivePath,
+    contents: ReleaseContents,
 }
 
 impl RuntimeArtifact {
-    pub fn new(version: ReleaseVersion, digest: ArchiveDigest, executable: ArchivePath) -> Self {
+    /// Build installed-artifact identity from its invariant-bearing values.
+    pub fn new(version: ReleaseVersion, digest: ArchiveDigest, contents: ReleaseContents) -> Self {
         Self {
             version,
             digest,
-            executable,
+            contents,
         }
     }
 
+    /// Project the installed identity of one pinned release.
     pub fn for_release(release: &PinnedRelease) -> Self {
         Self::new(
             release.version().clone(),
             release.archive_digest().clone(),
-            release.executable().clone(),
+            release.contents().clone(),
         )
     }
 
+    /// Return the pinned version included in artifact identity.
     pub fn version(&self) -> &ReleaseVersion {
         &self.version
     }
+
+    /// Return the verified archive digest included in artifact identity.
     pub fn digest(&self) -> &ArchiveDigest {
         &self.digest
     }
-    pub fn executable(&self) -> &ArchivePath {
-        &self.executable
+
+    /// Return every installed path and role included in artifact identity.
+    pub fn contents(&self) -> &ReleaseContents {
+        &self.contents
     }
 }
 
 /// The verified local account and command invocation that requested an install.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct InstallRequest {
     account_id: String,
     request_id: String,
 }
 
 impl InstallRequest {
+    /// Validate the account and invocation identities for one install request.
     pub fn new(
         account_id: impl Into<String>,
         request_id: impl Into<String>,
@@ -58,9 +66,12 @@ impl InstallRequest {
         })
     }
 
+    /// Return the verified local account identity.
     pub fn account_id(&self) -> &str {
         &self.account_id
     }
+
+    /// Return the invocation identity assigned by composition.
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
@@ -73,7 +84,9 @@ fn plain(value: String) -> Option<String> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallRequestError {
+    /// The account identity is empty, too long, or contains control characters.
     AccountId,
+    /// The invocation identity is empty, too long, or contains control characters.
     RequestId,
 }
 
@@ -88,6 +101,41 @@ impl fmt::Display for InstallRequestError {
 
 impl std::error::Error for InstallRequestError {}
 
+/// One logical position in an install attempt's evidence sequence.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum InstallEventSlot {
+    /// The attempt was admitted before effects began.
+    Started,
+    /// Digest verification either succeeded or rejected the archive.
+    VerificationOutcome,
+    /// Publication succeeded, rolled back, or ended with incomplete recovery.
+    CompletionOutcome,
+}
+
+/// Stable identity of one logical install event.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct InstallEventIdentity {
+    request: InstallRequest,
+    slot: InstallEventSlot,
+}
+
+impl InstallEventIdentity {
+    /// Pair a request with the domain-owned lifecycle slot.
+    pub fn new(request: InstallRequest, slot: InstallEventSlot) -> Self {
+        Self { request, slot }
+    }
+
+    /// Return the account and invocation identity.
+    pub fn request(&self) -> &InstallRequest {
+        &self.request
+    }
+
+    /// Return this event's lifecycle slot.
+    pub fn slot(&self) -> InstallEventSlot {
+        self.slot
+    }
+}
+
 /// The closed vocabulary of install transitions written to audit storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallTransitionKind {
@@ -98,6 +146,19 @@ pub enum InstallTransitionKind {
     Replaced,
     RolledBack,
     RecoveryIncomplete,
+}
+
+impl InstallTransitionKind {
+    /// Return the domain-owned logical slot for this kind.
+    pub fn slot(self) -> InstallEventSlot {
+        match self {
+            Self::Started => InstallEventSlot::Started,
+            Self::Verified | Self::DigestRejected => InstallEventSlot::VerificationOutcome,
+            Self::Installed | Self::Replaced | Self::RolledBack | Self::RecoveryIncomplete => {
+                InstallEventSlot::CompletionOutcome
+            }
+        }
+    }
 }
 
 /// The installed state a failed publication actually restored.
@@ -112,7 +173,7 @@ pub enum RollbackState {
 pub enum InstallFailureKind {
     Unwritable,
     Unreadable,
-    MissingExecutable,
+    IncompleteArchive,
     MalformedArchive,
 }
 
@@ -191,12 +252,15 @@ impl RecoveryFailureEvidence {
     }
 }
 
+/// Semantic facts for one transition, independent of journal metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum TransitionDetail {
-    None,
-    ActualDigest(ArchiveDigest),
-    Previous(RuntimeArtifact),
-    Rollback(RollbackState),
+pub enum InstallTransitionFacts {
+    Started,
+    Verified,
+    DigestRejected(ArchiveDigest),
+    Installed,
+    Replaced(RuntimeArtifact),
+    RolledBack(RollbackState),
     RecoveryIncomplete {
         state: RecoveryState,
         failures: RecoveryFailureEvidence,
@@ -211,134 +275,116 @@ pub struct InstallTransition {
     agent: AgentName,
     target: RuntimeArtifact,
     request: InstallRequest,
-    detail: TransitionDetail,
+    facts: InstallTransitionFacts,
 }
 
 impl InstallTransition {
-    pub(crate) fn simple(
-        kind: InstallTransitionKind,
+    /// Restore or create transition evidence through the same domain invariants.
+    pub fn restore(
         agent: AgentName,
         target: RuntimeArtifact,
         request: InstallRequest,
-    ) -> Self {
-        Self {
+        facts: InstallTransitionFacts,
+    ) -> Result<Self, InstallTransitionError> {
+        let kind = match &facts {
+            InstallTransitionFacts::Started => InstallTransitionKind::Started,
+            InstallTransitionFacts::Verified => InstallTransitionKind::Verified,
+            InstallTransitionFacts::DigestRejected(actual) => {
+                if actual == target.digest() {
+                    return Err(InstallTransitionError::MatchingRejectedDigest);
+                }
+                InstallTransitionKind::DigestRejected
+            }
+            InstallTransitionFacts::Installed => InstallTransitionKind::Installed,
+            InstallTransitionFacts::Replaced(previous) => {
+                if previous == &target {
+                    return Err(InstallTransitionError::UnchangedReplacement);
+                }
+                InstallTransitionKind::Replaced
+            }
+            InstallTransitionFacts::RolledBack(rollback) => {
+                verify_restored_target(&target, rollback)?;
+                InstallTransitionKind::RolledBack
+            }
+            InstallTransitionFacts::RecoveryIncomplete { state, .. } => {
+                if let RecoveryState::Confirmed(rollback) = state {
+                    verify_restored_target(&target, rollback)?;
+                }
+                InstallTransitionKind::RecoveryIncomplete
+            }
+        };
+        Ok(Self {
             kind,
             agent,
             target,
             request,
-            detail: TransitionDetail::None,
-        }
-    }
-
-    pub(crate) fn rejected(
-        agent: AgentName,
-        target: RuntimeArtifact,
-        actual: ArchiveDigest,
-        request: InstallRequest,
-    ) -> Result<Self, InstallTransitionError> {
-        if &actual == target.digest() {
-            return Err(InstallTransitionError::MatchingRejectedDigest);
-        }
-        Ok(Self {
-            kind: InstallTransitionKind::DigestRejected,
-            agent,
-            target,
-            request,
-            detail: TransitionDetail::ActualDigest(actual),
-        })
-    }
-
-    pub(crate) fn replaced(
-        agent: AgentName,
-        previous: RuntimeArtifact,
-        target: RuntimeArtifact,
-        request: InstallRequest,
-    ) -> Result<Self, InstallTransitionError> {
-        if previous == target {
-            return Err(InstallTransitionError::UnchangedReplacement);
-        }
-        Ok(Self {
-            kind: InstallTransitionKind::Replaced,
-            agent,
-            target,
-            request,
-            detail: TransitionDetail::Previous(previous),
-        })
-    }
-
-    pub(crate) fn rolled_back(
-        agent: AgentName,
-        target: RuntimeArtifact,
-        rollback: RollbackState,
-        request: InstallRequest,
-    ) -> Result<Self, InstallTransitionError> {
-        if matches!(&rollback, RollbackState::Restored(restored) if restored == &target) {
-            return Err(InstallTransitionError::TargetReportedRestored);
-        }
-        Ok(Self {
-            kind: InstallTransitionKind::RolledBack,
-            agent,
-            target,
-            request,
-            detail: TransitionDetail::Rollback(rollback),
-        })
-    }
-
-    pub(crate) fn recovery_incomplete(
-        agent: AgentName,
-        target: RuntimeArtifact,
-        state: RecoveryState,
-        failures: RecoveryFailureEvidence,
-        request: InstallRequest,
-    ) -> Result<Self, InstallTransitionError> {
-        if matches!(&state, RecoveryState::Confirmed(RollbackState::Restored(restored)) if restored == &target)
-        {
-            return Err(InstallTransitionError::TargetReportedRestored);
-        }
-        Ok(Self {
-            kind: InstallTransitionKind::RecoveryIncomplete,
-            agent,
-            target,
-            request,
-            detail: TransitionDetail::RecoveryIncomplete { state, failures },
+            facts,
         })
     }
 
     pub fn kind(&self) -> InstallTransitionKind {
         self.kind
     }
+
+    pub fn event_identity(&self) -> InstallEventIdentity {
+        InstallEventIdentity::new(self.request.clone(), self.kind.slot())
+    }
+
     pub fn agent(&self) -> &AgentName {
         &self.agent
     }
+
     pub fn target(&self) -> &RuntimeArtifact {
         &self.target
     }
+
     pub fn request(&self) -> &InstallRequest {
         &self.request
     }
+
+    pub fn facts(&self) -> &InstallTransitionFacts {
+        &self.facts
+    }
+
     pub fn actual_digest(&self) -> Option<&ArchiveDigest> {
-        match &self.detail {
-            TransitionDetail::ActualDigest(value) => Some(value),
+        match &self.facts {
+            InstallTransitionFacts::DigestRejected(value) => Some(value),
             _ => None,
         }
     }
+
     pub fn previous(&self) -> Option<&RuntimeArtifact> {
-        match &self.detail {
-            TransitionDetail::Previous(value) => Some(value),
+        match &self.facts {
+            InstallTransitionFacts::Replaced(value) => Some(value),
             _ => None,
         }
     }
+
     pub fn rollback(&self) -> Option<&RollbackState> {
-        match &self.detail {
-            TransitionDetail::Rollback(value) => Some(value),
+        match &self.facts {
+            InstallTransitionFacts::RolledBack(value) => Some(value),
             _ => None,
         }
     }
+
     pub fn recovery(&self) -> Option<(&RecoveryState, &RecoveryFailureEvidence)> {
-        match &self.detail {
-            TransitionDetail::RecoveryIncomplete { state, failures } => Some((state, failures)),
+        match &self.facts {
+            InstallTransitionFacts::RecoveryIncomplete { state, failures } => {
+                Some((state, failures))
+            }
             _ => None,
         }
+    }
+}
+
+fn verify_restored_target(
+    target: &RuntimeArtifact,
+    rollback: &RollbackState,
+) -> Result<(), InstallTransitionError> {
+    if matches!(rollback, RollbackState::Restored(restored) if restored == target) {
+        Err(InstallTransitionError::TargetReportedRestored)
+    } else {
+        Ok(())
     }
 }
 

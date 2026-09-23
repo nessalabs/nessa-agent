@@ -4,12 +4,12 @@
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc::Sender, Mutex};
+use std::sync::{Mutex, mpsc::Sender};
 
 use crate::agent_install::application::{
-    ArchiveSource, AuditFailure, AuditFailureStage, InstallAudit, Publication, PublicationChange,
-    PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
-    SourceFailure, StagedArchive, StoreFailure,
+    ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
+    Publication, PublicationChange, PublicationCleanupFailure, PublicationRecovery, PublishFailure,
+    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
@@ -76,8 +76,8 @@ pub(crate) fn request() -> InstallRequest {
 pub(crate) struct AcceptingAudit;
 
 impl InstallAudit for AcceptingAudit {
-    fn record(&self, _transition: InstallTransition) -> Result<(), AuditFailure> {
-        Ok(())
+    fn record(&self, _transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        Ok(AuditAcknowledgement::Recorded)
     }
 }
 
@@ -90,6 +90,7 @@ pub(crate) fn audit() -> &'static AcceptingAudit {
 pub(crate) struct RecordingAudit {
     records: Mutex<Vec<InstallTransition>>,
     failure: Option<(Option<InstallTransitionKind>, AuditFailure)>,
+    replay: bool,
 }
 
 impl RecordingAudit {
@@ -105,6 +106,14 @@ impl RecordingAudit {
                     None,
                 ),
             )),
+            replay: false,
+        }
+    }
+
+    pub(crate) fn replaying() -> Self {
+        Self {
+            replay: true,
+            ..Self::default()
         }
     }
 
@@ -114,7 +123,7 @@ impl RecordingAudit {
 }
 
 impl InstallAudit for RecordingAudit {
-    fn record(&self, transition: InstallTransition) -> Result<(), AuditFailure> {
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
         let kind = transition.kind();
         self.records
             .lock()
@@ -124,7 +133,8 @@ impl InstallAudit for RecordingAudit {
             Some((expected, failure)) if expected.is_none() || *expected == Some(kind) => {
                 Err(failure.clone())
             }
-            _ => Ok(()),
+            _ if self.replay => Ok(AuditAcknowledgement::Replayed),
+            _ => Ok(AuditAcknowledgement::Recorded),
         }
     }
 }

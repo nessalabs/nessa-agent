@@ -9,16 +9,20 @@ use std::path::{Path, PathBuf};
 
 use flate2::read::MultiGzDecoder;
 use nessa_local_storage::{
-    create_directory, create_directory_beneath, open_beneath, remove_directory_beneath,
-    remove_file_beneath, sync_directory_beneath, OpenMode, PrivateTempFile,
+    OpenMode, PrivateTempFile, create_directory, create_directory_beneath, open_beneath,
+    remove_directory_beneath, remove_file_beneath, sync_directory_beneath,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
 
-use crate::agent_install::application::{RuntimeStore, StagedArchive, StoreFailure};
+use crate::agent_install::application::{
+    Publication, PublicationChange, PublicationCleanupFailure, PublicationRecovery, PublishFailure,
+    RollbackChange, RuntimeStore, StagedArchive, StoreFailure,
+};
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, FileRole, PinnedRelease, ReleaseFile, ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, FileRole, PinnedRelease, ReleaseContents, ReleaseFile,
+    ReleaseVersion, RuntimeArtifact,
 };
 
 /// How many times a staged download will try for a name of its own before
@@ -155,6 +159,25 @@ impl InstallationRecord {
             && self.digest == expected.digest
             && self.files == expected.files
     }
+
+    /// Restore installed identity through the current domain validators.
+    fn artifact(&self) -> Option<RuntimeArtifact> {
+        let files = self
+            .files
+            .iter()
+            .map(|file| {
+                Some(ReleaseFile::new(
+                    ArchivePath::parse(&file.path).ok()?,
+                    FileRole::parse(&file.role).ok()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(RuntimeArtifact::new(
+            ReleaseVersion::parse(&self.version).ok()?,
+            ArchiveDigest::parse(&self.digest).ok()?,
+            ReleaseContents::new(files).ok()?,
+        ))
+    }
 }
 
 /// The runtimes Nessa installed, under one directory it owns.
@@ -279,6 +302,11 @@ impl ManagedRuntimes {
             .join(release.archive_digest().as_str())
     }
 
+    fn recorded_artifact_root(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {
+        self.version_root(agent, artifact.version())
+            .join(artifact.digest().as_str())
+    }
+
     /// Every directory inside the artifact this release's files need,
     /// outermost first.
     ///
@@ -354,6 +382,68 @@ impl ManagedRuntimes {
     /// Where the program `agent` is launched from for this artifact.
     fn launch_path(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
         self.file_path(agent, release, release.launch())
+    }
+
+    fn recorded_file_path(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+        path: &ArchivePath,
+    ) -> PathBuf {
+        self.recorded_artifact_root(agent, artifact)
+            .join(path.as_str())
+    }
+
+    fn installation_record(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<InstallationRecord>, StoreFailure> {
+        let mut record = match open_beneath(
+            &self.root,
+            &self.record_path(agent),
+            OpenMode::ReadNonblocking,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(unreadable(error)),
+        };
+        let mut encoded = Vec::new();
+        record.read_to_end(&mut encoded).map_err(unreadable)?;
+        Ok(serde_json::from_slice(&encoded).ok())
+    }
+
+    fn recorded_artifact(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<RuntimeArtifact>, StoreFailure> {
+        let Some(artifact) = self
+            .installation_record(agent)?
+            .and_then(|record| record.artifact())
+        else {
+            return Ok(None);
+        };
+        for file in artifact.contents().files() {
+            if !self.holds(&self.recorded_file_path(agent, &artifact, file.path()))? {
+                return Ok(None);
+            }
+        }
+        Ok(Some(artifact))
+    }
+
+    fn held_artifact(
+        &self,
+        agent: &AgentName,
+        artifact: Option<RuntimeArtifact>,
+    ) -> Result<Option<RuntimeArtifact>, StoreFailure> {
+        let Some(artifact) = artifact else {
+            return Ok(None);
+        };
+        for file in artifact.contents().files() {
+            if !self.holds(&self.recorded_file_path(agent, &artifact, file.path()))? {
+                return Ok(None);
+            }
+        }
+        Ok(Some(artifact))
     }
 
     /// Whether this store really holds the file it published at `relative`.
@@ -484,6 +574,15 @@ impl ManagedRuntimes {
         durable: impl Fn(&Path) -> io::Result<()>,
     ) -> Result<(), StoreFailure> {
         let record = InstallationRecord::of(release);
+        self.write_record(agent, &record, durable)
+    }
+
+    fn write_record(
+        &self,
+        agent: &AgentName,
+        record: &InstallationRecord,
+        durable: impl Fn(&Path) -> io::Result<()>,
+    ) -> Result<(), StoreFailure> {
         let directory = self.agent_root(agent);
         let mut staging =
             PrivateTempFile::new_beneath(&self.root, &directory).map_err(unwritable)?;
@@ -499,6 +598,22 @@ impl ManagedRuntimes {
         // `sync_directory` directly here would leave the final step of the
         // guarantee outside anything a test can watch.
         durable(&directory).map_err(unwritable)
+    }
+
+    fn restore_record(
+        &self,
+        agent: &AgentName,
+        record: Option<&InstallationRecord>,
+        durable: impl Fn(&Path) -> io::Result<()>,
+    ) -> Result<(), StoreFailure> {
+        match record {
+            Some(record) => self.write_record(agent, record, durable),
+            None => match remove_file_beneath(&self.root, &self.record_path(agent)) {
+                Ok(()) => durable(&self.agent_root(agent)).map_err(unwritable),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(unwritable(error)),
+            },
+        }
     }
 
     /// Make an unpacked executable durable and record it as installed.
@@ -558,23 +673,29 @@ impl ManagedRuntimes {
     /// second one about the clean-up would replace the cause with its
     /// consequence. What cannot be removed is logged, so that a directory
     /// holding an unrecorded runtime is at least explainable.
-    fn withdraw(&self, agent: &AgentName, release: &PinnedRelease, written: &[PathBuf]) {
+    fn withdraw(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+        written: &[PathBuf],
+    ) -> Result<(), StoreFailure> {
+        let mut failures = Vec::new();
         for file in written {
             if let Err(error) = remove_file_beneath(&self.root, file) {
                 if error.kind() != io::ErrorKind::NotFound {
-                    // `warn`, not `debug`: the shipped default keeps `info` and
-                    // above, and a line nobody sees would make the sentence
-                    // above untrue. This is the only trace that a runtime was
-                    // left somewhere nothing will look for it again.
-                    tracing::warn!(
-                        path = %self.absolute(file).display(),
-                        %error,
-                        "could not withdraw an agent runtime file that was not recorded"
-                    );
+                    failures.push(format!("{}: {error}", self.absolute(file).display()));
                 }
             }
         }
         self.sweep_artifact(agent, release);
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(StoreFailure::Unwritable(format!(
+                "could not withdraw published runtime files: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
     /// Remove the directories this install made and then had no use for.
@@ -679,7 +800,7 @@ impl ManagedRuntimes {
                 Some(Err(path)) => {
                     return Err(StoreFailure::MalformedArchive(format!(
                         "{path} is in the archive twice"
-                    )))
+                    )));
                 }
                 Some(Ok(file)) => file,
             };
@@ -771,123 +892,138 @@ impl ManagedRuntimes {
     /// it threaded this far means the guarded region, rollback included, has
     /// somewhere to be observed from. A failure to settle is otherwise only
     /// reachable on a disk that has run out part-way through an install.
+    fn recover_publication(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+        written: &[PathBuf],
+        previous_record: Option<&InstallationRecord>,
+        previous_artifact: Option<RuntimeArtifact>,
+        failure: StoreFailure,
+        durable: impl Fn(&Path) -> io::Result<()> + Copy,
+        withdraw: impl Fn(&[PathBuf]) -> Result<(), StoreFailure> + Copy,
+        lock: File,
+    ) -> PublishFailure {
+        let withdrawal = withdraw(written).err();
+        let restoration = self.restore_record(agent, previous_record, durable).err();
+        let (rollback, confirmation) = match self.recorded_artifact(agent) {
+            Ok(confirmed) if confirmed == previous_artifact => {
+                let rollback = match confirmed {
+                    Some(artifact) => RollbackChange::Restored(artifact),
+                    None => RollbackChange::NoInstalledRuntime,
+                };
+                (Some(rollback), None)
+            }
+            Ok(confirmed) => (
+                None,
+                Some(StoreFailure::Unreadable(format!(
+                    "publication recovery confirmed unexpected installed state: {confirmed:?}"
+                ))),
+            ),
+            Err(error) => (None, Some(error)),
+        };
+        match PublicationCleanupFailure::new(withdrawal, restoration, confirmation) {
+            Some(cleanup) => PublishFailure::incomplete(failure, rollback, cleanup, Box::new(lock)),
+            None => PublishFailure::rolled_back(
+                failure,
+                rollback.expect("successful recovery confirms a rollback state"),
+                Box::new(lock),
+            ),
+        }
+    }
+
+    /// Publish one complete multi-file runtime while retaining its lock through
+    /// the caller's audit acknowledgement.
     fn publish_durably(
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
         staged: &mut StagedArchive,
-        durable: impl Fn(&Path) -> io::Result<()>,
-    ) -> Result<PathBuf, StoreFailure> {
-        // Held from here to the end of this method, the rollback included.
-        // Everything below assumes that whatever is at each of this release's
-        // paths when it looks is either nothing or this call's own work, and
-        // that assumption is true only while nobody else is publishing this
-        // agent.
-        let _lock = self.hold(agent)?;
-        // Asked again now that this call is the only one publishing. The
-        // caller asked before downloading, and between that answer and this
-        // line another install may have finished the very same artifact — in
-        // which case it is already there, verified against the same digest,
-        // and unpacking over it would mean replacing files something may be
-        // running with identical ones. Handing back what is installed also
-        // keeps the rollback below honest: after this point, a file at any of
-        // this release's paths can only have been put there by this call.
-        if let Some(installed) = self.installed(agent, release)? {
-            return Ok(installed);
+        durable: impl Fn(&Path) -> io::Result<()> + Copy,
+    ) -> Result<Publication, PublishFailure> {
+        self.publish_with_recovery(agent, release, staged, durable, |written| {
+            self.withdraw(agent, release, written)
+        })
+    }
+
+    fn publish_with_recovery(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+        staged: &mut StagedArchive,
+        durable: impl Fn(&Path) -> io::Result<()> + Copy,
+        withdraw: impl Fn(&[PathBuf]) -> Result<(), StoreFailure> + Copy,
+    ) -> Result<Publication, PublishFailure> {
+        let lock = self.hold(agent).map_err(PublishFailure::unchanged)?;
+        if let Some(installed) = self
+            .installed(agent, release)
+            .map_err(PublishFailure::unchanged)?
+        {
+            return Ok(Publication::new(
+                installed,
+                PublicationChange::Reused,
+                Box::new(lock),
+            ));
         }
-        self.private_directory(&self.artifact_root(agent, release))?;
-        // Outermost first, and from the pin's paths rather than the archive's
-        // entries — see [`Self::content_directories`]. Made before the unpack
-        // rather than during it so that a release whose paths this machine
-        // cannot hold fails before a single file has been written.
+
+        let previous_record = self
+            .installation_record(agent)
+            .map_err(PublishFailure::unchanged)?;
+        let previous_artifact = self
+            .held_artifact(
+                agent,
+                previous_record
+                    .as_ref()
+                    .and_then(InstallationRecord::artifact),
+            )
+            .map_err(PublishFailure::unchanged)?;
+
+        self.private_directory(&self.artifact_root(agent, release))
+            .map_err(PublishFailure::unchanged)?;
         for directory in self.content_directories(agent, release) {
-            self.private_directory(&directory)?;
+            self.private_directory(&directory)
+                .map_err(PublishFailure::unchanged)?;
         }
-        // What this call has renamed into place, so that a failure anywhere
-        // below undoes exactly this call's own work.
+
         let mut written = Vec::new();
-        // Every way of not getting the files ends the same: whatever was
-        // written is taken back out and the directories made a moment ago in
-        // the expectation of them are swept. Nothing outside `written` is
-        // touched, so a pin that is wrong about its own contents cannot delete
-        // a runtime somebody was using.
         if let Err(failure) =
             self.unpack(agent, release, staged, MAXIMUM_UNPACKED_BYTES, &mut written)
         {
-            self.withdraw(agent, release, &written);
-            return Err(failure);
+            return Err(self.recover_publication(
+                agent,
+                release,
+                &written,
+                previous_record.as_ref(),
+                previous_artifact,
+                failure,
+                durable,
+                withdraw,
+                lock,
+            ));
         }
-        // Everything from the renames onwards is guarded together, because from
-        // that moment the files exist and a failure would otherwise leave them
-        // behind.
-        //
-        // The record is written last, since it is what makes the install true:
-        // `installed` answers from it, so writing it before the executable
-        // exists would claim an install that does not. That ordering leaves a
-        // window, and it is not only the record that can fail in it — making
-        // the directory durable can too. Returning either failure on its own
-        // would tell somebody nothing was installed while a hundred megabytes
-        // of runtime sat in a directory no record names, which nothing would
-        // ever look at again — on a disk that, in the likeliest cause of this
-        // failure, is the thing that ran out. So the executable is taken back
-        // out, and the message is true when it is read.
         if let Err(failure) = self.settle(agent, release, durable) {
-            // Unconditional, and safe to be: the lock has been held since
-            // before the recheck, which found nothing installed, so every file
-            // in `written` is one this call renamed and no other install can
-            // have finished in between. Taking them back out is undoing this
-            // call's own work, not losing somebody else's.
-            self.withdraw(agent, release, &written);
-            return Err(failure);
+            return Err(self.recover_publication(
+                agent,
+                release,
+                &written,
+                previous_record.as_ref(),
+                previous_artifact,
+                failure,
+                durable,
+                withdraw,
+                lock,
+            ));
         }
-        // Nothing reclaims the artifact this one supersedes, and that is a
-        // decision rather than an oversight.
-        //
-        // A pin bump leaves `versions/<old>/<digest>/` on disk with no record
-        // naming it, around a hundred and fifty megabytes for Opencode, and
-        // nothing will ever look at it again. The place to remove it is here:
-        // this method already holds the publication lock, and this line is the
-        // only moment at which the record has just become true, so it is the
-        // only moment at which "every artifact the record does not name" is a
-        // safe thing to say. Anywhere else would be reading a record another
-        // install is in the middle of replacing.
-        //
-        // What stops it being written today is not where it goes but what it
-        // owes. Removing an installed runtime is a consequential state
-        // transition, so the hard audit rule asks it to carry its target, its
-        // before and after, its cause, and who caused it — and this store has
-        // no audit port to carry any of that. Adding the removal without one
-        // would delete a runtime and leave nothing saying it happened, which
-        // is worse than the disk. The same port is what the install path is
-        // waiting on, so the two land together or not at all.
-        //
-        // Three things the implementation owes, written here because this is
-        // where it will be read.
-        //
-        // The early return above skips this line. A run that finds the
-        // artifact already published also holds the lock and also has a record
-        // that is true, so it is a second safe moment — and reclaiming only on
-        // the branch that unpacked means a machine that bumps its pin and then
-        // re-runs the install never reclaims anything at all.
-        //
-        // The module doc leaves the old artifact on the ground that whatever
-        // is running it keeps working. On Unix a removal keeps that true for a
-        // process that already holds the file open and makes it false for its
-        // next start; on Windows the removal fails outright against a running
-        // image. That paragraph and this one would then say opposite things
-        // about the same artifact, so they are settled together.
-        //
-        // And it is recomputed, never enumerated: "every artifact directory
-        // this agent's record does not name" is derived from the record and
-        // the pin. A `read_dir` of `versions/` is the one shape that could
-        // remove a directory nothing verified.
-        //
-        // The one path that leaves this type, so the one that is spelled in
-        // full: everything above is relative because everything above is
-        // reached through the root rather than resolved from the outside. One
-        // of the files rather than all of them, because the rest are reached by
-        // the runtime itself, relative to this one.
-        Ok(self.absolute(&self.launch_path(agent, release)))
+
+        let change = match previous_artifact {
+            Some(previous) => PublicationChange::Replaced(previous),
+            None => PublicationChange::Installed,
+        };
+        Ok(Publication::new(
+            self.absolute(&self.launch_path(agent, release)),
+            change,
+            Box::new(lock),
+        ))
     }
 }
 
@@ -1020,7 +1156,7 @@ impl RuntimeStore for ManagedRuntimes {
         agent: &AgentName,
         release: &PinnedRelease,
         staged: &mut StagedArchive,
-    ) -> Result<PathBuf, StoreFailure> {
+    ) -> Result<Publication, PublishFailure> {
         self.publish_durably(agent, release, staged, |relative| {
             sync_directory_beneath(&self.root, relative)
         })
