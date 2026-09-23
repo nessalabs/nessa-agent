@@ -2050,15 +2050,14 @@ impl Agent {
             agent.inner.lifecycle.wait_for_work().await;
             let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
             let cleanup = cleanup.into_result();
-            let result = match saved {
+            match saved {
                 Ok(()) => cleanup,
                 Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
                     error,
                     cleanup_result: Box::new(cleanup),
                 }),
                 Err(error) => Err(error),
-            };
-            result
+            }
         })
         .await
         .map_err(|_| AgentError::Closed)?
