@@ -1387,3 +1387,6 @@ async fn queue_audit_panics_preserve_owned_receipt_and_prevent_dispatch() {
         restored.close(close_action()).await.unwrap();
     }
 }
+
+#[path = "initialization/startup_control.rs"]
+mod startup_control;

@@ -15,6 +15,10 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
             ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
             Err(AgentError::AuditFailure),
         ),
+        CleanupReport::new(
+            ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain),
+            Err(AgentError::AuditFailure),
+        ),
     ] {
         let (agent, backend) = agent_with_backend().await;
         agent.close(actor()).await.unwrap();
