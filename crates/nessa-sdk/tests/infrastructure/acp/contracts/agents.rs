@@ -354,6 +354,7 @@ struct FailReviewStorage {
     inner: InMemoryStorage,
     failed: Arc<AtomicBool>,
 }
+
 struct FailReviewLease {
     inner: Box<dyn SessionStorageLease>,
     failed: Arc<AtomicBool>,
@@ -425,6 +426,169 @@ async fn observation_storage_failure_audits_execution_failure_without_fabricated
         }
     );
     assert_eq!(cancellations[0].origin(), &CancellationOrigin::Runtime);
+}
+
+type DeclineSaveGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
+
+struct FailSelectedDeclineStorage {
+    inner: InMemoryStorage,
+    gate: DeclineSaveGate,
+}
+struct FailSelectedDeclineLease {
+    inner: Box<dyn SessionStorageLease>,
+    gate: DeclineSaveGate,
+}
+impl SessionStorage for FailSelectedDeclineStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(FailSelectedDeclineLease {
+                inner: self.inner.open(id).await?,
+                gate: self.gate.clone(),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+impl SessionStorageLease for FailSelectedDeclineLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.inner.load()
+    }
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            let selected = snapshot.invocations.iter().any(|record| {
+                record.events.iter().any(|event| {
+                    matches!(
+                        event.update(),
+                        ExecutionUpdate::ReviewDeclined(observation)
+                            if observation.stage() == ReviewDeclineStage::Selected
+                    )
+                })
+            });
+            let gate = if selected {
+                self.gate.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some((entered, release)) = gate {
+                entered.send(()).unwrap();
+                release.await.unwrap();
+                return Err(StorageError::Io(
+                    "selected decline persistence rejected".into(),
+                ));
+            }
+            self.inner.save(snapshot).await
+        })
+    }
+}
+
+struct DeclineBarrierAudit {
+    declines: Mutex<Vec<ReviewDeclineRecord>>,
+    written: Mutex<Option<oneshot::Sender<()>>>,
+}
+impl ExecutionAudit for DeclineBarrierAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if let ExecutionAuditRecord::ReviewDeclined(record) = record {
+                let written = record.delivery() == &PermissionAnswerDelivery::Written;
+                self.declines.lock().unwrap().push(record);
+                if written {
+                    self.written
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap()
+                        .send(())
+                        .unwrap();
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn declined_review_survives_selected_save_failure_and_caller_loss() {
+    let _slot = process_test_slot().await;
+    let (save_entered, saving) = oneshot::channel();
+    let (save_release, release) = oneshot::channel();
+    let storage = InMemoryStorage::new();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(FailSelectedDeclineStorage {
+            inner: storage.clone(),
+            gate: Arc::new(Mutex::new(Some((save_entered, release)))),
+        }),
+    )
+    .await
+    .unwrap();
+    let (written, write_completed) = oneshot::channel();
+    let audit = Arc::new(DeclineBarrierAudit {
+        declines: Mutex::new(Vec::new()),
+        written: Mutex::new(Some(written)),
+    });
+    let (_root, config, model) = test_acp_configuration("declined-tool", 16);
+    let provider = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let mut events = agent.subscribe();
+    let caller = tokio::spawn({
+        let agent = agent.clone();
+        async move {
+            agent
+                .invoke(prompt("decline-storage-caller-loss"), close_action())
+                .await
+        }
+    });
+
+    saving.await.unwrap();
+    write_completed.await.unwrap();
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    save_release.send(()).unwrap();
+
+    let final_observation = loop {
+        let event = timeout(Duration::from_secs(3), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if let ExecutionUpdate::ReviewDeclined(observation) = event.into_update() {
+            break observation;
+        }
+    };
+    assert_eq!(
+        final_observation.stage(),
+        ReviewDeclineStage::WriteConfirmed
+    );
+    agent.close(close_action()).await.unwrap();
+
+    let snapshot = agent.session_manager().snapshot().await.unwrap();
+    let declines = snapshot.invocations[0]
+        .events
+        .iter()
+        .filter_map(|event| match event.update() {
+            ExecutionUpdate::ReviewDeclined(observation) => Some(observation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(declines.len(), 2);
+    assert_eq!(declines[0].stage(), ReviewDeclineStage::Selected);
+    assert_eq!(declines[1].stage(), ReviewDeclineStage::WriteConfirmed);
+    assert_eq!(declines[0].id(), declines[1].id());
+    assert_eq!(declines[0].decline(), declines[1].decline());
+    assert_eq!(declines[1].id(), final_observation.id());
+
+    let audited = audit.declines.lock().unwrap();
+    assert_eq!(audited.len(), 2);
+    assert_eq!(audited[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(audited[1].delivery(), &PermissionAnswerDelivery::Written);
+    assert_eq!(audited[0].id(), audited[1].id());
+    assert_eq!(audited[1].id(), declines[1].id());
+    assert_eq!(audited[0].decline(), audited[1].decline());
 }
 
 #[tokio::test]

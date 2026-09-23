@@ -11,9 +11,7 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
 use crate::domain::agent_execution::{
     executions::{ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage},
-    permissions::{
-        PermissionRequest, PermissionStateView, ReviewDeclineObservation, ReviewDeclineStage,
-    },
+    permissions::{PermissionRequest, PermissionStateView, ReviewDeclineStage},
 };
 use std::{
     collections::{HashMap, HashSet},
