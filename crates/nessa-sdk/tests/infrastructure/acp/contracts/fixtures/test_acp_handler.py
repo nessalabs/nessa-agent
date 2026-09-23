@@ -17,9 +17,12 @@ for line in sys.stdin:
     method = message.get("method")
     params = message.get("params", {})
     if method == "initialize":
-        send({"id": message["id"], "result": {"protocolVersion": 1, "agentInfo": {"version": "fixture"}}})
+        send({"id": message["id"], "result": {"protocolVersion": 1, "agentInfo": {"version": "fixture"}, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}}})
     elif method == "session/new":
         assert set(params) == {"cwd", "mcpServers"}
+        send({"id": message["id"], "result": {"sessionId": session}})
+    elif method == "session/resume":
+        assert params["sessionId"] == session
         send({"id": message["id"], "result": {"sessionId": session}})
     elif method == "session/prompt":
         assert params["sessionId"] == session

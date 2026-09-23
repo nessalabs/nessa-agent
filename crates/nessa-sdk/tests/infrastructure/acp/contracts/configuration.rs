@@ -647,11 +647,11 @@ async fn startup_notifications_share_live_configuration_and_correlation_validati
         ),
         (
             "startup-update-before-initialize",
-            "session update before startup context admission",
+            "non-advisory session update before startup context admission",
         ),
         (
             "startup-update-before-session",
-            "session update before startup context admission",
+            "non-advisory session update before startup context admission",
         ),
     ] {
         for restored in [false, true] {
