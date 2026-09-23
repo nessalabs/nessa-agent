@@ -47,7 +47,7 @@ mod queue_validation;
 pub mod storage;
 pub(crate) mod validation;
 pub use manager::SessionManager;
-pub(crate) use manager::{AttachedProvider, AttachmentOpenError, AttachmentOpenFailureSource};
+pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use storage::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     QueueHistoryRecord, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,

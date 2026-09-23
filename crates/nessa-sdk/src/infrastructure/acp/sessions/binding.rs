@@ -20,13 +20,13 @@ use crate::application::agent_execution::permissions::{
     PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCleanup,
-    ImageInputRefusal, ObservationFailure, ObservationFailureCause, OpenedProviderSession,
-    ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture,
-    ProviderOpenControl, ProviderOpenError, ProviderOperationCapabilities,
-    ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult, ProviderSession,
-    ProviderSessionBackend, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
-    SteeringOutcome,
+    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCauseSource,
+    FailedOpenCleanup, ImageInputRefusal, ObservationFailure, ObservationFailureCause,
+    OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply,
+    ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
+    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
+    ResourceCleanup, SessionCloseRequest, SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
@@ -250,6 +250,19 @@ struct RestorationRecovery {
 struct LiveGenerationFailure {
     cause: AgentError,
     state: Option<Box<ProviderSessionState>>,
+}
+fn restoration_failure_cause(
+    fallback: AgentError,
+    source: FailedOpenCauseSource,
+    report: &CleanupReport,
+) -> AgentError {
+    match source {
+        FailedOpenCauseSource::Independent => fallback,
+        FailedOpenCauseSource::CleanupReport => report
+            .clone()
+            .into_result()
+            .expect_err("cleanup-report provenance requires a reported failure"),
+    }
 }
 impl Generation {
     fn control(&self) -> Control {
@@ -502,9 +515,10 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 let (next, events) = match self.factory.start(Some(self.id.clone())) {
                     Ok(started) => started,
                     Err(failure) => {
-                        let (cause, cleanup) = failure.into_parts();
+                        let (cause, cleanup, source) = failure.into_parts();
                         match cleanup {
                             FailedOpenCleanup::Retained { report, owner } => {
+                                let cause = restoration_failure_cause(cause, source, &report);
                                 let recovery = Arc::new(RestorationRecovery {
                                     cause: cause.clone(),
                                     cleanup: owner,
@@ -516,6 +530,7 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                                 return Err(failure);
                             }
                             FailedOpenCleanup::Completed(report) => {
+                                let cause = restoration_failure_cause(cause, source, &report);
                                 return Err(LiveGenerationFailure {
                                     cause,
                                     state: Some(Box::new(ProviderSessionState::CleanupReported(
@@ -523,7 +538,10 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                                     ))),
                                 });
                             }
-                            FailedOpenCleanup::NotStarted => return Err(cause.into()),
+                            FailedOpenCleanup::NotStarted => {
+                                debug_assert_eq!(source, FailedOpenCauseSource::Independent);
+                                return Err(cause.into());
+                            }
                         }
                     }
                 };
