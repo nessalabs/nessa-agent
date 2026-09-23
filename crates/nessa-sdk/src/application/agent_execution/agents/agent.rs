@@ -269,10 +269,9 @@ impl Agent {
                     // a concurrent close keeps any owners it already cancelled.
                     let settlement = {
                         let mut scheduler = agent.inner.scheduler.lock().await;
-                        let settlement = agent
+                        agent
                             .settle_failed_pending(&mut scheduler, original.clone())
-                            .await;
-                        settlement
+                            .await
                     };
                     if let Err(settlement_error) = settlement {
                         result = Err(AgentError::MultipleOperationFailures {
