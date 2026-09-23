@@ -8,7 +8,7 @@ enum Delivery {
     BoundarySteering,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn active_input_keeps_automatic_cause_when_later_close_overtakes_dispatch() {
     for delivery in [
         Delivery::Immediate,

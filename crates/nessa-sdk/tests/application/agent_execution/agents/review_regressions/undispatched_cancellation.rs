@@ -50,7 +50,7 @@ impl InvocationHook for PausedBeforeDispatch {
             .unwrap()
             .send(())
             .unwrap();
-        self.release.lock().unwrap().recv().unwrap();
+        tokio::task::block_in_place(|| self.release.lock().unwrap().recv().unwrap());
         if self.reject {
             Err(HookError::Failed("hook stopped input".into()))
         } else {
@@ -59,7 +59,7 @@ impl InvocationHook for PausedBeforeDispatch {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn explicit_close_retains_undispatched_input_cause_actor_and_write_failure() {
     for reject_hook in [false, true] {
         for save_fault in [0, 1, 2] {
@@ -358,7 +358,7 @@ async fn automatic_cancellation_evidence_survives_save_failure_and_caller_loss()
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn automatic_stop_keeps_its_first_cause_when_explicit_close_overtakes_evidence() {
     for source in [ProviderControl::Answer, ProviderControl::CancelPermission] {
         let (agent, backend, storage) = probe(false).await;

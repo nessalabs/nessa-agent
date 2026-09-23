@@ -436,7 +436,7 @@ impl InvocationHook for RejectPausedBeforeHook {
     fn before_invocation(&self, _: &InvocationContext<'_>) -> Result<(), HookError> {
         if let Some(entered) = self.entered.lock().unwrap().take() {
             entered.send(()).unwrap();
-            self.release.lock().unwrap().recv().unwrap();
+            tokio::task::block_in_place(|| self.release.lock().unwrap().recv().unwrap());
             return Err(HookError::Failed("stop before provider preparation".into()));
         }
         Ok(())
