@@ -13,11 +13,16 @@
 //! escape it, a release names exactly one program to launch, an archive is
 //! fetched over https from a host that is named. Deciding *where* a runtime
 //! goes and putting it there is infrastructure.
+pub mod entities;
 mod release_selection;
 pub mod value_objects;
+pub use entities::{InstallAttempt, InstallAttemptError};
 pub use release_selection::preferred_release;
 pub use value_objects::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveSize, ArchiveUrl, FileRole,
-    HostPlatform, Libc, NotAnAgentName, PinRejected, PinnedRelease, ReleaseContents, ReleaseFile,
-    ReleasePlatform, ReleaseRequirements, ReleaseVersion,
+    HostPlatform, InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallRequestError,
+    InstallTransition, InstallTransitionError, InstallTransitionKind, Libc, NotAnAgentName,
+    PinRejected, PinnedRelease, RecoveryFailureEvidence, RecoveryState, ReleaseContents,
+    ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion, RollbackState,
+    RuntimeArtifact,
 };

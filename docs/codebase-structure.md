@@ -917,15 +917,40 @@ same bytes as their siblings at 1.18.31, so what they need is unsettled and an
 x86-64 machine without AVX2 is offered nothing rather than a build nobody has
 run on one.
 
+Install evidence is domain state too. `install_transition.rs` owns the validated
+request identity, target artifact, and immutable transition facts; its private
+representation prevents a rejected digest from equalling the target, a runtime
+from replacing itself, or a rollback from claiming the failed target was
+restored. Incomplete recovery retains the original publication failure, each
+cleanup stage that failed, and either the remaining state the store confirmed
+or an explicit unconfirmed state. `entities/install_attempt.rs` is the sequence
+owner: started may become verified or rejected, and only verified may become
+installed, replaced, rolled back, or incomplete recovery. Application and
+infrastructure cannot construct contradictory before/after evidence around that
+owner.
+
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
 does installed-already, then download, hash, accept, publish, and never unpacks
-an archive that was not accepted. Its two ports are `ArchiveSource` (the
-network) and `RuntimeStore` (this machine's disk), whose `StagedArchive` carries
-an open file rather than a path, so the bytes that are measured are the bytes
-that are unpacked.
+an archive that was not accepted. Its ports are `ArchiveSource` (the network),
+`RuntimeStore` (this machine's disk), and `InstallAudit` (durable transition
+evidence). `StagedArchive` carries an open file rather than a path, so the bytes
+that are measured are the bytes that are unpacked. Publication captures the
+prior valid artifact while holding the store's per-agent lock and returns that
+authority as a lease. The use case keeps the lease until the installed,
+replaced, or rolled-back evidence is acknowledged, so concurrent installers
+cannot report effects in an order that contradicts their before/after chain.
+Audit failure stays visible and carries typed state evidence: unchanged, the
+target installed, the prior artifact restored, no runtime installed, or
+unconfirmed. It therefore does not turn an uncertain cleanup into a claim that
+nothing is installed.
+If publication durability fails, the store removes only the target it computed
+from the accepted pin, restores only a prior record whose validated artifact
+still had a private nonempty executable, and re-reads installed state under the
+same lease. The original failure, every cleanup failure, and the confirmed or
+explicitly unconfirmed remaining state travel as separate typed facts through
+the audit attempt and back to the caller when the sink also fails.
 
-`infrastructure/` holds the three outside things — the pins, the network and
-the disk, one module each. `pinned_releases.rs` reads
+`infrastructure/` holds the four outside things: `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
 what is beside the binary, and is also the one boundary that reads *the
 machine* — `host_platform()` builds a `HostPlatform` from the compiler's own
@@ -941,24 +966,25 @@ crate's `*_beneath` primitives, which walk down one verified component at a
 time; the root itself, which composition owns, is the single path resolved the
 ordinary way. So no symbolic link between the root and a runtime can send a
 read, a write or a removal outside the store, and the installed executable is
-private to its owner like everything else there.
+private to its owner like everything else there. `audit.rs` creates its nested
+directory durably beneath the data root, then uses a filesystem lock shared by
+CLI processes to write monotonically sequenced private JSON records. It syncs
+each record and the journal directory before acknowledging it, and refuses a
+corrupt or discontinuous journal rather than silently appending past it.
+Observation time is descriptive; the durable sequence and domain before/after
+chain establish order.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases
-The domain says what a release *is*: `pinned_release.rs` holds the pin, and
-`release_contents.rs` holds the set of files it installs — each one an
-`ArchivePath` with a `FileRole` of `Launch`, `Helper` or `Document`, exactly one
-of them the launch. That set is why one install path serves an agent that ships
-a single binary and one that ships four programs plus the tools they call.
-`ArchiveSize` bounds the download against the size the pin measured. Composition
-reads the store at every start through `composition/installed_launch.rs`, which
-answers with a launch or with nothing, and never with a path it wrote down
-earlier.
-
-that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-agents.mjs` regenerates
-the pin file by downloading and hashing every platform's archive. Tests under
-`tests/agent_install/` split the domain's rules, the ordering, the two adapters
-and the command's output.
+that run on it — supplies a fresh correlation identity and the effective local
+account whose private data receives the runtime, and reports one line of JSON on
+stdout. `scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
+and hashing every platform's archives. Composition reads the store at every
+start through `composition/installed_launch.rs`, which answers with a launch or
+with nothing and never with a path it wrote down earlier. Tests under
+`tests/agent_install/` split the domain's rules, application ordering and
+failure reporting, the three adapters, concurrent publication authority, and
+the command's output.
 
 ## Command-line surface
 

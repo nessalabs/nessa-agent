@@ -2,7 +2,9 @@ use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease};
+use crate::agent_install::domain::{
+    AgentName, ArchiveDigest, InstallTransition, PinnedRelease, RuntimeArtifact,
+};
 
 /// Why an archive could not be fetched.
 ///
@@ -87,6 +89,330 @@ impl fmt::Display for StoreFailure {
 }
 
 impl std::error::Error for StoreFailure {}
+
+/// The application-level checkpoint at which durable audit acknowledgement failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditFailureStage {
+    /// The private journal authority could not be initialized.
+    Initialize,
+    /// The stable journal lock could not be acquired.
+    AcquireLock,
+    /// The retained directory or stable lock no longer had its original identity.
+    VerifyAuthority,
+    /// Existing durable records could not be enumerated or validated.
+    ReadJournal,
+    /// The next record could not be encoded or written to its reservation.
+    WriteRecord,
+    /// The reserved record could not be renamed to its immutable destination.
+    PublishRecord,
+    /// Publication occurred, but its durability or identity could not be acknowledged.
+    AcknowledgeRecord,
+}
+
+/// Logical identity of an audit record whose destination rename occurred.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedAuditRecord {
+    record_id: String,
+    sequence: u64,
+    destination: String,
+}
+
+impl PublishedAuditRecord {
+    /// Describe the logical record that reached its immutable destination.
+    pub fn new(record_id: String, sequence: u64, destination: String) -> Self {
+        Self {
+            record_id,
+            sequence,
+            destination,
+        }
+    }
+
+    /// Return the adapter-owned identity written into the record.
+    pub fn record_id(&self) -> &str {
+        &self.record_id
+    }
+
+    /// Return the durable sequence written into the record and its filename.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Return the immutable single-component destination name.
+    pub fn destination(&self) -> &str {
+        &self.destination
+    }
+}
+
+/// The durable audit sink did not acknowledge install evidence.
+///
+/// A destination rename, the primary failure, and reservation cleanup are
+/// independent facts. Keeping them separate prevents a caller from blindly
+/// retrying a sequence that may already exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditFailure {
+    stage: AuditFailureStage,
+    detail: String,
+    published: Option<PublishedAuditRecord>,
+    cleanup: Option<String>,
+}
+
+impl AuditFailure {
+    /// Build a failure while preserving any publication and cleanup evidence.
+    pub fn new(
+        stage: AuditFailureStage,
+        detail: String,
+        published: Option<PublishedAuditRecord>,
+        cleanup: Option<String>,
+    ) -> Self {
+        Self {
+            stage,
+            detail,
+            published,
+            cleanup,
+        }
+    }
+
+    /// Return the application checkpoint that failed.
+    pub fn stage(&self) -> AuditFailureStage {
+        self.stage
+    }
+
+    /// Return the primary failure detail.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Return the logical record when its destination rename already occurred.
+    pub fn published(&self) -> Option<&PublishedAuditRecord> {
+        self.published.as_ref()
+    }
+
+    /// Return an independent reservation-cleanup failure.
+    pub fn cleanup(&self) -> Option<&str> {
+        self.cleanup.as_deref()
+    }
+}
+
+impl fmt::Display for AuditFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "audit failed at {:?}: {}",
+            self.stage, self.detail
+        )?;
+        if let Some(cleanup) = &self.cleanup {
+            write!(formatter, "; reservation cleanup also failed: {cleanup}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AuditFailure {}
+
+/// Which state change a successful publication performed while holding the
+/// agent's publication lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationChange {
+    /// Another install had already published this exact artifact.
+    Reused,
+    /// No valid runtime record existed before this artifact was published.
+    Installed,
+    /// This artifact replaced the runtime named by the prior valid record.
+    Replaced(RuntimeArtifact),
+}
+
+/// Keeps the store's per-agent publication authority until audit delivery has
+/// completed. Implementations normally own the publication lock handle.
+pub trait PublicationLease: Send {}
+
+impl<T: Send> PublicationLease for T {}
+
+/// A runtime publication and the state it actually changed under the store's
+/// publication lock.
+pub struct Publication {
+    executable: PathBuf,
+    change: PublicationChange,
+    _lease: Box<dyn PublicationLease>,
+}
+
+impl fmt::Debug for Publication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Publication")
+            .field("executable", &self.executable)
+            .field("change", &self.change)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Publication {
+    pub fn new(
+        executable: PathBuf,
+        change: PublicationChange,
+        lease: Box<dyn PublicationLease>,
+    ) -> Self {
+        Self {
+            executable,
+            change,
+            _lease: lease,
+        }
+    }
+
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub fn change(&self) -> &PublicationChange {
+        &self.change
+    }
+}
+
+/// The state left after the store withdrew a publication that could not be
+/// completed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RollbackChange {
+    Restored(RuntimeArtifact),
+    NoInstalledRuntime,
+}
+
+/// Every cleanup failure observed after publication failed. The original
+/// publication failure remains separate on [`PublishFailure`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationCleanupFailure {
+    withdrawal: Option<StoreFailure>,
+    restoration: Option<StoreFailure>,
+    confirmation: Option<StoreFailure>,
+}
+
+impl PublicationCleanupFailure {
+    pub fn new(
+        withdrawal: Option<StoreFailure>,
+        restoration: Option<StoreFailure>,
+        confirmation: Option<StoreFailure>,
+    ) -> Option<Self> {
+        (withdrawal.is_some() || restoration.is_some() || confirmation.is_some()).then_some(Self {
+            withdrawal,
+            restoration,
+            confirmation,
+        })
+    }
+
+    pub fn withdrawal(&self) -> Option<&StoreFailure> {
+        self.withdrawal.as_ref()
+    }
+
+    pub fn restoration(&self) -> Option<&StoreFailure> {
+        self.restoration.as_ref()
+    }
+
+    pub fn confirmation(&self) -> Option<&StoreFailure> {
+        self.confirmation.as_ref()
+    }
+}
+
+impl fmt::Display for PublicationCleanupFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let failures = [
+            self.withdrawal
+                .as_ref()
+                .map(|failure| ("withdrawal", failure)),
+            self.restoration
+                .as_ref()
+                .map(|failure| ("restoration", failure)),
+            self.confirmation
+                .as_ref()
+                .map(|failure| ("confirmation", failure)),
+        ];
+        let mut separator = "";
+        for failure in failures.into_iter().flatten() {
+            write!(formatter, "{separator}{}: {}", failure.0, failure.1)?;
+            separator = "; ";
+        }
+        Ok(())
+    }
+}
+
+/// What cleanup after a failed publication established while retaining the
+/// publication lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationRecovery {
+    /// Publication failed before it changed installed state.
+    NotRequired,
+    /// The prior installed state was durably restored.
+    RolledBack(RollbackChange),
+    /// Cleanup failed. `rollback` is present only when the installed state was
+    /// nevertheless re-read and confirmed after that failure.
+    Incomplete {
+        rollback: Option<RollbackChange>,
+        cleanup: PublicationCleanupFailure,
+    },
+}
+
+/// A publication failure, including a rollback the store actually performed.
+pub struct PublishFailure {
+    failure: StoreFailure,
+    recovery: Box<PublicationRecovery>,
+    _lease: Box<dyn PublicationLease>,
+}
+
+impl PublishFailure {
+    pub fn unchanged(failure: StoreFailure) -> Self {
+        Self {
+            failure,
+            recovery: Box::new(PublicationRecovery::NotRequired),
+            _lease: Box::new(()),
+        }
+    }
+
+    pub fn rolled_back(
+        failure: StoreFailure,
+        rollback: RollbackChange,
+        lease: Box<dyn PublicationLease>,
+    ) -> Self {
+        Self {
+            failure,
+            recovery: Box::new(PublicationRecovery::RolledBack(rollback)),
+            _lease: lease,
+        }
+    }
+
+    pub fn incomplete(
+        failure: StoreFailure,
+        rollback: Option<RollbackChange>,
+        cleanup: PublicationCleanupFailure,
+        lease: Box<dyn PublicationLease>,
+    ) -> Self {
+        Self {
+            failure,
+            recovery: Box::new(PublicationRecovery::Incomplete { rollback, cleanup }),
+            _lease: lease,
+        }
+    }
+
+    pub fn failure(&self) -> &StoreFailure {
+        &self.failure
+    }
+
+    pub fn recovery(&self) -> &PublicationRecovery {
+        self.recovery.as_ref()
+    }
+}
+
+impl fmt::Debug for PublishFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PublishFailure")
+            .field("failure", &self.failure)
+            .field("recovery", &self.recovery)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Durable evidence for agent-runtime installation transitions.
+pub trait InstallAudit: Send + Sync {
+    /// Commit one immutable transition before the install reports its outcome.
+    fn record(&self, transition: InstallTransition) -> Result<(), AuditFailure>;
+}
 
 /// The private file one install downloads its archive into.
 ///
@@ -250,7 +576,7 @@ pub trait RuntimeStore: Send + Sync {
         agent: &AgentName,
         release: &PinnedRelease,
         staged: &mut StagedArchive,
-    ) -> Result<PathBuf, StoreFailure>;
+    ) -> Result<Publication, PublishFailure>;
 
     /// Forget a staged download. Never fails the install: a leftover file in a
     /// directory Nessa owns is survivable, and reporting it would turn a
