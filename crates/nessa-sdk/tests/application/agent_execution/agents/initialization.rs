@@ -1340,52 +1340,6 @@ async fn attachment_audit_construction_poll_and_drop_panics_settle_failed() {
 }
 
 #[tokio::test]
-async fn close_joins_a_held_started_audit_panic_before_replacement() {
-    for failure in [AuditPanic::Construct, AuditPanic::Poll, AuditPanic::Drop] {
-        let storage = MemoryStorage::default();
-        let provider = TestProvider::new();
-        let agent = prepared(
-            provider.clone(),
-            &storage,
-            Arc::new(PanickingAudit(failure)),
-        )
-        .await;
-        let (entered, paused) = oneshot::channel();
-        let (release, waiting) = oneshot::channel();
-        agent.inner.lifecycle.pause_next_attachment_audit(
-            AttachmentAuditStage::Starting,
-            entered,
-            waiting,
-        );
-        let authorization = agent
-            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
-            .unwrap();
-        let attachment = agent.start_attachment(authorization).unwrap();
-        paused.await.unwrap();
-        let closing = tokio::spawn({
-            let agent = agent.clone();
-            async move { agent.close(close_action()).await }
-        });
-        while agent.attachment_status().phase() != AttachmentPhase::Absent {
-            tokio::task::yield_now().await;
-        }
-        assert!(!closing.is_finished());
-        assert!(agent
-            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
-            .is_err());
-        release.send(()).unwrap();
-        assert_eq!(attachment.wait().await, Err(AgentError::AuditFailure));
-        let expected = AgentError::MultipleOperationFailures {
-            first_error: Box::new(AgentError::AuditFailure),
-            subsequent_error: Box::new(AgentError::AuditFailure),
-        };
-        assert_eq!(closing.await.unwrap(), Err(expected.clone()));
-        assert_eq!(agent.close(close_action()).await, Err(expected));
-        assert!(provider.calls.opens.lock().unwrap().is_empty());
-    }
-}
-
-#[tokio::test]
 async fn provider_open_construction_poll_and_drop_panics_settle_without_unwind() {
     for failure in [OpenPanic::Construct, OpenPanic::Poll, OpenPanic::Drop] {
         let storage = MemoryStorage::default();

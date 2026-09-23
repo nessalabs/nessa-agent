@@ -96,7 +96,7 @@ pub trait ProviderCleanup: Send + Sync {
 /// ```
 pub struct ProviderOpenError {
     cause: AgentError,
-    cleanup: FailedOpenCleanup,
+    cleanup: Box<FailedOpenCleanup>,
 }
 pub(crate) enum FailedOpenCleanup {
     NotStarted,
@@ -116,7 +116,7 @@ impl ProviderOpenError {
         let cause = cause.bounded();
         Self {
             cause,
-            cleanup: FailedOpenCleanup::NotStarted,
+            cleanup: Box::new(FailedOpenCleanup::NotStarted),
         }
     }
 
@@ -129,10 +129,10 @@ impl ProviderOpenError {
     pub fn with_cleanup(cause: AgentError, cleanup: Arc<dyn ProviderCleanup>) -> Self {
         Self {
             cause: cause.bounded(),
-            cleanup: FailedOpenCleanup::Retained {
+            cleanup: Box::new(FailedOpenCleanup::Retained {
                 report: CleanupReport::unconfirmed(AgentError::CleanupUncertain),
                 owner: cleanup,
-            },
+            }),
         }
     }
 
@@ -148,7 +148,7 @@ impl ProviderOpenError {
         };
         Self {
             cause: cause.bounded(),
-            cleanup,
+            cleanup: Box::new(cleanup),
         }
     }
 
@@ -160,14 +160,14 @@ impl ProviderOpenError {
     /// Borrow the owned cleanup handle, if resources still require supervision.
     /// Its presence is an ownership claim, not proof that a retry will succeed.
     pub fn cleanup(&self) -> Option<&Arc<dyn ProviderCleanup>> {
-        match &self.cleanup {
+        match self.cleanup.as_ref() {
             FailedOpenCleanup::Retained { owner, .. } => Some(owner),
             FailedOpenCleanup::NotStarted | FailedOpenCleanup::Completed(_) => None,
         }
     }
 
     pub(crate) fn into_parts(self) -> (AgentError, FailedOpenCleanup) {
-        (self.cause, self.cleanup)
+        (self.cause, *self.cleanup)
     }
 }
 impl fmt::Debug for ProviderOpenError {
@@ -176,7 +176,7 @@ impl fmt::Debug for ProviderOpenError {
             .field("cause", &self.cause)
             .field(
                 "cleanup_report",
-                &match &self.cleanup {
+                &match self.cleanup.as_ref() {
                     FailedOpenCleanup::NotStarted => None,
                     FailedOpenCleanup::Completed(report)
                     | FailedOpenCleanup::Retained { report, .. } => Some(report),
@@ -184,7 +184,7 @@ impl fmt::Debug for ProviderOpenError {
             )
             .field(
                 "cleanup_pending",
-                &matches!(&self.cleanup, FailedOpenCleanup::Retained { .. }),
+                &matches!(self.cleanup.as_ref(), FailedOpenCleanup::Retained { .. }),
             )
             .finish()
     }

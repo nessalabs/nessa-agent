@@ -10,6 +10,8 @@ use super::AgentError;
 use crate::application::agent_execution::providers::{CleanupReport, SessionCloseRequest};
 use tokio::sync::watch;
 
+pub(super) type AttachmentEvidenceCompletion = watch::Sender<Option<Result<(), AgentError>>>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AttachmentEvidenceTransition {
     Started,

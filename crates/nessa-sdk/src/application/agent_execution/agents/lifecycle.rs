@@ -4,7 +4,9 @@
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
 pub(super) use super::attachment_evidence::CloseAttempt;
 use super::{
-    attachment_evidence::{AttachmentEvidenceSlot, AttachmentEvidenceTransition},
+    attachment_evidence::{
+        AttachmentEvidenceCompletion, AttachmentEvidenceSlot, AttachmentEvidenceTransition,
+    },
     AgentError, AttachmentAuthorization, AttachmentFailure, AttachmentFailureCode, AttachmentPhase,
     AttachmentRequest, AttachmentStatus, AttachmentWait,
 };
@@ -670,7 +672,7 @@ impl SessionLifecycle {
         code: AttachmentFailureCode,
         error: AgentError,
         recorded_context: bool,
-    ) -> Result<Option<watch::Sender<Option<Result<(), AgentError>>>>, ()> {
+    ) -> Result<Option<AttachmentEvidenceCompletion>, ()> {
         let mut state = self.state.lock().expect("session lifecycle");
         if state.attachment_generation == generation
             && matches!(state.attachment,

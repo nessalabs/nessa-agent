@@ -1,9 +1,14 @@
 //! Deterministic checks at the control-result handoff before caller-side processing.
 use super::*;
-use crate::application::agent_execution::agents::{AgentFuture, AttachmentRequest};
+use crate::application::agent_execution::agents::{
+    AgentFuture, AttachmentPhase, AttachmentRequest,
+};
 use crate::application::{
     agent_execution::{
-        executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, SubmissionMode},
+        executions::{
+            AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionRequest,
+            SubmissionMode,
+        },
         permissions::{
             ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
             PermissionResolution,
@@ -24,6 +29,38 @@ struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
     fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async { Ok(()) })
+    }
+}
+#[derive(Clone, Copy)]
+enum AttachmentAuditPanic {
+    Construct,
+    Poll,
+    Drop,
+}
+struct PanickingAttachmentAudit(AttachmentAuditPanic);
+struct PanickingAttachmentAuditFuture(AttachmentAuditPanic);
+impl ExecutionAudit for PanickingAttachmentAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if matches!(self.0, AttachmentAuditPanic::Construct) {
+            panic!("attachment audit construction panic");
+        }
+        Box::pin(PanickingAttachmentAuditFuture(self.0))
+    }
+}
+impl Future for PanickingAttachmentAuditFuture {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        if matches!(self.0, AttachmentAuditPanic::Poll) {
+            panic!("attachment audit poll panic");
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+impl Drop for PanickingAttachmentAuditFuture {
+    fn drop(&mut self) {
+        if matches!(self.0, AttachmentAuditPanic::Drop) {
+            panic!("attachment audit drop panic");
+        }
     }
 }
 #[derive(Default)]
@@ -97,10 +134,15 @@ use crate::domain::{
     },
 };
 use crate::infrastructure::session_storage::InMemoryStorage;
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::channel,
-    Arc, Mutex as StateMutex,
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::channel,
+        Arc, Mutex as StateMutex,
+    },
+    task::Poll,
 };
 use tokio::{
     sync::{oneshot, Notify},
@@ -114,6 +156,7 @@ struct RecoveryOpenFailureProvider {
 }
 #[derive(Default)]
 struct Backend {
+    opens: AtomicUsize,
     executions: AtomicUsize,
     answer: StateMutex<Option<PermissionResolution>>,
     cancellation: StateMutex<Option<PermissionCancellation>>,
@@ -135,6 +178,7 @@ impl AgentProvider for Provider {
     }
     fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            self.0.opens.fetch_add(1, Ordering::SeqCst);
             let text = ModalitiesDto {
                 text: true,
                 image: false,
@@ -713,6 +757,60 @@ async fn local_failure_during_automatic_cleanup_requires_explicit_recovery() {
         Ok(ExecutionOutcome::Completed)
     );
     agent.close(actor()).await.unwrap();
+}
+
+#[tokio::test]
+async fn close_joins_a_held_started_audit_panic_before_replacement() {
+    for failure in [
+        AttachmentAuditPanic::Construct,
+        AttachmentAuditPanic::Poll,
+        AttachmentAuditPanic::Drop,
+    ] {
+        let backend = Arc::new(Backend::default());
+        let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+            .await
+            .unwrap();
+        let agent = Agent::prepare(
+            Arc::new(Provider(backend.clone())),
+            manager,
+            Arc::new(PanickingAttachmentAudit(failure)),
+        )
+        .await
+        .unwrap();
+        let (entered, paused) = oneshot::channel();
+        let (release, waiting) = oneshot::channel();
+        agent.inner.lifecycle.pause_next_attachment_audit(
+            AttachmentAuditStage::Starting,
+            entered,
+            waiting,
+        );
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        let attachment = agent.start_attachment(authorization).unwrap();
+        paused.await.unwrap();
+        let closing = tokio::spawn({
+            let agent = agent.clone();
+            async move { agent.close(actor()).await }
+        });
+        while agent.attachment_status().phase() != AttachmentPhase::Absent {
+            tokio::task::yield_now().await;
+        }
+        assert!(!closing.is_finished());
+        assert!(agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .is_err());
+        release.send(()).unwrap();
+        assert_eq!(attachment.wait().await, Err(AgentError::AuditFailure));
+        let expected = AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure),
+        };
+        assert_eq!(closing.await.unwrap(), Err(expected.clone()));
+        assert_eq!(agent.close(actor()).await, Err(expected));
+        assert_eq!(backend.opens.load(Ordering::SeqCst), 0);
+        assert!(backend.closes.lock().unwrap().is_empty());
+    }
 }
 
 #[path = "coordination/ready_results.rs"]
