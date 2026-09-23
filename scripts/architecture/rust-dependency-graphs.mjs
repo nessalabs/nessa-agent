@@ -5,6 +5,7 @@
  * renamed or transitive dependency cannot hide the package that Cargo resolves.
  */
 export const PORTABLE_RUST_PACKAGES = Object.freeze([
+  "nessa-agent-credentials",
   "nessa-server",
   "nessa-sdk",
   "nessa-auth",

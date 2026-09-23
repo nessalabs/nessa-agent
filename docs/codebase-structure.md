@@ -272,6 +272,14 @@ below, and reports a sink failure beside the primary fault.
 Server composition supplies whether the open came from gateway startup,
 automatic provisioning, or an explicit local command.
 
+`crates/nessa-agent-credentials` is the smaller pure domain consumed by the
+gateway credential-source adapter and available to later credential consumers. It owns
+the immutable validated credential text, API-key/OAuth meaning, the explicit
+Claude/OpenCode credential identity, and the durable stage/instance namespace.
+It owns no keychain, environment, provider, serialization, or filesystem code;
+the gateway keeps those effects behind its own application port. See the
+[crate map](../crates/nessa-agent-credentials/README.md).
+
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
@@ -652,6 +660,15 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 `tests/agents/` split domain rules, application orchestration, the shared
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
+
+The same context defines `AgentCredentialSource`; its local adapter can read
+standalone Claude environment credentials before the Nessa keychain while
+preserving API-key versus OAuth meaning. Its values and stage/instance account namespace come from
+`nessa-agent-credentials`; `protocol/defaults/agent-credentials.json` is the one
+infrastructure mapping for the Security.framework service and the Claude and
+OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
+can read an injected source on a blocking worker for each process open. Neither
+adapter puts the source value in configuration, plist, arguments, or logs.
 
 ## Attachments
 
