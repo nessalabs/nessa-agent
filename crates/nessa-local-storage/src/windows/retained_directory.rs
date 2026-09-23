@@ -3,8 +3,10 @@
 //! Directory and mutation-capable file handles omit `FILE_SHARE_DELETE`,
 //! pinning their names. Read-only handles and transient identity probes share
 //! deletion so they can coexist with a publication handle; they acquire no
-//! naming authority. Publication uses `FileRenameInfo` relative to the retained
-//! directory and never claims a directory-fsync guarantee.
+//! naming authority. Publication uses `FileRenameInfo` on the reservation
+//! handle with a validated extended absolute destination. The retained chain
+//! pins that destination from the caller-trusted root down; authority above the
+//! root remains the caller's. Windows exposes no directory-fsync guarantee.
 
 use super::{check, information, verify_acl, wide, User};
 use crate::{
@@ -129,21 +131,31 @@ impl RetainedDirectory {
     }
 
     pub fn publish_new(&self, _: &OsStr, to: &OsStr, file: &File) -> io::Result<()> {
-        // Validate the destination with the existing Win32 path classifier even
-        // though FileRenameInfo consumes the final component separately.
-        let _ = wide(&self.path(to)?)?;
-        let name: Vec<u16> = to.encode_wide().collect();
-        if name.is_empty() || name.contains(&0) {
-            return Err(unsafe_file());
-        }
-        let bytes = size_of::<FILE_RENAME_INFO>() + name.len().saturating_sub(1) * size_of::<u16>();
+        let name = wide(&self.path(to)?)?;
+        let name_bytes = name
+            .len()
+            .checked_sub(1)
+            .and_then(|length| length.checked_mul(size_of::<u16>()))
+            .and_then(|length| u32::try_from(length).ok())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "destination is too long")
+            })?;
+        let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+            .checked_add(name.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "destination is too long")
+            })?)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "destination is too long")
+            })?;
+        let buffer_bytes = u32::try_from(bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "destination is too long"))?;
         let words = bytes.div_ceil(size_of::<usize>());
         let mut buffer = vec![0usize; words];
         let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
         unsafe {
             (*rename).Anonymous.ReplaceIfExists = false;
-            (*rename).RootDirectory = self.directory().file.as_raw_handle();
-            (*rename).FileNameLength = (name.len() * size_of::<u16>()) as u32;
+            (*rename).RootDirectory = null_mut();
+            (*rename).FileNameLength = name_bytes;
             std::ptr::copy_nonoverlapping(
                 name.as_ptr(),
                 addr_of_mut!((*rename).FileName).cast::<u16>(),
@@ -153,7 +165,7 @@ impl RetainedDirectory {
                 file.as_raw_handle(),
                 FileRenameInfo,
                 rename.cast(),
-                bytes as u32,
+                buffer_bytes,
             ))
         }
     }

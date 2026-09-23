@@ -160,8 +160,16 @@ fn two_publishers_of_one_name_have_one_winner_without_overwrite() {
     assert_ne!(first.is_ok(), second.is_ok());
     let failure = first.err().or_else(|| second.err()).unwrap();
     assert_eq!(failure.stage(), PrivatePublicationStage::Rename);
+    assert_eq!(
+        failure.source_error().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
     assert!(failure.published().is_none());
     assert!(failure.cleanup_error().is_none());
+    assert_eq!(
+        names(&directory),
+        vec![(OsString::from("sequence-1"), PrivateFileType::RegularFile)]
+    );
 
     let mut bytes = Vec::new();
     directory
@@ -373,6 +381,25 @@ fn retained_windows_directory_handles_prevent_replacement_for_their_lifetime() {
 
 #[cfg(windows)]
 #[test]
+fn retained_windows_root_and_intermediate_handles_pin_then_release_each_name() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    create_directory(&root).unwrap();
+    create_private_directory_tree_beneath(&root, Path::new("parent/records")).unwrap();
+    let directory = PrivateDirectory::open_beneath(&root, Path::new("parent/records")).unwrap();
+    let held_parent = root.join("held-parent");
+    let held_root = temporary.path().join("held-root");
+
+    assert!(std::fs::rename(root.join("parent"), &held_parent).is_err());
+    assert!(std::fs::rename(&root, &held_root).is_err());
+
+    drop(directory);
+    std::fs::rename(root.join("parent"), &held_parent).unwrap();
+    std::fs::rename(&root, &held_root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
 fn retained_windows_file_handle_prevents_named_lock_replacement() {
     let (_temporary, root, directory) = fixture();
     write_named(&directory, "lock", b"first");
@@ -413,6 +440,53 @@ fn windows_reservation_identity_publish_reopen_and_cleanup_share_one_file() {
     drop(published);
     std::fs::remove_file(root.join("records/record")).unwrap();
     assert!(names(&directory).is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_publication_accepts_a_unicode_destination_beyond_max_path() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    create_directory(&root).unwrap();
+    let relative = PathBuf::from("a".repeat(120)).join("b".repeat(120));
+    create_private_directory_tree_beneath(&root, &relative).unwrap();
+    let directory = PrivateDirectory::open_beneath(&root, &relative).unwrap();
+    let destination = OsString::from("résumé-記録.json");
+    assert!(
+        root.join(&relative)
+            .join(&destination)
+            .as_os_str()
+            .encode_wide()
+            .count()
+            > 260
+    );
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation
+        .as_file_mut()
+        .write_all(b"long unicode destination")
+        .unwrap();
+    let reservation_name = reservation.name().to_owned();
+
+    let published = reservation.publish_new(&destination).unwrap();
+
+    assert_eq!(published.name(), destination.as_os_str());
+    let published_names = names(&directory);
+    assert!(published_names.contains(&(destination, PrivateFileType::RegularFile)));
+    assert!(!published_names
+        .iter()
+        .any(|(name, _)| name == &reservation_name));
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    let mut bytes = Vec::new();
+    directory
+        .open_file(published.name(), OpenMode::Read)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"long unicode destination");
 }
 
 #[cfg(windows)]
