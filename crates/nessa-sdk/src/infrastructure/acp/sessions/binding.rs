@@ -295,50 +295,9 @@ impl Generation {
     ) -> (Result<ExecutionSessionId, AgentError>, bool) {
         let close_requested = self.close_requested.clone();
         let startup = self.startup.as_mut().expect("generation startup pending");
-        let mut control_available = true;
-        let mut stop_selected = false;
-        let result = loop {
-            if let Some(request) = control.requested() {
-                close_requested.send_if_modified(|current| {
-                    if current.is_none() {
-                        *current = Some(request.clone());
-                        true
-                    } else {
-                        false
-                    }
-                });
-                stop_selected = true;
-                break startup.await;
-            }
-            tokio::select! {
-                biased;
-                request = control.wait(), if control_available => {
-                    match request {
-                        Some(request) => {
-                            close_requested.send_if_modified(|current| {
-                                if current.is_none() {
-                                    *current = Some(request.clone());
-                                    true
-                                } else {
-                                    false
-                                }
-                            });
-                            stop_selected = true;
-                            break startup.await;
-                        }
-                        None => control_available = false,
-                    }
-                }
-                result = &mut *startup => break result,
-            }
-        };
+        let (result, stop_selected) =
+            await_startup_or_stop(startup, &close_requested, control).await;
         self.startup = None;
-        let result = result.unwrap_or(Err(AgentError::Closed));
-        let result = if stop_selected && result.is_ok() {
-            Err(AgentError::Closed)
-        } else {
-            result
-        };
         if result.is_err() {
             self.pending_events.take();
             self.observations
@@ -369,6 +328,57 @@ impl Generation {
             || self.commands.is_closed()
     }
 }
+async fn await_startup_or_stop(
+    startup: &mut oneshot::Receiver<Result<ExecutionSessionId, AgentError>>,
+    close_requested: &watch::Sender<Option<SessionCloseRequest>>,
+    control: &mut ProviderOpenControl,
+) -> (Result<ExecutionSessionId, AgentError>, bool) {
+    let mut control_available = true;
+    let mut stop_selected = false;
+    let result = loop {
+        if let Some(request) = control.requested() {
+            close_requested.send_if_modified(|current| {
+                if current.is_none() {
+                    *current = Some(request.clone());
+                    true
+                } else {
+                    false
+                }
+            });
+            stop_selected = true;
+            break startup.await;
+        }
+        tokio::select! {
+            biased;
+            request = control.wait(), if control_available => {
+                match request {
+                    Some(request) => {
+                        close_requested.send_if_modified(|current| {
+                            if current.is_none() {
+                                *current = Some(request.clone());
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        stop_selected = true;
+                        break startup.await;
+                    }
+                    None => control_available = false,
+                }
+            }
+            result = &mut *startup => break result,
+        }
+    };
+    let result = result.unwrap_or(Err(AgentError::Closed));
+    let result = if stop_selected && result.is_ok() {
+        Err(AgentError::Closed)
+    } else {
+        result
+    };
+    (result, stop_selected)
+}
+
 impl RestorationRecovery {
     async fn retry(&self) -> CleanupReport {
         self.cleanup
@@ -979,3 +989,6 @@ impl ExecutionEventStream for Events {
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/acp/sessions/restoration_recovery.rs"]
 mod restoration_recovery_tests;
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/acp/sessions/startup_control.rs"]
+mod startup_control_tests;
