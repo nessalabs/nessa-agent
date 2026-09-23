@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -28,7 +29,7 @@ import { windowsPrivateFile } from "../packages/nessa-client/src/transport/windo
 
 globalThis.WebSocket = WebSocket
 const root = fileURLToPath(new URL("../", import.meta.url))
-const directory = mkdtempSync(join(tmpdir(), "nessa-auth-e2e-"))
+const directory = realpathSync(mkdtempSync(join(tmpdir(), "nessa-auth-e2e-")))
 const binary = join(
   cargoTargetDirectory(root),
   "debug",

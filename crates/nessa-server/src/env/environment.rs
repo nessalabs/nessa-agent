@@ -326,19 +326,23 @@ mod tests {
 
     #[test]
     fn endpoint_publication_uses_the_resolved_auth_namespace() {
+        let directory = tempfile::tempdir().expect("temporary data root");
+        let data_root = directory.path().to_path_buf();
         let config = Environment::load(
             &MockEnv::new()
-                .set("NESSA_DATA_DIR", "/private/nessa")
+                .set("NESSA_DATA_DIR", data_root.to_string_lossy().into_owned())
                 .set(STAGE, "ci")
                 .set("NESSA_INSTANCE", "worker-7"),
         )
         .unwrap();
+        let (resolved_root, relative_namespace) = config.gateway_endpoint_storage().unwrap();
+        assert_eq!(resolved_root, data_root);
         assert_eq!(
-            config.gateway_endpoint_storage().unwrap(),
-            (
-                PathBuf::from("/private/nessa"),
-                PathBuf::from("ci/instances/worker-7/logs")
-            )
+            relative_namespace,
+            PathBuf::from("ci")
+                .join("instances")
+                .join("worker-7")
+                .join("logs")
         );
     }
 }
