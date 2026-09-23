@@ -155,9 +155,8 @@ async fn current_control_failure_keeps_cleanup_owner_after_stopping_work_generat
         .lifecycle
         .start_control_cleanup(&admission)
         .expect("own failure still owns cleanup after stopping work");
-    let report = attempt.clone().wait().await;
+    let report = agent.inner.lifecycle.complete_stop(&attempt).await;
     assert!(report.is_confirmed());
-    agent.inner.lifecycle.finalize_stop(&attempt, &report).await;
     drop(admission);
     assert_eq!(
         backend.closes.lock().unwrap().as_slice(),

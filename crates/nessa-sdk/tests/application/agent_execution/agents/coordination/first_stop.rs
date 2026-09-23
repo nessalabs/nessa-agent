@@ -20,11 +20,7 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         );
         let automatic = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);
         if finalized {
-            agent
-                .inner
-                .lifecycle
-                .finalize_stop(&automatic, &report)
-                .await;
+            agent.inner.lifecycle.complete_stop(&automatic).await;
         }
         let closer = ActionContext::new("owner", "phone", "close-waiting-input").unwrap();
         let joined = agent.start_shutdown(SessionCloseRequest::Explicit(closer.clone()));

@@ -62,7 +62,7 @@ impl ExecutionAudit for AcceptingAudit {
     }
 }
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -164,6 +164,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) answer_failure: Mutex<Option<(AgentError, PermissionSelectionState)>>,
     pub(crate) close_calls: AtomicUsize,
     pub(crate) close_failure: Mutex<Option<AgentError>>,
+    pub(crate) close_reports: Mutex<VecDeque<CleanupReport>>,
+    pub(crate) close_finished: Notify,
     pub(crate) close_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
@@ -544,10 +546,23 @@ impl ProviderSessionBackend for Backend {
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
-            if let Some(error) = self.factory.close_failure.lock().unwrap().clone() {
-                return CleanupReport::unconfirmed(error);
-            }
-            CleanupReport::confirmed(CloseOutcome { forced: false })
+            let report = self
+                .factory
+                .close_reports
+                .lock()
+                .unwrap()
+                .pop_front()
+                .or_else(|| {
+                    self.factory
+                        .close_failure
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .map(CleanupReport::unconfirmed)
+                })
+                .unwrap_or_else(|| CleanupReport::confirmed(CloseOutcome { forced: false }));
+            self.factory.close_finished.notify_one();
+            report
         })
     }
 }

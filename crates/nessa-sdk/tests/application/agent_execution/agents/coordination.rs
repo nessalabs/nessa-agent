@@ -564,8 +564,7 @@ async fn automatic_cleanup_after_provider_fence_preserves_concurrent_close() {
             explicit
         });
         release.send(()).unwrap();
-        let report = second.clone().wait().await;
-        agent.inner.lifecycle.finalize_stop(&second, &report).await;
+        agent.inner.lifecycle.complete_stop(&second).await;
         assert!(
             agent.inner.lifecycle.is_closed(),
             "accepted work must retire"
@@ -599,14 +598,13 @@ async fn local_failure_during_automatic_cleanup_requires_explicit_recovery() {
     let agent = agent().await;
     let work = agent.inner.lifecycle.accept_work().unwrap();
     let attempt = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);
-    let report = attempt.clone().wait().await;
     // The provider cleanup is now known, but a local supervisor reports a
     // failure before its evidence has settled. Resource success cannot clear it.
     agent
         .inner
         .lifecycle
         .block(agent.inner.lifecycle.work_generation());
-    agent.inner.lifecycle.finalize_stop(&attempt, &report).await;
+    agent.inner.lifecycle.complete_stop(&attempt).await;
     drop(work);
     assert!(agent.inner.lifecycle.is_closed());
     assert!(matches!(

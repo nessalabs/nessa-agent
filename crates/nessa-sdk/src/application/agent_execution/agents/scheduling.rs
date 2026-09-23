@@ -1803,7 +1803,7 @@ impl Agent {
                         "failed queue settlement persistence panicked".into(),
                     ))
                 });
-            for error in settlement.err() {
+            if let Err(error) = settlement {
                 let aggregate = AgentError::Storage(error.clone());
                 aggregate_failure = Some(match aggregate_failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {

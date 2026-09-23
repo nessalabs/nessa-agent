@@ -263,12 +263,7 @@ async fn automatic_failure_claim_precedes_close_while_settlement_audit_waits() {
     assert_eq!(records[0].submitted_by(), &actor());
     assert_eq!(records[0].initiated_by(), None);
     drop(records);
-    let cleanup = attempt.clone().wait().await;
-    agent
-        .inner
-        .lifecycle
-        .finalize_stop(&attempt, &cleanup)
-        .await;
+    agent.inner.lifecycle.complete_stop(&attempt).await;
 }
 
 #[tokio::test]
@@ -306,10 +301,5 @@ async fn explicit_close_precedes_unclaimed_automatic_failure_settlement() {
     assert_eq!(records[0].submitted_by(), &submitted_by);
     assert_eq!(records[0].initiated_by(), Some(&closer));
     drop(records);
-    let cleanup = attempt.clone().wait().await;
-    agent
-        .inner
-        .lifecycle
-        .finalize_stop(&attempt, &cleanup)
-        .await;
+    agent.inner.lifecycle.complete_stop(&attempt).await;
 }

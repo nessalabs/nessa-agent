@@ -4,7 +4,7 @@ use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
 use std::{
     future::Future,
     pin::Pin,
-    sync::atomic::AtomicBool,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 use tempfile::tempdir;
@@ -159,6 +159,10 @@ struct GatedOpenProvider {
     entered: Notify,
     release: Mutex<Option<oneshot::Receiver<()>>>,
 }
+struct RecoveryOpenFailureProvider {
+    inner: Arc<TestProvider>,
+    opens: AtomicUsize,
+}
 struct PanickingOpen(OpenPanic);
 #[derive(Clone, Copy)]
 enum CleanupPanic {
@@ -259,6 +263,21 @@ impl AgentProvider for GatedOpenProvider {
             }
             self.inner.open(restore).await
         })
+    }
+}
+impl AgentProvider for RecoveryOpenFailureProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.inner.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.inner.capabilities()
+    }
+    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        if self.opens.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.inner.open(restore)
+        } else {
+            Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
+        }
     }
 }
 impl Future for PanickingOpen {
@@ -539,6 +558,76 @@ async fn initial_open_failure_settles_every_owned_queue_receipt() {
         .await
         .unwrap();
     assert_eq!(retry.wait().await, Err(AgentError::Closed));
+}
+
+#[tokio::test]
+async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt() {
+    let storage = MemoryStorage::default();
+    let provider = Arc::new(RecoveryOpenFailureProvider {
+        inner: TestProvider::new(),
+        opens: AtomicUsize::new(0),
+    });
+    let agent = prepared(provider.clone(), &storage, Arc::new(AcceptingAudit)).await;
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+
+    let control = agent.accept_control().unwrap();
+    assert_eq!(
+        agent
+            .run_control(control, async {
+                Err::<(), _>(ProviderOperationFailure::new(
+                    AgentError::Protocol("provider requested restart".into()),
+                    ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                        forced: false,
+                    })),
+                ))
+            })
+            .await,
+        Err(AgentError::Protocol("provider requested restart".into()))
+    );
+
+    let receipt = agent
+        .enqueue(request("failed-automatic-recovery"), actor())
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), receipt.wait())
+            .await
+            .expect("automatic recovery failure settles its receipt"),
+        Err(AgentError::Closed)
+    );
+    assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
+    let snapshot = storage.snapshot();
+    assert_eq!(
+        snapshot.invocations[0].result,
+        Some(Err(AgentError::Closed))
+    );
+    assert_eq!(
+        snapshot.invocations[0].scheduling.last().unwrap().stage,
+        InvocationStage::Settled
+    );
+
+    drop(agent);
+    let restored = Agent::prepare(
+        provider.clone(),
+        storage.manager().await,
+        Arc::new(AcceptingAudit),
+    )
+    .await
+    .unwrap();
+    let retry = restored
+        .enqueue(request("failed-automatic-recovery"), actor())
+        .await
+        .unwrap();
+    assert_eq!(retry.wait().await, Err(AgentError::Closed));
+    assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

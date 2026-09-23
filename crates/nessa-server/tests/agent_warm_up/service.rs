@@ -11,7 +11,7 @@ use nessa_sdk::application::agent_execution::executions::{
     AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord,
 };
 use nessa_sdk::application::agent_execution::providers::{
-    AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
+    AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ProviderCleanup, ProviderIdentity,
     ProviderOpenError, ProviderOpenFuture, SessionCloseRequest,
 };
 use nessa_sdk::application::agent_execution::sessions::{
@@ -385,7 +385,10 @@ async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
     let failure = audit[0].failure.as_ref().unwrap();
     assert_eq!(
         failure.error,
-        AgentError::Protocol("provider open failed".into())
+        AgentError::OperationAndCleanupFailure {
+            operation_error: Box::new(AgentError::Protocol("provider open failed".into())),
+            cleanup_error: Box::new(AgentError::Transport("cleanup retained".into())),
+        }
     );
     assert!(failure.cleanup_unconfirmed);
 }
@@ -433,14 +436,45 @@ async fn storage_and_audit_failures_report_unconfirmed_physical_cleanup_independ
             })
         };
         let fixture = fixture_with(execution_audit, storage);
-        *fixture.provider.close_failure.lock().unwrap() =
-            Some(AgentError::Transport("cleanup retained".into()));
+        fixture.provider.close_reports.lock().unwrap().extend([
+            CleanupReport::unconfirmed(AgentError::Transport("cleanup retained".into())),
+            CleanupReport::confirmed(CloseOutcome { forced: false }),
+        ]);
         fixture.warm_up.wait_until_settled().await;
 
-        assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
+        while fixture.provider.close_calls.load(Ordering::SeqCst) < 2 {
+            let finished = fixture.provider.close_finished.notified();
+            if fixture.provider.close_calls.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            finished.await;
+        }
+        assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 2);
         assert!(fixture.records.completed.lock().unwrap().is_empty());
         let audit = fixture.audit.records.lock().unwrap();
-        assert!(audit[0].failure.as_ref().unwrap().cleanup_unconfirmed);
+        let failure = audit[0].failure.as_ref().unwrap();
+        assert!(failure.cleanup_unconfirmed);
+        let operation_error = match &failure.error {
+            AgentError::OperationAndCleanupFailure {
+                operation_error,
+                cleanup_error,
+            } => {
+                assert_eq!(
+                    cleanup_error.as_ref(),
+                    &AgentError::Transport("cleanup retained".into())
+                );
+                operation_error.as_ref()
+            }
+            error => panic!("publication and cleanup failures must stay distinct: {error:?}"),
+        };
+        if audit_failure {
+            assert_eq!(operation_error, &AgentError::AuditFailure);
+        } else {
+            assert!(matches!(
+                operation_error,
+                AgentError::StorageInitialization { .. }
+            ));
+        }
     }
 }
 

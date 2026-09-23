@@ -68,7 +68,7 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
             agent.inner.lifecycle.attachment_needs_cleanup(),
             !report.is_confirmed()
         );
-        agent.inner.lifecycle.finalize_stop(&attempt, &actual).await;
+        assert_eq!(agent.inner.lifecycle.complete_stop(&attempt).await, actual);
         assert_eq!(
             agent.inner.lifecycle.is_closed(),
             !report.is_confirmed() || report.audit().is_err()
@@ -88,9 +88,8 @@ async fn close_before_restore_prevents_rearming() {
         agent.start_attachment(authorization),
         Err(AgentError::AttachmentAuthorizationStale)
     ));
-    let report = attempt.clone().wait().await;
+    let report = agent.inner.lifecycle.complete_stop(&attempt).await;
     assert!(report.is_confirmed());
-    agent.inner.lifecycle.finalize_stop(&attempt, &report).await;
     assert!(!agent.inner.lifecycle.attachment_needs_cleanup());
     assert_eq!(backend.closes.lock().unwrap().len(), 1);
 }

@@ -545,15 +545,65 @@ fn acknowledgement_audit_uses_direct_optional_error_shape_and_preflight_bounds()
         }
     ));
 
-    let mut oversized = record();
-    oversized["invocations"][0]["metadata"]["acknowledgement"] = json!({
-        "Failed": {
-            "audit": { "Protocol": "x".repeat(1024 * 1024) },
-            "storage": null
-        }
+    for (field, error) in [
+        ("audit", json!({ "Protocol": "x".repeat(1024 * 1024 + 1) })),
+        ("storage", json!({ "Io": "x".repeat(4097) })),
+    ] {
+        let mut oversized = record();
+        let mut acknowledgement = json!({
+            "Failed": { "audit": null, "storage": null }
+        });
+        acknowledgement["Failed"][field] = error;
+        oversized["invocations"][0]["metadata"]["acknowledgement"] = acknowledgement;
+        let bytes = encoded(&oversized);
+        let length = bytes.len();
+        let (result, decoded) = load(bytes);
+        assert!(matches!(result, Err(StorageError::Corrupt(_))));
+        assert!(
+            decoded <= 64 * 1024,
+            "oversized acknowledgement {field} was owned before rejection: {decoded}/{length}"
+        );
+    }
+
+    let mut exact = record();
+    exact["invocations"][0]["metadata"]["acknowledgement"] = json!({
+        "Failed": { "audit": null, "storage": { "Io": "x".repeat(4096) } }
     });
-    assert!(matches!(
-        load(encoded(&oversized)).0,
-        Err(StorageError::Corrupt(_))
-    ));
+    assert!(load(encoded(&exact)).0.is_ok());
+
+    let mut nested = json!("AuditFailure");
+    for _ in 0..33 {
+        nested = json!({
+            "MultipleOperationFailures": {
+                "first_error": nested,
+                "subsequent_error": "AuditFailure"
+            }
+        });
+    }
+    let mut deep = record();
+    deep["invocations"][0]["metadata"]["acknowledgement"] = json!({
+        "Failed": { "audit": nested, "storage": null }
+    });
+    let metadata = deep["invocations"][0]["metadata"].as_object_mut().unwrap();
+    let acknowledgement = metadata.remove("acknowledgement").unwrap();
+    metadata.remove("user_message").unwrap();
+    let remaining = serde_json::to_string(metadata).unwrap();
+    let ordered = format!(
+        "{{\"acknowledgement\":{},\"user_message\":\"{}\",{}",
+        serde_json::to_string(&acknowledgement).unwrap(),
+        "x".repeat(1024 * 1024),
+        &remaining[1..]
+    );
+    deep["invocations"][0]["metadata"] = json!("ordered-metadata");
+    let bytes = String::from_utf8(encoded(&deep))
+        .unwrap()
+        .replace("\"ordered-metadata\"", &ordered)
+        .into_bytes();
+    let length = bytes.len();
+    let (result, decoded) = load(bytes);
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded <= 64 * 1024,
+        "deep acknowledgement error was owned before rejection: {decoded}/{length}"
+    );
 }

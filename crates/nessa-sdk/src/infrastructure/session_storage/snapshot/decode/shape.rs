@@ -14,6 +14,7 @@ use Shape::*;
 
 pub(super) const LARGE_STRING: usize = 32 * 1024 * 1024;
 pub(super) const ERROR_BYTES: usize = 1024 * 1024;
+const STORAGE_ERROR_BYTES: usize = 4096;
 pub(super) const KEY_BYTES: usize = 128;
 /// `sha256:` and 64 hexadecimal digits: the one text form of a digest.
 const DIGEST_BYTES: usize = 71;
@@ -38,6 +39,9 @@ pub(super) enum Shape {
     Event,
     Update,
     Scheduling,
+    Acknowledgement,
+    FailedAcknowledgement,
+    StorageError,
     Reorders,
     Reorder,
     QueueEntries,
@@ -62,7 +66,7 @@ impl Shape {
     pub(super) fn string_limit(self) -> usize {
         match self {
             Self::Text(limit) => limit,
-            Self::Error => KEY_BYTES,
+            Self::Acknowledgement | Self::StorageError | Self::Error => KEY_BYTES,
             _ => LARGE_STRING,
         }
     }
@@ -85,6 +89,11 @@ impl Shape {
             (Change, "metadata") => Metadata,
             (Change, "events") => Events,
             (Change, "scheduling") => Scheduling,
+            (Metadata, "acknowledgement") => Acknowledgement,
+            (Acknowledgement, "Failed") => FailedAcknowledgement,
+            (FailedAcknowledgement, "audit") => Error,
+            (FailedAcknowledgement, "storage") => StorageError,
+            (StorageError, "Io" | "Corrupt") => Text(STORAGE_ERROR_BYTES),
             (Metadata, "execution_id") | (Event, "execution_id" | "message_id") => Text(256),
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
             (Metadata, "user_images") => Images,
@@ -142,6 +151,8 @@ impl Shape {
             Image => matches!(key, "digest" | "media_type" | "size"),
             FileLink => key == "path",
             ProviderError => matches!(key, "code" | "diagnostic"),
+            FailedAcknowledgement => matches!(key, "audit" | "storage"),
+            StorageError => matches!(key, "Io" | "Corrupt"),
             _ => true,
         }
     }

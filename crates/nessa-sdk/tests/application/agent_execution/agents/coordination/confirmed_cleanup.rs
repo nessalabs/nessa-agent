@@ -149,7 +149,7 @@ async fn same_attachment_ready_confirmation_reconciles_the_existing_stop_report(
                 if !cleanup_in_flight {
                     let failed = attempt.clone().wait().await;
                     assert!(!failed.is_confirmed());
-                    agent.inner.lifecycle.finalize_stop(&attempt, &failed).await;
+                    assert_eq!(agent.inner.lifecycle.complete_stop(&attempt).await, failed);
                 }
                 release_control.send(()).unwrap();
                 assert_eq!(control.await, Err(AgentError::StalePermission));
@@ -167,7 +167,7 @@ async fn same_attachment_ready_confirmation_reconciles_the_existing_stop_report(
                     result, expected,
                     "same attachment confirmation must update the shared close result"
                 );
-                agent.inner.lifecycle.finalize_stop(&attempt, &result).await;
+                assert_eq!(agent.inner.lifecycle.complete_stop(&attempt).await, result);
                 drop(admission);
                 assert!(!agent.inner.lifecycle.attachment_needs_cleanup());
                 assert_eq!(
@@ -230,11 +230,7 @@ async fn repeated_confirmation_keeps_distinct_failures_without_growing_history()
                 "reobserving known cleanup evidence must not append the same failure again"
             );
             assert_eq!(
-                agent
-                    .inner
-                    .lifecycle
-                    .finalize_stop(&attempt, &combined)
-                    .await,
+                agent.inner.lifecycle.complete_stop(&attempt).await,
                 combined,
                 "finalizing the same report must preserve identical evidence"
             );
