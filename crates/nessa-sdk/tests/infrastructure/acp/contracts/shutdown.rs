@@ -529,17 +529,17 @@ async fn consumer_loss_after_explicit_close_retains_both_causes_and_finishes_onc
         if reject_finish {
             assert_eq!(
                 result,
-                Err(AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(AgentError::Backpressure),
-                    cleanup_error: Box::new(AgentError::AuditFailure),
-                })
-            );
-            assert_eq!(
-                cleanup,
                 Err(ordered_failures(&[
                     AgentError::Backpressure,
                     AgentError::AuditFailure,
                 ]))
+            );
+            assert_eq!(
+                cleanup,
+                Err(AgentError::OperationAndCleanupFailure {
+                    operation_error: Box::new(AgentError::Backpressure),
+                    cleanup_error: Box::new(AgentError::AuditFailure),
+                })
             );
         } else {
             assert_eq!(result, Err(AgentError::Backpressure));

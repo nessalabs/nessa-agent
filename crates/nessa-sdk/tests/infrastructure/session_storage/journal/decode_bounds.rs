@@ -95,8 +95,23 @@ fn finalized_recipe_shape_and_aggregate_are_rejected_before_owned_restoration() 
     let mut oversized = record();
     oversized["invocations"][0]["metadata"]["provider_report"] =
         finalized_provider_report(Value::Array(vec![json!("Audit"); 259]));
-    oversized["invocations"][0]["metadata"]["user_message"] = json!("tail".repeat(1024 * 1024));
-    let bytes = encoded(&oversized);
+    let metadata = oversized["invocations"][0]["metadata"]
+        .as_object_mut()
+        .unwrap();
+    let provider_report =
+        serde_json::to_string(&metadata.remove("provider_report").unwrap()).unwrap();
+    metadata.remove("user_message").unwrap();
+    let remaining = serde_json::to_string(metadata).unwrap();
+    let tail = serde_json::to_string(&"tail".repeat(1024 * 1024)).unwrap();
+    let ordered = format!(
+        "{{\"provider_report\":{provider_report},\"user_message\":{tail},{}",
+        &remaining[1..]
+    );
+    oversized["invocations"][0]["metadata"] = json!("ordered-metadata");
+    let bytes = String::from_utf8(encoded(&oversized))
+        .unwrap()
+        .replace("\"ordered-metadata\"", &ordered)
+        .into_bytes();
     let length = bytes.len();
     let (result, decoded) = load(bytes);
     assert!(matches!(result, Err(StorageError::Corrupt(_))));

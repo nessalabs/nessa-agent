@@ -379,9 +379,9 @@ async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
     let failure = audit[0].failure.as_ref().unwrap();
     assert_eq!(
         failure.error,
-        AgentError::OperationAndCleanupFailure {
-            operation_error: Box::new(AgentError::Protocol("provider open failed".into())),
-            cleanup_error: Box::new(AgentError::Transport("cleanup retained".into())),
+        AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Protocol("provider open failed".into())),
+            subsequent_error: Box::new(AgentError::Transport("cleanup retained".into())),
         }
     );
     assert!(failure.cleanup_unconfirmed);
