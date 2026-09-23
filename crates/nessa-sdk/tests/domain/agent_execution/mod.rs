@@ -9,6 +9,7 @@ mod executions;
 mod invocation_history;
 mod permissions;
 mod prompts;
+mod provider_context;
 mod scheduling;
 mod session_identity;
 mod sessions;

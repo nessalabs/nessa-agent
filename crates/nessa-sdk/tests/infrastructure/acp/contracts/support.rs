@@ -3,6 +3,7 @@ pub(super) use crate::application::agent_execution::executions::ExecutionUpdate;
 pub(super) use crate::application::agent_execution::executions::*;
 pub(super) use crate::application::agent_execution::permissions::*;
 pub(super) use crate::application::agent_execution::providers::*;
+pub(super) use crate::application::agent_execution::sessions::SessionManager;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 pub(super) use crate::domain::agent_execution::{
     executions::*, permissions::*, prompts::*, sessions::ExecutionFinish,
@@ -21,6 +22,52 @@ pub(super) use std::{
 };
 pub(super) use tempfile::TempDir;
 pub(super) use tokio::time::timeout;
+
+pub(super) fn ordered_failures(errors: &[AgentError]) -> AgentError {
+    match errors {
+        [] => panic!("an ordered failure projection requires at least one fact"),
+        [error] => error.clone(),
+        errors => {
+            let middle = errors.len() / 2;
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(ordered_failures(&errors[..middle])),
+                subsequent_error: Box::new(ordered_failures(&errors[middle..])),
+            }
+        }
+    }
+}
+
+pub(super) fn rejected_audits(count: usize) -> AgentError {
+    ordered_failures(&vec![AgentError::AuditFailure; count])
+}
+
+struct AcceptingLifecycleAudit;
+impl ExecutionAudit for AcceptingLifecycleAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+pub(super) async fn attached_agent(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, Arc::new(AcceptingLifecycleAudit))
+        .await
+        .map_err(|error| error.cause().clone())?;
+    let authorization =
+        agent.authorize_attachment(AttachmentRequest::CallerRequested(close_action()))?;
+    agent.start_attachment(authorization)?.wait().await?;
+    Ok(agent)
+}
+
+pub(super) async fn attach_agent(
+    agent: &Agent,
+    request: AttachmentRequest,
+) -> Result<(), AgentError> {
+    let authorization = agent.authorize_attachment(request)?;
+    agent.start_attachment(authorization)?.wait().await
+}
 
 #[derive(Default)]
 pub(super) struct RecordingAudit {
@@ -56,6 +103,10 @@ impl ExecutionAudit for RecordingAudit {
                 ExecutionAuditRecord::QueueReordered(record) => {
                     self.reorders.lock().unwrap().push(record)
                 }
+                ExecutionAuditRecord::Attachment(_)
+                | ExecutionAuditRecord::QueueAdmitted(_)
+                | ExecutionAuditRecord::QueueSettled(_)
+                | ExecutionAuditRecord::SteeringAcknowledged(_) => {}
                 ExecutionAuditRecord::ReviewDeclined(record) => {
                     self.declines.lock().unwrap().push(record)
                 }

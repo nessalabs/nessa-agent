@@ -17,6 +17,9 @@ pub(super) fn validate(
     snapshot: &SessionSnapshot,
     invocation: &InvocationRecord,
 ) -> Result<(), AgentError> {
+    if invocation.events.is_empty() {
+        return Ok(());
+    }
     let cancelled: HashSet<_> = invocation
         .events
         .iter()
@@ -25,7 +28,13 @@ pub(super) fn validate(
             _ => None,
         })
         .collect();
-    let mut controller = ExecutionController::new(snapshot.provider_session_id.clone());
+    let mut controller = ExecutionController::new(
+        snapshot
+            .provider_context
+            .recorded()
+            .expect("validated provider observations require context")
+            .clone(),
+    );
     controller.begin_execution(invocation.request.execution_id.clone())?;
     let mut retained = HashMap::new();
     for event in &invocation.events {

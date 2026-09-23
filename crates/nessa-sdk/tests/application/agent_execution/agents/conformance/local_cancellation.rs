@@ -129,6 +129,8 @@ async fn automatic_stop_authorizes_local_settlement_without_erasing_observation_
         bounded(backend.dispatched.notified()).await;
         backend
             .output
+            .lock()
+            .unwrap()
             .send(Some(ExecutionEvent::new(
                 ExecutionId::new("foreign-execution").unwrap(),
                 ExecutionUpdate::Message(MessageChunk::text("invalid target")),

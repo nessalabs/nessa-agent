@@ -238,7 +238,10 @@ async fn compiled_binding_opens_and_restores_with_the_pinned_binary() {
     )
     .unwrap();
 
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session_id = opened.session.id().clone();
     opened
         .session
@@ -246,7 +249,12 @@ async fn compiled_binding_opens_and_restores_with_the_pinned_binary() {
         .await
         .into_result()
         .unwrap();
-    let restored = binding.open(Some(session_id.clone())).await.unwrap();
+    let restored = binding
+        .open(ProviderOpenRequest::without_startup_control(Some(
+            session_id.clone(),
+        )))
+        .await
+        .unwrap();
     assert_eq!(restored.session.id(), &session_id);
     restored
         .session
@@ -260,7 +268,10 @@ async fn compiled_binding_opens_and_restores_with_the_pinned_binary() {
 async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_opencode_binding("echo", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened.session.capabilities().model().model_id(),
         "exact-fixture-model"
@@ -301,7 +312,10 @@ async fn a_session_is_in_the_configured_mode_before_it_can_be_prompted() {
     let (_root, binding) = test_opencode_binding("echo", 16);
     // Opening is what applies the configuration: a session that reached the
     // caller is a configured one, and the handler refuses the prompt otherwise.
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -320,7 +334,10 @@ async fn a_session_is_in_the_configured_mode_before_it_can_be_prompted() {
 async fn a_session_that_leaves_its_mode_afterwards_fails_the_execution() {
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_opencode_binding("left-the-mode", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let outcome = opened.session.execute(prompt("first")).await.into_result();
     assert!(outcome.is_err(), "{outcome:?}");
 }
@@ -335,7 +352,9 @@ async fn an_opencode_this_profile_was_not_written_against_is_refused() {
     for mode in ["wrong-harness", "wrong-version"] {
         let _process_slot = process_test_slot().await;
         let (_root, binding) = test_opencode_binding(mode, 16);
-        let opened = binding.open(None).await;
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await;
         assert!(opened.is_err(), "{mode} was accepted");
     }
 }
@@ -345,7 +364,9 @@ async fn a_session_is_refused_rather_than_run_half_configured() {
     for mode in ["model-not-offered", "model-refused", "mode-refused"] {
         let _process_slot = process_test_slot().await;
         let (_root, binding) = test_opencode_binding(mode, 16);
-        let opened = binding.open(None).await;
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await;
         assert!(opened.is_err(), "{mode} opened a session anyway");
     }
 }
@@ -357,7 +378,10 @@ async fn a_session_is_refused_rather_than_run_half_configured() {
 async fn opencode_reporting_its_configuration_while_it_is_being_configured_is_not_a_failure() {
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_opencode_binding("startup-update-configuring", 16);
-    assert!(binding.open(None).await.is_ok());
+    assert!(binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .is_ok());
 }
 
 #[tokio::test]
@@ -368,7 +392,13 @@ async fn only_a_correlated_advisory_update_may_race_the_session_response() {
     ] {
         let _process_slot = process_test_slot().await;
         let (_root, binding) = test_opencode_binding(mode, 16);
-        assert!(binding.open(None).await.is_err(), "{mode} was admitted");
+        assert!(
+            binding
+                .open(ProviderOpenRequest::without_startup_control(None))
+                .await
+                .is_err(),
+            "{mode} was admitted"
+        );
     }
 }
 
@@ -382,7 +412,10 @@ async fn only_a_correlated_advisory_update_may_race_the_session_response() {
 async fn opencode_naming_the_mode_it_opened_in_is_not_leaving_the_one_it_is_given() {
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_opencode_binding("announces-start-mode", 16);
-    assert!(binding.open(None).await.is_ok());
+    assert!(binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .is_ok());
 }
 
 /// Tolerating the mode Opencode opens in is not tolerating any mode at all.
@@ -394,7 +427,10 @@ async fn opencode_naming_the_mode_it_opened_in_is_not_leaving_the_one_it_is_give
 async fn a_mode_the_session_never_offered_is_refused_even_before_it_is_configured() {
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_opencode_binding("announces-unknown-mode", 16);
-    assert!(binding.open(None).await.is_err());
+    assert!(binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .is_err());
 }
 
 /// Opencode reports tool calls in the protocol's own shape, so what this
@@ -404,7 +440,10 @@ async fn a_mode_the_session_never_offered_is_refused_even_before_it_is_configure
 async fn a_tool_call_arrives_with_what_it_read() {
     let _process_slot = process_test_slot().await;
     let (_root, binding) = test_opencode_binding("read-tool-call", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "first").await;
     let mut contents = Vec::new();
     loop {
@@ -435,7 +474,10 @@ async fn a_tool_call_arrives_with_what_it_read() {
 async fn an_edit_approval_reaches_the_host_with_what_it_would_change() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_opencode_binding("edit-permission", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "first").await;
     let ExecutionUpdate::PermissionRequested {
         id, input, options, ..
@@ -503,7 +545,10 @@ async fn a_session_offers_image_input_exactly_when_it_has_somewhere_to_read_byte
         16,
         Some(Arc::new(UnreadImages)),
     );
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let features = opened.session.capabilities().features();
     assert!(features.input().text());
     assert!(
@@ -521,7 +566,10 @@ async fn a_session_offers_image_input_exactly_when_it_has_somewhere_to_read_byte
     assert_gone(&root, "pid");
 
     let (root, binding) = test_opencode_binding_on_a_model_that_takes_images("echo", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let features = opened.session.capabilities().features();
     assert!(features.input().text());
     assert!(
@@ -552,7 +600,10 @@ async fn an_answered_permission_is_recorded_against_the_session_and_the_tool_tha
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session_id = opened.session.id().clone();
     let running = start(&opened, "first").await;
     let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
@@ -636,7 +687,10 @@ async fn a_refused_permission_is_recorded_as_the_refusal_it_was() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let session_id = opened.session.id().clone();
     let running = start(&opened, "first").await;
     let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
@@ -718,7 +772,10 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
         ..Default::default()
     });
     let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "first").await;
     let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
         panic!("expected permission");
@@ -744,7 +801,7 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
         .await
         .unwrap_err();
     assert_eq!(failure.error(), &AgentError::AuditFailure);
-    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(running.await.unwrap(), Err(rejected_audits(3)));
     // Opencode is never told to proceed. If it is told anything, it is that the
     // request was cancelled, which is the session being torn down around it.
     if let Ok(told) = std::fs::read_to_string(root.path().join("permission-outcome")) {
@@ -759,7 +816,7 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
     assert_gone(&root, "pid");
 }
@@ -769,7 +826,10 @@ async fn opencode_close_cancels_the_exact_pending_review_and_audits_its_caller()
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "cancelled-review").await;
     let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
         panic!("expected permission")
@@ -818,7 +878,10 @@ async fn opencode_permission_cancellation_audit_failure_is_visible_after_cleanup
         ..Default::default()
     });
     let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "cancelled-review").await;
     assert!(matches!(
         next(&mut opened).await,
@@ -831,9 +894,9 @@ async fn opencode_permission_cancellation_audit_failure_is_visible_after_cleanup
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(running.await.unwrap(), Err(rejected_audits(3)));
     assert_gone(&root, "pid");
 }
 
@@ -842,7 +905,10 @@ async fn opencode_execution_deadline_retains_runtime_cause_and_correlation() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_opencode_binding_with_audit("stall", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "deadline").await;
     assert_eq!(
         next(&mut opened).await,
@@ -883,7 +949,10 @@ async fn opencode_permission_answer_survives_the_execution_callers_loss() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "lost-caller").await;
     let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
         panic!("expected permission")
@@ -934,7 +1003,10 @@ async fn opencode_process_exit_mid_turn_retains_failed_execution_audit() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_opencode_binding_with_audit("process-exit", 16, audit.clone());
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let running = start(&opened, "process-exit").await;
     assert_eq!(
         next(&mut opened).await,
@@ -986,7 +1058,10 @@ async fn opencode_process_exit_mid_turn_retains_failed_execution_audit() {
 async fn the_command_list_opencode_volunteers_at_startup_does_not_stop_the_session() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_opencode_binding("startup-update-before-session-response", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     // Configuration still completed underneath it: the session is prompted and
     // answers, rather than merely having opened.
     let running = start(&opened, "first").await;

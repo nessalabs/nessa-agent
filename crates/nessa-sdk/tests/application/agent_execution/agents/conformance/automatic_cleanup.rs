@@ -113,8 +113,19 @@ async fn cleanup_required_recovers_only_after_confirmed_resources_and_audit() {
                     .await
                     .unwrap();
                 assert_eq!(first.is_ok(), confirmed && !audit_failed);
+                assert_eq!(
+                    agent.attachment_status().phase(),
+                    if confirmed {
+                        AttachmentPhase::Absent
+                    } else {
+                        AttachmentPhase::Starting
+                    }
+                );
                 assert!(storage.snapshot().invocations[0].provider_report.is_some());
                 *backend.execution_report.lock().unwrap() = None;
+                if confirmed && !audit_failed {
+                    recover_after_automatic_stop(&agent).await;
+                }
                 let next = bounded(mode.start(agent.clone(), request("next")))
                     .await
                     .unwrap();

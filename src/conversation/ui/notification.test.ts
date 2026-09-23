@@ -1,6 +1,80 @@
 import { describe, expect, it } from "vitest"
-import { conversation } from "../model"
+import { conversation, type AgentFeatures } from "../model"
 import { conversationNotice } from "./notification"
+
+const agentFeatures: AgentFeatures = {
+  permissionDenial: "unknown",
+  nativeHookSuppression: "unknown",
+  compactionReporting: "unsupported_not_implemented",
+  modelSwitchReporting: "unsupported_not_implemented",
+  permissionDeferral: "unsupported_not_implemented",
+  elicitationForwarding: "unknown",
+  preToolPolicy: "unsupported_not_implemented",
+  policyEndTurn: "unsupported_not_implemented",
+  policyCloseSession: "unsupported_not_implemented",
+  incomingElicitation: "unsupported_not_implemented",
+}
+
+it("shows a late bounded startup failure from the replacement view", () => {
+  const value = conversation("tab")
+  value.remote = {
+    running: false,
+    permissions: [],
+    tools: [],
+    pending: [],
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: false,
+      permissions: false,
+      imageInput: false,
+      agentFeatures,
+    },
+    lifecycle: {
+      phase: "failed",
+      failure: { code: "provider", message: "The configured agent did not start." },
+    },
+    queueComplete: true,
+    truncated: false,
+  }
+  expect(conversationNotice(value)).toEqual({
+    title: "Agent could not start",
+    description: "The configured agent did not start.",
+    retry: { kind: "refresh" },
+  })
+})
+
+it("shows late mandatory lifecycle evidence failure after attachment succeeds", () => {
+  const value = conversation("tab")
+  value.remote = {
+    running: false,
+    permissions: [],
+    tools: [],
+    pending: [],
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: false,
+      permissions: false,
+      imageInput: false,
+      agentFeatures,
+    },
+    lifecycle: {
+      phase: "attached",
+      evidenceFailure: {
+        code: "audit",
+        message: "Attachment audit was not acknowledged.",
+      },
+    },
+    queueComplete: true,
+    truncated: false,
+  }
+  expect(conversationNotice(value)).toEqual({
+    title: "Agent lifecycle record failed",
+    description: "Attachment audit was not acknowledged.",
+    retry: { kind: "refresh" },
+  })
+})
 
 describe("conversation notification", () => {
   it("keeps uncertain admission retry tied to its original execution", () => {

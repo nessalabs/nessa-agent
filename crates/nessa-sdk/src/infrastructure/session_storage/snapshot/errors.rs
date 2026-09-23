@@ -1,5 +1,6 @@
 use crate::application::agent_execution::agents::{
-    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, ProviderDiagnostic,
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, AttachmentFailureCode,
+    AttachmentPhase, ProviderDiagnostic,
 };
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::{
@@ -146,6 +147,8 @@ impl From<Hook> for HookFailure {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) enum SavedError {
+    AttachmentUnavailable(AttachmentState),
+    AttachmentAuthorizationStale,
     OutputRetentionLimit,
     DiagnosticLimit,
     Configuration(String),
@@ -217,6 +220,53 @@ pub(super) enum SavedError {
         error: StorageFailure,
         execution_result: Box<Result<Outcome, SavedError>>,
     },
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum AttachmentState {
+    Absent,
+    Waiting,
+    Starting,
+    Attached,
+    Failed(AttachmentFailure),
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum AttachmentFailure {
+    Audit,
+    Provider,
+    Storage,
+    Cleanup,
+}
+impl From<AttachmentPhase> for AttachmentState {
+    fn from(value: AttachmentPhase) -> Self {
+        match value {
+            AttachmentPhase::Absent => Self::Absent,
+            AttachmentPhase::Waiting => Self::Waiting,
+            AttachmentPhase::Starting => Self::Starting,
+            AttachmentPhase::Attached => Self::Attached,
+            AttachmentPhase::Failed(code) => Self::Failed(match code {
+                AttachmentFailureCode::Audit => AttachmentFailure::Audit,
+                AttachmentFailureCode::Provider => AttachmentFailure::Provider,
+                AttachmentFailureCode::Storage => AttachmentFailure::Storage,
+                AttachmentFailureCode::Cleanup => AttachmentFailure::Cleanup,
+            }),
+        }
+    }
+}
+impl From<AttachmentState> for AttachmentPhase {
+    fn from(value: AttachmentState) -> Self {
+        match value {
+            AttachmentState::Absent => Self::Absent,
+            AttachmentState::Waiting => Self::Waiting,
+            AttachmentState::Starting => Self::Starting,
+            AttachmentState::Attached => Self::Attached,
+            AttachmentState::Failed(code) => Self::Failed(match code {
+                AttachmentFailure::Audit => AttachmentFailureCode::Audit,
+                AttachmentFailure::Provider => AttachmentFailureCode::Provider,
+                AttachmentFailure::Storage => AttachmentFailureCode::Storage,
+                AttachmentFailure::Cleanup => AttachmentFailureCode::Cleanup,
+            }),
+        }
+    }
 }
 /// Saved counterpart of the step named by a startup deadline. The context is
 /// stored beside the step rather than folded into it, because a restoration can
@@ -292,6 +342,8 @@ impl From<Cleanup> for CloseOutcome {
 impl From<SavedError> for AgentError {
     fn from(value: SavedError) -> Self {
         match value {
+            SavedError::AttachmentUnavailable(phase) => Self::AttachmentUnavailable(phase.into()),
+            SavedError::AttachmentAuthorizationStale => Self::AttachmentAuthorizationStale,
             SavedError::DiagnosticLimit => Self::DiagnosticLimit,
             SavedError::OutputRetentionLimit => Self::OutputRetentionLimit,
             SavedError::SubmissionConflict => Self::SubmissionConflict,
@@ -402,6 +454,8 @@ impl From<SavedError> for AgentError {
 impl From<AgentError> for SavedError {
     fn from(value: AgentError) -> Self {
         match value {
+            AgentError::AttachmentUnavailable(phase) => Self::AttachmentUnavailable(phase.into()),
+            AgentError::AttachmentAuthorizationStale => Self::AttachmentAuthorizationStale,
             AgentError::DiagnosticLimit => Self::DiagnosticLimit,
             AgentError::OutputRetentionLimit => Self::OutputRetentionLimit,
             AgentError::SubmissionConflict => Self::SubmissionConflict,

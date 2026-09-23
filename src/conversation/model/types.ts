@@ -218,6 +218,17 @@ type ConversationState = {
       mode: "queued" | "steering"
     }[]
     capabilities: ConversationCapabilities
+    lifecycle: {
+      phase: "absent" | "starting" | "attached" | "failed"
+      failure?: {
+        code: "audit" | "provider" | "storage" | "cleanup"
+        message: string
+      }
+      evidenceFailure?: {
+        code: "audit"
+        message: string
+      }
+    }
     queueComplete: boolean
     truncated: boolean
     permissionViewError?: string
@@ -225,7 +236,7 @@ type ConversationState = {
 }
 export type IdleConversation = ConversationState & { phase: "idle" }
 export type BusyConversation = ConversationState & {
-  phase: "thinking" | "streaming"
+  phase: "starting" | "thinking" | "streaming"
   pending: string
 }
 

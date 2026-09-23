@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 struct AnswerAudit {
     records: Mutex<Vec<ExecutionAuditRecord>>,
     reject_call: Option<usize>,
+    reject_calls: Vec<usize>,
     stall_call: Option<usize>,
     pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
 }
@@ -27,7 +28,7 @@ impl ExecutionAudit for AnswerAudit {
             if self.stall_call == Some(call) {
                 return std::future::pending().await;
             }
-            if self.reject_call == Some(call) {
+            if self.reject_call == Some(call) || self.reject_calls.contains(&call) {
                 return Err(AgentError::AuditFailure);
             }
             Ok(())
@@ -48,7 +49,10 @@ async fn fixture(
     config.execution_timeout = None;
     let binding =
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
@@ -75,11 +79,32 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
                 panic!("resolved answer must not be relabelled on cleanup")
             }
             ExecutionAuditRecord::QueueReordered(_) => None,
+            ExecutionAuditRecord::Attachment(_)
+            | ExecutionAuditRecord::QueueAdmitted(_)
+            | ExecutionAuditRecord::QueueSettled(_)
+            | ExecutionAuditRecord::SteeringAcknowledged(_) => {
+                panic!("provider answer audit emitted SDK admission evidence")
+            }
             ExecutionAuditRecord::ReviewDeclined(record) => {
                 panic!("an offered review must not be refused unoffered: {record:?}")
             }
         })
         .collect()
+}
+
+fn count_error(error: &AgentError, expected: &AgentError) -> usize {
+    match error {
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        }
+        | AgentError::OperationAndCleanupFailure {
+            operation_error: first_error,
+            cleanup_error: subsequent_error,
+        } => count_error(first_error, expected) + count_error(subsequent_error, expected),
+        error if error == expected => 1,
+        _ => 0,
+    }
 }
 
 #[tokio::test]
@@ -267,10 +292,56 @@ async fn failed_answer_write_and_failed_delivery_audit_preserve_both_errors() {
         .await;
     assert!(report.is_confirmed());
     assert_eq!(report.audit(), &Err(AgentError::AuditFailure));
-    assert_eq!(report.operation_failure(), Some(&failure));
-    let expected = report.into_result().unwrap_err();
-    assert_eq!(active.await.unwrap(), Err(expected));
+    assert_eq!(report.operation_failure(), Some(delivery_error.as_ref()));
+    let cleanup_error = report.into_result().unwrap_err();
+    assert_eq!(
+        cleanup_error,
+        AgentError::OperationAndCleanupFailure {
+            operation_error: delivery_error.clone(),
+            cleanup_error: Box::new(AgentError::AuditFailure),
+        }
+    );
+    assert_eq!(active.await.unwrap(), Err(failure));
     assert_eq!(answers(&audit).len(), 2);
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn mixed_permission_delivery_and_late_closure_audits_remain_distinct() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(AnswerAudit {
+        reject_calls: vec![2, 3],
+        ..Default::default()
+    });
+    let (root, opened, active, answer) = fixture("permission-write-failure", audit.clone()).await;
+    let answer_error = opened
+        .session
+        .answer_permission(answer)
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap_err();
+    assert!(matches!(
+        answer_error,
+        AgentError::PermissionAnswerDeliveryAndAuditFailure { .. }
+    ));
+    let report = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert!(report.is_confirmed());
+    assert_eq!(
+        count_error(
+            report.audit().as_ref().unwrap_err(),
+            &AgentError::AuditFailure
+        ),
+        2
+    );
+    assert!(matches!(
+        report.operation_failure(),
+        Some(AgentError::Transport(_))
+    ));
+    let final_error = active.await.unwrap().unwrap_err();
+    assert_eq!(count_error(&final_error, &AgentError::AuditFailure), 1);
     assert_gone(&root, "pid");
 }
 
@@ -589,7 +660,10 @@ async fn failed_answer_drains_a_distinct_admitted_cancellation_before_bulk_close
             audit.clone(),
         )
         .unwrap();
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let mut ids = Vec::new();
@@ -717,7 +791,10 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
             audit.clone(),
         )
         .unwrap();
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
         let mut decisions = Vec::new();
@@ -769,15 +846,17 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
             first_error: Box::new(first_error),
             subsequent_error: Box::new(second_error),
         };
-        let combined = AgentError::OperationAndCleanupFailure {
-            operation_error: Box::new(combined),
-            cleanup_error: Box::new(AgentError::AuditFailure),
-        };
         assert_eq!(active.await.unwrap(), Err(combined.clone()));
         let close_report = closing.await;
         assert!(close_report.is_confirmed());
         let close_error = close_report.into_result().unwrap_err();
-        assert_eq!(close_error, combined);
+        assert_eq!(
+            close_error,
+            AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(transport.clone()),
+                cleanup_error: Box::new(AgentError::AuditFailure),
+            }
+        );
         assert_gone(&root, "pid");
         let recorded = answers(&audit);
         assert_eq!(recorded.len(), 3);

@@ -47,6 +47,7 @@ function view(ids: string[]): ConversationView {
         incomingElicitation: "unsupported_not_implemented",
       },
     },
+    lifecycle: { phase: "attached" },
   }
 }
 for (const outcome of [

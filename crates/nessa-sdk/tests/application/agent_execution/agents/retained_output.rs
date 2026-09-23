@@ -23,14 +23,16 @@ impl AgentProvider for OutputProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("output", "model", "").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("output-session").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(OutputEvents(self.0.clone())),
             })
@@ -158,7 +160,7 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
             closed: watch::channel(false).0,
             shutdowns: Mutex::new(Vec::new()),
         });
-        let agent = Agent::new(
+        let agent = attached_agent(
             Arc::new(OutputProvider(state.clone())),
             storage.manager().await,
         )
@@ -203,6 +205,15 @@ async fn drained_output_limit_preserves_evidence_and_reuses_only_after_acknowled
             assert_eq!(state.calls.load(Ordering::SeqCst), 1);
             assert_eq!(agent.close(actor()).await, Err(AgentError::AuditFailure));
         } else {
+            let authorization = agent
+                .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+                .unwrap();
+            agent
+                .start_attachment(authorization)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             assert_eq!(
                 agent.invoke(request("next"), actor()).await,
                 Ok(ExecutionOutcome::Completed)
@@ -227,7 +238,7 @@ async fn explicit_close_racing_output_cutoff_keeps_its_barrier_after_audit_failu
         closed: watch::channel(false).0,
         shutdowns: Mutex::new(Vec::new()),
     });
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(OutputProvider(state.clone())),
         storage.manager().await,
     )

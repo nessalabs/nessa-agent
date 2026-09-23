@@ -3,7 +3,10 @@ use super::support::*;
 async fn streams_two_prompts_with_one_immutable_session_and_repeated_close() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("echo", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened.session.capabilities().model().model_id(),
         "exact-fixture-model"

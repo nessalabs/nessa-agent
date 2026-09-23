@@ -1,5 +1,6 @@
 use super::view::{
-    ConversationAttachment, ConversationCapabilities, ConversationLinkedFile, ConversationMessage,
+    ConversationAttachment, ConversationCapabilities, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionOption, ConversationTool, ConversationView,
 };
@@ -122,6 +123,11 @@ impl Projection {
                 tools: Vec::new(),
                 runtime: None,
                 capabilities,
+                lifecycle: ConversationLifecycle {
+                    phase: ConversationLifecyclePhase::Absent,
+                    failure: None,
+                    evidence_failure: None,
+                },
                 truncated: false,
                 queue_complete: true,
                 permission_view_error: None,
@@ -147,6 +153,12 @@ impl Projection {
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.view.revision = format!("{}:{}", self.epoch, self.revision);
+    }
+    pub fn lifecycle(&mut self, lifecycle: ConversationLifecycle) {
+        if self.view.lifecycle != lifecycle {
+            self.view.lifecycle = lifecycle;
+            self.bump();
+        }
     }
     /// Replace the coherent capability snapshot and revise the view only when it changed.
     pub fn capabilities(&mut self, capabilities: ConversationCapabilities) {

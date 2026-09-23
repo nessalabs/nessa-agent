@@ -5,12 +5,11 @@ use crate::{
         hooks::{BeforeInvocation, InvocationContext},
         sessions::{
             SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-            StorageFuture,
+            StorageFuture, SubmissionAcknowledgement,
         },
     },
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::{InMemoryStorage, LocalFileStorage},
-    Agent,
 };
 use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -26,7 +25,7 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     let storage = Arc::new(LocalFileStorage::new(storage_root.path().join("sessions")).unwrap());
     let local_id = SessionId::new("conversation").unwrap();
     let provider = Arc::new(provider);
-    let agent = Agent::new(
+    let agent = attached_agent(
         provider.clone(),
         SessionManager::open(Some(local_id.clone()), storage.clone())
             .await
@@ -54,8 +53,11 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
         );
     }
     let before = agent.session_manager().snapshot().await.unwrap();
-    let provider_id = before.provider_session_id;
+    let provider_id = before.provider_context;
     agent.close(close_action()).await.unwrap();
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
     assert_eq!(
         agent.invoke(prompt("third"), close_action()).await,
         Ok(ExecutionOutcome::Completed)
@@ -63,7 +65,7 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     assert_eq!(hook_calls.load(Ordering::SeqCst), 3);
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let restored = Agent::new(
+    let restored = attached_agent(
         provider,
         SessionManager::open(Some(local_id), storage).await.unwrap(),
     )
@@ -75,7 +77,7 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
             .snapshot()
             .await
             .unwrap()
-            .provider_session_id,
+            .provider_context,
         provider_id
     );
     let recovered = restored
@@ -130,7 +132,7 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
     )
     .await
     .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let mut events = agent.subscribe();
     let first = agent
         .enqueue(prompt("first"), close_action())
@@ -152,7 +154,7 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
         .unwrap();
     assert!(
         matches!(agent.steer(prompt("adjust-first"), close_action()).await.unwrap(),
-        SteeringDelivery::Injected { target } if target.as_str() == "first")
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "first")
     );
     assert_eq!(first.wait().await.unwrap(), ExecutionOutcome::Completed);
     loop {
@@ -163,7 +165,7 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
     }
     assert!(
         matches!(agent.steer(prompt("adjust-second"), close_action()).await.unwrap(),
-        SteeringDelivery::Injected { target } if target.as_str() == "second")
+        SteeringDelivery::Injected { target, .. } if target.as_str() == "second")
     );
     assert_eq!(second.wait().await.unwrap(), ExecutionOutcome::Completed);
     let saved = agent.session_manager().snapshot().await.unwrap();
@@ -191,7 +193,7 @@ async fn idle_generation_failure_is_reported_before_restoration_can_send_a_promp
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     wait_until_gone(&root, "pid").await;
     let result = agent.invoke(prompt("must-not-send"), close_action()).await;
     assert!(matches!(result, Err(AgentError::Protocol(_))));
@@ -216,6 +218,9 @@ async fn idle_generation_failure_is_reported_before_restoration_can_send_a_promp
             .len(),
         0
     );
+    attach_agent(&agent, AttachmentRequest::AutomaticRecovery)
+        .await
+        .unwrap();
     assert_eq!(
         agent
             .invoke(prompt("safe-after-observed-failure"), close_action())
@@ -281,7 +286,10 @@ fn pause_cancelled_provider() -> (
 async fn cancelled_generation_is_sealed_while_terminal_audit_is_pending() {
     let _slot = process_test_slot().await;
     let (root, provider, waiting, release) = pause_cancelled_provider();
-    let opened = provider.open(None).await.unwrap();
+    let opened = provider
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let first = start(&opened, "cancelled-first").await;
     waiting.await.unwrap();
     let mut second = opened.session.execute(prompt("next-after-cancellation"));
@@ -319,7 +327,7 @@ async fn queued_followup_resumes_after_provider_cancellation_without_losing_admi
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let first = agent
         .enqueue(prompt("cancelled-first"), close_action())
         .await
@@ -398,7 +406,7 @@ async fn observation_storage_failure_audits_execution_failure_without_fabricated
         failed: Arc::new(AtomicBool::new(false)),
     });
     let manager = SessionManager::open(None, storage).await.unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     assert!(matches!(
         agent
             .invoke(prompt("fails-to-save-review"), close_action())
@@ -541,7 +549,18 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
         audit.clone(),
     )
     .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = Agent::prepare(Arc::new(provider), manager, audit.clone())
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let mut events = agent.subscribe();
     let caller = tokio::spawn({
         let agent = agent.clone();
@@ -641,9 +660,12 @@ async fn dropping_agent_retains_reader_and_lease_until_handles_dropped_cleanup()
         let manager = SessionManager::open(Some(id.clone()), storage.clone())
             .await
             .unwrap();
-        let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+        let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
         if resume_first {
             agent.close(close_action()).await.unwrap();
+            attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+                .await
+                .unwrap();
             assert_eq!(
                 agent
                     .invoke(prompt("resumed-before-drop"), close_action())
@@ -684,10 +706,11 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     // More local rejections than the former 16-generation reader queue capacity.
     // Escapes make the encoded frame oversized even though raw input is smaller.
-    // Admission measures the encoded message, so nothing is accepted or sent.
+    // The SDK owns each invocation before adapter validation, then retains the
+    // local refusal without sending it to the provider.
     for index in 0..24 {
         let request = ExecutionRequest {
             user_message: UserMessage::text_only(PromptText::new("\u{0}".repeat(2048)).unwrap()),
@@ -716,11 +739,31 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
         Ok(ExecutionOutcome::Completed)
     );
     let snapshot = agent.session_manager().snapshot().await.unwrap();
-    // Refused before acceptance: none of the oversized messages was saved.
-    assert_eq!(snapshot.invocations.len(), 1);
+    assert_eq!(snapshot.invocations.len(), 25);
+    for (index, invocation) in snapshot.invocations[..24].iter().enumerate() {
+        assert_eq!(
+            invocation.request.execution_id.as_str(),
+            format!("oversized-{index}")
+        );
+        assert!(matches!(
+            &invocation.result,
+            Some(Err(AgentError::MessageTooLarge {
+                max_bytes: 8192,
+                ..
+            }))
+        ));
+        assert_eq!(
+            &invocation.acknowledgement,
+            &SubmissionAcknowledgement::Pending
+        );
+    }
     assert_eq!(
-        snapshot.invocations[0].request.execution_id.as_str(),
+        snapshot.invocations[24].request.execution_id.as_str(),
         "valid-after-rejections"
+    );
+    assert_eq!(
+        snapshot.invocations[24].result,
+        Some(Ok(ExecutionOutcome::Completed))
     );
     let launches: Vec<u32> =
         serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();
@@ -736,15 +779,13 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     agent.close(close_action()).await.unwrap();
     // Preparation returns before Agent polls its reader. Failed startups must
     // therefore release their reserved slots without relying on a reader poll.
     for index in 0..24 {
         assert_eq!(
-            agent
-                .invoke(prompt(&format!("failed-restore-{index}")), close_action())
-                .await,
+            attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()),).await,
             Err(AgentError::Provider {
                 code: -32000,
                 diagnostic: Some(ProviderDiagnostic::new("restore failed")),
@@ -753,6 +794,9 @@ async fn repeated_failed_restoration_recovers_on_the_same_agent() {
         );
     }
     std::fs::write(root.path().join("resume-healthy"), "ready").unwrap();
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
     assert_eq!(
         agent.invoke(prompt("after-recovery"), close_action()).await,
         Ok(ExecutionOutcome::Completed)

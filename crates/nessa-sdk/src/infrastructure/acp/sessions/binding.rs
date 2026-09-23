@@ -20,9 +20,10 @@ use crate::application::agent_execution::permissions::{
     PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ImageInputRefusal,
-    ObservationFailure, ObservationFailureCause, OpenedProviderSession, ProviderCleanup,
-    ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture, ProviderOpenError,
+    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCauseSource,
+    FailedOpenCleanup, ImageInputRefusal, ObservationFailure, ObservationFailureCause,
+    OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply,
+    ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
     ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
     ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
     ResourceCleanup, SessionCloseRequest, SteeringOutcome,
@@ -51,13 +52,13 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
     restore: Option<ExecutionSessionId>,
+    mut open_control: ProviderOpenControl,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
     config.validate().map_err(|cause| {
         // Validation runs before allocation and returns only Configuration/Unsupported.
         ProviderOpenError::no_resources(cause)
     })?;
     let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
-    let session_audit = audit.clone();
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),
         operation_capabilities,
@@ -69,16 +70,39 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         permission_sequence: Arc::new(AtomicU64::new(0)),
     };
     let (mut generation, initial_events) = factory.start(restore)?;
-    // A cancelled open drops this generation and requests its process cleanup.
-    let session_id = match generation.ready().await {
+    let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
+    let session_id = match ready {
         Ok(id) => id,
         Err(cause) => {
             let completed = completion(generation.completion.clone()).await;
-            return Err(match completed {
-                Ok(completed) if completed.cleanup.is_confirmed() => {
-                    ProviderOpenError::no_resources(cause)
+            let (cause, cleanup_report) = match completed {
+                Ok(completed) => {
+                    let cleanup = completed.cleanup.clone();
+                    let cause = if stop_selected {
+                        AgentError::Closed
+                    } else {
+                        cause
+                    };
+                    (cause, Some(cleanup))
                 }
-                _ => ProviderOpenError::with_cleanup(cause, generation.recovery.clone()),
+                Err(error) => (
+                    AgentError::MultipleOperationFailures {
+                        first_error: Box::new(cause),
+                        subsequent_error: Box::new(error),
+                    },
+                    None,
+                ),
+            };
+            return Err(match cleanup_report {
+                Some(report) if report.is_confirmed() => {
+                    ProviderOpenError::with_cleanup_report(cause, report, None)
+                }
+                Some(report) => ProviderOpenError::with_cleanup_report(
+                    cause,
+                    report,
+                    Some(generation.recovery.clone()),
+                ),
+                None => ProviderOpenError::with_cleanup(cause, generation.recovery.clone()),
             });
         }
     };
@@ -96,7 +120,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         image_budget,
     });
     Ok(OpenedProviderSession {
-        session: ProviderSession::new(session_id, session, capabilities, session_audit),
+        session: ProviderSession::new(session_id, session, capabilities),
         events: Box::new(Events {
             current: Some(initial_events),
             queued,
@@ -227,6 +251,19 @@ struct LiveGenerationFailure {
     cause: AgentError,
     state: Option<Box<ProviderSessionState>>,
 }
+fn restoration_failure_cause(
+    fallback: AgentError,
+    source: FailedOpenCauseSource,
+    report: &CleanupReport,
+) -> AgentError {
+    match source {
+        FailedOpenCauseSource::Independent => fallback,
+        FailedOpenCauseSource::CleanupReport => report
+            .clone()
+            .into_result()
+            .expect_err("cleanup-report provenance requires a reported failure"),
+    }
+}
 impl Generation {
     fn control(&self) -> Control {
         Control::Generation {
@@ -252,6 +289,24 @@ impl Generation {
         }
         result
     }
+    async fn ready_during_open(
+        &mut self,
+        control: &mut ProviderOpenControl,
+    ) -> (Result<ExecutionSessionId, AgentError>, bool) {
+        let close_requested = self.close_requested.clone();
+        let startup = self.startup.as_mut().expect("generation startup pending");
+        let (result, stop_selected) =
+            await_startup_or_stop(startup, &close_requested, control).await;
+        self.startup = None;
+        if result.is_err() {
+            self.pending_events.take();
+            self.observations
+                .lock()
+                .expect("generation observation lock")
+                .delivery = FailureDelivery::Reported;
+        }
+        (result, stop_selected)
+    }
     fn publish_events(&mut self) {
         if let Some((permit, events)) = self.pending_events.take() {
             permit.send(events);
@@ -273,6 +328,57 @@ impl Generation {
             || self.commands.is_closed()
     }
 }
+async fn await_startup_or_stop(
+    startup: &mut oneshot::Receiver<Result<ExecutionSessionId, AgentError>>,
+    close_requested: &watch::Sender<Option<SessionCloseRequest>>,
+    control: &mut ProviderOpenControl,
+) -> (Result<ExecutionSessionId, AgentError>, bool) {
+    let mut control_available = true;
+    let mut stop_selected = false;
+    let result = loop {
+        if let Some(request) = control.requested() {
+            close_requested.send_if_modified(|current| {
+                if current.is_none() {
+                    *current = Some(request.clone());
+                    true
+                } else {
+                    false
+                }
+            });
+            stop_selected = true;
+            break startup.await;
+        }
+        tokio::select! {
+            biased;
+            request = control.wait(), if control_available => {
+                match request {
+                    Some(request) => {
+                        close_requested.send_if_modified(|current| {
+                            if current.is_none() {
+                                *current = Some(request.clone());
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        stop_selected = true;
+                        break startup.await;
+                    }
+                    None => control_available = false,
+                }
+            }
+            result = &mut *startup => break result,
+        }
+    };
+    let result = result.unwrap_or(Err(AgentError::Closed));
+    let result = if stop_selected && result.is_ok() {
+        Err(AgentError::Closed)
+    } else {
+        result
+    };
+    (result, stop_selected)
+}
+
 impl RestorationRecovery {
     async fn retry(&self) -> CleanupReport {
         self.cleanup
@@ -409,18 +515,34 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 let (next, events) = match self.factory.start(Some(self.id.clone())) {
                     Ok(started) => started,
                     Err(failure) => {
-                        let (cause, cleanup) = failure.into_parts();
-                        if let Some(cleanup) = cleanup {
-                            let recovery = Arc::new(RestorationRecovery {
-                                cause: cause.clone(),
-                                cleanup,
-                            });
-                            let failure = recovery.failure(ProviderSessionState::CleanupRequired);
-                            generation.restoration = Some(recovery.clone());
-                            *control = Control::Restoration(recovery);
-                            return Err(failure);
+                        let (cause, cleanup, source) = failure.into_parts();
+                        match cleanup {
+                            FailedOpenCleanup::Retained { report, owner } => {
+                                let cause = restoration_failure_cause(cause, source, &report);
+                                let recovery = Arc::new(RestorationRecovery {
+                                    cause: cause.clone(),
+                                    cleanup: owner,
+                                });
+                                let failure =
+                                    recovery.failure(ProviderSessionState::CleanupReported(report));
+                                generation.restoration = Some(recovery.clone());
+                                *control = Control::Restoration(recovery);
+                                return Err(failure);
+                            }
+                            FailedOpenCleanup::Completed(report) => {
+                                let cause = restoration_failure_cause(cause, source, &report);
+                                return Err(LiveGenerationFailure {
+                                    cause,
+                                    state: Some(Box::new(ProviderSessionState::CleanupReported(
+                                        report,
+                                    ))),
+                                });
+                            }
+                            FailedOpenCleanup::NotStarted => {
+                                debug_assert_eq!(source, FailedOpenCauseSource::Independent);
+                                return Err(cause.into());
+                            }
                         }
-                        return Err(cause.into());
                     }
                 };
                 generation
@@ -883,3 +1005,6 @@ impl ExecutionEventStream for Events {
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/acp/sessions/restoration_recovery.rs"]
 mod restoration_recovery_tests;
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/acp/sessions/startup_control.rs"]
+mod startup_control_tests;

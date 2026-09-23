@@ -82,6 +82,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
               incomingElicitation: "unsupported_not_implemented",
             },
           },
+          lifecycle: { phase: "attached" },
           truncated: false,
           queueComplete: true,
         })

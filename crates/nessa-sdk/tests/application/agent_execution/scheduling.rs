@@ -1,6 +1,6 @@
 //! Deterministic invocation admission, dispatch, steering, and cleanup interleavings.
 //! Retry tests share these gated providers through the retries module.
-use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
+use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 mod retries;
 use super::{agents::MemoryStorage, support::*};
 use nessa_sdk::application::agent_execution::hooks::{
@@ -39,7 +39,10 @@ impl AgentProvider for GatedFactory {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gated", "fixture", "tests").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (sender, receiver) = mpsc::unbounded_channel();
             let (closing, _) = watch::channel(false);
@@ -52,7 +55,6 @@ impl AgentProvider for GatedFactory {
                         closing,
                     }),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(Events(receiver)),
             })
@@ -206,7 +208,7 @@ async fn fixture(
         steering_wait: Mutex::new(None),
         steering_started: Notify::new(),
     });
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(GatedFactory(provider.clone())),
         storage.manager().await,
     )
@@ -335,7 +337,7 @@ async fn scheduling_native_injection_saves_input_and_correlates_with_active_exec
     let running = started(&mut calls, "active").await;
     let injected = agent.steer(request("correction"), actor()).await.unwrap();
     assert!(
-        matches!(injected, SteeringDelivery::Injected { target } if target.as_str() == "active")
+        matches!(injected, SteeringDelivery::Injected { target, .. } if target.as_str() == "active")
     );
     assert_eq!(provider.steered.lock().unwrap()[0].0.as_str(), "active");
     let before = provider.saved_before_steering.lock().unwrap()[0].clone();
@@ -593,7 +595,10 @@ async fn scheduling_failed_close_audit_reports_failure_and_still_cleans_every_pe
     );
     assert!(matches!(
         within(first.wait()).await,
-        Err(AgentError::Storage(StorageError::Io(_)))
+        Err(AgentError::StorageAfterExecution {
+            error: StorageError::Io(_),
+            execution_result,
+        }) if *execution_result == Err(AgentError::Closed)
     ));
     assert_eq!(within(second.wait()).await, Err(AgentError::Closed));
     assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Cancelled));
@@ -626,7 +631,10 @@ async fn scheduling_runner_cleanup_audit_failure_is_visible_without_losing_other
     );
     assert!(matches!(
         within(first.wait()).await,
-        Err(AgentError::Storage(StorageError::Io(_)))
+        Err(AgentError::StorageAfterExecution {
+            error: StorageError::Io(_),
+            execution_result,
+        }) if *execution_result == Err(AgentError::Closed)
     ));
     assert_eq!(within(second.wait()).await, Err(AgentError::Closed));
     for id in ["first", "second"] {
@@ -698,6 +706,41 @@ async fn scheduling_close_interrupts_stalled_native_steering_and_retains_caller_
     assert_eq!(event.target.as_ref().unwrap().as_str(), "active");
     assert!(calls.try_recv().is_err());
     drop(held);
+}
+
+#[tokio::test]
+async fn scheduling_close_wins_when_stalled_native_steering_returns_prompt_required() {
+    let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::PromptRequired)).await;
+    let active = agent.enqueue(request("active"), actor()).await.unwrap();
+    let _running = started(&mut calls, "active").await;
+    let (release, wait) = oneshot::channel();
+    *provider.steering_wait.lock().unwrap() = Some(wait);
+    let steering_agent = agent.clone();
+    let steering =
+        tokio::spawn(async move { steering_agent.steer(request("stalled"), actor()).await });
+    within(provider.steering_started.notified()).await;
+    let closing_agent = agent.clone();
+    let closing = tokio::spawn(async move { closing_agent.close(close_action()).await });
+    while agent.attachment_status().phase() != AttachmentPhase::Absent {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        release.send(()).is_err(),
+        "close drops the provider wait after owning its cancellation"
+    );
+    assert!(matches!(
+        within(steering).await.unwrap(),
+        Err(AgentError::Closed)
+    ));
+    within(closing).await.unwrap().unwrap();
+    assert_eq!(within(active.wait()).await, Ok(ExecutionOutcome::Cancelled));
+    let saved = record(&storage, "stalled");
+    assert_eq!(saved.result, Some(Err(AgentError::Closed)));
+    let event = saved.scheduling.last().unwrap();
+    assert_eq!(event.stage, InvocationStage::Cancelled);
+    assert_eq!(event.cause, SchedulingCause::SessionClosed);
+    assert_eq!(event.actor, Some(close_action()));
+    assert!(calls.try_recv().is_err());
 }
 
 #[tokio::test]

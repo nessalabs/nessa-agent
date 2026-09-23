@@ -76,6 +76,7 @@ const view: ConversationView = {
       incomingElicitation: "unsupported_not_implemented",
     },
   },
+  lifecycle: { phase: "attached" },
 }
 it("projects exact review and tool targets while preserving the next unsent draft", () => {
   const current = {
@@ -145,6 +146,35 @@ it("labels confirmed waiting work as queued without inventing an assistant messa
   })
   expect(projected.turns).toHaveLength(1)
   expect(projected.turns[0]).toMatchObject({ from: "user", receipt: "queued" })
+})
+
+it("shows provider attachment as starting rather than model thinking", () => {
+  const projected = applyView(conversation("tab"), {
+    ...view,
+    lifecycle: { phase: "starting" },
+    messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
+    pending: [
+      { executionId: "run", text: "read", attachments: [], files: [], mode: "queued" },
+    ],
+  })
+  expect(projected.phase).toBe("starting")
+  expect(projected.remote?.lifecycle).toEqual({ phase: "starting" })
+})
+
+it("does not label queued work as model thinking after attachment failed", () => {
+  const projected = applyView(conversation("tab"), {
+    ...view,
+    lifecycle: {
+      phase: "failed",
+      failure: { code: "provider", message: "Provider did not start" },
+    },
+    messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
+    pending: [
+      { executionId: "run", text: "read", attachments: [], files: [], mode: "queued" },
+    ],
+  })
+  expect(projected.phase).toBe("idle")
+  expect(projected.remote?.lifecycle.failure?.code).toBe("provider")
 })
 
 it("keeps selected work in the transcript while the first output is still pending", () => {

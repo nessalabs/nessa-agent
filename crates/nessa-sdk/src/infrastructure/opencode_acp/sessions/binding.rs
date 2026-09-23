@@ -4,10 +4,9 @@ use super::{effective_data_home, profile::OpencodeProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ProviderIdentity, ProviderOpenFuture,
+    AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
-use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
@@ -336,8 +335,13 @@ impl AgentProvider for OpencodeAcpProvider {
         .expect("validated model and fixed-size context fingerprint")
     }
 
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
+    }
+
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
+            let (restore, control) = request.into_parts();
             let factory = self.clone();
             acp_binding::open(
                 Arc::new(move || {
@@ -351,6 +355,7 @@ impl AgentProvider for OpencodeAcpProvider {
                 OpencodeProfile::new(self.capabilities.model().model_id()),
                 self.audit.clone(),
                 restore,
+                control,
             )
             .await
         })

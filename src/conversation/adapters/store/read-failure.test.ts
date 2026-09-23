@@ -42,6 +42,7 @@ const view = (conversationId: string): ConversationView => ({
       incomingElicitation: "unsupported_not_implemented",
     },
   },
+  lifecycle: { phase: "attached" },
   truncated: false,
   queueComplete: true,
 })

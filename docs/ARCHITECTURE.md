@@ -303,7 +303,7 @@ especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 [scheduling/retries](../crates/nessa-sdk/docs/agent_execution/scheduling.md), and
 [permissions](../crates/nessa-sdk/docs/agent_execution/permissions.md). The
 [structure guide](codebase-structure.md#agent-sdk-foundation) maps owning modules.
-The gateway now owns a shared Agent for each authorized conversation. The
+The gateway now owns a prepared shared Agent for each authorized conversation. The
 conversation context owns durable creator/organization metadata and a bounded
 read projection; SDK Agent remains the sole scheduler and execution authority.
 The projection also carries ordered runtime-owned declined-review notices from
@@ -311,7 +311,10 @@ persisted invocation events, replacing selection with later local write evidence
 by identity without turning it into permission authority or provider output.
 NessaClient sends stable-ID commands over its existing authenticated socket.
 The floating panel polls current replacement views, displays streaming output and
-permission choices, and queues busy follow-ups. Closing a tab detaches a view;
+permission choices, distinguishes provider startup from model thinking, and queues
+follow-ups while attachment is pending. Create, read, and queue admission use the
+ordinary client command deadline; provider startup settles later through the same
+replacement view and durable SDK receipt. Closing a tab detaches a view;
 Stop explicitly closes active and queued work.
 
 See [gateway chat](guides/gateway-chat.md) for configuration, ownership, commands,

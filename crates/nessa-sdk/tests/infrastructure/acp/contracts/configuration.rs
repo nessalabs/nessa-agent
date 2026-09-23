@@ -2,10 +2,93 @@ use super::support::*;
 use crate::application::agent_execution::sessions::SessionManager;
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use crate::infrastructure::acp::sessions::StdioMcpServer;
+use crate::infrastructure::process::ProcessScope;
 use crate::infrastructure::session_storage::InMemoryStorage;
 use serde_json::json;
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicU8, Ordering},
+    task::{Context, Poll},
+};
+
+struct DropPanicClosureAudit;
+impl Future for DropPanicClosureAudit {
+    type Output = Result<(), AgentError>;
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+impl Drop for DropPanicClosureAudit {
+    fn drop(&mut self) {
+        panic!("provider closure audit drop panic");
+    }
+}
+
+struct SelectiveClosureAudit {
+    failure: AtomicU8,
+    closures: Mutex<Vec<SessionClosureRecord>>,
+}
+
+fn retains_error(error: &AgentError, expected: &AgentError) -> bool {
+    if error == expected {
+        return true;
+    }
+    match error {
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        } => retains_error(first_error, expected) || retains_error(subsequent_error, expected),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => retains_error(operation_error, expected) || retains_error(cleanup_error, expected),
+        _ => false,
+    }
+}
+
+fn cleanup_fault_process(
+    config: &AcpConfig,
+) -> crate::infrastructure::acp::sessions::binding::ProcessFactory {
+    let config = config.clone();
+    Arc::new(move || {
+        let mut command = tokio::process::Command::new(&config.executable);
+        command
+            .args(&config.arguments)
+            .current_dir(&config.workspace)
+            .env_clear()
+            .envs(&config.environment)
+            .envs(&config.credential_environment)
+            .env("ANTHROPIC_MODEL", "exact-fixture-model")
+            .env("ANTHROPIC_CUSTOM_MODEL_OPTION", "exact-fixture-model")
+            .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "100")
+            .env("DISABLE_AUTOUPDATER", "1")
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+        let mut scope = ProcessScope::spawn(command)?;
+        scope.fail_next_cleanup();
+        Ok(scope)
+    })
+}
+impl ExecutionAudit for SelectiveClosureAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        let closure = matches!(record, ExecutionAuditRecord::SessionClosed(_));
+        if let ExecutionAuditRecord::SessionClosed(record) = record {
+            self.closures.lock().unwrap().push(record);
+        }
+        if !closure {
+            return Box::pin(async { Ok(()) });
+        }
+        match self.failure.load(Ordering::SeqCst) {
+            1 => Box::pin(async { Err(AgentError::AuditFailure) }),
+            2 => panic!("provider closure audit construction panic"),
+            3 => Box::pin(async { panic!("provider closure audit poll panic") }),
+            4 => Box::pin(DropPanicClosureAudit),
+            _ => Box::pin(async { Ok(()) }),
+        }
+    }
+}
 
 #[tokio::test]
 async fn fails_closed_on_invalid_configuration() {
@@ -36,7 +119,7 @@ async fn fails_closed_on_invalid_configuration() {
                 .unwrap();
             }
             let error = binding
-                .open(restore)
+                .open(ProviderOpenRequest::without_startup_control(restore))
                 .await
                 .err()
                 .expect("startup fails closed");
@@ -88,7 +171,7 @@ async fn oversized_provider_context_is_rejected_before_lifecycle_admission() {
     let audit = Arc::new(RecordingAudit::default());
     let (root, binding) = test_acp_binding_with_audit("oversized-session-id", 16, audit.clone());
     let error = binding
-        .open(None)
+        .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .err()
         .expect("oversized context must fail");
@@ -108,7 +191,10 @@ async fn oversized_provider_context_is_rejected_before_lifecycle_admission() {
 async fn admission_rejects_invalid_input_without_using_provider() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("echo", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     for invalid in [
         ExecutionRequest {
             estimated_input_tokens: 801,
@@ -209,7 +295,11 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let opening = tokio::spawn(async move { binding.open(None).await });
+    let opening = tokio::spawn(async move {
+        binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+    });
     wait_for_file(&root, "pid").await;
     // Start the clock assertion only after Python has published its PID. The
     // deadline itself remains the worker's configured deadline; OS launch and
@@ -251,7 +341,11 @@ async fn the_launch_budget_and_the_protocol_budget_are_spent_separately() {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let opening = tokio::spawn(async move { binding.open(None).await });
+    let opening = tokio::spawn(async move {
+        binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+    });
     wait_for_file(&root, "new-session-wait").await;
     tokio::time::pause();
     // Past the protocol budget but nowhere near the launch budget.
@@ -293,10 +387,13 @@ async fn a_launch_slower_than_the_protocol_budget_still_starts() {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let opened = timeout(Duration::from_secs(20), binding.open(None))
-        .await
-        .unwrap()
-        .expect("a slow launch is not a protocol failure");
+    let opened = timeout(
+        Duration::from_secs(20),
+        binding.open(ProviderOpenRequest::without_startup_control(None)),
+    )
+    .await
+    .unwrap()
+    .expect("a slow launch is not a protocol failure");
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -378,7 +475,11 @@ async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
             Arc::new(RecordingAudit::default()),
         )
         .unwrap();
-        let opening = tokio::spawn(async move { binding.open(restore).await });
+        let opening = tokio::spawn(async move {
+            binding
+                .open(ProviderOpenRequest::without_startup_control(restore))
+                .await
+        });
         // Advance only after the child has reached the stalling step, so the
         // simulated deadline cannot overtake real process launch.
         wait_for_file(&root, marker).await;
@@ -503,23 +604,21 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
             .unwrap();
         let error = timeout(
             Duration::from_secs(3),
-            Agent::new(Arc::new(binding), manager),
+            attached_agent(Arc::new(binding), manager),
         )
         .await
         .unwrap()
         .err()
         .expect("startup must fail");
         assert_eq!(
-            error.cause(),
-            &AgentError::OperationAndCleanupFailure {
+            error,
+            AgentError::OperationAndCleanupFailure {
                 operation_error: Box::new(AgentError::Protocol(
                     "provider permission mode is not default".into()
                 )),
                 cleanup_error: Box::new(AgentError::AuditFailure),
             }
         );
-        assert!(!error.needs_cleanup());
-        error.retry_cleanup().await.unwrap();
         drop(SessionManager::open(Some(id), storage).await.unwrap());
         assert_gone(&root, "pid");
     }
@@ -539,7 +638,11 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
         audit.clone(),
     )
     .unwrap();
-    let opening = tokio::spawn(async move { binding.open(None).await });
+    let opening = tokio::spawn(async move {
+        binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+    });
     wait_for_file(&root, "configuration-wait").await;
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(31)).await;
@@ -572,6 +675,52 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
 }
 
 #[tokio::test]
+async fn close_during_fresh_configuration_retains_the_explicit_actor() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("configuration-stall", 16, audit.clone());
+    let storage = Arc::new(InMemoryStorage::new());
+    let id = SessionId::new("fresh-configuration").unwrap();
+    let manager = SessionManager::open(Some(id.clone()), storage.clone())
+        .await
+        .unwrap();
+    let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    let opening = agent.start_attachment(authorization).unwrap();
+    wait_for_file(&root, "configuration-wait").await;
+
+    timeout(Duration::from_secs(3), agent.close(close_action()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(opening.wait().await, Err(AgentError::Closed));
+    let provider_id = ExecutionSessionId::new(
+        std::fs::read_to_string(root.path().join("configuration-wait")).unwrap(),
+    )
+    .unwrap();
+    {
+        let records = audit.closures.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].closure().session_id(), &provider_id);
+        assert_eq!(
+            records[0].closure().reason(),
+            &PermissionCancellationReason::session_closed()
+        );
+        assert_eq!(
+            records[0].origin(),
+            &CancellationOrigin::Client(close_action())
+        );
+    }
+    assert_gone(&root, "pid");
+    drop(agent);
+    drop(SessionManager::open(Some(id), storage).await.unwrap());
+}
+
+#[tokio::test]
 async fn close_during_restored_configuration_retains_the_explicit_actor() {
     let _slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
@@ -582,24 +731,27 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
     let manager = SessionManager::open(Some(id.clone()), storage.clone())
         .await
         .unwrap();
-    let agent = Agent::new(Arc::new(binding), manager).await.unwrap();
+    let agent = attached_agent(Arc::new(binding), manager).await.unwrap();
     let provider_id = agent
         .session_manager()
         .snapshot()
         .await
         .unwrap()
-        .provider_session_id;
+        .provider_context
+        .recorded()
+        .expect("attached provider context")
+        .clone();
     agent.close(close_action()).await.unwrap();
-    let invoking = tokio::spawn({
-        let agent = agent.clone();
-        async move { agent.invoke(prompt("restore"), close_action()).await }
-    });
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    let restoring = agent.start_attachment(authorization).unwrap();
     wait_for_file(&root, "configuration-wait").await;
     timeout(Duration::from_secs(3), agent.close(close_action()))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(invoking.await.unwrap(), Err(AgentError::Closed));
+    assert_eq!(restoring.wait().await, Err(AgentError::Closed));
     agent.close(close_action()).await.unwrap();
     {
         let records = audit.closures.lock().unwrap();
@@ -617,6 +769,119 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
     assert!(audit.finishes.lock().unwrap().is_empty());
     drop(agent);
     drop(SessionManager::open(Some(id), storage).await.unwrap());
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn close_during_configuration_retains_provider_closure_audit_failure() {
+    let _slot = process_test_slot().await;
+    for restored in [false, true] {
+        for failure in [1, 2, 3, 4] {
+            let audit = Arc::new(SelectiveClosureAudit {
+                failure: AtomicU8::new(0),
+                closures: Mutex::new(Vec::new()),
+            });
+            let mode = if restored {
+                "configuration-stall-on-resume"
+            } else {
+                "configuration-stall"
+            };
+            let (root, config, model) = test_acp_configuration(mode, 16);
+            let binding = ClaudeAcpProvider::new(
+                config,
+                &model,
+                TokenLimits::new(900, 100).unwrap(),
+                audit.clone(),
+            )
+            .unwrap();
+            let storage = Arc::new(InMemoryStorage::new());
+            let manager = SessionManager::open(None, storage).await.unwrap();
+            let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
+                .await
+                .unwrap();
+            if restored {
+                attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+                    .await
+                    .unwrap();
+                agent.close(close_action()).await.unwrap();
+            }
+            audit.failure.store(failure, Ordering::SeqCst);
+            let authorization = agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+                .unwrap();
+            let opening = agent.start_attachment(authorization).unwrap();
+            wait_for_file(&root, "configuration-wait").await;
+
+            let expected = AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(AgentError::Closed),
+                cleanup_error: Box::new(AgentError::AuditFailure),
+            };
+            assert_eq!(agent.close(close_action()).await, Err(expected.clone()));
+            assert!(opening.wait().await.is_err());
+            assert!(agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+                .is_err());
+            assert_eq!(agent.close(close_action()).await, Err(expected));
+            let closures = audit.closures.lock().unwrap();
+            assert_eq!(closures.len(), usize::from(restored) + 1);
+            let record = closures.last().unwrap();
+            assert_eq!(record.origin(), &CancellationOrigin::Client(close_action()));
+            drop(closures);
+            assert_gone(&root, "pid");
+        }
+    }
+}
+
+#[tokio::test]
+async fn sdk_close_retries_unconfirmed_configuration_cleanup_without_losing_audit_failure() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(SelectiveClosureAudit {
+        failure: AtomicU8::new(1),
+        closures: Mutex::new(Vec::new()),
+    });
+    let (root, config, model) = test_acp_configuration("configuration-stall", 16);
+    let process = cleanup_fault_process(&config);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap()
+    .with_process_factory(process);
+    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
+        .await
+        .unwrap();
+    let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
+        .await
+        .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    let opening = agent.start_attachment(authorization).unwrap();
+    wait_for_file(&root, "configuration-wait").await;
+
+    let first_actor = ActionContext::new("owner", "phone", "first-close").unwrap();
+    let first = agent.close(first_actor.clone()).await.unwrap_err();
+    assert!(retains_error(&first, &AgentError::CleanupUncertain));
+    assert!(retains_error(&first, &AgentError::AuditFailure));
+    assert!(opening.wait().await.is_err());
+    assert!(agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .is_err());
+
+    let repeated = agent
+        .close(ActionContext::new("other", "surface", "later-close").unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(repeated, first);
+    let closures = audit.closures.lock().unwrap();
+    assert_eq!(closures.len(), 1);
+    assert_eq!(
+        closures[0].origin(),
+        &CancellationOrigin::Client(first_actor)
+    );
+    drop(closures);
     assert_gone(&root, "pid");
 }
 
@@ -666,7 +931,7 @@ async fn startup_notifications_share_live_configuration_and_correlation_validati
                 .unwrap();
             }
             let error = binding
-                .open(restore)
+                .open(ProviderOpenRequest::without_startup_control(restore))
                 .await
                 .err()
                 .expect("hostile startup update fails closed");
@@ -702,7 +967,10 @@ async fn startup_notifications_share_live_configuration_and_correlation_validati
 async fn valid_startup_configuration_and_advisory_updates_preserve_normal_execution() {
     let _slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("startup-update-valid", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -719,7 +987,10 @@ async fn valid_startup_configuration_and_advisory_updates_preserve_normal_execut
         .await
         .into_result()
         .unwrap();
-    let restored = binding.open(Some(id)).await.unwrap();
+    let restored = binding
+        .open(ProviderOpenRequest::without_startup_control(Some(id)))
+        .await
+        .unwrap();
     assert_eq!(
         restored
             .session
@@ -746,7 +1017,11 @@ async fn startup_update_failure_retains_primary_and_failed_closure_audit() {
         ..Default::default()
     });
     let (root, binding) = test_acp_binding_with_audit("startup-update-mode", 16, audit);
-    let error = binding.open(None).await.err().unwrap();
+    let error = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .err()
+        .unwrap();
     assert_eq!(
         error.cause(),
         &AgentError::OperationAndCleanupFailure {
@@ -794,13 +1069,13 @@ async fn live_duplicate_configuration_retires_context_and_preserves_audit_failur
                 ..Default::default()
             });
             let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
-            let opened = binding.open(None).await.unwrap();
+            let opened = binding
+                .open(ProviderOpenRequest::without_startup_control(None))
+                .await
+                .unwrap();
             let protocol = AgentError::Protocol("duplicate model or mode config option".into());
             let expected = if reject {
-                AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(protocol),
-                    cleanup_error: Box::new(AgentError::AuditFailure),
-                }
+                ordered_failures(&[protocol, AgentError::AuditFailure, AgentError::AuditFailure])
             } else {
                 protocol
             };
@@ -877,7 +1152,10 @@ async fn a_permission_mode_reported_while_it_is_still_being_set_is_not_the_settl
     // tolerated while in flight, required once applied.
     let _slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("startup-update-mode-option", 16);
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session

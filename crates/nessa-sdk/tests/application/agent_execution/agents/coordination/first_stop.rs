@@ -15,16 +15,12 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         // A native operation reports completed physical cleanup. Its active work
         // stops now; the previously admitted waiting input remains eligible.
         agent.inner.lifecycle.record_provider_state(
-            native.work_generation(),
+            &native,
             &ProviderSessionState::CleanupReported(report.clone()),
         );
         let automatic = agent.start_shutdown(SessionCloseRequest::ExecutionFailed);
         if finalized {
-            agent
-                .inner
-                .lifecycle
-                .finalize_stop(&automatic, &report)
-                .await;
+            agent.inner.lifecycle.complete_stop(&automatic).await;
         }
         let closer = ActionContext::new("owner", "phone", "close-waiting-input").unwrap();
         let joined = agent.start_shutdown(SessionCloseRequest::Explicit(closer.clone()));
@@ -63,9 +59,10 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         lease.save(saved.clone()).await.unwrap();
         drop(lease);
         let restored = SessionManager::open(Some(id), storage).await.unwrap();
-        let restored_agent = Agent::new(Arc::new(Provider(Arc::new(Backend::default()))), restored)
-            .await
-            .unwrap();
+        let restored_agent =
+            attached_agent(Arc::new(Provider(Arc::new(Backend::default()))), restored)
+                .await
+                .unwrap();
         let restored = restored_agent.session_manager().snapshot().await.unwrap();
         assert_eq!(
             restored.invocations[0].scheduling,

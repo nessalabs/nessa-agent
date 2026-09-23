@@ -7,6 +7,7 @@
 //! active ExecutionId -> steer -> Injected / PromptRequired
 //! SessionCloseRequest -> backend close -> CleanupReport (resources + audit)
 //! failed open -> ProviderOpenError -> ProviderCleanup (when resources remain)
+//! finalized adapter facts -> validated recipe -> ExecutionReport -> storage
 //! ```
 //! Arrows show calls and returned handles. These ports describe a complete
 //! invocation runtime; ACP need not expose individual model/tool steps.
@@ -29,6 +30,7 @@
 //! requests, queues, and snapshots only ever hold references.
 
 mod close;
+mod finalized_execution;
 mod identity;
 mod images;
 mod open;
@@ -38,9 +40,16 @@ mod reports;
 mod session;
 mod steering;
 pub use close::SessionCloseRequest;
+pub(crate) use finalized_execution::{
+    FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,
+};
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
-pub use open::{ProviderCleanup, ProviderOpenError, ProviderOpenFuture};
+pub(crate) use open::{FailedOpenCauseSource, FailedOpenCleanup};
+pub use open::{
+    ProviderCleanup, ProviderOpenControl, ProviderOpenError, ProviderOpenFuture,
+    ProviderOpenRequest,
+};
 pub use operations::{
     CompactionReportingCapability, ElicitationForwardingCapability, IncomingElicitationCapability,
     ModelSwitchReportingCapability, NativeHookSuppressionCapability, OperationCapabilities,
@@ -59,6 +68,7 @@ pub use reports::{
     ProviderObservationFuture, ProviderOperationFailure, ProviderOperationFuture,
     ProviderOperationResult, ProviderSessionState, ResourceCleanup,
 };
+pub(crate) use session::validate_configured_input;
 pub use session::ProviderSession;
 
 pub use steering::SteeringOutcome;

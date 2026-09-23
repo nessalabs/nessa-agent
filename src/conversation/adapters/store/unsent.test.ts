@@ -177,6 +177,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
               incomingElicitation: "unsupported_not_implemented",
             },
           },
+          lifecycle: { phase: "attached" },
           messages: [
             {
               executionId: "active",

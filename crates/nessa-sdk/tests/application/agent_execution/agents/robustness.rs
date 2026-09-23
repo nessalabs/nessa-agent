@@ -31,7 +31,10 @@ impl AgentProvider for ExhaustedProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("exhaustion-probe", "fixture", "test").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let started = Arc::new(AtomicUsize::new(0));
             Ok(OpenedProviderSession {
@@ -39,7 +42,6 @@ impl AgentProvider for ExhaustedProvider {
                     ExecutionSessionId::new("probe").unwrap(),
                     Arc::new(ExhaustedBackend(started.clone())),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents {
                     failure: self.failure,
@@ -53,7 +55,7 @@ impl AgentProvider for ExhaustedProvider {
 #[tokio::test]
 async fn robustness_exhausted_stream_still_waits_for_backend_settlement() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ExhaustedProvider { failure: false }),
         storage.manager().await,
     )
@@ -72,7 +74,7 @@ async fn robustness_exhausted_stream_still_waits_for_backend_settlement() {
 #[tokio::test]
 async fn robustness_stream_failure_does_not_report_backend_success() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ExhaustedProvider { failure: true }),
         storage.manager().await,
     )
@@ -90,7 +92,7 @@ async fn robustness_stream_failure_does_not_report_backend_success() {
 #[tokio::test]
 async fn robustness_lagging_subscriber_does_not_lose_saved_observations() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(TestProvider::new(), storage.manager().await)
+    let agent = attached_agent(TestProvider::new(), storage.manager().await)
         .await
         .unwrap();
     let mut events = agent.subscribe();
@@ -236,7 +238,10 @@ impl AgentProvider for StreamFailureProvider {
     fn identity(&self) -> ProviderIdentity {
         ExhaustedProvider { failure: true }.identity()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let started = Arc::new(AtomicUsize::new(0));
             Ok(OpenedProviderSession {
@@ -248,7 +253,6 @@ impl AgentProvider for StreamFailureProvider {
                         cleanup_failure: self.cleanup_failure,
                     }),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents {
                     failure: true,
@@ -262,7 +266,7 @@ impl AgentProvider for StreamFailureProvider {
 #[tokio::test(start_paused = true)]
 async fn robustness_failed_stream_closes_backend_before_waiting_for_settlement() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(StreamFailureProvider {
             cleanup_failure: false,
         }),
@@ -290,7 +294,7 @@ async fn robustness_failed_stream_closes_backend_before_waiting_for_settlement()
 #[tokio::test(start_paused = true)]
 async fn robustness_stream_and_cleanup_failures_are_saved_without_waiting_for_provider() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(StreamFailureProvider {
             cleanup_failure: true,
         }),

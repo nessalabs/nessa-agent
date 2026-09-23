@@ -15,7 +15,10 @@ async fn undrained_restored_generations_cannot_each_allocate_a_fresh_byte_budget
         audit.clone(),
     )
     .unwrap();
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     for id in ["first", "second"] {
         assert_eq!(
             opened.session.execute(prompt(id)).await.into_result(),
@@ -80,7 +83,10 @@ async fn execute_reopens_the_same_context_and_revives_an_exhausted_event_reader(
     let _process_slot = process_test_slot().await;
     for mode in ["resume-context", "resume-no-id"] {
         let (root, binding) = test_acp_binding(mode, 16);
-        let mut opened = binding.open(None).await.unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let id = opened.session.id().clone();
         assert_eq!(
             opened.session.execute(prompt("first")).await.into_result(),
@@ -151,7 +157,10 @@ async fn restore_failures_never_create_a_replacement_conversation() {
     let _process_slot = process_test_slot().await;
     for mode in ["resume-unsupported", "resume-failure", "resume-wrong-id"] {
         let (root, binding) = test_acp_binding(mode, 16);
-        let opened = binding.open(None).await.unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
         let id = opened.session.id().clone();
         opened
             .session
@@ -217,7 +226,10 @@ async fn audit_failure_prevents_automatic_process_restart() {
         ..Default::default()
     });
     let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
     assert!(matches!(
@@ -230,12 +242,12 @@ async fn audit_failure_prevents_automatic_process_restart() {
             .shutdown(SessionCloseRequest::Explicit(close_action()))
             .await
             .into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_eq!(
         opened.session.execute(prompt("later")).await.into_result(),
-        Err(AgentError::AuditFailure)
+        Err(rejected_audits(3))
     );
     let launches: Vec<u32> =
         serde_json::from_str(&std::fs::read_to_string(root.path().join("launches")).unwrap())
@@ -248,7 +260,10 @@ async fn audit_failure_prevents_automatic_process_restart() {
 async fn permission_ids_do_not_repeat_when_the_same_execution_id_is_resumed() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("permission-stop", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     let first = start(&opened, "write").await;
     next(&mut opened).await;
     let ExecutionUpdate::PermissionRequested { id: old_id, .. } = next(&mut opened).await else {
@@ -322,7 +337,10 @@ async fn close_interrupts_a_stalled_restore_before_the_startup_deadline() {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let opened = binding.open(None).await.unwrap();
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -355,7 +373,10 @@ async fn close_interrupts_a_stalled_restore_before_the_startup_deadline() {
 async fn reopened_execution_remains_interruptible_and_does_not_start_parallel_workers() {
     let _process_slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("stall", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -397,7 +418,10 @@ async fn reopened_execution_remains_interruptible_and_does_not_start_parallel_wo
 async fn restoration_drains_old_evidence_without_replaying_its_reported_failure() {
     let _slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("provider-error-once", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     assert_eq!(
         opened
             .session
@@ -478,7 +502,10 @@ async fn restoration_drains_old_evidence_without_replaying_its_reported_failure(
 async fn cancelled_preparation_keeps_its_worker_and_publishes_events_when_ready() {
     let _slot = process_test_slot().await;
     let (root, binding) = test_acp_binding("resume-gated", 16);
-    let mut opened = binding.open(None).await.unwrap();
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

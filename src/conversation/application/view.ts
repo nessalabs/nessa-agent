@@ -47,6 +47,17 @@ export type ConversationView = {
     details: string
   }[]
   capabilities: ConversationCapabilities
+  lifecycle: {
+    phase: "absent" | "starting" | "attached" | "failed"
+    failure?: {
+      code: "audit" | "provider" | "storage" | "cleanup"
+      message: string
+    }
+    evidenceFailure?: {
+      code: "audit"
+      message: string
+    }
+  }
   permissionViewError?: string
 }
 

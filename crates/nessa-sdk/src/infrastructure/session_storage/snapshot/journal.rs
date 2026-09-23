@@ -9,7 +9,7 @@ use super::{
 use crate::application::agent_execution::sessions::{
     InvocationRecord, SessionSnapshot, StorageError,
 };
-use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
+use crate::domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 
@@ -21,7 +21,7 @@ pub(super) struct Record {
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<Provider>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provider_session_id: Option<String>,
+    provider_context: Option<String>,
     queue_from: usize,
     queue_history: Vec<QueueEvent>,
     invocation_count: usize,
@@ -122,12 +122,12 @@ fn apply(snapshot: &mut Option<SessionSnapshot>, record: Record) -> Result<(), S
                 .provider
                 .ok_or_else(|| corrupt("first journal record has no provider"))?
                 .decode()?,
-            provider_session_id: ExecutionSessionId::new(
-                record
-                    .provider_session_id
-                    .ok_or_else(|| corrupt("first journal record has no provider session"))?,
-            )
-            .map_err(corrupt)?,
+            provider_context: record
+                .provider_context
+                .map(ExecutionSessionId::new)
+                .transpose()
+                .map_err(corrupt)?
+                .map_or(ProviderContext::Absent, ProviderContext::Recorded),
             invocations: Vec::new(),
         });
     } else {
@@ -135,8 +135,9 @@ fn apply(snapshot: &mut Option<SessionSnapshot>, record: Record) -> Result<(), S
         if let Some(provider) = record.provider {
             value.provider = provider.decode()?;
         }
-        if let Some(id) = record.provider_session_id {
-            value.provider_session_id = ExecutionSessionId::new(id).map_err(corrupt)?;
+        if let Some(id) = record.provider_context {
+            value.provider_context =
+                ProviderContext::Recorded(ExecutionSessionId::new(id).map_err(corrupt)?);
         }
     }
     let value = snapshot.as_mut().expect("initialized snapshot");
@@ -170,7 +171,13 @@ fn apply(snapshot: &mut Option<SessionSnapshot>, record: Record) -> Result<(), S
                 .decode()?;
             for event in change.events {
                 invocation.events.push(
-                    event.decode(&value.provider_session_id, &invocation.request.execution_id)?,
+                    event.decode(
+                        value
+                            .provider_context
+                            .recorded()
+                            .ok_or_else(|| corrupt("event requires recorded provider context"))?,
+                        &invocation.request.execution_id,
+                    )?,
                 );
             }
             invocation.scheduling = change
@@ -195,7 +202,13 @@ fn apply(snapshot: &mut Option<SessionSnapshot>, record: Record) -> Result<(), S
             invocation.events.truncate(change.events_from);
             for event in change.events {
                 invocation.events.push(
-                    event.decode(&value.provider_session_id, &invocation.request.execution_id)?,
+                    event.decode(
+                        value
+                            .provider_context
+                            .recorded()
+                            .ok_or_else(|| corrupt("event requires recorded provider context"))?,
+                        &invocation.request.execution_id,
+                    )?,
                 );
             }
             invocation.scheduling.truncate(change.scheduling_from);
@@ -219,7 +232,7 @@ pub(in crate::infrastructure::session_storage) fn encode(
 ) -> Result<Option<Vec<u8>>, StorageError> {
     let provider_changed = previous.is_none_or(|prior| prior.provider != value.provider);
     let session_changed =
-        previous.is_none_or(|prior| prior.provider_session_id != value.provider_session_id);
+        previous.is_none_or(|prior| prior.provider_context != value.provider_context);
     let mut changes = Vec::new();
     for (index, invocation) in value.invocations.iter().enumerate() {
         let prior = previous.and_then(|snapshot| snapshot.invocations.get(index));
@@ -280,7 +293,14 @@ pub(in crate::infrastructure::session_storage) fn encode(
             model_id: value.provider.model_id().into(),
             context: value.provider.context().into(),
         }),
-        provider_session_id: session_changed.then(|| value.provider_session_id.as_str().into()),
+        provider_context: session_changed
+            .then(|| {
+                value
+                    .provider_context
+                    .recorded()
+                    .map(|id| id.as_str().into())
+            })
+            .flatten(),
         queue_from,
         queue_history: value.queue_history[queue_from..]
             .iter()
@@ -304,6 +324,7 @@ fn same_metadata(left: &InvocationRecord, right: &InvocationRecord) -> bool {
     left.submission == right.submission
         && left.request == right.request
         && left.actor == right.actor
+        && left.acknowledgement == right.acknowledgement
         && left.provider_report == right.provider_report
         && left.local_cancellation == right.local_cancellation
         && left.local_outcome == right.local_outcome

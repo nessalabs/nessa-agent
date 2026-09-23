@@ -7,13 +7,14 @@ use crate::application::agent_execution::executions::{
 };
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::application::agent_execution::providers::{ExecutionReport, ProviderIdentity};
+pub use crate::domain::agent_execution::sessions::ProviderContext;
 use crate::domain::agent_execution::{
     executions::{
         ExecutionId, ExecutionOutcome, InvocationCancellation, InvocationKind, InvocationStage,
         QueueMutation, SchedulingCause, SchedulingInitiator, SchedulingTransition,
         SchedulingTransitionError,
     },
-    sessions::{ExecutionSessionId, SessionId},
+    sessions::SessionId,
 };
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
@@ -46,13 +47,17 @@ pub struct SessionSnapshot {
     pub id: SessionId,
     /// Provider configuration identity required for restoration.
     pub provider: ProviderIdentity,
-    /// Opaque provider context to resume without replaying input.
-    pub provider_session_id: ExecutionSessionId,
+    /// Opaque provider context to resume without replaying input, or explicit absence.
+    pub provider_context: ProviderContext,
     /// Submitted invocations in admission order, including unresolved work.
     pub invocations: Vec<InvocationRecord>,
     /// Append-only global queue membership/order facts. Local selection precedes
     /// provider dispatch; restoration clears pending membership without replay.
     pub queue_history: Vec<QueueHistoryRecord>,
+}
+impl SessionSnapshot {
+    /// Maximum durable invocation records retained by one conversation.
+    pub const MAX_INVOCATIONS: usize = 1024;
 }
 
 /// One queue membership decision, recorded in global scheduler order.
@@ -85,6 +90,10 @@ pub struct InvocationRecord {
     pub request: ExecutionRequest,
     /// Caller attribution verified by the host before submission.
     pub actor: ActionContext,
+    /// Independent audit and durable-write acknowledgement for admission or
+    /// confirmed native injection. This fact is retained even when delivery or
+    /// execution has no terminal result.
+    pub acknowledgement: SubmissionAcknowledgement,
     /// Provider observations associated with this invocation, in received order.
     pub events: Vec<ExecutionEvent>,
     /// Local scheduling transitions in causal order, independent of provider output.
@@ -105,6 +114,23 @@ pub struct InvocationRecord {
     pub local_outcome: Option<ExecutionOutcome>,
     /// Saved settlement, or `None` if settlement has not been recorded.
     pub result: Option<Result<ExecutionOutcome, AgentError>>,
+}
+
+/// Durable acknowledgement state for a submitted invocation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmissionAcknowledgement {
+    /// The submission is saved, but its admission or injection acknowledgement
+    /// has not completed yet.
+    Pending,
+    /// Audit and storage both acknowledged the applicable boundary effect.
+    Acknowledged,
+    /// The boundary effect remains retained with one or both acknowledgement failures.
+    Failed {
+        /// Mandatory audit failure, if the audit sink did not acknowledge it.
+        audit: Option<AgentError>,
+        /// Durable snapshot failure, if storage did not acknowledge it.
+        storage: Option<StorageError>,
+    },
 }
 
 /// Cause and caller of a stop captured by an admitted invocation owner.
@@ -241,11 +267,26 @@ impl SessionSnapshot {
             if let Some(Err(error)) = invocation.result.take() {
                 error.discard_iteratively();
             }
+            if let SubmissionAcknowledgement::Failed { audit, .. } = &mut invocation.acknowledgement
+            {
+                if let Some(error) = audit.take() {
+                    error.discard_iteratively();
+                }
+            }
         }
     }
 }
 
 impl StorageError {
+    pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
+        let capacity = match self {
+            Self::Io(value) | Self::Corrupt(value) => value.capacity(),
+            Self::Busy | Self::IdentityMismatch => 0,
+        };
+        (capacity <= 4096)
+            .then_some(())
+            .ok_or_else(|| Self::Corrupt("stored acknowledgement diagnostic exceeds limit".into()))
+    }
     /// Compact external diagnostics before an SDK error wrapper or clone retains them.
     pub(crate) fn bounded(self) -> Self {
         fn text(mut value: String) -> String {

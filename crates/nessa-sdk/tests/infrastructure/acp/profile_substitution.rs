@@ -13,7 +13,8 @@ use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    ProviderSessionState, ResourceCleanup, SessionCloseRequest,
+    ProviderOpenControl, ProviderOpenRequest, ProviderSessionState, ResourceCleanup,
+    SessionCloseRequest,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -46,6 +47,12 @@ use std::{
 };
 
 use tokio::{sync::oneshot, time::timeout};
+
+fn no_startup_control() -> ProviderOpenControl {
+    ProviderOpenRequest::without_startup_control(None)
+        .into_parts()
+        .1
+}
 
 #[derive(Default)]
 struct RecordingAudit {
@@ -200,6 +207,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();
@@ -364,6 +372,7 @@ async fn failed_startup_retains_real_process_until_explicit_cleanup_retry() {
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await;
     let error = match result {
@@ -409,6 +418,7 @@ async fn live_close_recovers_real_scope_and_preserves_failed_audit_evidence() {
         },
         Arc::new(RejectAudit),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();
@@ -548,17 +558,22 @@ async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_start
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();
     stop_initial_generation(&mut opened, &root).await;
 
     let failure = opened.session.prepare_invocation().await.unwrap_err();
-    assert!(matches!(
-        failure.session_state(),
-        ProviderSessionState::CleanupRequired
-    ));
     assert!(matches!(failure.error(), AgentError::Transport(_)));
+    let ProviderSessionState::CleanupReported(report) = failure.session_state() else {
+        panic!("failed restoration must retain its exact cleanup report")
+    };
+    assert!(matches!(
+        report.resources(),
+        ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain)
+    ));
+    assert_eq!(report.operation_failure(), None);
     let directory = failed_directory.lock().unwrap().clone().unwrap();
     assert!(directory.is_dir());
 
@@ -589,6 +604,7 @@ async fn close_retries_the_failed_restoration_instead_of_the_old_generation() {
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();
@@ -627,6 +643,7 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();
@@ -724,6 +741,7 @@ async fn dropping_a_failed_restoration_keeps_its_directory_until_confirmed_clean
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();
@@ -766,6 +784,7 @@ async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     {
@@ -847,6 +866,7 @@ async fn known_startup_context_retains_audit_and_cleanup_failures_until_retry() 
             },
             audit.clone(),
             None,
+            no_startup_control(),
         )
         .await
         .err()
@@ -1024,7 +1044,16 @@ async fn losing_open_wait_before_readiness_preserves_handle_loss_cause_and_clean
             });
             let opening_audit = audit.clone();
             let opening = tokio::spawn(async move {
-                binding::open(process, config, capabilities, profile, opening_audit, None).await
+                binding::open(
+                    process,
+                    config,
+                    capabilities,
+                    profile,
+                    opening_audit,
+                    None,
+                    no_startup_control(),
+                )
+                .await
             });
             timeout(Duration::from_secs(10), entered_rx)
                 .await
@@ -1095,6 +1124,7 @@ async fn dropping_failed_open_recovery_still_confirms_process_cleanup() {
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .err()
@@ -1153,6 +1183,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
         },
         Arc::new(RecordingAudit::default()),
         None,
+        no_startup_control(),
     )
     .await
     .unwrap();

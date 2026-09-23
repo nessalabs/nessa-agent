@@ -24,7 +24,9 @@ use crate::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_sdk::application::agent_execution::{
-    agents::AgentError, permissions::PermissionSelectionState, providers::ImageInputRefusal,
+    agents::{AgentError, AttachmentPhase},
+    permissions::PermissionSelectionState,
+    providers::ImageInputRefusal,
     sessions::StorageError,
 };
 
@@ -276,10 +278,30 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
             ConversationErrorCode::ConversationConfigurationChanged
         }
         ConversationError::Audit => ConversationErrorCode::AuditUnavailable,
+        ConversationError::AdmissionEvidence { audit: Some(_), .. } => {
+            ConversationErrorCode::AuditUnavailable
+        }
+        ConversationError::AdmissionEvidence {
+            audit: None,
+            storage: Some(_),
+        } => ConversationErrorCode::ConversationStorageUnavailable,
+        ConversationError::AdmissionEvidence {
+            audit: None,
+            storage: None,
+        } => ConversationErrorCode::AgentOperationFailed,
         ConversationError::Metadata | ConversationError::Storage(_) => {
             ConversationErrorCode::ConversationStorageUnavailable
         }
         ConversationError::Agent(error) => match error {
+            AgentError::AttachmentUnavailable(
+                AttachmentPhase::Waiting | AttachmentPhase::Starting | AttachmentPhase::Attached,
+            ) => ConversationErrorCode::TemporarilyUnavailable,
+            AgentError::AttachmentUnavailable(
+                AttachmentPhase::Absent | AttachmentPhase::Failed(_),
+            )
+            | AgentError::AttachmentAuthorizationStale => {
+                ConversationErrorCode::AgentOperationFailed
+            }
             AgentError::SubmissionConflict => ConversationErrorCode::SubmissionConflict,
             AgentError::SubmissionUnresolved => ConversationErrorCode::SubmissionUnresolved,
             AgentError::Closed => ConversationErrorCode::ConversationClosed,
@@ -301,8 +323,8 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
             | AgentError::MessageTooLarge { .. } => ConversationErrorCode::InvalidRequest,
             AgentError::UserImage(_) => ConversationErrorCode::AttachmentUnavailable,
             AgentError::AuditFailure => ConversationErrorCode::AuditUnavailable,
-            // Startup never reaches the provider with input, and the runtime is
-            // warm afterwards: the same command is safe to send again.
+            // Startup never reaches the provider with input. This code carries
+            // no claim that a later attachment attempt will succeed.
             AgentError::StartupDeadline(_) => ConversationErrorCode::AgentStartupDeadline,
             // Saved state this gateway cannot read, which it will not be able
             // to read later either: the failure is cached and every later

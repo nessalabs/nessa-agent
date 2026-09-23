@@ -5,9 +5,9 @@ use super::{
     ProviderExecutionReply, ProviderOperationFailure, ProviderOperationFuture,
     ProviderSessionBackend, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
-use crate::application::agent_execution::agents::{AgentError, AgentFuture};
+use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::{
-    executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest},
+    executions::ExecutionRequest,
     permissions::{
         CancellationOrigin, PermissionAnswer, PermissionCancellation,
         PermissionCancellationRequest, PermissionResolution, PermissionSelectionState,
@@ -46,30 +46,23 @@ pub struct ProviderSession {
     id: ExecutionSessionId,
     backend: Arc<dyn ProviderSessionBackend>,
     capabilities: EffectiveCapabilities,
-    audit: Arc<dyn ExecutionAudit>,
 }
 impl ProviderSession {
-    /// Wrap `backend` with its provider context `id`, immutable model admission
-    /// `capabilities`, and mandatory application `audit` port. The same sink records
-    /// provider lifecycle evidence and caller-attributed queue changes. Construction
-    /// performs no I/O and opens no provider context.
+    /// Wrap `backend` with its provider context `id` and immutable model admission
+    /// `capabilities`. Construction performs no I/O and opens no provider context.
+    /// The provider backend retains the audit sink used for provider effects; the
+    /// owning [`Agent`](crate::application::agent_execution::agents::Agent) receives
+    /// the application audit sink when it is prepared.
     pub fn new(
         id: ExecutionSessionId,
         backend: Arc<dyn ProviderSessionBackend>,
         capabilities: EffectiveCapabilities,
-        audit: Arc<dyn ExecutionAudit>,
     ) -> Self {
         Self {
             id,
             backend,
             capabilities,
-            audit,
         }
-    }
-    /// Deliver application-owned lifecycle evidence to the mandatory audit sink.
-    /// The sink defines its bounded acknowledgement and durability contract.
-    pub(crate) fn record_audit(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
-        self.audit.record(record)
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move { self.backend.prepare_invocation().await })
@@ -104,37 +97,9 @@ impl ProviderSession {
     /// restored agent takes no images. A closed context keeps its last
     /// negotiation, because the same agent is what a restoration would start.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
-        input.validate_message_size()?;
-        // Require what the message actually holds. An image sent to a text-only
-        // binding is refused here, before acceptance, and never dropped.
         let images = input.user_message.images();
-        let mut requirements = Vec::with_capacity(2);
-        if input.user_message.text().is_some() {
-            requirements.push(CapabilityRequirement::Input(Modality::Text));
-        }
+        validate_configured_input(&self.capabilities, input)?;
         if !images.is_empty() {
-            requirements.push(CapabilityRequirement::Input(Modality::Image));
-        }
-        self.capabilities
-            .validate(
-                &requirements,
-                input.estimated_input_tokens,
-                input.reserved_output_tokens,
-            )
-            .map_err(offered_image_input_or)?;
-        if !images.is_empty() {
-            // Image input is offered exactly when its limits are recorded, so
-            // the modality check above has already refused a model without them.
-            // Answering the same refusal rather than asserting keeps that one
-            // fact one typed error wherever the two are ever read apart.
-            let Some(limits) = self.capabilities.image_input() else {
-                return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
-            };
-            for image in images {
-                limits
-                    .check(image.media_type(), image.size())
-                    .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
-            }
             let agent = self.operation_capabilities();
             if agent.negotiated() && !agent.image_input() {
                 return Err(AgentError::ImageInputRefused(
@@ -234,6 +199,39 @@ impl ProviderSession {
     pub(crate) fn shutdown(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         self.backend.close(request)
     }
+}
+
+pub(crate) fn validate_configured_input(
+    capabilities: &EffectiveCapabilities,
+    input: &ExecutionRequest,
+) -> Result<(), AgentError> {
+    input.validate_message_size()?;
+    let images = input.user_message.images();
+    let mut requirements = Vec::with_capacity(2);
+    if input.user_message.text().is_some() {
+        requirements.push(CapabilityRequirement::Input(Modality::Text));
+    }
+    if !images.is_empty() {
+        requirements.push(CapabilityRequirement::Input(Modality::Image));
+    }
+    capabilities
+        .validate(
+            &requirements,
+            input.estimated_input_tokens,
+            input.reserved_output_tokens,
+        )
+        .map_err(offered_image_input_or)?;
+    if !images.is_empty() {
+        let Some(limits) = capabilities.image_input() else {
+            return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
+        };
+        for image in images {
+            limits
+                .check(image.media_type(), image.size())
+                .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
+        }
+    }
+    Ok(())
 }
 
 /// One unmet requirement as the caller's typed answer: an image the attachment

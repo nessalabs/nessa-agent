@@ -78,7 +78,7 @@ async fn scheduling_retry_rejects_changed_content_attribution_or_delivery_mode()
     .unwrap();
     assert!(matches!(
         agent.enqueue(different, actor()).await,
-        Err(AgentError::SubmissionConflict)
+        Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
     ));
     let mut different = request("same");
     different.estimated_input_tokens += 1;
@@ -112,7 +112,7 @@ async fn scheduling_native_retry_recovers_injection_and_ambiguous_error_without_
         let running = started(&mut calls, "active").await;
         for _ in 0..2 {
             match agent.steer(request("correction"), actor()).await {
-                Ok(SteeringDelivery::Injected { target }) => {
+                Ok(SteeringDelivery::Injected { target, .. }) => {
                     assert!(outcome.is_ok());
                     assert_eq!(target.as_str(), "active");
                 }
@@ -136,7 +136,7 @@ async fn scheduling_restore_returns_saved_result_without_dispatching_again() {
     within(receipt.wait()).await.unwrap();
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let restored = Agent::new(Arc::new(GatedFactory(provider)), storage.manager().await)
+    let restored = attached_agent(Arc::new(GatedFactory(provider)), storage.manager().await)
         .await
         .unwrap();
     let receipt = restored.enqueue(request("saved"), actor()).await.unwrap();
@@ -155,36 +155,47 @@ async fn restored_retry_retains_late_queue_and_native_persistence_failures() {
         let (agent, storage, provider, mut calls) = fixture(Ok(SteeringOutcome::Injected)).await;
         let receipt = agent.enqueue(request("active"), actor()).await.unwrap();
         let running = started(&mut calls, "active").await;
-        let original = if native {
+        let (native_evidence, queue_error) = if native {
             storage.fail_scheduling("correction", InvocationStage::Injected);
-            let error = match agent.steer(request("correction"), actor()).await {
-                Err(error) => error,
-                _ => panic!("injection evidence save must fail"),
+            let evidence = match agent.steer(request("correction"), actor()).await.unwrap() {
+                SteeringDelivery::Injected { evidence, .. } => evidence,
+                SteeringDelivery::Queued(_) => panic!("active steering must remain native"),
             };
-            complete(running);
-            within(receipt.wait()).await.unwrap();
-            error
+            assert!(matches!(
+                &evidence,
+                SteeringEvidence::Failed(failure)
+                    if matches!(failure.storage(), Some(StorageError::Io(_)))
+            ));
+            let _ = running.release.send(Ok(ExecutionOutcome::Completed));
+            let active_result = within(receipt.wait()).await;
+            assert_eq!(record(&storage, "active").result, Some(active_result));
+            (Some(evidence), None)
         } else {
             storage.fail_scheduling("active", InvocationStage::Settled);
             complete(running);
-            within(receipt.wait()).await.unwrap_err()
+            (None, Some(within(receipt.wait()).await.unwrap_err()))
         };
         agent.close(close_action()).await.unwrap();
         drop(agent);
-        let restored = Agent::new(
+        let restored = attached_agent(
             Arc::new(GatedFactory(provider.clone())),
             storage.manager().await,
         )
         .await
         .unwrap();
         if native {
-            assert!(
-                matches!(restored.steer(request("correction"), actor()).await, Err(error) if error == original)
-            );
+            let restored_evidence = match restored.steer(request("correction"), actor()).await {
+                Ok(SteeringDelivery::Injected { evidence, .. }) => evidence,
+                Ok(SteeringDelivery::Queued(_)) => {
+                    panic!("restored native receipt became queued")
+                }
+                Err(error) => panic!("restored native receipt failed: {error:?}"),
+            };
+            assert_eq!(Some(restored_evidence), native_evidence);
             assert_eq!(provider.steered.lock().unwrap().len(), 1);
         } else {
             let retry = restored.enqueue(request("active"), actor()).await.unwrap();
-            assert_eq!(within(retry.wait()).await, Err(original));
+            assert_eq!(within(retry.wait()).await, Err(queue_error.unwrap()));
         }
         assert!(calls.try_recv().is_err());
         restored.close(close_action()).await.unwrap();
@@ -207,7 +218,7 @@ async fn restored_withdrawn_receipt_retains_its_audit_failure() {
     within(active.wait()).await.unwrap();
     agent.close(close_action()).await.unwrap();
     drop(agent);
-    let restored = Agent::new(Arc::new(GatedFactory(provider)), storage.manager().await)
+    let restored = attached_agent(Arc::new(GatedFactory(provider)), storage.manager().await)
         .await
         .unwrap();
     let retry = restored.enqueue(request("removed"), actor()).await.unwrap();

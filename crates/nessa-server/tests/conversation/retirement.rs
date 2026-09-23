@@ -289,13 +289,7 @@ async fn stalled_opening_owner_cannot_prevent_another_owner_cleanup_or_later_ret
         .retire("gateway_upgrade", "opening-upgrade")
         .await
         .unwrap_err();
-    let ConversationError::RetirementAdmission {
-        cleanup_error: Some(cleanup),
-    } = error
-    else {
-        panic!("admission and cleanup failures must both remain");
-    };
-    assert!(matches!(*cleanup, ConversationError::Retirement(ref errors)
+    assert!(matches!(error, ConversationError::Retirement(ref errors)
         if errors.len() == 1 && errors[0].0 == blocked_id.to_string() && errors[0].1 == AgentError::Deadline));
     assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
     release.send(()).unwrap();

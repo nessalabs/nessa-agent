@@ -21,7 +21,7 @@ import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
-import { Thinking } from "./thinking"
+import { Starting, Thinking } from "./thinking"
 import { selectedWork } from "./work-selection"
 
 export function Transcript({
@@ -75,6 +75,13 @@ export function Transcript({
     conversation.turns
       .filter((turn) => turn.from === "user")
       .map((turn) => [turn.id, turn]),
+  )
+  const linkedUserIds = new Set(
+    rows.flatMap((row) => (row.promptId ? [row.promptId] : [])),
+  )
+  const waitingUsers = conversation.turns.filter(
+    (turn) =>
+      turn.from === "user" && turn.receipt === "queued" && !linkedUserIds.has(turn.id),
   )
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
 
@@ -153,11 +160,25 @@ export function Transcript({
                 </React.Fragment>
               )
             })}
+            {waitingUsers.map((turn) => (
+              <TurnRow
+                key={`${turn.id}:waiting`}
+                turn={turn}
+                streaming={false}
+                animateMount={animateMount}
+                onOpenPaste={onOpenPaste}
+              />
+            ))}
             {conversation.phase === "thinking" &&
             (rows.length === 0 || rows.at(-1)?.status === "running") &&
             !conversation.readError &&
             !conversation.error ? (
               <Thinking motion={animateMount} />
+            ) : null}
+            {conversation.phase === "starting" &&
+            !conversation.readError &&
+            !conversation.error ? (
+              <Starting />
             ) : null}
             <ConversationControls
               conversation={conversation}

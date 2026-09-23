@@ -4,7 +4,7 @@
 
 | Term | Meaning in ACP | Current Nessa SDK behavior |
 | --- | --- | --- |
-| Create a session | `session/new` creates an agent conversation context. | `Agent::new(provider, manager)` restores the saved provider context or opens a new one. |
+| Create a session | `session/new` creates an agent conversation context. | `Agent::prepare(provider, manager, audit)` restores durable local evidence without provider I/O; an attributed attachment authorization starts provider opening separately. |
 | Run an execution / prompt turn | `session/prompt` runs a user message within that context. | `Agent::invoke()`; normal completion leaves the session available for another execution. |
 | Queue / steer input | Provider-specific controls may extend prompt delivery. | `enqueue` and `enqueue_steering` wait for invocation boundaries; `steer` uses supported native injection. See [scheduling](scheduling.md). |
 | Withdraw waiting input | No provider effect is needed for locally pending input. | `remove_queued` retains withdrawal evidence; active/injected input cannot be unsent. |

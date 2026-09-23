@@ -32,14 +32,16 @@ impl AgentProvider for SettlementProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("observation-settlement", "fixture", "test").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("settlement-context").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(SettlementEvents(
                     self.0.receiver.lock().unwrap().take().unwrap(),
@@ -141,7 +143,7 @@ async fn assert_settlement_after_invalid_observation(
         reader_error: reader_error.clone(),
         closes: Mutex::new(Vec::new()),
     });
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(SettlementProvider(backend.clone())),
         storage.manager().await,
     )

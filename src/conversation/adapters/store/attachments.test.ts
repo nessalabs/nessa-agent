@@ -216,6 +216,7 @@ function viewSaying(imageInput: boolean): ConversationEffects["read"] {
         incomingElicitation: "unsupported_not_implemented",
       },
     },
+    lifecycle: { phase: "attached" },
     truncated: false,
     queueComplete: true,
   })

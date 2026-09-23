@@ -9,4 +9,7 @@
 pub mod aggregates;
 pub mod value_objects;
 pub use aggregates::{ExecutionSession, SessionClosureResult};
-pub use value_objects::{ExecutionFinish, ExecutionSessionId, SessionClosure, SessionId};
+pub use value_objects::{
+    AttachmentCause, ExecutionFinish, ExecutionSessionId, ProviderContext,
+    ProviderContextEvidenceError, SessionClosure, SessionId,
+};

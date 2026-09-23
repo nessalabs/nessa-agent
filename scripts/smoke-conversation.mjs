@@ -406,6 +406,13 @@ try {
       .length,
     1,
   )
+  // Restart creation publishes the durable view before provider attachment completes.
+  // Observe the attachment boundary before checking provider resume evidence.
+  await viewWith(
+    restarted,
+    (view) => view.lifecycle.phase === "attached",
+    "provider attachment after gateway restart",
+  )
   const resumes = evidenceFor(
     readEvidence(evidencePath),
     "session-resume",

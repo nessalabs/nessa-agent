@@ -4,12 +4,14 @@ use super::*;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
     providers::ProviderIdentity,
-    sessions::{InvocationRecord, InvocationSchedulingEvent, SessionSnapshot},
+    sessions::{
+        InvocationRecord, InvocationSchedulingEvent, SessionSnapshot, SubmissionAcknowledgement,
+    },
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationKind, SchedulingCause, SubmissionMode},
     prompts::{PromptText, UserMessage},
-    sessions::ExecutionSessionId,
+    sessions::{ExecutionSessionId, ProviderContext},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 
@@ -17,7 +19,7 @@ fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("00000000-0000-4000-8000-00000000000c").unwrap(),
         provider: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
-        provider_session_id: ExecutionSessionId::new("provider-1").unwrap(),
+        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider-1").unwrap()),
         invocations,
         queue_history: Vec::new(),
     }
@@ -52,6 +54,7 @@ fn invocation(
             reserved_output_tokens: 1,
         },
         actor: ActionContext::new("person", "panel", "turn-1").unwrap(),
+        acknowledgement: SubmissionAcknowledgement::Acknowledged,
         events: Vec::new(),
         scheduling: vec![InvocationSchedulingEvent {
             kind: InvocationKind::Queued,

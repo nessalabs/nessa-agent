@@ -1,10 +1,11 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::{Projection, MAX_TEXT},
-    ConversationAgentFeatures, ConversationCaller, ConversationCapabilities,
-    ConversationDependencies, ConversationLimits, ConversationMessageStatus,
-    ConversationPendingMode, ConversationService, PermissionDenialSupport, SubmissionMode,
-    SubmittedMessage,
+    projection::{clipped, Projection, MAX_TEXT},
+    ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
+    ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
+    ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
+    ConversationLimits, ConversationMessageStatus, ConversationPendingMode, ConversationService,
+    PermissionDenialSupport, SubmissionMode, SubmittedMessage,
 };
 use crate::{
     conversation::domain::ConversationId,
@@ -25,7 +26,7 @@ use nessa_sdk::{
             ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
             ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
         },
-        sessions::{InvocationRecord, SessionSnapshot},
+        sessions::{InvocationRecord, SessionSnapshot, SubmissionAcknowledgement},
         tools::ToolReviewInput,
     },
     domain::agent_execution::{
@@ -37,7 +38,7 @@ use nessa_sdk::{
             ReviewDeclineStage,
         },
         prompts::{PromptText, UserMessage},
-        sessions::{ExecutionSessionId, SessionId},
+        sessions::{ExecutionSessionId, ProviderContext, SessionId},
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
@@ -107,6 +108,37 @@ fn event(update: ExecutionUpdate) -> ExecutionEvent {
     ExecutionEvent::new(ExecutionId::new("execution").unwrap(), update)
 }
 
+#[test]
+fn lifecycle_evidence_is_phase_independent_and_only_changes_revision_once() {
+    let mut projection = projection();
+    let initial = projection.read().revision;
+    let lifecycle = ConversationLifecycle {
+        phase: ConversationLifecyclePhase::Attached,
+        failure: None,
+        evidence_failure: Some(ConversationAttachmentEvidenceFailure {
+            code: ConversationAttachmentEvidenceFailureCode::Audit,
+            message: "attachment audit was not acknowledged".into(),
+        }),
+    };
+    projection.lifecycle(lifecycle.clone());
+    let changed = projection.read();
+    assert_ne!(changed.revision, initial);
+    assert_eq!(changed.lifecycle, lifecycle);
+
+    projection.lifecycle(lifecycle);
+    assert_eq!(projection.read().revision, changed.revision);
+}
+
+#[test]
+fn lifecycle_diagnostics_are_clipped_at_a_utf8_boundary() {
+    let exact = "😀".repeat(512);
+    assert_eq!(clipped(&exact, 2048), exact);
+    let oversized = "😀".repeat(513);
+    let clipped = clipped(&oversized, 2048);
+    assert_eq!(clipped, "😀".repeat(512));
+    assert_eq!(clipped.len(), 2048);
+}
+
 fn decline_event(id: &str, delivery: ReviewDeclineStage) -> ExecutionEvent {
     let selected = ReviewDeclineObservation::selected(
         ReviewDeclineId::new(id).unwrap(),
@@ -145,7 +177,9 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
-        provider_session_id: ExecutionSessionId::new("provider-session").unwrap(),
+        provider_context: ProviderContext::Recorded(
+            ExecutionSessionId::new("provider-session").unwrap(),
+        ),
         queue_history: vec![],
         invocations: vec![InvocationRecord {
             target_event_offset: None,
@@ -157,6 +191,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
                 reserved_output_tokens: 10,
             },
             actor: ActionContext::new("person", "panel", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
             cancellation: None,
@@ -575,7 +610,7 @@ async fn assert_terminal_failure_round_trip(
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
-            agents: only(Arc::new(Provider(provider))),
+            agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),

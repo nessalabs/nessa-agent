@@ -21,7 +21,10 @@ mod events;
 pub(crate) mod limits;
 mod request;
 pub use audit::{
-    ExecutionAudit, ExecutionAuditRecord, QueueOrderCause, QueueOrderRecord, SessionClosureRecord,
+    AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditRecord,
+    AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, QueueAdmissionRecord,
+    QueueOrderCause, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
+    SteeringAcknowledgementRecord, SteeringAuditCause, SteeringAuditStage,
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};

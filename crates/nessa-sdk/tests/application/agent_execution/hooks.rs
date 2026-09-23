@@ -4,7 +4,7 @@ use nessa_sdk::application::agent_execution::hooks::{
     AfterInvocation, AfterInvocationEvent, BeforeInvocation, HookError, HookFailure,
     InvocationContext, InvocationHook,
 };
-use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
+use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 use nessa_sdk::application::agent_execution::{agents::Agent, providers::ProviderIdentity};
 use std::{future::poll_fn, task::Poll, time::Duration};
 use tokio::sync::{watch, Notify};
@@ -92,14 +92,17 @@ impl AgentProvider for HookProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("hook-fixture", "fixture", "test").unwrap()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let (restore, _control) = request.into_parts();
         Box::pin(async move {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     restore.unwrap_or_else(|| ExecutionSessionId::new("context").unwrap()),
                     self.0.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(EmptyEvents),
             })
@@ -110,7 +113,7 @@ async fn client(
     backend: Arc<dyn ProviderSessionBackend>,
     hooks: Vec<Arc<dyn InvocationHook>>,
 ) -> Agent {
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(HookProvider(backend)),
         MemoryStorage::default().manager().await,
     )
@@ -542,7 +545,10 @@ impl AgentProvider for ObservationFailureProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("observation-fixture", "test", "test").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
             let backend = Arc::new(RecordingSession {
                 prompts: AtomicUsize::new(0),
@@ -552,7 +558,6 @@ impl AgentProvider for ObservationFailureProvider {
                     ExecutionSessionId::new("context").unwrap(),
                     backend.clone(),
                     capabilities(),
-                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(FailedEvents(backend)),
             })
@@ -563,7 +568,7 @@ impl AgentProvider for ObservationFailureProvider {
 #[tokio::test]
 async fn observation_failure_retains_confirmed_execution_in_storage_and_after_hook() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(
+    let agent = attached_agent(
         Arc::new(ObservationFailureProvider),
         storage.manager().await,
     )

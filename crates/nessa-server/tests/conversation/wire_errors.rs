@@ -5,7 +5,10 @@ use super::{
 };
 use nessa_sdk::{
     application::agent_execution::{
-        agents::{AgentStartupContext, AgentStartupPhase, AgentStartupStep},
+        agents::{
+            AgentStartupContext, AgentStartupPhase, AgentStartupStep, AttachmentFailureCode,
+            AttachmentPhase,
+        },
         providers::UserImageError,
     },
     domain::common::value_objects::ImageMediaType,
@@ -49,6 +52,32 @@ fn startup_deadline_is_distinguished_from_other_agent_failures() {
         error_code(&ConversationError::Agent(AgentError::Deadline)),
         ConversationErrorCode::AgentOperationFailed
     );
+}
+
+#[test]
+fn attachment_readiness_and_stale_internal_authority_have_stable_codes() {
+    for phase in [
+        AttachmentPhase::Waiting,
+        AttachmentPhase::Starting,
+        AttachmentPhase::Attached,
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Agent(
+                AgentError::AttachmentUnavailable(phase)
+            )),
+            ConversationErrorCode::TemporarilyUnavailable
+        );
+    }
+    for error in [
+        AgentError::AttachmentUnavailable(AttachmentPhase::Absent),
+        AgentError::AttachmentUnavailable(AttachmentPhase::Failed(AttachmentFailureCode::Provider)),
+        AgentError::AttachmentAuthorizationStale,
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Agent(error)),
+            ConversationErrorCode::AgentOperationFailed
+        );
+    }
 }
 
 #[test]

@@ -64,7 +64,7 @@ impl ExecutionAudit for WorkflowAudit {
 struct WorkflowEvents(mpsc::UnboundedReceiver<Option<ExecutionEvent>>);
 struct WorkflowBackend {
     audit: Arc<WorkflowAudit>,
-    output: mpsc::UnboundedSender<Option<ExecutionEvent>>,
+    output: Mutex<mpsc::UnboundedSender<Option<ExecutionEvent>>>,
     receiver: Mutex<Option<mpsc::UnboundedReceiver<Option<ExecutionEvent>>>>,
     dispatched: Notify,
     execution_gate: Mutex<Option<oneshot::Receiver<()>>>,
@@ -84,18 +84,24 @@ impl AgentProvider for WorkflowProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("workflow-conformance", "fixture", "local").unwrap()
     }
-    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        capabilities_ref()
+    }
+    fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            let receiver = self.0.receiver.lock().unwrap().take().unwrap_or_else(|| {
+                let (output, receiver) = mpsc::unbounded_channel();
+                *self.0.output.lock().unwrap() = output;
+                receiver
+            });
+            self.0.closed.send_replace(false);
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
                     ExecutionSessionId::new("workflow-context").unwrap(),
                     self.0.clone(),
                     capabilities(),
-                    self.0.audit.clone(),
                 ),
-                events: Box::new(WorkflowEvents(
-                    self.0.receiver.lock().unwrap().take().unwrap(),
-                )),
+                events: Box::new(WorkflowEvents(receiver)),
             })
         })
     }
@@ -134,6 +140,7 @@ impl ProviderSessionBackend for WorkflowBackend {
         })
     }
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+        let output = self.output.lock().unwrap().clone();
         Box::pin(async move {
             assert!(self
                 .target
@@ -153,14 +160,14 @@ impl ProviderSessionBackend for WorkflowBackend {
             }
             self.target.lock().unwrap().take();
             if let Some(report) = self.execution_report.lock().unwrap().clone() {
-                self.output.send(None).unwrap();
+                output.send(None).unwrap();
                 return ProviderExecutionReply::Finished(report);
             }
             let fault = self.execution_fault.lock().unwrap().clone();
             match fault {
                 Some(fault) => {
                     let (error, attachment) = fault.into_parts();
-                    self.output.send(None).unwrap();
+                    output.send(None).unwrap();
                     ProviderExecutionReply::Finished(ExecutionReport::new(
                         Some(Err(error)),
                         None,
@@ -170,7 +177,7 @@ impl ProviderSessionBackend for WorkflowBackend {
                 None => {
                     // This fixture's provider really reports Completed even when
                     // its completion races local close; cleanup cannot rewrite it.
-                    self.output
+                    output
                         .send(Some(ExecutionEvent::new(
                             input.execution_id,
                             ExecutionUpdate::Finished(ExecutionOutcome::Completed),
@@ -248,19 +255,55 @@ async fn workflow_from_storage(
     storage: MemoryStorage,
 ) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
     let backend = workflow_backend();
-    let agent = Agent::new(
+    let agent = Agent::prepare(
         Arc::new(WorkflowProvider(backend.clone())),
         storage.manager().await,
+        backend.audit.clone(),
     )
     .await
     .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     (agent, backend, storage)
+}
+async fn reattach_after_explicit_close(agent: &Agent) {
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
+}
+async fn recover_after_automatic_stop(agent: &Agent) {
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
 }
 fn workflow_backend() -> Arc<WorkflowBackend> {
     let (output, receiver) = mpsc::unbounded_channel();
     Arc::new(WorkflowBackend {
         audit: Arc::new(WorkflowAudit::default()),
-        output,
+        output: Mutex::new(output),
         receiver: Mutex::new(Some(receiver)),
         dispatched: Notify::new(),
         execution_gate: Mutex::new(None),
@@ -326,6 +369,7 @@ async fn invocation_modes_keep_owned_work_and_real_settlement_after_waiter_loss_
                 "retry cannot redispatch"
             );
         }
+        reattach_after_explicit_close(&agent).await;
         assert_eq!(
             bounded(agent.invoke(request("resumed"), actor())).await,
             Ok(ExecutionOutcome::Completed)
@@ -367,7 +411,8 @@ async fn invocation_modes_follow_explicit_resource_status_independently_of_error
             assert_eq!(settlement.session_state(), &attachment);
             *backend.execution_fault.lock().unwrap() = None;
             // CleanupRequired initially fences dispatch, but this conforming
-            // backend confirms owned cleanup and audit before the result returns.
+            // backend confirms owned cleanup and audit before recovery is authorized.
+            recover_after_automatic_stop(&agent).await;
             assert_eq!(
                 bounded(agent.invoke(request("recovered"), actor())).await,
                 Ok(ExecutionOutcome::Completed)
@@ -486,6 +531,7 @@ async fn invocation_modes_retain_provider_settlement_when_its_save_panics() {
             }
             assert_eq!(backend.executions.lock().unwrap().len(), 1);
             bounded(agent.close(actor())).await.unwrap();
+            reattach_after_explicit_close(&agent).await;
             assert_eq!(
                 bounded(agent.invoke(request("recovered"), actor())).await,
                 Ok(ExecutionOutcome::Completed)

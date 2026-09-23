@@ -204,7 +204,8 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             closing: true,
             deferred_outcome: None,
             provider_result: None,
-            audit_failure: None,
+            settlement_facts: SettlementFacts::new(),
+            correlation_sequence: 0,
             failure_cause: ObservationFailureCause::ExecutionFailed,
         };
         if pending_permission {

@@ -26,13 +26,15 @@ pub use service::{
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,
-    ConversationCapabilities, ConversationDisposition, ConversationLinkedFile, ConversationMessage,
+    ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
+    ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
     ConversationMessageStatus, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionOption, ConversationReorderOutcome,
-    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
-    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
-    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
-    SubmissionReceipt,
+    ConversationStartupFailure, ConversationStartupFailureCode, ConversationTool, ConversationView,
+    ElicitationForwardingSupport, IncomingElicitationSupport, ModelSwitchReportingSupport,
+    NativeHookSuppressionSupport, PermissionDeferralSupport, PermissionDenialSupport,
+    PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport, SubmissionReceipt,
 };
 
 #[cfg(test)]

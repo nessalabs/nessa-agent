@@ -72,18 +72,31 @@ pub(super) fn replay(snapshot: &SessionSnapshot) -> Result<InvocationQueue, Stor
             }
             QueueMutation::Removed { cause, .. } => {
                 let (_, edge) = checkpoint.expect("single-input event");
-                let expected = match cause {
-                    QueueRemovalCause::Withdrawn => SchedulingCause::Withdrawn,
-                    QueueRemovalCause::SessionClosed => SchedulingCause::SessionClosed,
-                    QueueRemovalCause::RunnerStopped => SchedulingCause::RunnerStopped,
+                let (expected_stage, expected_cause) = match cause {
+                    QueueRemovalCause::Withdrawn => {
+                        (InvocationStage::Cancelled, SchedulingCause::Withdrawn)
+                    }
+                    QueueRemovalCause::SessionClosed => {
+                        (InvocationStage::Cancelled, SchedulingCause::SessionClosed)
+                    }
+                    QueueRemovalCause::RunnerStopped => {
+                        (InvocationStage::Cancelled, SchedulingCause::RunnerStopped)
+                    }
+                    QueueRemovalCause::DispatchFailed => {
+                        (InvocationStage::Settled, SchedulingCause::DispatchFailed)
+                    }
                 };
-                if edge.stage != InvocationStage::Cancelled
-                    || edge.cause != expected
+                let explicit = matches!(
+                    cause,
+                    QueueRemovalCause::Withdrawn | QueueRemovalCause::SessionClosed
+                );
+                if edge.stage != expected_stage
+                    || edge.cause != expected_cause
                     || entry.actor != edge.actor
-                    || (entry.actor.is_some() != (*cause != QueueRemovalCause::RunnerStopped))
+                    || (entry.actor.is_some() != explicit)
                 {
                     return Err(corrupt(
-                        "queue removal disagrees with cancellation cause or caller",
+                        "queue removal disagrees with scheduling stage, cause, or caller",
                     ));
                 }
             }

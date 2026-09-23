@@ -11,7 +11,8 @@
 //!       |                        |-> pending wait interrupted by shared stop
 //!       |-> SessionLifecycle -> work permits / work generations
 //!                              |-> attachment generation / active dispatch
-//!                              |-> shared stop -> cleanup facts / retained lease
+//!                              |-> attachment evidence ledger
+//!                              |-> shared stop -> cleanup attempts / retained lease
 //!       |-> event subscribers
 //! ```
 //! Arrows show calls. Agent drains provider events and saves evidence before
@@ -26,6 +27,8 @@
 //! remain distinct: new queued input may be stopped without restoring a provider.
 
 mod agent;
+mod attachment;
+mod attachment_evidence;
 mod coordination;
 mod error;
 mod error_limits;
@@ -35,9 +38,16 @@ mod scheduling;
 mod submissions;
 
 pub use agent::{Agent, AgentEvents};
+pub use attachment::{
+    AttachmentAuthorization, AttachmentCancellation, AttachmentFailure, AttachmentFailureCode,
+    AttachmentPhase, AttachmentRequest, AttachmentStatus, AttachmentWait,
+};
 pub use error::{
     AgentError, AgentFuture, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
     ProviderDiagnostic,
 };
 pub use initialization::AgentInitializationError;
-pub use scheduling::{QueueRemoval, QueueReorder, QueuedInvocation, SteeringDelivery};
+pub use scheduling::{
+    AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
+    SteeringDelivery, SteeringEvidence,
+};

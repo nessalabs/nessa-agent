@@ -1,5 +1,4 @@
 import { NessaRpcError } from "../application/rpc-error.js"
-import { agentOperationTimeoutMs } from "../application/agent-budgets.js"
 import { expect, it, vi } from "vitest"
 import { createConversationApi } from "./conversation-api.js"
 import {
@@ -36,9 +35,107 @@ const view: ConversationView = {
       incomingElicitation: "unsupported_not_implemented",
     },
   },
+  lifecycle: { phase: "attached" },
   truncated: false,
   queueComplete: true,
 }
+it("validates attachment lifecycle fields and their cross-field agreement", async () => {
+  const api = createConversationApi(
+    { request: vi.fn().mockResolvedValue(view) },
+    () => "id",
+  )
+  await expect(api.read(conversationId)).resolves.toMatchObject({
+    lifecycle: { phase: "attached" },
+  })
+  for (const lifecycle of [
+    { phase: "failed" },
+    { phase: "starting", failure: { code: "provider", message: "failed" } },
+    { phase: "failed", failure: { code: "unknown", message: "failed" } },
+    { phase: "failed", failure: { code: "provider", message: "" } },
+    {
+      phase: "attached",
+      evidenceFailure: { code: "provider", message: "failed" },
+    },
+  ]) {
+    const invalid = createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...view, lifecycle }) },
+      () => "id",
+    )
+    await expect(invalid.read(conversationId)).rejects.toThrow()
+  }
+  const exactUtf8 = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({
+        ...view,
+        lifecycle: {
+          phase: "failed",
+          failure: { code: "provider", message: "😀".repeat(512) },
+        },
+      }),
+    },
+    () => "id",
+  )
+  await expect(exactUtf8.read(conversationId)).resolves.toBeDefined()
+  const exactEvidenceUtf8 = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({
+        ...view,
+        lifecycle: {
+          phase: "attached",
+          evidenceFailure: { code: "audit", message: "😀".repeat(512) },
+        },
+      }),
+    },
+    () => "id",
+  )
+  await expect(exactEvidenceUtf8.read(conversationId)).resolves.toBeDefined()
+  const oversizedUtf8 = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({
+        ...view,
+        lifecycle: {
+          phase: "failed",
+          failure: { code: "provider", message: "😀".repeat(513) },
+        },
+      }),
+    },
+    () => "id",
+  )
+  await expect(oversizedUtf8.read(conversationId)).rejects.toThrow(
+    "Invalid conversation message",
+  )
+  const oversizedEvidenceUtf8 = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({
+        ...view,
+        lifecycle: {
+          phase: "absent",
+          evidenceFailure: { code: "audit", message: "😀".repeat(513) },
+        },
+      }),
+    },
+    () => "id",
+  )
+  await expect(oversizedEvidenceUtf8.read(conversationId)).rejects.toThrow(
+    "Invalid conversation message",
+  )
+})
+
+it("uses the ordinary configured request deadline for create, read, and send", async () => {
+  const request = vi.fn(async (method: string, params: unknown) => {
+    if (method === "conversation.create") return { conversationId }
+    if (method === "conversation.read") return view
+    return {
+      executionId: (params as { executionId: string }).executionId,
+      disposition: "queued",
+    }
+  })
+  const api = createConversationApi({ request }, () => "identity")
+  await api.create({ conversationId })
+  await api.read(conversationId)
+  await api.send(conversationId, "hello")
+  expect(request.mock.calls.map((call) => call.length)).toEqual([2, 2, 2])
+})
 it("owns immutable message and action identities through an uncertain retry", async () => {
   const request = vi
     .fn()
@@ -686,9 +783,6 @@ it("reorders an immutable full queue and accepts each typed outcome", async () =
       requestId: "reorder-action",
       executionIds: ["second", "first"],
     },
-    // Conversation commands can open an agent, so they raise the connection's
-    // ordinary deadline rather than being abandoned mid-launch.
-    { atLeastMs: agentOperationTimeoutMs },
   ])
   finish({ requestId: "reorder-action", outcome: "applied" })
   expect(await pending).toEqual({ requestId: "reorder-action", outcome: "applied" })
@@ -792,10 +886,9 @@ it("sends an image-only message, and steers with images the same way", async () 
   await api.send(conversationId, "", [image])
   await api.steer(conversationId, "  ", [image])
   const command = { conversationId, executionId: "id", requestId: "id", files: [] }
-  const deadline = { atLeastMs: agentOperationTimeoutMs }
   expect(request.mock.calls).toEqual([
-    ["conversation.send", { ...command, text: "", attachments: [image] }, deadline],
-    ["conversation.steer", { ...command, text: "  ", attachments: [image] }, deadline],
+    ["conversation.send", { ...command, text: "", attachments: [image] }],
+    ["conversation.steer", { ...command, text: "  ", attachments: [image] }],
   ])
 })
 it("sends a message that only points at files, and refuses a path it could not carry", () => {
@@ -803,12 +896,11 @@ it("sends a message that only points at files, and refuses a path it could not c
   const api = createConversationApi({ request }, () => "id")
   const file = { path: "/Users/ada/report (final).pdf" }
   const command = { conversationId, executionId: "id", requestId: "id", attachments: [] }
-  const deadline = { atLeastMs: agentOperationTimeoutMs }
 
   // A file alone is a whole message; the path travels and nothing else does.
   void api.send(conversationId, "", [], [file])
   expect(request.mock.calls).toEqual([
-    ["conversation.send", { ...command, text: "", files: [file] }, deadline],
+    ["conversation.send", { ...command, text: "", files: [file] }],
   ])
 
   // Refused here, before anything is sent, for every path the gateway's own

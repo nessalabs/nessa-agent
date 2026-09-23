@@ -3,6 +3,7 @@
 use super::*;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+use std::sync::OnceLock;
 
 async fn submit(
     agent: &Agent,
@@ -26,7 +27,7 @@ async fn message_byte_limit_precedes_every_admission_save() {
         for oversized in [false, true] {
             let storage = MemoryStorage::default();
             let provider = TestProvider::new();
-            let agent = Agent::new(provider.clone(), storage.manager().await)
+            let agent = attached_agent(provider.clone(), storage.manager().await)
                 .await
                 .unwrap();
             let writes = storage.0.lock().unwrap().writes;
@@ -64,7 +65,7 @@ async fn message_byte_limit_precedes_every_admission_save() {
 #[tokio::test]
 async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
     let storage = MemoryStorage::default();
-    let agent = Agent::new(TestProvider::new(), storage.manager().await)
+    let agent = attached_agent(TestProvider::new(), storage.manager().await)
         .await
         .unwrap();
     agent.invoke(request("saved"), actor()).await.unwrap();
@@ -84,10 +85,10 @@ async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
     );
     let writes = storage.0.lock().unwrap().writes;
     let provider = TestProvider::new();
-    assert!(
-        matches!(Agent::new(provider.clone(), storage.manager().await).await,
-        Err(error) if matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_))))
-    );
+    assert!(matches!(
+        attached_agent(provider.clone(), storage.manager().await).await,
+        Err(AgentError::Storage(StorageError::Corrupt(_)))
+    ));
     assert!(provider.calls.opens.lock().unwrap().is_empty());
     assert_eq!(storage.0.lock().unwrap().writes, writes);
     assert_eq!(
@@ -107,7 +108,7 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
         for text in [Some("look at this"), None] {
             let storage = MemoryStorage::default();
             let provider = TestProvider::new();
-            let agent = Agent::new(provider.clone(), storage.manager().await)
+            let agent = attached_agent(provider.clone(), storage.manager().await)
                 .await
                 .unwrap();
             let writes = storage.0.lock().unwrap().writes;
@@ -130,8 +131,18 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                 "operation {operation}"
             );
             assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
-            assert_eq!(storage.0.lock().unwrap().writes, writes);
-            assert!(storage.snapshot().invocations.is_empty());
+            if operation != 3 {
+                assert_eq!(storage.0.lock().unwrap().writes, writes);
+                assert!(storage.snapshot().invocations.is_empty());
+            } else {
+                let snapshot = storage.snapshot();
+                assert_eq!(snapshot.invocations.len(), 1, "operation {operation}");
+                assert_eq!(
+                    snapshot.invocations[0].result,
+                    Some(result),
+                    "operation {operation}"
+                );
+            }
             agent.close(actor()).await.unwrap();
         }
     }
@@ -206,11 +217,19 @@ fn image_capabilities() -> EffectiveCapabilities {
     )
     .unwrap()
 }
+fn image_capabilities_ref() -> &'static EffectiveCapabilities {
+    static CAPABILITIES: OnceLock<EffectiveCapabilities> = OnceLock::new();
+    CAPABILITIES.get_or_init(image_capabilities)
+}
 impl AgentProvider for ImageProvider {
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("fixture", "fixture", "workspace").unwrap()
+        ProviderIdentity::new("anthropic", "fixture", "workspace").unwrap()
     }
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        image_capabilities_ref()
+    }
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        let (restore, _control) = request.into_parts();
         Box::pin(async move {
             let id =
                 restore.unwrap_or_else(|| ExecutionSessionId::new("provider-context").unwrap());
@@ -224,8 +243,7 @@ impl AgentProvider for ImageProvider {
                         refuses: self.refuses.clone(),
                         sender,
                     }),
-                    image_capabilities(),
-                    Arc::new(AcceptingAudit),
+                    image_capabilities_ref().clone(),
                 ),
                 events: Box::new(TestEvents(receiver)),
             })
@@ -330,7 +348,9 @@ async fn provider_advertisements_cannot_enable_missing_application_integrations(
         None,
     );
     let storage = MemoryStorage::default();
-    let agent = Agent::new(provider, storage.manager().await).await.unwrap();
+    let agent = attached_agent(provider, storage.manager().await)
+        .await
+        .unwrap();
     let capabilities = agent.operation_capabilities();
     assert_eq!(
         capabilities.compaction_reporting(),
@@ -363,17 +383,19 @@ async fn provider_advertisements_cannot_enable_missing_application_integrations(
 }
 
 /// Submit `input` every way an Agent accepts input and require the same
-/// outcome each time. A refusal must have saved and sent nothing.
+/// outcome each time, distinguishing application refusal from a durably admitted
+/// input that only the opened provider can reject.
 async fn every_entry(
     agent_answer: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
     input: &ExecutionRequest,
     expected: Result<ExecutionOutcome, AgentError>,
+    refusal_is_durably_admitted: bool,
 ) {
     for operation in 0..4 {
         let storage = MemoryStorage::default();
         let provider = ImageProvider::new(agent_answer, refuses.clone());
-        let agent = Agent::new(provider.clone(), storage.manager().await)
+        let agent = attached_agent(provider.clone(), storage.manager().await)
             .await
             .unwrap();
         let writes = storage.0.lock().unwrap().writes;
@@ -382,8 +404,18 @@ async fn every_entry(
         let executions = provider.executions.load(Ordering::SeqCst);
         if expected.is_err() {
             assert_eq!(executions, 0, "operation {operation}");
-            assert_eq!(storage.0.lock().unwrap().writes, writes);
-            assert!(storage.snapshot().invocations.is_empty());
+            if refusal_is_durably_admitted || operation == 3 {
+                let snapshot = storage.snapshot();
+                assert_eq!(snapshot.invocations.len(), 1, "operation {operation}");
+                assert_eq!(
+                    snapshot.invocations[0].result,
+                    Some(result),
+                    "operation {operation}"
+                );
+            } else {
+                assert_eq!(storage.0.lock().unwrap().writes, writes);
+                assert!(storage.snapshot().invocations.is_empty());
+            }
         } else {
             assert_eq!(executions, 1, "operation {operation}");
         }
@@ -399,7 +431,7 @@ fn with_images(id: &str, images: Vec<ImageReference>) -> ExecutionRequest {
 }
 
 #[tokio::test]
-async fn an_agent_known_to_take_no_images_is_a_typed_refusal_before_every_admission_save() {
+async fn an_agent_image_refusal_is_retained_without_provider_execution() {
     let input = with_images("image", vec![image(ImageMediaType::Png, 6)]);
     every_entry(
         AGENT_TAKES_NO_IMAGES,
@@ -408,6 +440,7 @@ async fn an_agent_known_to_take_no_images_is_a_typed_refusal_before_every_admiss
         Err(AgentError::ImageInputRefused(
             ImageInputRefusal::AgentDoesNotAccept,
         )),
+        true,
     )
     .await;
     // The same agent still takes text: only the images were the problem.
@@ -416,6 +449,7 @@ async fn an_agent_known_to_take_no_images_is_a_typed_refusal_before_every_admiss
         None,
         &request("text"),
         Ok(ExecutionOutcome::Completed),
+        false,
     )
     .await;
 }
@@ -426,7 +460,7 @@ async fn an_agent_whose_answer_is_not_known_is_not_refused_at_admission() {
     // answers for itself at dispatch. An agent that said yes is admitted too.
     let input = with_images("image", vec![image(ImageMediaType::Png, 6)]);
     for answer in [AGENT_NOT_YET_KNOWN, AGENT_TAKES_IMAGES] {
-        every_entry(answer, None, &input, Ok(ExecutionOutcome::Completed)).await;
+        every_entry(answer, None, &input, Ok(ExecutionOutcome::Completed), false).await;
     }
 }
 
@@ -451,13 +485,14 @@ async fn an_image_outside_the_models_limits_is_a_typed_refusal_before_every_admi
             None,
             &with_images("image", images),
             Err(AgentError::ImageInputRefused(refusal)),
+            false,
         )
         .await;
     }
 }
 
 #[tokio::test]
-async fn what_the_backend_could_never_deliver_is_refused_before_every_admission_save() {
+async fn backend_refusal_is_retained_without_provider_execution() {
     let refusal = AgentError::MessageTooLarge {
         encoded_bytes: 9000,
         max_bytes: 8192,
@@ -471,6 +506,7 @@ async fn what_the_backend_could_never_deliver_is_refused_before_every_admission_
             Some(refusal.clone()),
             &input,
             Err(refusal.clone()),
+            true,
         )
         .await;
     }

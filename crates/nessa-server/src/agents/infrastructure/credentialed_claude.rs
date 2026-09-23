@@ -10,11 +10,14 @@ use nessa_sdk::{
     application::agent_execution::{
         agents::AgentError,
         executions::ExecutionAudit,
-        providers::{AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture},
+        providers::{
+            AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture,
+            ProviderOpenRequest,
+        },
     },
     domain::{
-        agent_execution::{prompts::SystemPrompt, sessions::ExecutionSessionId},
-        common::value_objects::TokenLimits,
+        agent_execution::prompts::SystemPrompt, common::value_objects::TokenLimits,
+        effective_capabilities::value_objects::EffectiveCapabilities,
         model_metadata::entities::ModelMetadata,
     },
     infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
@@ -36,6 +39,7 @@ pub struct CredentialedClaudeProvider {
     prompt: SystemPrompt,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
+    capabilities: EffectiveCapabilities,
 }
 
 impl CredentialedClaudeProvider {
@@ -52,9 +56,10 @@ impl CredentialedClaudeProvider {
         prompt: SystemPrompt,
         credentials: Arc<dyn AgentCredentialSource>,
     ) -> Result<Self, AgentError> {
-        let identity = ClaudeAcpProvider::new(config.clone(), &model, limits, audit.clone())?
-            .with_system_prompt(prompt.clone())
-            .identity();
+        let provider = ClaudeAcpProvider::new(config.clone(), &model, limits, audit.clone())?
+            .with_system_prompt(prompt.clone());
+        let identity = provider.identity();
+        let capabilities = provider.capabilities().clone();
         Ok(Self {
             config,
             model,
@@ -63,6 +68,7 @@ impl CredentialedClaudeProvider {
             prompt,
             credentials,
             identity,
+            capabilities,
         })
     }
 }
@@ -72,7 +78,11 @@ impl AgentProvider for CredentialedClaudeProvider {
         self.identity.clone()
     }
 
-    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        &self.capabilities
+    }
+
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         let credentials = self.credentials.clone();
         let mut config = self.config.clone();
         let model = self.model.clone();
@@ -90,7 +100,7 @@ impl AgentProvider for CredentialedClaudeProvider {
             let provider = ClaudeAcpProvider::new(config, &model, limits, audit)
                 .map_err(ProviderOpenError::no_resources)?
                 .with_system_prompt(prompt);
-            provider.open(restore).await
+            provider.open(request).await
         })
     }
 }

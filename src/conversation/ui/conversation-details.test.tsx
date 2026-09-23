@@ -50,6 +50,7 @@ it("describes scoped support without implying missing policy integrations", () =
         incomingElicitation: "unsupported_not_implemented",
       },
     },
+    lifecycle: { phase: "attached" },
   }
 
   act(() => {

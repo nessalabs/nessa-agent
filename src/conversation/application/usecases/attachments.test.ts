@@ -90,6 +90,7 @@ const remote = {
   tools: [],
   pending: [],
   capabilities,
+  lifecycle: { phase: "attached" as const },
   queueComplete: true,
   truncated: false,
 }

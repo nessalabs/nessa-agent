@@ -1,7 +1,7 @@
 //! Provider observations keep resource ownership separate from diagnostic failures.
 #![deny(missing_docs)]
 
-use super::CloseOutcome;
+use super::{CloseOutcome, FinalizedExecutionProjection, FinalizedExecutionSource};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionEvent;
 use crate::application::agent_execution::permissions::PermissionSelectionState;
@@ -22,7 +22,8 @@ pub enum ResourceCleanup {
 pub struct CleanupReport {
     resources: ResourceCleanup,
     audit: Result<(), AgentError>,
-    operation_failure: Option<AgentError>,
+    operation_failure: Option<Box<AgentError>>,
+    completion_failure: Option<Box<AgentError>>,
 }
 impl CleanupReport {
     /// Record actual `resources` and independent `audit` acknowledgement.
@@ -36,6 +37,7 @@ impl CleanupReport {
             resources,
             audit: audit.map_err(AgentError::bounded),
             operation_failure: None,
+            completion_failure: None,
         }
     }
     /// Confirm cleanup with no outstanding audit failure.
@@ -60,28 +62,62 @@ impl CleanupReport {
     }
     /// Replace physical evidence after retry, retaining the original audit result.
     pub fn with_resources(self, resources: ResourceCleanup) -> Self {
-        Self::new(resources, self.audit).with_operation_failure(self.operation_failure)
+        Self::new(resources, self.audit)
+            .with_operation_failure(self.operation_failure.map(|error| *error))
+            .with_completion_failure(self.completion_failure.map(|error| *error))
+    }
+    /// Replace audit acknowledgement while preserving physical cleanup and the
+    /// initiating operation diagnostic.
+    pub fn with_audit(self, audit: Result<(), AgentError>) -> Self {
+        Self::new(self.resources, audit)
+            .with_operation_failure(self.operation_failure.map(|error| *error))
+            .with_completion_failure(self.completion_failure.map(|error| *error))
     }
     /// Preserve the initiating operation diagnostic alongside cleanup and audit.
     pub fn with_operation_failure(mut self, failure: Option<AgentError>) -> Self {
-        self.operation_failure = failure.map(AgentError::bounded);
+        self.operation_failure = failure.map(|error| Box::new(error.bounded()));
         self
     }
     /// Initiating operation failure, separate from this cleanup attempt.
     pub fn operation_failure(&self) -> Option<&AgentError> {
-        self.operation_failure.as_ref()
+        self.operation_failure.as_deref()
+    }
+    /// Failure while supervising completion of this cleanup attempt.
+    ///
+    /// This is independent of physical release and audit acknowledgement. For
+    /// example, a provider may return confirmed cleanup before destroying its
+    /// cleanup future panics. The confirmed physical fact remains authoritative,
+    /// while callers still observe the supervision failure.
+    pub fn completion_failure(&self) -> Option<&AgentError> {
+        self.completion_failure.as_deref()
+    }
+    /// Preserve a failure from supervising this cleanup attempt.
+    pub fn with_completion_failure(mut self, failure: Option<AgentError>) -> Self {
+        self.completion_failure = failure.map(|error| Box::new(error.bounded()));
+        self
     }
     /// Return the result of this cleanup attempt.
-    /// Confirmed resources and successful audit delivery return `Ok`, even when
-    /// `operation_failure` retains an earlier operation error. That field is
-    /// historical evidence, not a failure of otherwise successful cleanup.
-    /// If cleanup or audit fails, the returned error includes that earlier error.
+    /// Confirmed resources and successful audit delivery return `Ok` when cleanup
+    /// supervision also completed, even when `operation_failure` retains an earlier
+    /// operation error. That field is historical evidence, not a failure of an
+    /// otherwise successful cleanup. A `completion_failure` remains observable
+    /// without changing the physical-release fact.
+    /// If cleanup, supervision, or audit fails, the returned error includes it.
     /// Inspect [`Self::operation_failure`] before consuming the report when the
     /// original operation matters. Session lifecycle decisions use
     /// [`Self::resources`] and [`Self::audit`] directly.
     pub fn into_result(self) -> Result<CloseOutcome, AgentError> {
-        let cleanup = match (self.resources, self.audit) {
-            (ResourceCleanup::Confirmed(outcome), Ok(())) => return Ok(outcome),
+        let Self {
+            resources,
+            audit,
+            operation_failure,
+            completion_failure,
+        } = self;
+        let cleanup = match (resources, audit) {
+            (ResourceCleanup::Confirmed(outcome), Ok(())) => match completion_failure {
+                Some(error) => return Err(*error),
+                None => return Ok(outcome),
+            },
             (ResourceCleanup::Confirmed(_), Err(error))
             | (ResourceCleanup::Unconfirmed(error), Ok(())) => error,
             (ResourceCleanup::Unconfirmed(cleanup_error), Err(operation_error)) => {
@@ -91,14 +127,19 @@ impl CleanupReport {
                 }
             }
         };
-        Err(match self.operation_failure {
-            Some(operation_error) if operation_error != cleanup => {
-                AgentError::OperationAndCleanupFailure {
-                    operation_error: Box::new(operation_error),
-                    cleanup_error: Box::new(cleanup),
-                }
-            }
-            _ => cleanup,
+        let cleanup = match completion_failure {
+            Some(completion_error) => AgentError::OperationAndCleanupFailure {
+                operation_error: Box::new(cleanup),
+                cleanup_error: completion_error,
+            },
+            None => cleanup,
+        };
+        Err(match operation_failure {
+            Some(operation_error) => AgentError::OperationAndCleanupFailure {
+                operation_error,
+                cleanup_error: Box::new(cleanup),
+            },
+            None => cleanup,
         })
     }
 }
@@ -183,13 +224,79 @@ pub enum ExecutionReportSource {
     LocalCancellation,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FinalizedExecutionReport {
+    source: FinalizedExecutionSource,
+    physical: ResourceCleanup,
+    completion_failure: Option<AgentError>,
+    projection: FinalizedExecutionProjection,
+    failure: Option<AgentError>,
+    session_state: ProviderSessionState,
+}
+impl FinalizedExecutionReport {
+    fn new(
+        source: FinalizedExecutionSource,
+        physical: ResourceCleanup,
+        completion_failure: Option<AgentError>,
+        projection: FinalizedExecutionProjection,
+    ) -> Self {
+        let physical = match physical {
+            ResourceCleanup::Confirmed(outcome) => ResourceCleanup::Confirmed(outcome),
+            ResourceCleanup::Unconfirmed(error) => ResourceCleanup::Unconfirmed(error.bounded()),
+        };
+        let completion_failure = completion_failure.map(AgentError::bounded);
+        let failure = projection.consumer_failure();
+        let session_state = ProviderSessionState::CleanupReported(
+            CleanupReport::new(physical.clone(), projection.audit_result())
+                .with_operation_failure(projection.operation_failure())
+                .with_completion_failure(completion_failure.clone()),
+        );
+        Self {
+            source,
+            physical,
+            completion_failure,
+            projection,
+            failure,
+            session_state,
+        }
+    }
+    fn physical_failure(&self) -> Option<AgentError> {
+        let physical = match &self.physical {
+            ResourceCleanup::Confirmed(_) => None,
+            ResourceCleanup::Unconfirmed(error) => Some(error.clone()),
+        };
+        combine_failures(physical, self.completion_failure.clone())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ExecutionReportState {
+    Independent {
+        provider_result: Option<Result<ExecutionOutcome, AgentError>>,
+        source: ExecutionReportSource,
+        failure: Option<AgentError>,
+        session_state: ProviderSessionState,
+    },
+    Finalized(FinalizedExecutionReport),
+}
+
+type IndependentExecutionParts<'a> = (
+    Option<&'a Result<ExecutionOutcome, AgentError>>,
+    ExecutionReportSource,
+    Option<&'a AgentError>,
+    &'a ProviderSessionState,
+);
+type FinalizedExecutionParts<'a> = (
+    &'a FinalizedExecutionSource,
+    &'a ResourceCleanup,
+    Option<&'a AgentError>,
+    &'a FinalizedExecutionProjection,
+);
+
 /// Provider result and any separate delivery or audit failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionReport {
-    provider_result: Option<Result<ExecutionOutcome, AgentError>>,
-    source: ExecutionReportSource,
-    failure: Option<AgentError>,
-    session_state: ProviderSessionState,
+    state: Box<ExecutionReportState>,
 }
 impl ExecutionReport {
     /// Retain the actual provider result (None if unknown), independent failure,
@@ -200,11 +307,78 @@ impl ExecutionReport {
         session_state: ProviderSessionState,
     ) -> Self {
         Self {
-            source: ExecutionReportSource::Provider,
-            provider_result: provider_result.map(|result| result.map_err(AgentError::bounded)),
-            failure: failure.map(AgentError::bounded),
-            session_state,
+            state: Box::new(ExecutionReportState::Independent {
+                source: ExecutionReportSource::Provider,
+                provider_result: provider_result.map(|result| result.map_err(AgentError::bounded)),
+                failure: failure.map(AgentError::bounded),
+                session_state,
+            }),
         }
+    }
+    /// Build a provider settlement from one validated finalized recipe.
+    pub(crate) fn finalized_provider(
+        provider_result: Option<Result<ExecutionOutcome, AgentError>>,
+        physical: ResourceCleanup,
+        completion_failure: Option<AgentError>,
+        projection: FinalizedExecutionProjection,
+    ) -> Self {
+        let provider_result = provider_result.map(|result| result.map_err(AgentError::bounded));
+        Self {
+            state: Box::new(ExecutionReportState::Finalized(
+                FinalizedExecutionReport::new(
+                    FinalizedExecutionSource::Provider(provider_result),
+                    physical,
+                    completion_failure,
+                    projection,
+                ),
+            )),
+        }
+    }
+    /// Build a locally cancelled settlement from one validated finalized recipe.
+    pub(crate) fn finalized_local_cancellation(
+        physical: ResourceCleanup,
+        completion_failure: Option<AgentError>,
+        projection: FinalizedExecutionProjection,
+    ) -> Self {
+        Self {
+            state: Box::new(ExecutionReportState::Finalized(
+                FinalizedExecutionReport::new(
+                    FinalizedExecutionSource::LocalCancellation,
+                    physical,
+                    completion_failure,
+                    projection,
+                ),
+            )),
+        }
+    }
+    /// Internal finalized authority for current storage encoding.
+    pub(crate) fn finalized_parts(&self) -> Option<FinalizedExecutionParts<'_>> {
+        let ExecutionReportState::Finalized(report) = self.state.as_ref() else {
+            return None;
+        };
+        Some((
+            &report.source,
+            &report.physical,
+            report.completion_failure.as_ref(),
+            &report.projection,
+        ))
+    }
+    pub(crate) fn independent_parts(&self) -> Option<IndependentExecutionParts<'_>> {
+        let ExecutionReportState::Independent {
+            provider_result,
+            source,
+            failure,
+            session_state,
+        } = self.state.as_ref()
+        else {
+            return None;
+        };
+        Some((
+            provider_result.as_ref(),
+            *source,
+            failure.as_ref(),
+            session_state,
+        ))
     }
     /// Record local cancellation and separate cleanup evidence without inventing a provider reply.
     /// Use this only when settling an invocation stopped by its owning Agent. The
@@ -214,38 +388,97 @@ impl ExecutionReport {
     /// Unconfirmed cleanup still projects an error; local intent never confirms termination.
     pub fn cancelled_locally(report: CleanupReport) -> Self {
         Self {
-            provider_result: None,
-            failure: None,
-            session_state: ProviderSessionState::CleanupReported(report),
-            source: ExecutionReportSource::LocalCancellation,
+            state: Box::new(ExecutionReportState::Independent {
+                provider_result: None,
+                failure: None,
+                session_state: ProviderSessionState::CleanupReported(report),
+                source: ExecutionReportSource::LocalCancellation,
+            }),
         }
     }
     /// Whether local cancellation settled the invocation without a provider response.
     pub fn source(&self) -> ExecutionReportSource {
-        self.source
+        match self.state.as_ref() {
+            ExecutionReportState::Independent { source, .. } => *source,
+            ExecutionReportState::Finalized(report) => match &report.source {
+                FinalizedExecutionSource::Provider(_) => ExecutionReportSource::Provider,
+                FinalizedExecutionSource::LocalCancellation => {
+                    ExecutionReportSource::LocalCancellation
+                }
+            },
+        }
     }
     /// Result actually observed from the provider, or None when unknown.
     pub fn provider_result(&self) -> Option<&Result<ExecutionOutcome, AgentError>> {
-        self.provider_result.as_ref()
+        match self.state.as_ref() {
+            ExecutionReportState::Independent {
+                provider_result, ..
+            } => provider_result.as_ref(),
+            ExecutionReportState::Finalized(report) => match &report.source {
+                FinalizedExecutionSource::Provider(result) => result.as_ref(),
+                FinalizedExecutionSource::LocalCancellation => None,
+            },
+        }
     }
     /// Independent observation, delivery, or audit failure.
     pub fn failure(&self) -> Option<&AgentError> {
-        self.failure.as_ref()
+        match self.state.as_ref() {
+            ExecutionReportState::Independent { failure, .. } => failure.as_ref(),
+            ExecutionReportState::Finalized(report) => report.failure.as_ref(),
+        }
     }
     /// Explicit provider session status when settlement was published.
     pub fn session_state(&self) -> &ProviderSessionState {
-        &self.session_state
+        match self.state.as_ref() {
+            ExecutionReportState::Independent { session_state, .. } => session_state,
+            ExecutionReportState::Finalized(report) => &report.session_state,
+        }
     }
     /// Consumer projection retaining a known outcome alongside secondary failure.
     pub fn into_result(self) -> Result<ExecutionOutcome, AgentError> {
-        let (cleanup_failure, cleanup_primary) = match self.session_state {
+        let (provider_result, source, failure, session_state) = match *self.state {
+            ExecutionReportState::Independent {
+                provider_result,
+                source,
+                failure,
+                session_state,
+            } => (provider_result, source, failure, session_state),
+            ExecutionReportState::Finalized(report) => {
+                let failure = combine_failures(report.failure.clone(), report.physical_failure());
+                return match (report.source, failure) {
+                    (FinalizedExecutionSource::Provider(Some(result)), Some(error)) => {
+                        Err(AgentError::ExecutionObservation {
+                            error: Box::new(error),
+                            execution_result: Some(Box::new(result)),
+                        }
+                        .bounded())
+                    }
+                    (FinalizedExecutionSource::Provider(None), Some(error)) => Err(error),
+                    (FinalizedExecutionSource::Provider(Some(result)), None) => result,
+                    (FinalizedExecutionSource::Provider(None), None) => {
+                        Err(AgentError::SubmissionUnresolved)
+                    }
+                    (FinalizedExecutionSource::LocalCancellation, Some(error)) => {
+                        Err(AgentError::ExecutionObservation {
+                            error: Box::new(error),
+                            execution_result: Some(Box::new(Ok(ExecutionOutcome::Cancelled))),
+                        }
+                        .bounded())
+                    }
+                    (FinalizedExecutionSource::LocalCancellation, None) => {
+                        Ok(ExecutionOutcome::Cancelled)
+                    }
+                };
+            }
+        };
+        let (cleanup_failure, cleanup_primary) = match session_state {
             ProviderSessionState::CleanupReported(report) => {
-                let primary = report.operation_failure.clone();
+                let primary = report.operation_failure().cloned();
                 (report.into_result().err(), primary)
             }
             _ => (None, None),
         };
-        let failure = match (self.failure, cleanup_failure) {
+        let failure = match (failure, cleanup_failure) {
             (Some(operation_error), Some(cleanup_error))
                 if cleanup_primary.as_ref() == Some(&operation_error) =>
             {
@@ -259,7 +492,7 @@ impl ExecutionReport {
             }
             (first, second) => first.or(second),
         };
-        match (self.provider_result, failure) {
+        match (provider_result, failure) {
             (Some(Err(primary)), Some(error)) if primary == error => Err(primary),
             (None, Some(error)) => Err(error),
             (result, Some(error)) => Err(AgentError::ExecutionObservation {
@@ -267,11 +500,23 @@ impl ExecutionReport {
                 execution_result: result.map(Box::new),
             }),
             (Some(result), None) => result,
-            (None, None) if self.source == ExecutionReportSource::LocalCancellation => {
+            (None, None) if source == ExecutionReportSource::LocalCancellation => {
                 Ok(ExecutionOutcome::Cancelled)
             }
             (None, None) => Err(AgentError::SubmissionUnresolved),
         }
+    }
+}
+
+fn combine_failures(first: Option<AgentError>, second: Option<AgentError>) -> Option<AgentError> {
+    match (first, second) {
+        (Some(first_error), Some(subsequent_error)) => {
+            Some(AgentError::MultipleOperationFailures {
+                first_error: Box::new(first_error),
+                subsequent_error: Box::new(subsequent_error),
+            })
+        }
+        (first, second) => first.or(second),
     }
 }
 

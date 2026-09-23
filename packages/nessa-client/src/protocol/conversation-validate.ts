@@ -117,6 +117,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "permissions",
     "tools",
     "capabilities",
+    "lifecycle",
     "truncated",
     "permissionViewError",
     "queueComplete",
@@ -364,6 +365,28 @@ export function conversationView(value: unknown, expected: string): Conversation
   exact(features, Object.keys(featureValues))
   for (const [key, values] of Object.entries(featureValues))
     oneOf(text(features, key), Object.values(values))
+  const lifecycle = record(item.lifecycle)
+  exact(lifecycle, ["phase", "failure", "evidenceFailure"])
+  const phase = text(lifecycle, "phase")
+  oneOf(phase, ["absent", "starting", "attached", "failed"])
+  const attachmentFailure = (value: unknown) => {
+    const failure = record(value)
+    exact(failure, ["code", "message"])
+    oneOf(text(failure, "code"), ["audit", "provider", "storage", "cleanup"])
+    text(failure, "message", 2048, false)
+  }
+  if (phase === "failed") {
+    attachmentFailure(lifecycle.failure)
+  } else if (lifecycle.failure !== undefined) {
+    throw new Error("Conversation lifecycle failure contradicts its phase")
+  }
+  if (lifecycle.evidenceFailure !== undefined)
+    attachmentFailure(lifecycle.evidenceFailure)
+  if (
+    lifecycle.evidenceFailure !== undefined &&
+    record(lifecycle.evidenceFailure).code !== "audit"
+  )
+    throw new Error("Conversation lifecycle evidence has an invalid cause")
   return item as unknown as ConversationView
 }
 
