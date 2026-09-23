@@ -1,5 +1,5 @@
 use super::{MAX_BYTES, MAX_DEPTH, MAX_NODES};
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::{
     CleanupReport, CloseOutcome, ExecutionReport, ProviderOperationFailure, ProviderSessionState,
@@ -7,6 +7,57 @@ use crate::application::agent_execution::providers::{
 };
 use crate::application::agent_execution::sessions::StorageError;
 use crate::domain::agent_execution::executions::ExecutionOutcome;
+
+#[test]
+fn provider_diagnostics_bound_utf8_and_compact_input_capacity() {
+    let mut spare = String::with_capacity(ProviderDiagnostic::MAX_BYTES * 2);
+    spare.push_str("brief");
+    let compact = ProviderDiagnostic::new(spare);
+    assert_eq!(compact.as_str(), "brief");
+
+    assert_eq!(ProviderDiagnostic::new("").as_str(), "");
+    let exact = "x".repeat(ProviderDiagnostic::MAX_BYTES);
+    assert_eq!(ProviderDiagnostic::new(exact.clone()).as_str(), exact);
+
+    let multibyte = format!("{}😀tail", "x".repeat(ProviderDiagnostic::MAX_BYTES - 2));
+    let bounded = ProviderDiagnostic::new(multibyte);
+    assert!(bounded.as_str().is_char_boundary(bounded.as_str().len()));
+    assert!(bounded.as_str().len() <= ProviderDiagnostic::MAX_BYTES);
+    assert!(bounded.as_str().ends_with(" [diagnostic truncated]"));
+
+    assert_eq!(
+        ProviderDiagnostic::restore("restored".into())
+            .unwrap()
+            .as_str(),
+        "restored"
+    );
+    assert!(ProviderDiagnostic::restore("x".repeat(ProviderDiagnostic::MAX_BYTES + 1)).is_err());
+}
+
+#[test]
+fn provider_codes_and_diagnostics_remain_independent_facts() {
+    let first = ProviderDiagnostic::new("first explanation");
+    let second = ProviderDiagnostic::new("second explanation");
+    let same_code_first = AgentError::Provider {
+        code: -32000,
+        diagnostic: Some(first.clone()),
+    };
+    let same_code_second = AgentError::Provider {
+        code: -32000,
+        diagnostic: Some(second),
+    };
+    let different_code_same_diagnostic = AgentError::Provider {
+        code: -32001,
+        diagnostic: Some(first),
+    };
+    assert_ne!(same_code_first, same_code_second);
+    assert_ne!(same_code_first, different_code_same_diagnostic);
+    assert!(same_code_first.validate_retained_size().is_ok());
+    assert!(same_code_second.validate_retained_size().is_ok());
+    assert!(different_code_same_diagnostic
+        .validate_retained_size()
+        .is_ok());
+}
 
 #[test]
 fn oversized_diagnostics_are_bounded_before_clone_including_spare_capacity() {
@@ -100,7 +151,10 @@ fn diagnostic_normalization_preserves_explicit_resource_and_audit_reports() {
         assert_eq!(report.audit(), &Err(AgentError::DiagnosticLimit));
         let failure = ProviderOperationFailure::new(
             AgentError::MultipleOperationFailures {
-                first_error: Box::new(AgentError::Provider { code: 42 }),
+                first_error: Box::new(AgentError::Provider {
+                    code: 42,
+                    diagnostic: None,
+                }),
                 subsequent_error: Box::new(AgentError::Transport("x".repeat(MAX_BYTES))),
             },
             ProviderSessionState::CleanupReported(report.clone()),
@@ -123,7 +177,10 @@ fn diagnostic_normalization_preserves_explicit_resource_and_audit_reports() {
 fn diagnostic_summary_cannot_erase_separately_reported_provider_settlement() {
     for provider_result in [
         Ok(ExecutionOutcome::Completed),
-        Err(AgentError::Provider { code: 42 }),
+        Err(AgentError::Provider {
+            code: 42,
+            diagnostic: None,
+        }),
     ] {
         let provider_state = ProviderSessionState::CleanupRequired;
         let settlement = ExecutionReport::new(

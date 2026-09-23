@@ -10,7 +10,10 @@ async fn oversized_provider_errors_are_bounded_for_direct_and_queued_receipts() 
                 forced: false,
             }));
         *backend.execution_error.lock().unwrap() = Some(AgentError::OperationAndCleanupFailure {
-            operation_error: Box::new(AgentError::Provider { code: 401 }),
+            operation_error: Box::new(AgentError::Provider {
+                code: 401,
+                diagnostic: None,
+            }),
             cleanup_error: Box::new(AgentError::StorageDuringClose {
                 error: StorageError::Io("x".repeat(1024 * 1024)),
                 cleanup_result: Box::new(Ok(CloseOutcome { forced: false })),

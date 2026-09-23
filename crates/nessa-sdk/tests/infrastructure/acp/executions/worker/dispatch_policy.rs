@@ -1,6 +1,8 @@
 //! Ready wire policy evidence precedes prompt writes, including native steering.
 use super::*;
-use crate::application::agent_execution::{executions::ExecutionRequest, tools::ToolReviewInput};
+use crate::application::agent_execution::{
+    agents::ProviderDiagnostic, executions::ExecutionRequest, tools::ToolReviewInput,
+};
 use crate::domain::agent_execution::{
     prompts::{PromptText, UserMessage},
     tools::ToolCallUpdate,
@@ -313,7 +315,13 @@ async fn valid_ready_burst_larger_than_batch_preserves_prompt_dispatch() {
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
-    assert_eq!(failure, Err(AgentError::Provider { code: -32099 }));
+    assert_eq!(
+        failure,
+        Err(AgentError::Provider {
+            code: -32099,
+            diagnostic: Some(ProviderDiagnostic::new("test prompt observed"))
+        })
+    );
     assert_eq!(worker.sequence, 1);
     assert_eq!(
         execution.active_execution_id(),
