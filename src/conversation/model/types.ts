@@ -140,9 +140,10 @@ export type UserTurn = {
 export type AgentPart = {
   messageId?: string
   offset: number
-  kind: "text" | "thought" | "tool"
+  kind: "text" | "thought" | "tool" | "local_notice"
   text: string
   toolId: string
+  noticeId: string
 }
 
 export type AssistantTurn = {

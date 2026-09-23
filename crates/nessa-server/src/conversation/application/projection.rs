@@ -10,6 +10,7 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
     prompts::UserMessage,
     tools::{ToolContentView, ToolStatus},
 };
@@ -47,6 +48,30 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::RequestLimit
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
+}
+fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> String {
+    let target = decline
+        .declared()
+        .map(|tool| format!(" labeled {tool}"))
+        .unwrap_or_default();
+    let reason = match decline.reason() {
+        ReviewDeclineReason::ToolNotReviewable => "that tool is not reviewable here",
+        ReviewDeclineReason::UnreadableRequest => "the request could not be read safely",
+        ReviewDeclineReason::UnusableOptions => "the request offered no usable choices",
+    };
+    let delivery = match delivery {
+        ReviewDeclineStage::Selected => "Nessa has not confirmed writing the refusal to the agent.",
+        ReviewDeclineStage::WriteConfirmed => "",
+        ReviewDeclineStage::WriteUnconfirmed => {
+            "Nessa could not confirm writing the refusal to the agent."
+        }
+        ReviewDeclineStage::WriteNotAttempted => {
+            "Nessa did not attempt to write the refusal to the agent."
+        }
+    };
+    format!("Nessa declined a tool review{target} because {reason}. {delivery}")
+        .trim_end()
+        .to_owned()
 }
 fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let final_error = record.result.as_ref()?.as_ref().err()?;
@@ -272,7 +297,9 @@ impl Projection {
                             .permissions
                             .retain(|permission| permission.execution_id != execution);
                     }
-                    ExecutionUpdate::Message(_) | ExecutionUpdate::Tool(_) => {}
+                    ExecutionUpdate::Message(_)
+                    | ExecutionUpdate::Tool(_)
+                    | ExecutionUpdate::ReviewDeclined(_) => {}
                 }
             }
         }
@@ -408,13 +435,12 @@ impl Projection {
             .retain(|pending| pending.execution_id != id);
         let offset = self.view.messages[index].event_count;
         self.view.messages[index].event_count += 1;
-        let available = (MAX_TEXT * 2).saturating_sub(
-            self.view.messages[index]
-                .parts
-                .iter()
-                .map(|part| part.text.len())
-                .sum::<usize>(),
-        );
+        let retained_text = self.view.messages[index]
+            .parts
+            .iter()
+            .map(|part| part.text.len())
+            .sum::<usize>();
+        let available = (MAX_TEXT * 2).saturating_sub(retained_text);
         if matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.as_str().len() > available)
         {
             self.view.truncated = true;
@@ -432,6 +458,7 @@ impl Projection {
                     .into(),
                     text: clipped(chunk.as_str(), available),
                     tool_id: String::new(),
+                    notice_id: String::new(),
                 })
             }
             ExecutionUpdate::Tool(update) => Some(ConversationPart {
@@ -440,7 +467,40 @@ impl Projection {
                 kind: "tool".into(),
                 text: String::new(),
                 tool_id: clipped(update.id().as_str(), 256),
+                notice_id: String::new(),
             }),
+            ExecutionUpdate::ReviewDeclined(observation) => {
+                let notice_id = observation.id().as_str();
+                let text = decline_notice(observation.decline(), observation.stage());
+                if let Some(position) = self.view.messages[index]
+                    .parts
+                    .iter()
+                    .position(|part| part.kind == "local_notice" && part.notice_id == notice_id)
+                {
+                    let previous = self.view.messages[index].parts[position].text.len();
+                    let budget =
+                        (MAX_TEXT * 2).saturating_sub(retained_text.saturating_sub(previous));
+                    let bounded = clipped(&text, budget);
+                    if bounded.len() != text.len() {
+                        self.view.truncated = true;
+                    }
+                    self.view.messages[index].parts[position].text = bounded;
+                    None
+                } else {
+                    let bounded = clipped(&text, available);
+                    if bounded.len() != text.len() {
+                        self.view.truncated = true;
+                    }
+                    Some(ConversationPart {
+                        message_id: None,
+                        offset,
+                        kind: "local_notice".into(),
+                        text: bounded,
+                        tool_id: String::new(),
+                        notice_id: notice_id.into(),
+                    })
+                }
+            }
             _ => None,
         };
         if let Some(part) = part {
@@ -478,6 +538,9 @@ impl Projection {
                 if !self.lagged {
                     self.observe_permission(event);
                 }
+            }
+            ExecutionUpdate::ReviewDeclined(_) => {
+                self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::Tool(update) => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;

@@ -15,8 +15,22 @@ function nullableMetadataTranscript() {
         from: "assistant",
         text: "",
         parts: [
-          { offset: 0, kind: "thought", text: "First", messageId: "one", toolId: "" },
-          { offset: 1, kind: "thought", text: " second", messageId: "two", toolId: "" },
+          {
+            offset: 0,
+            kind: "thought",
+            text: "First",
+            messageId: "one",
+            toolId: "",
+            noticeId: "",
+          },
+          {
+            offset: 1,
+            kind: "thought",
+            text: " second",
+            messageId: "two",
+            toolId: "",
+            noticeId: "",
+          },
         ],
       },
     ],
@@ -54,8 +68,15 @@ it("renders every message in observation order even when the builder extracts fi
         text: "",
         status: "running",
         parts: [
-          { offset: 0, kind: "text", text: "Checking.", messageId: "a", toolId: "" },
-          { offset: 1, kind: "tool", text: "", toolId: "tool" },
+          {
+            offset: 0,
+            kind: "text",
+            text: "Checking.",
+            messageId: "a",
+            toolId: "",
+            noticeId: "",
+          },
+          { offset: 1, kind: "tool", text: "", toolId: "tool", noticeId: "" },
         ],
       },
       {
@@ -82,7 +103,11 @@ it("renders every message in observation order even when the builder extracts fi
   const row = agentTurnView(transcript.turns[0]!, transcript)
   expect(
     row.content.map((part) =>
-      "text" in part ? part.text : part.activity.map((item) => item.kind),
+      "text" in part
+        ? part.text
+        : "notice" in part
+          ? part.notice
+          : part.activity.map((item) => item.kind),
     ),
   ).toEqual(["Checking.", ["tool"]])
   const activity = row.content.find((part) => "activity" in part)
@@ -106,7 +131,7 @@ it.each(["pending", "running", "completed", "failed"])(
           executionId: "run",
           text: "",
           status: "cancelled",
-          parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool" }],
+          parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool", noticeId: "" }],
         },
       ],
       [
@@ -154,8 +179,8 @@ it.each([
           text: "Done",
           status,
           parts: [
-            { offset: 0, kind: "tool", text: "", toolId: "tool" },
-            { offset: 2, kind: "text", text: "Done", toolId: "" },
+            { offset: 0, kind: "tool", text: "", toolId: "tool", noticeId: "" },
+            { offset: 2, kind: "text", text: "Done", toolId: "", noticeId: "" },
           ],
         },
         {
@@ -209,8 +234,8 @@ it("settles a thought-only activity from its source execution across steering", 
         text: "Done",
         status: "completed",
         parts: [
-          { offset: 0, kind: "thought", text: "Considering", toolId: "" },
-          { offset: 2, kind: "text", text: "Done", toolId: "" },
+          { offset: 0, kind: "thought", text: "Considering", toolId: "", noticeId: "" },
+          { offset: 2, kind: "text", text: "Done", toolId: "", noticeId: "" },
         ],
       },
       {
@@ -245,7 +270,9 @@ it("uses the source turn identity when a local assistant has no execution id", (
         from: "assistant",
         text: "",
         status: "completed",
-        parts: [{ offset: 0, kind: "thought", text: "Local thought", toolId: "" }],
+        parts: [
+          { offset: 0, kind: "thought", text: "Local thought", toolId: "", noticeId: "" },
+        ],
       },
     ],
     [],
@@ -314,7 +341,9 @@ it("rejects disagreement between an activity event and its terminal event", () =
         from: "assistant",
         text: "",
         status: "completed",
-        parts: [{ offset: 0, kind: "thought", text: "Finished", toolId: "" }],
+        parts: [
+          { offset: 0, kind: "thought", text: "Finished", toolId: "", noticeId: "" },
+        ],
       },
     ],
     [],
@@ -349,12 +378,47 @@ it("keeps streamed whitespace inside a thought and omits a whole whitespace-only
         text: "Done",
         status: "completed",
         parts: [
-          { offset: 0, kind: "thought", text: "hello", messageId: "thought", toolId: "" },
-          { offset: 1, kind: "thought", text: " ", messageId: "space", toolId: "" },
-          { offset: 2, kind: "thought", text: "world", messageId: "world", toolId: "" },
-          { offset: 3, kind: "tool", text: "", toolId: "tool" },
-          { offset: 4, kind: "thought", text: "\n\n", messageId: "empty", toolId: "" },
-          { offset: 5, kind: "text", text: "Done", messageId: "answer", toolId: "" },
+          {
+            offset: 0,
+            kind: "thought",
+            text: "hello",
+            messageId: "thought",
+            toolId: "",
+            noticeId: "",
+          },
+          {
+            offset: 1,
+            kind: "thought",
+            text: " ",
+            messageId: "space",
+            toolId: "",
+            noticeId: "",
+          },
+          {
+            offset: 2,
+            kind: "thought",
+            text: "world",
+            messageId: "world",
+            toolId: "",
+            noticeId: "",
+          },
+          { offset: 3, kind: "tool", text: "", toolId: "tool", noticeId: "" },
+          {
+            offset: 4,
+            kind: "thought",
+            text: "\n\n",
+            messageId: "empty",
+            toolId: "",
+            noticeId: "",
+          },
+          {
+            offset: 5,
+            kind: "text",
+            text: "Done",
+            messageId: "answer",
+            toolId: "",
+            noticeId: "",
+          },
         ],
       },
     ],
@@ -402,11 +466,11 @@ it("projects alternating thoughts and tools into one ordered turn activity", () 
         text: "Done",
         status: "completed",
         parts: [
-          { offset: 0, kind: "thought", text: "First", toolId: "" },
-          { offset: 1, kind: "tool", text: "", toolId: "one" },
-          { offset: 2, kind: "thought", text: "Second", toolId: "" },
-          { offset: 3, kind: "tool", text: "", toolId: "two" },
-          { offset: 4, kind: "text", text: "Done", toolId: "" },
+          { offset: 0, kind: "thought", text: "First", toolId: "", noticeId: "" },
+          { offset: 1, kind: "tool", text: "", toolId: "one", noticeId: "" },
+          { offset: 2, kind: "thought", text: "Second", toolId: "", noticeId: "" },
+          { offset: 3, kind: "tool", text: "", toolId: "two", noticeId: "" },
+          { offset: 4, kind: "text", text: "Done", toolId: "", noticeId: "" },
         ],
       },
     ],
@@ -466,7 +530,9 @@ it("keeps a row for a turn of images alone, so the transcript has a user turn to
         executionId: "run",
         text: "A finder window.",
         status: "completed",
-        parts: [{ offset: 0, kind: "text", text: "A finder window.", toolId: "" }],
+        parts: [
+          { offset: 0, kind: "text", text: "A finder window.", toolId: "", noticeId: "" },
+        ],
       },
     ],
     [],
@@ -474,4 +540,53 @@ it("keeps a row for a turn of images alone, so the transcript has a user turn to
   const rows = transcript.turns.map((turn) => agentTurnView(turn, transcript))
   // `Transcript` looks the user turn up by this id and renders its content.
   expect(rows.map((row) => row.promptId)).toEqual(["pictures"])
+})
+
+it("renders distinct Nessa notices in observation order without turning them into permission decisions", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "user",
+        from: "user",
+        executionId: "run",
+        receipt: "delivered",
+        content: textContent("Inspect"),
+      },
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "Done",
+        status: "completed",
+        parts: [
+          {
+            offset: 0,
+            kind: "local_notice",
+            text: "Nessa declined the first review.",
+            toolId: "",
+            noticeId: "1",
+          },
+          {
+            offset: 2,
+            kind: "local_notice",
+            text: "Nessa declined the same review again.",
+            toolId: "",
+            noticeId: "2",
+          },
+          { offset: 4, kind: "text", text: "Done", toolId: "", noticeId: "" },
+        ],
+      },
+    ],
+    [],
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  expect(row.content).toEqual([
+    { key: "notice:1", notice: "Nessa declined the first review." },
+    { key: "notice:2", notice: "Nessa declined the same review again." },
+    { key: "assistant:4", text: "Done" },
+  ])
+  expect(transcript.events.filter((event) => event.payload.type === "permission_denied")).toEqual(
+    [],
+  )
 })

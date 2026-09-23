@@ -39,6 +39,29 @@ reports both failures instead of hiding either. Repeated close does not overwrit
 The SDK uses diagnostics for delivery failure even if callers have dropped all
 handles; diagnostics themselves are not the audit store.
 
+## Reviews declined before host presentation
+
+A provider review that cannot become an actionable permission is retained as a
+`ReviewDeclineObservation`. `ReviewDeclineId` is a checked execution-scoped local
+sequence identity, separate from the provider RPC identity and `PermissionId`.
+That separation lets two otherwise identical refusals remain distinct without
+claiming that a host ever had a request to answer. The first immutable observation
+is `Selected`; the domain permits exactly one replacement with the same identity,
+reason, and provider-declared label: `WriteConfirmed`, `WriteUnconfirmed`, or
+`WriteNotAttempted`. Snapshot restoration rejects a final without its selection,
+repeated finals, changed evidence, and invalid retained labels.
+
+Selection publication is attempted before the ACP response write begins. An owning
+publication guard makes a bounded final attempt on cancellation or drop, and final
+write evidence is attempted before waiting for its audit record. Queue closure or
+saturation can still leave only the selected observation, or no notice if even the
+selection attempt failed; selected text therefore says that Nessa has not confirmed
+writing the refusal. This live event path is bounded rather than a durable outbox.
+The mandatory `ReviewDeclineRecord` audit independently records
+selection and the observed write result under the same decline identity. Wire,
+audit, and notice-publication failures remain separate typed facts; none proves
+provider acknowledgement, tool execution, or a terminal execution state.
+
 Composition must provide an adapter with an explicit storage/durability contract.
 The adapter owns record IDs and timestamps through its infrastructure dependencies;
 these are observation/commit times, not an inferred time of provider effects.
@@ -154,8 +177,11 @@ There is no stored grant or automatic rule engine in this binding.
 
 Regression coverage lives under `tests/infrastructure/acp/`, compiled internally for private adapter access:
 [permission answers](../../tests/infrastructure/acp/contracts/permissions/answers.rs)
-and [permission cancellations](../../tests/infrastructure/acp/contracts/permissions.rs).
-The answer tests cover allow/deny attribution, once-only cleanup, dropped waits,
+and [permission reviews](../../tests/infrastructure/acp/contracts/permissions.rs).
+The permission-review tests cover local declines, paired audit identity, and wire
+failure; [worker tests](../../tests/infrastructure/acp/executions/worker.rs) cover
+cancellation/drop finalization and bounded notice loss. The answer tests cover
+allow/deny attribution, once-only cleanup, dropped waits,
 selection/delivery audit rejection, bounded sink timeouts, and failed wire writes.
 
 Execution release also crosses the mandatory `ExecutionAudit` port as `Finished`,

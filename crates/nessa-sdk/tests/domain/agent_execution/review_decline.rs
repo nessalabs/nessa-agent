@@ -4,6 +4,16 @@
 use super::*;
 
 #[test]
+fn decline_identity_is_a_bounded_positive_decimal_sequence() {
+    for valid in ["1", "42", "18446744073709551615"] {
+        assert_eq!(ReviewDeclineId::new(valid).unwrap().as_str(), valid);
+    }
+    for invalid in ["", "0", "01", "-1", "one", "18446744073709551616"] {
+        assert!(ReviewDeclineId::new(invalid).is_err(), "accepted {invalid}");
+    }
+}
+
+#[test]
 fn a_readable_name_is_kept_with_its_reason() {
     for (tool, reason) in [
         ("Monitor", ReviewDeclineReason::ToolNotReviewable),
@@ -43,6 +53,22 @@ fn an_unreadable_name_leaves_the_reason_standing_and_retains_nothing() {
 }
 
 #[test]
+fn restoration_rejects_a_saved_label_live_construction_would_omit() {
+    let oversized = "M".repeat(129);
+    for invalid in ["", "two\nlines", oversized.as_str()] {
+        assert!(ReviewDecline::restore(
+            Some(invalid.to_owned()),
+            ReviewDeclineReason::UnreadableRequest,
+        )
+        .is_err());
+    }
+    let restored =
+        ReviewDecline::restore(Some("Read".into()), ReviewDeclineReason::ToolNotReviewable)
+            .unwrap();
+    assert_eq!(restored.declared(), Some("Read"));
+}
+
+#[test]
 fn the_retained_name_is_bounded_at_the_limit_not_past_it() {
     let at_limit = "M".repeat(128);
     let over_limit = "M".repeat(129);
@@ -68,4 +94,35 @@ fn a_decline_is_not_equal_across_different_reasons_for_the_same_tool() {
         ReviewDecline::new(Some("Monitor"), ReviewDeclineReason::ToolNotReviewable),
         ReviewDecline::new(Some("Monitor"), ReviewDeclineReason::UnusableOptions)
     );
+}
+
+#[test]
+fn selection_advances_immutably_without_changing_its_evidence() {
+    let selected = ReviewDeclineObservation::selected(
+        ReviewDeclineId::new("7").unwrap(),
+        ReviewDecline::new(Some("provider-label"), ReviewDeclineReason::UnusableOptions),
+    );
+    for stage in [
+        ReviewDeclineStage::WriteConfirmed,
+        ReviewDeclineStage::WriteUnconfirmed,
+        ReviewDeclineStage::WriteNotAttempted,
+    ] {
+        let final_observation = selected.advance(stage).unwrap();
+        assert_eq!(final_observation.id(), selected.id());
+        assert_eq!(final_observation.decline(), selected.decline());
+        assert_eq!(
+            final_observation.decline().declared(),
+            Some("provider-label")
+        );
+        assert_eq!(
+            final_observation.decline().reason(),
+            ReviewDeclineReason::UnusableOptions
+        );
+        assert_eq!(final_observation.stage(), stage);
+        assert_eq!(selected.stage(), ReviewDeclineStage::Selected);
+        assert!(final_observation
+            .advance(ReviewDeclineStage::WriteConfirmed)
+            .is_err());
+    }
+    assert!(selected.advance(ReviewDeclineStage::Selected).is_err());
 }

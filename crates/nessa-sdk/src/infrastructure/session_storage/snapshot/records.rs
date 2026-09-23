@@ -16,7 +16,10 @@ use crate::application::agent_execution::{
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
-        permissions::PermissionId,
+        permissions::{
+            PermissionId, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
+            ReviewDeclineReason, ReviewDeclineStage,
+        },
         prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
         sessions::ExecutionSessionId,
     },
@@ -126,12 +129,31 @@ pub(super) enum Update {
     Thought(String),
     Tool(Tool),
     PermissionCancelled(Cancellation),
+    ReviewDeclined {
+        id: String,
+        tool: Option<String>,
+        reason: DeclineReason,
+        delivery: DeclineDelivery,
+    },
     PermissionRequested {
         id: String,
         tool: Tool,
         input: Input,
         options: Vec<Choice>,
     },
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum DeclineReason {
+    ToolNotReviewable,
+    UnreadableRequest,
+    UnusableOptions,
+}
+#[derive(Serialize, Deserialize)]
+pub(super) enum DeclineDelivery {
+    Selected,
+    WriteConfirmed,
+    WriteUnconfirmed,
+    WriteNotAttempted,
 }
 impl From<&InvocationRecord> for Metadata {
     fn from(value: &InvocationRecord) -> Self {
@@ -186,6 +208,21 @@ impl From<ExecutionEvent> for Event {
                 ExecutionUpdate::PermissionCancelled(cancellation) => {
                     Update::PermissionCancelled((&cancellation).into())
                 }
+                ExecutionUpdate::ReviewDeclined(observation) => Update::ReviewDeclined {
+                    id: observation.id().as_str().into(),
+                    tool: observation.decline().declared().map(str::to_owned),
+                    reason: match observation.decline().reason() {
+                        ReviewDeclineReason::ToolNotReviewable => DeclineReason::ToolNotReviewable,
+                        ReviewDeclineReason::UnreadableRequest => DeclineReason::UnreadableRequest,
+                        ReviewDeclineReason::UnusableOptions => DeclineReason::UnusableOptions,
+                    },
+                    delivery: match observation.stage() {
+                        ReviewDeclineStage::Selected => DeclineDelivery::Selected,
+                        ReviewDeclineStage::WriteConfirmed => DeclineDelivery::WriteConfirmed,
+                        ReviewDeclineStage::WriteUnconfirmed => DeclineDelivery::WriteUnconfirmed,
+                        ReviewDeclineStage::WriteNotAttempted => DeclineDelivery::WriteNotAttempted,
+                    },
+                },
                 ExecutionUpdate::PermissionRequested {
                     id,
                     tool_id,
@@ -279,6 +316,29 @@ impl Event {
                 }
                 ExecutionUpdate::PermissionCancelled(cancellation)
             }
+            Update::ReviewDeclined {
+                id,
+                tool,
+                reason,
+                delivery,
+            } => ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::restore(
+                ReviewDeclineId::new(id).map_err(corrupt)?,
+                ReviewDecline::restore(
+                    tool,
+                    match reason {
+                        DeclineReason::ToolNotReviewable => ReviewDeclineReason::ToolNotReviewable,
+                        DeclineReason::UnreadableRequest => ReviewDeclineReason::UnreadableRequest,
+                        DeclineReason::UnusableOptions => ReviewDeclineReason::UnusableOptions,
+                    },
+                )
+                .map_err(corrupt)?,
+                match delivery {
+                    DeclineDelivery::Selected => ReviewDeclineStage::Selected,
+                    DeclineDelivery::WriteConfirmed => ReviewDeclineStage::WriteConfirmed,
+                    DeclineDelivery::WriteUnconfirmed => ReviewDeclineStage::WriteUnconfirmed,
+                    DeclineDelivery::WriteNotAttempted => ReviewDeclineStage::WriteNotAttempted,
+                },
+            )),
             Update::PermissionRequested {
                 id,
                 tool,

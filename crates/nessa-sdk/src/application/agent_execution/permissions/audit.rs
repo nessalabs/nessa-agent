@@ -4,7 +4,7 @@
 use super::PermissionResolution;
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionId;
-use crate::domain::agent_execution::permissions::ReviewDecline;
+use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 
 /// Observed delivery stage of an already selected permission answer.
@@ -67,6 +67,7 @@ impl PermissionAnswerRecord {
 pub struct ReviewDeclineRecord {
     session_id: ExecutionSessionId,
     execution_id: ExecutionId,
+    id: ReviewDeclineId,
     decline: ReviewDecline,
     delivery: PermissionAnswerDelivery,
 }
@@ -85,12 +86,14 @@ impl ReviewDeclineRecord {
     pub fn new(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
+        id: ReviewDeclineId,
         decline: ReviewDecline,
         delivery: PermissionAnswerDelivery,
     ) -> Self {
         Self {
             session_id,
             execution_id,
+            id,
             decline,
             delivery,
         }
@@ -102,6 +105,10 @@ impl ReviewDeclineRecord {
     /// Execution the agent was running when it asked for the tool.
     pub fn execution_id(&self) -> &ExecutionId {
         &self.execution_id
+    }
+    /// Stable identity pairing the selected and delivery-stage audit records.
+    pub fn id(&self) -> &ReviewDeclineId {
+        &self.id
     }
     /// Which tool was refused, where it could be named, and why.
     pub fn decline(&self) -> &ReviewDecline {

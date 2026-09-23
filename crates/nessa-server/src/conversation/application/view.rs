@@ -348,4 +348,6 @@ pub struct ConversationPart {
     pub kind: String,
     pub text: String,
     pub tool_id: String,
+    /// Stable identity for a runtime-owned declined-review notice; empty otherwise.
+    pub notice_id: String,
 }

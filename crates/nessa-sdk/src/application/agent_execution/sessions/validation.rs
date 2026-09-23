@@ -11,7 +11,9 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
 use crate::domain::agent_execution::{
     executions::{ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage},
-    permissions::{PermissionRequest, PermissionStateView},
+    permissions::{
+        PermissionRequest, PermissionStateView, ReviewDeclineObservation, ReviewDeclineStage,
+    },
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -106,6 +108,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         super::retention::validate(snapshot, invocation).map_err(corrupt)?;
         let mut reviews = HashMap::new();
         let mut review_ids = HashSet::new();
+        let mut declines = HashMap::new();
         for event in &invocation.events {
             match event.update() {
                 ExecutionUpdate::Tool(tool) => {
@@ -160,6 +163,29 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                         return Err(corrupt(
                             "cancellation differs from the original permission request",
                         ));
+                    }
+                }
+                ExecutionUpdate::ReviewDeclined(observation) => {
+                    match declines.get(observation.id()) {
+                        None if observation.stage() == ReviewDeclineStage::Selected => {
+                            declines.insert(observation.id(), observation);
+                        }
+                        Some(selected)
+                            if selected.advance(observation.stage()).as_ref()
+                                == Ok(observation) =>
+                        {
+                            declines.insert(observation.id(), observation);
+                        }
+                        None => {
+                            return Err(corrupt(
+                                "declined review delivery has no preceding local selection",
+                            ))
+                        }
+                        Some(_) => {
+                            return Err(corrupt(
+                                "declined review identity is repeated or changes its decision",
+                            ))
+                        }
                     }
                 }
                 _ => {}

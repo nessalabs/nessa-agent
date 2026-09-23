@@ -19,6 +19,7 @@ export type AgentTurnActivityItem =
 export type AgentTurnContentView =
   | { key: string; text: string }
   | { key: string; activity: AgentTurnActivityItem[]; running: boolean }
+  | { key: string; notice: string }
 function rawText(raw: JsonValue, key: string): string {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return ""
   if (!Object.hasOwn(raw, key)) return ""
@@ -35,11 +36,21 @@ function nullableRawText(raw: Record<string, JsonValue>, key: string): string | 
   if (value === null || typeof value === "string") return value
   throw new Error("Transcript event has invalid source execution metadata")
 }
+function localNotice(raw: JsonValue): { id: string; text: string } | undefined {
+  if (raw === null || Array.isArray(raw) || typeof raw !== "object") return undefined
+  const value = raw.localNotice
+  if (value === null || Array.isArray(value) || typeof value !== "object") return undefined
+  if (!Object.hasOwn(value, "id") || !Object.hasOwn(value, "text")) return undefined
+  return typeof value.id === "string" && typeof value.text === "string"
+    ? { id: value.id, text: value.text }
+    : undefined
+}
 function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | undefined {
-  const productEvents = events.filter(({ payload }) =>
-    ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
-      payload.type,
-    ),
+  const productEvents = events.filter(
+    ({ payload, raw }) =>
+      ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
+        payload.type,
+      ) || (payload.type === "unknown" && localNotice(raw) !== undefined),
   )
   if (productEvents.length === 0) return undefined
   const facts = productEvents.map(({ raw }) => {
@@ -169,6 +180,13 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       const tool = tools.find((tool) => tool.callId === payload.callId)
       if (tool) {
         activityFor(event.id).activity.push({ key: event.id, kind: "tool", tool })
+      }
+    }
+    if (payload.type === "unknown") {
+      const notice = localNotice(event.raw)
+      if (notice) {
+        flushThought()
+        content.push({ key: `notice:${notice.id}`, notice: notice.text })
       }
     }
   }

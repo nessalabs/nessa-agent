@@ -616,6 +616,26 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
 /// review ended the execution and closed the session, and the caller was shown
 /// nothing at all. Each mode here refuses for a different reason, and each one
 /// has to leave the agent told, the turn finishing, and the refusal recorded.
+async fn declined_updates(
+    opened: &mut OpenedProviderSession,
+) -> (ReviewDeclineId, ReviewDecline, ReviewDeclineStage) {
+    let ExecutionUpdate::ReviewDeclined(selected) = next(opened).await else {
+        panic!("expected selected declined-review notice")
+    };
+    assert_eq!(selected.stage(), ReviewDeclineStage::Selected);
+    let ExecutionUpdate::ReviewDeclined(final_observation) = next(opened).await else {
+        panic!("expected final declined-review notice")
+    };
+    assert_eq!(final_observation.id(), selected.id());
+    assert_eq!(final_observation.decline(), selected.decline());
+    assert_ne!(final_observation.stage(), ReviewDeclineStage::Selected);
+    (
+        selected.id().clone(),
+        selected.decline().clone(),
+        final_observation.stage(),
+    )
+}
+
 #[tokio::test]
 async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
     let _process_slot = process_test_slot().await;
@@ -655,6 +675,10 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
             matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)),
             "{mode}: the declined call was not shown"
         );
+        let (decline_id, notice, delivery) = declined_updates(&mut opened).await;
+        assert_eq!(notice.reason(), reason, "{mode}");
+        assert_eq!(notice.declared(), named, "{mode}");
+        assert_eq!(delivery, ReviewDeclineStage::WriteConfirmed, "{mode}");
         // No review reaches a host: there was nothing this binding could put
         // to one. The turn carries on to its own ending.
         let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
@@ -685,6 +709,7 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
             assert_eq!(record.execution_id().as_str(), "write");
             assert_eq!(record.decline().reason(), reason, "{mode}");
             assert_eq!(record.decline().declared(), named, "{mode}");
+            assert_eq!(record.id(), &decline_id, "{mode}");
         }
         assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
         assert_eq!(declines[1].delivery(), &PermissionAnswerDelivery::Written);
@@ -718,6 +743,10 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert_eq!(
+        declined_updates(&mut opened).await.2,
+        ReviewDeclineStage::WriteConfirmed
+    );
 
     // The execution ends on the audit failure — evidence is mandatory here, and
     // that is a different failure from "a tool was unfamiliar".
@@ -764,6 +793,10 @@ async fn a_refusal_that_cannot_be_written_keeps_its_decision_and_its_delivery_fa
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert_eq!(
+        declined_updates(&mut opened).await.2,
+        ReviewDeclineStage::WriteUnconfirmed
+    );
     let outcome = timeout(Duration::from_secs(5), active)
         .await
         .unwrap()
@@ -804,6 +837,10 @@ async fn a_refusal_failing_to_write_and_to_record_preserves_both_causes() {
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    assert_eq!(
+        declined_updates(&mut opened).await.2,
+        ReviewDeclineStage::WriteUnconfirmed
+    );
     let outcome = timeout(Duration::from_secs(5), active)
         .await
         .unwrap()
@@ -849,6 +886,9 @@ async fn a_declared_name_is_recorded_as_a_claim_and_does_not_decide_the_refusal(
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let (_, notice, delivery) = declined_updates(&mut opened).await;
+    assert_eq!(delivery, ReviewDeclineStage::WriteConfirmed);
+    assert_eq!(notice.declared(), Some("Read"));
     let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
         panic!("expected the turn to continue after the decline");
     };

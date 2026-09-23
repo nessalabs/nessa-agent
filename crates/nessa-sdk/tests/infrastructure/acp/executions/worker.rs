@@ -28,6 +28,85 @@ impl ExecutionAudit for UnexpectedAudit {
     }
 }
 
+fn decline_publication(
+    capacity: usize,
+) -> (
+    DeclineNoticePublication,
+    crate::infrastructure::acp::executions::event_queue::EventReceiver,
+) {
+    let (events, receiver) = EventQueueBudget::new().channel(capacity);
+    let observation = ReviewDeclineObservation::selected(
+        ReviewDeclineId::new("1").unwrap(),
+        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+    );
+    (
+        DeclineNoticePublication::new(events, ExecutionId::new("execution").unwrap(), observation),
+        receiver,
+    )
+}
+
+async fn decline_stage(
+    receiver: &mut crate::infrastructure::acp::executions::event_queue::EventReceiver,
+) -> ReviewDeclineStage {
+    let ExecutionUpdate::ReviewDeclined(observation) = receiver.recv().await.unwrap().into_update()
+    else {
+        panic!("expected declined-review observation")
+    };
+    observation.stage()
+}
+
+#[tokio::test]
+async fn dropping_decline_publication_finalizes_each_owned_write_state() {
+    let (mut before_write, mut before_events) = decline_publication(2);
+    before_write.publish_selected().unwrap();
+    drop(before_write);
+    assert_eq!(
+        decline_stage(&mut before_events).await,
+        ReviewDeclineStage::Selected
+    );
+    assert_eq!(
+        decline_stage(&mut before_events).await,
+        ReviewDeclineStage::WriteNotAttempted
+    );
+
+    let (mut during_write, mut during_events) = decline_publication(2);
+    during_write.publish_selected().unwrap();
+    during_write.begin_write();
+    drop(during_write);
+    assert_eq!(
+        decline_stage(&mut during_events).await,
+        ReviewDeclineStage::Selected
+    );
+    assert_eq!(
+        decline_stage(&mut during_events).await,
+        ReviewDeclineStage::WriteUnconfirmed
+    );
+}
+
+#[tokio::test]
+async fn a_full_notice_queue_retains_truthful_selection_and_reports_final_loss() {
+    let (mut publication, mut events) = decline_publication(1);
+    publication.publish_selected().unwrap();
+    publication.begin_write();
+    assert_eq!(
+        publication.settle(ReviewDeclineStage::WriteConfirmed),
+        Err(QueueError::Full)
+    );
+    drop(publication);
+    assert_eq!(
+        decline_stage(&mut events).await,
+        ReviewDeclineStage::Selected
+    );
+    assert!(events.recv().await.is_none());
+    assert_eq!(
+        combine_decline_result(Err(AgentError::AuditFailure), Err(QueueError::Full)),
+        Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::Backpressure),
+        })
+    );
+}
+
 #[tokio::test]
 async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe() {
     for (grace, pending_permission) in [

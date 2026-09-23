@@ -376,6 +376,10 @@ All additional Nessa tools use this MCP boundary. See the
 Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives one
 turn-level activity row from the shared Transcript; `ui/turn-activity.tsx` opens
 its ordered thought and tool detail. Neither parses provider wire formats.
+Runtime-owned declined-review notices use their own ordered `local_notice` part
+and stable execution-scoped identity. The gateway upserts selection with its later
+local write evidence before the agent-stream adapter renders it; it is not a
+permission decision, provider message, tool failure, or execution status.
 `ui/transcript.tsx` renders a turn's terminal status once at row level,
 independently of whether that turn contains text.
 

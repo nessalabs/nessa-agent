@@ -4,13 +4,14 @@
 //! ```text
 //! PermissionOfferPolicy --> PermissionOptions --> PermissionRequest --> PermissionStateView
 //!                                    |
-//!                                    +--> ReviewDecline
+//!                                    +--> ReviewDeclineObservation
 //! ```
 //!
 //! Arrows mean filtering offered choices, constructing a request, and resolving
 //! it. The branch is the request that never became one: a tool this binding
 //! will not put to a host, a frame it could not describe, or no choice left to
-//! offer. That is a decision too, so it is modelled rather than lost.
+//! offer. That is a decision too, so its immutable selection and response-write
+//! stages are modelled under one checked identity rather than lost.
 pub mod entities;
 pub mod value_objects;
 pub use entities::{PermissionRequest, PermissionStateView};
@@ -18,5 +19,6 @@ pub use value_objects::{
     CustomPermissionCancellationReason, PermissionApplicationId, PermissionCancellationReason,
     PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionId,
     PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope, PermissionScopeView, PermissionSessionId, ReviewDecline, ReviewDeclineReason,
+    PermissionScope, PermissionScopeView, PermissionSessionId, ReviewDecline, ReviewDeclineId,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
 };

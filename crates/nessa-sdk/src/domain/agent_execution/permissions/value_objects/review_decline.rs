@@ -1,4 +1,5 @@
 //! Why one tool review was answered "no" without ever being offered to a host.
+use crate::domain::agent_execution::ExecutionError;
 
 /// The longest provider tool name this decline will retain.
 ///
@@ -7,6 +8,43 @@
 /// what a tool is plausibly called rather than what a frame can hold; anything
 /// longer is not a name that would have meant something to a reader.
 const MAX_TOOL_NAME_BYTES: usize = 128;
+
+/// Stable local identity for one review the runtime declined before offering it.
+///
+/// The identity is scoped by its execution. It is deliberately distinct from a
+/// provider RPC identity and from [`PermissionId`](super::PermissionId): the
+/// declined frame never becomes an actionable permission. The ACP adapter mints
+/// decimal sequence values so two otherwise identical declines remain separate.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ReviewDeclineId(Box<str>);
+
+impl ReviewDeclineId {
+    /// Restore or construct a checked session-local sequence identity.
+    ///
+    /// Decimal text from `1` through `u64::MAX` is accepted. Keeping this shape
+    /// bounded makes live and saved observations use the same identity contract.
+    pub fn new(value: impl Into<String>) -> Result<Self, ExecutionError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 20
+            || value.starts_with('0')
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+            || value
+                .parse::<u64>()
+                .ok()
+                .filter(|number| *number > 0)
+                .is_none()
+        {
+            return Err(ExecutionError::InvalidReviewDeclineId);
+        }
+        Ok(Self(value.into_boxed_str()))
+    }
+
+    /// Borrow the decimal identity text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Why a review could not be offered.
 ///
@@ -24,6 +62,19 @@ pub enum ReviewDeclineReason {
     /// Nothing offerable remained once the provider's choices were filtered,
     /// so there was no decision a host could have made.
     UnusableOptions,
+}
+
+/// Local evidence stage for a review declined before host presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewDeclineStage {
+    /// The runtime selected refusal and has no later response-write evidence.
+    Selected,
+    /// The response write completed; this is not provider acknowledgement.
+    WriteConfirmed,
+    /// A response write was attempted, but local observation cannot confirm completion.
+    WriteUnconfirmed,
+    /// The owning operation ended before attempting a response write.
+    WriteNotAttempted,
 }
 
 /// One refused review: which tool, and why it was refused.
@@ -53,6 +104,59 @@ pub struct ReviewDecline {
     reason: ReviewDeclineReason,
 }
 
+/// One immutable local refusal observation and its current delivery evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewDeclineObservation {
+    id: ReviewDeclineId,
+    decline: ReviewDecline,
+    stage: ReviewDeclineStage,
+}
+
+impl ReviewDeclineObservation {
+    /// Create the first observation for one local refusal.
+    pub fn selected(id: ReviewDeclineId, decline: ReviewDecline) -> Self {
+        Self {
+            id,
+            decline,
+            stage: ReviewDeclineStage::Selected,
+        }
+    }
+
+    /// Restore one individually valid stage; history validation must pair a
+    /// final stage with its preceding selection through [`advance`](Self::advance).
+    pub fn restore(id: ReviewDeclineId, decline: ReviewDecline, stage: ReviewDeclineStage) -> Self {
+        Self { id, decline, stage }
+    }
+
+    /// Produce the one allowed replacement: the same refusal advancing from
+    /// selection to a final local write fact.
+    pub fn advance(&self, stage: ReviewDeclineStage) -> Result<Self, ExecutionError> {
+        if self.stage != ReviewDeclineStage::Selected || stage == ReviewDeclineStage::Selected {
+            return Err(ExecutionError::InvalidReviewDeclineTransition);
+        }
+        Ok(Self {
+            id: self.id.clone(),
+            decline: self.decline.clone(),
+            stage,
+        })
+    }
+
+    /// Stable identity distinguishing repeated otherwise identical refusals.
+    pub fn id(&self) -> &ReviewDeclineId {
+        &self.id
+    }
+
+    /// Provider label claim and local refusal reason.
+    pub fn decline(&self) -> &ReviewDecline {
+        &self.decline
+    }
+
+    /// Current local selection or response-write evidence.
+    pub fn stage(&self) -> ReviewDeclineStage {
+        self.stage
+    }
+}
+
 impl ReviewDecline {
     /// Refuse a review of `tool` for `reason`.
     ///
@@ -67,6 +171,24 @@ impl ReviewDecline {
             tool: tool.filter(|name| nameable(name)).map(Box::from),
             reason,
         }
+    }
+
+    /// Restore exact retained evidence without silently dropping a corrupt label.
+    ///
+    /// Live construction may omit an unusable provider claim so a refusal can
+    /// always be recorded. Saved evidence has already claimed that a label was
+    /// retained; an invalid saved label is corruption and must be rejected.
+    pub fn restore(
+        tool: Option<String>,
+        reason: ReviewDeclineReason,
+    ) -> Result<Self, ExecutionError> {
+        if tool.as_deref().is_some_and(|name| !nameable(name)) {
+            return Err(ExecutionError::InvalidReviewDeclineToolName);
+        }
+        Ok(Self {
+            tool: tool.map(String::into_boxed_str),
+            reason,
+        })
     }
 
     /// The name the provider gave the refused tool, where it was readable.

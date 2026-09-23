@@ -132,6 +132,14 @@ export function Transcript({
                           onOpenPaste={onOpenPaste}
                         />
                       )}
+                      {"notice" in part && (
+                        <p
+                          role="status"
+                          className="rounded-lg border border-border/70 bg-muted/50 px-3 py-2 text-xs [overflow-wrap:anywhere]"
+                        >
+                          {part.notice}
+                        </p>
+                      )}
                     </React.Fragment>
                   ))}
                   <TurnStatus key={`${row.key}:status`} status={row.status} />

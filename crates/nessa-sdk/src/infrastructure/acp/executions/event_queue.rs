@@ -27,6 +27,7 @@ impl EventQueueBudget {
     }
 }
 
+#[derive(Clone)]
 pub(in crate::infrastructure::acp) struct EventSender {
     sender: mpsc::Sender<QueuedEvent>,
     permits: Arc<Semaphore>,

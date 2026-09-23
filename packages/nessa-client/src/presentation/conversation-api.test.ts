@@ -183,8 +183,8 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
           attachments: [],
           files: [],
           parts: [
-            { offset: 0, kind: "thought", text: "", toolId: "" },
-            { offset: 1, kind: "text", text: "", toolId: "" },
+            { offset: 0, kind: "thought", text: "", toolId: "", noticeId: "" },
+            { offset: 1, kind: "text", text: "", toolId: "", noticeId: "" },
           ],
           status: "maybe",
         },

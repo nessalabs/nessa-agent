@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! PermissionOfferPolicy --> PermissionOptions --> decision or cancellation cause
+//! declined review -------> ReviewDeclineObservation(selected -> final write stage)
 //! ```
 //!
 //! Arrows mean filtering review choices and describing their eventual resolution.
@@ -17,4 +18,7 @@ pub use permission::{
     PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionOfferPolicy,
     PermissionOption, PermissionOptions, PermissionScope, PermissionScopeView,
 };
-pub use review_decline::{ReviewDecline, ReviewDeclineReason};
+pub use review_decline::{
+    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+    ReviewDeclineStage,
+};
