@@ -1,8 +1,7 @@
 use crate::browser_session::{
-    application::{BrowserSession, SessionStore},
-    domain::value_objects::RemovalReason,
+    application::SessionStore,
+    domain::value_objects::{BrowserSessionOrigin, BrowserSessionState, RemovalReason},
 };
-use crate::core::trusted_origin::is_trusted_origin_value;
 use nessa_auth::application::ports::{AccessError, PortFuture};
 use nessa_auth::domain::CredentialId;
 use nessa_local_storage::{open, OpenMode};
@@ -44,12 +43,12 @@ struct StoredSession {
     origin: String,
     idle_expires_at: u64,
 }
-impl TryFrom<StoredSession> for BrowserSession {
+impl TryFrom<StoredSession> for BrowserSessionState {
     type Error = AccessError;
     fn try_from(value: StoredSession) -> Result<Self, Self::Error> {
-        BrowserSession::restore(
+        BrowserSessionState::restore(
             CredentialId::new(value.credential_id).map_err(|_| AccessError::Unavailable)?,
-            value.origin,
+            BrowserSessionOrigin::new(value.origin).ok_or(AccessError::Unavailable)?,
             value.created_at,
             value.renewed_at,
             value.idle_expires_at,
@@ -57,8 +56,8 @@ impl TryFrom<StoredSession> for BrowserSession {
         .ok_or(AccessError::Unavailable)
     }
 }
-impl From<&BrowserSession> for StoredSession {
-    fn from(value: &BrowserSession) -> Self {
+impl From<&BrowserSessionState> for StoredSession {
+    fn from(value: &BrowserSessionState) -> Self {
         Self {
             credential_id: value.credential_id().as_str().to_owned(),
             created_at: value.created_at(),
@@ -87,8 +86,8 @@ struct StoredRecord {
 #[derive(Clone, Debug)]
 struct Change {
     id: String,
-    before: Option<BrowserSession>,
-    after: Option<BrowserSession>,
+    before: Option<BrowserSessionState>,
+    after: Option<BrowserSessionState>,
     reason: Reason,
     initiator: Option<CredentialId>,
 }
@@ -174,8 +173,8 @@ impl Drop for Journal {
     }
 }
 struct State {
-    sessions: BTreeMap<String, BrowserSession>,
-    login_replacements: BTreeMap<String, Option<(String, BrowserSession)>>,
+    sessions: BTreeMap<String, BrowserSessionState>,
+    login_replacements: BTreeMap<String, Option<(String, BrowserSessionState)>>,
     sequence: u64,
     file: Option<Journal>,
     max_journal_bytes: u64,
@@ -353,14 +352,6 @@ impl State {
                 || next.get(&change.id) != change.before.as_ref()
             {
                 return Err(AccessError::Unavailable);
-            }
-            if let Some(after) = &change.after {
-                if after.origin().len() > 1024
-                    || !is_trusted_origin_value(after.origin())
-                    || !after.origin().starts_with("http")
-                {
-                    return Err(AccessError::Unavailable);
-                }
             }
             let valid = match (&change.reason, &change.before, &change.after) {
                 (Reason::SignIn, None, Some(after)) => {
@@ -542,10 +533,10 @@ impl SessionStore for PersistentSessions {
     fn insert<'a>(
         &'a self,
         id: String,
-        session: BrowserSession,
+        session: BrowserSessionState,
         prior: Option<String>,
         now: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>> {
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
         self.run(move |state| {
             if prior
                 .as_ref()
@@ -596,7 +587,7 @@ impl SessionStore for PersistentSessions {
             Ok(replaced)
         })
     }
-    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSession>> {
+    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSessionState>> {
         self.run(move |state| Ok(state.sessions.get(&id).cloned()))
     }
     fn remove<'a>(
@@ -642,7 +633,7 @@ impl SessionStore for PersistentSessions {
         id: String,
         now: u64,
         initiator: CredentialId,
-    ) -> PortFuture<'a, BrowserSession> {
+    ) -> PortFuture<'a, BrowserSessionState> {
         self.run(move |state| {
             let before = state
                 .sessions
@@ -676,7 +667,7 @@ impl SessionStore for PersistentSessions {
     fn abandon_login<'a>(
         &'a self,
         id: String,
-        prior: Option<(String, BrowserSession)>,
+        prior: Option<(String, BrowserSessionState)>,
         now: u64,
     ) -> PortFuture<'a, ()> {
         self.run(move |state| {
@@ -725,13 +716,13 @@ impl SessionStore for MemorySessions {
     fn insert<'a>(
         &'a self,
         id: String,
-        s: BrowserSession,
+        s: BrowserSessionState,
         p: Option<String>,
         now: u64,
-    ) -> PortFuture<'a, Option<(String, BrowserSession)>> {
+    ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
         self.0.insert(id, s, p, now)
     }
-    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSession>> {
+    fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSessionState>> {
         self.0.get(id)
     }
     fn remove<'a>(
@@ -748,13 +739,13 @@ impl SessionStore for MemorySessions {
         id: String,
         now: u64,
         initiator: CredentialId,
-    ) -> PortFuture<'a, BrowserSession> {
+    ) -> PortFuture<'a, BrowserSessionState> {
         self.0.renew(id, now, initiator)
     }
     fn abandon_login<'a>(
         &'a self,
         id: String,
-        prior: Option<(String, BrowserSession)>,
+        prior: Option<(String, BrowserSessionState)>,
         now: u64,
     ) -> PortFuture<'a, ()> {
         self.0.abandon_login(id, prior, now)
