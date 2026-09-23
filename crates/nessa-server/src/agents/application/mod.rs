@@ -6,7 +6,10 @@
 //! question costs: concurrent callers all want the same parameterless answer, so
 //! one probe runs and they share it, and nobody waits for it past a deadline.
 mod ports;
-pub use ports::{AgentProbe, ProbeFailure};
+pub use ports::{
+    AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
+    AgentProbe, ProbeFailure,
+};
 mod readiness;
 pub use readiness::ReadAgentReadiness;
 mod shared_readiness;

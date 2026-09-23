@@ -139,6 +139,10 @@ jobs:
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       - run: cargo fmt --all -- --check
+      # This pure shared domain is small enough to report denied warnings
+      # before its tests without paying a second workspace compile.
+      - run: cargo clippy -p nessa-agent-credentials --all-targets -- -D warnings
+      - run: cargo test -p nessa-agent-credentials
       # Test before lint, here and in the matrix below, and it is worth saying
       # why because the intuitive order is the other one. Reporting a
       # `-D warnings` failure first would be better if it were free, and it is
@@ -335,6 +339,7 @@ jobs:
           root.mkdir()
           shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
           shutil.copytree('scripts', root / 'scripts')
+          shutil.copytree('crates/nessa-sdk/data', root / 'crates/nessa-sdk/data')
           # The scripts resolve stage defaults — the gateway port among them —
           # from `protocol/`, relative to the tree they are in. Copied because
           # the harness is that tree here, not the checkout beside it.
@@ -347,6 +352,12 @@ jobs:
           shutil.copy2('.github/harnesses/local-auth/package-lock.json', root / 'package-lock.json')
       - run: npm ci --ignore-scripts
         working-directory: .ci-auth
+      - run: node --test scripts/conversation-smoke/*.test.mjs
+        working-directory: .ci-auth
+        if: runner.os == 'Linux'
+      - run: node --import tsx scripts/smoke-conversation.mjs
+        working-directory: .ci-auth
+        if: runner.os == 'Linux'
       - run: node --import tsx scripts/smoke-windows-private-files.ts
         working-directory: .ci-auth
         if: runner.os == 'Windows'

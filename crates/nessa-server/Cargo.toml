@@ -19,6 +19,7 @@ nessa-images = { path = "../nessa-images" }
 nessa-local-storage = { path = "../nessa-local-storage" }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
+nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -56,6 +57,15 @@ url = "2"
 [target.'cfg(unix)'.dependencies]
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Nessa-owned agent API keys live in the login keychain. This crate is already
+# in the desktop dependency graph; naming it here exposes the typed Security
+# framework API without putting a secret in a subprocess argument.
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+security-framework = "3.7"
+security-framework-sys = "2.17"
 
 [dev-dependencies]
 tempfile = "3"

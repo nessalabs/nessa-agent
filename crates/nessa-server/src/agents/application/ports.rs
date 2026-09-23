@@ -1,4 +1,24 @@
 use crate::agents::domain::AgentId;
+pub use nessa_agent_credentials::{AgentCredential, AgentCredentialKind};
+
+/// Why a configured credential could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentCredentialFailure {
+    /// The credential store exists but did not answer safely.
+    Unavailable,
+    /// The stored value cannot be used as a process credential.
+    Invalid,
+}
+
+/// Credentials Nessa may give an explicitly supported local agent.
+///
+/// A consumer reads whenever it needs the current value. Composition that
+/// requires launch and readiness to agree must inject this same source into
+/// both consumers; the port itself does not select either consumer.
+pub trait AgentCredentialSource: Send + Sync {
+    /// Read the current credential for `agent`, or `None` when Nessa stores none.
+    fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure>;
+}
 
 /// Why this machine could not answer a question about an agent.
 ///
