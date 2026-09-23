@@ -1,6 +1,6 @@
 //! Loopback and desktop-shell origins this process trusts, shared by every
 //! context that checks a browser `Origin`: request admission in the server and
-//! agents entrypoints, and browser-session journal validation.
+//! agents entrypoints, and current browser-session admission.
 
 /// Accept the desktop shell origin or a loopback `http(s)` origin with an
 /// optional numeric port. Anything else, including userinfo tricks and paths,
