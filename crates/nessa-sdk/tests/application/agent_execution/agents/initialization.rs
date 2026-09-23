@@ -165,6 +165,7 @@ enum CleanupPanic {
     Construct,
     Poll,
     Drop,
+    DropAfterCompletionFailure,
 }
 #[derive(Clone, Copy)]
 enum SavePanic {
@@ -343,12 +344,24 @@ impl Future for PanickingCleanupFuture {
         if matches!(self.0, CleanupPanic::Poll) {
             panic!("cleanup poll panic");
         }
-        Poll::Ready(CleanupReport::confirmed(CloseOutcome { forced: false }))
+        let report = CleanupReport::confirmed(CloseOutcome { forced: false });
+        Poll::Ready(
+            if matches!(self.0, CleanupPanic::DropAfterCompletionFailure) {
+                report.with_completion_failure(Some(AgentError::Transport(
+                    "cleanup completion failed".into(),
+                )))
+            } else {
+                report
+            },
+        )
     }
 }
 impl Drop for PanickingCleanupFuture {
     fn drop(&mut self) {
-        if matches!(self.0, CleanupPanic::Drop) {
+        if matches!(
+            self.0,
+            CleanupPanic::Drop | CleanupPanic::DropAfterCompletionFailure
+        ) {
             panic!("cleanup drop panic");
         }
     }
@@ -1372,6 +1385,7 @@ async fn cleanup_construction_poll_and_drop_panics_remain_retryable() {
         CleanupPanic::Construct,
         CleanupPanic::Poll,
         CleanupPanic::Drop,
+        CleanupPanic::DropAfterCompletionFailure,
     ] {
         let storage = MemoryStorage::default();
         let agent = Agent::prepare(
@@ -1391,14 +1405,22 @@ async fn cleanup_construction_poll_and_drop_panics_remain_retryable() {
             .await
             .unwrap();
 
+        let expected = if matches!(failure, CleanupPanic::DropAfterCompletionFailure) {
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(AgentError::Transport("cleanup completion failed".into())),
+                subsequent_error: Box::new(AgentError::CleanupUncertain),
+            }
+        } else {
+            AgentError::CleanupUncertain
+        };
+        assert_eq!(agent.close(close_action()).await, Err(expected.clone()));
         assert_eq!(
             agent.close(close_action()).await,
-            Err(AgentError::CleanupUncertain)
-        );
-        assert_eq!(
-            agent.close(close_action()).await,
-            if matches!(failure, CleanupPanic::Drop) {
-                Err(AgentError::CleanupUncertain)
+            if matches!(
+                failure,
+                CleanupPanic::Drop | CleanupPanic::DropAfterCompletionFailure
+            ) {
+                Err(expected)
             } else {
                 Ok(CloseOutcome { forced: false })
             }

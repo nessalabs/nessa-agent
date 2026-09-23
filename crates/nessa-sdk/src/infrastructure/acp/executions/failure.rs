@@ -43,8 +43,12 @@ enum SettlementFact {
         phase: OperationEffectPhase,
         error: AgentError,
     },
-    AuditOverflow,
-    OperationOverflow,
+    AuditOverflow {
+        id: FactId,
+    },
+    OperationOverflow {
+        id: FactId,
+    },
 }
 
 /// Bounded diagnostic evidence for one worker generation's terminal settlement.
@@ -56,8 +60,8 @@ pub(super) struct SettlementFacts {
     next_id: u64,
     audit_count: usize,
     operation_count: usize,
-    audit_overflow: bool,
-    operation_overflow: bool,
+    audit_overflow: Option<FactId>,
+    operation_overflow: Option<FactId>,
 }
 impl SettlementFacts {
     pub(super) fn new() -> Self {
@@ -66,8 +70,8 @@ impl SettlementFacts {
             next_id: 0,
             audit_count: 0,
             operation_count: 0,
-            audit_overflow: false,
-            operation_overflow: false,
+            audit_overflow: None,
+            operation_overflow: None,
         }
     }
     fn next_id(&mut self) -> FactId {
@@ -78,32 +82,15 @@ impl SettlementFacts {
             .expect("one worker cannot exhaust failure fact identities");
         id
     }
-    pub(super) fn cursor(&self) -> u64 {
-        self.next_id
-    }
-    pub(super) fn coverage_since(&self, cursor: u64) -> Vec<FactId> {
-        self.facts
-            .iter()
-            .filter_map(|fact| match fact {
-                SettlementFact::ProviderResult { id }
-                | SettlementFact::Audit { id, .. }
-                | SettlementFact::Operation { id, .. }
-                    if id.0 >= cursor =>
-                {
-                    Some(*id)
-                }
-                _ => None,
-            })
-            .collect()
-    }
     pub(super) fn record_audit(&mut self, phase: AuditEffectPhase) -> Option<FactId> {
-        if self.audit_overflow {
-            return None;
+        if let Some(id) = self.audit_overflow {
+            return Some(id);
         }
         if self.audit_count == MAX_RETAINED_CATEGORY_FACTS {
-            self.audit_overflow = true;
-            self.facts.push(SettlementFact::AuditOverflow);
-            return None;
+            let id = self.next_id();
+            self.audit_overflow = Some(id);
+            self.facts.push(SettlementFact::AuditOverflow { id });
+            return Some(id);
         }
         let id = self.next_id();
         self.audit_count += 1;
@@ -120,13 +107,14 @@ impl SettlementFacts {
         phase: OperationEffectPhase,
         error: AgentError,
     ) -> Option<FactId> {
-        if self.operation_overflow {
-            return None;
+        if let Some(id) = self.operation_overflow {
+            return Some(id);
         }
         if self.operation_count == MAX_RETAINED_CATEGORY_FACTS {
-            self.operation_overflow = true;
-            self.facts.push(SettlementFact::OperationOverflow);
-            return None;
+            let id = self.next_id();
+            self.operation_overflow = Some(id);
+            self.facts.push(SettlementFact::OperationOverflow { id });
+            return Some(id);
         }
         let id = self.next_id();
         self.operation_count += 1;
@@ -142,12 +130,15 @@ impl SettlementFacts {
             SettlementFact::ProviderResult { id: fact_id }
             | SettlementFact::Audit { id: fact_id, .. }
             | SettlementFact::Operation { id: fact_id, .. } => *fact_id == id,
-            SettlementFact::AuditOverflow | SettlementFact::OperationOverflow => false,
+            SettlementFact::AuditOverflow { id: fact_id }
+            | SettlementFact::OperationOverflow { id: fact_id } => *fact_id == id,
         })
     }
     pub(super) fn coverage_has_operation(&self, coverage: &[FactId]) -> bool {
         self.facts.iter().any(|fact| match fact {
-            SettlementFact::Operation { id, .. } => coverage.contains(id),
+            SettlementFact::Operation { id, .. } | SettlementFact::OperationOverflow { id } => {
+                coverage.contains(id)
+            }
             _ => false,
         })
     }
@@ -196,8 +187,10 @@ impl SettlementFacts {
                     ..
                 } if paired.contains(&correlation) => None,
                 SettlementFact::Audit { .. } => Some(FinalizedFailureComponent::Audit),
-                SettlementFact::AuditOverflow => Some(FinalizedFailureComponent::AuditOverflow),
-                SettlementFact::OperationOverflow => {
+                SettlementFact::AuditOverflow { .. } => {
+                    Some(FinalizedFailureComponent::AuditOverflow)
+                }
+                SettlementFact::OperationOverflow { .. } => {
                     Some(FinalizedFailureComponent::OperationOverflow)
                 }
             })
@@ -222,11 +215,28 @@ impl WorkerFailure {
     pub(super) fn into_error(self) -> AgentError {
         self.error
     }
+    pub(super) fn error(&self) -> &AgentError {
+        &self.error
+    }
+    pub(super) fn with_error(self, error: AgentError) -> Self {
+        Self {
+            error,
+            coverage: self.coverage,
+        }
+    }
     pub(super) fn validate(&self, facts: &SettlementFacts) {
         assert!(self.coverage.iter().all(|id| facts.contains(*id)));
     }
     pub(super) fn coverage(&self) -> &[FactId] {
         &self.coverage
+    }
+    pub(super) fn combine(self, subsequent: Self) -> Self {
+        let mut coverage = self.coverage;
+        coverage.extend(subsequent.coverage);
+        Self {
+            error: retain_admitted_failure(Some(self.error), subsequent.error),
+            coverage,
+        }
     }
 }
 impl From<AgentError> for WorkerFailure {

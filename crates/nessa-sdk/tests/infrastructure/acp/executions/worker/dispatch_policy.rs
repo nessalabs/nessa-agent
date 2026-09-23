@@ -211,6 +211,64 @@ enum Dispatch {
     Steering,
 }
 
+struct AcceptingDeclineAudit;
+impl ExecutionAudit for AcceptingDeclineAudit {
+    fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
+    let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
+    worker.audit = Arc::new(AcceptingDeclineAudit);
+    let execution_id = ExecutionId::new("active").unwrap();
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    execution.begin_execution(execution_id.clone()).unwrap();
+    let (reply, _result) = oneshot::channel();
+    worker.active = Some(ActiveExecution {
+        id: 7,
+        execution_id: execution_id.clone(),
+        reply,
+        deadline: None,
+    });
+    let observation = ReviewDeclineObservation::selected(
+        ReviewDeclineId::new("prefill").unwrap(),
+        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+    );
+    for _ in 0..15 {
+        worker
+            .events
+            .try_send(ExecutionEvent::new(
+                execution_id.clone(),
+                ExecutionUpdate::ReviewDeclined(observation.clone()),
+            ))
+            .unwrap();
+    }
+    let failure = match worker
+        .decline_review(
+            &execution,
+            RpcId::Number(4),
+            &json!({"toolCall":{"name":"Read"}}),
+            ReviewDeclineReason::UnreadableRequest,
+            None,
+        )
+        .await
+    {
+        Err(failure) => failure,
+        Ok(()) => panic!("full final notice queue must fail"),
+    };
+    assert_eq!(failure.error(), &AgentError::Backpressure);
+    assert!(worker
+        .settlement_facts
+        .coverage_has_operation(failure.coverage()));
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
     for dispatch in [Dispatch::Prompt, Dispatch::Steering] {

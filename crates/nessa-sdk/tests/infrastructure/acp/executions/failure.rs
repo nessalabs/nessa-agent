@@ -416,3 +416,36 @@ fn settlement_fact_budgets_preserve_both_categories_in_either_arrival_order() {
         combined.validate_retained_size().unwrap();
     }
 }
+
+#[test]
+fn saturated_categories_keep_stable_fact_identities_for_late_failures() {
+    let mut facts = SettlementFacts::new();
+    for _ in 0..MAX_RETAINED_CATEGORY_FACTS {
+        facts.record_audit(AuditEffectPhase::Lifecycle);
+        facts.record_operation(OperationEffectPhase::Worker, AgentError::Deadline);
+    }
+    let audit_overflow = facts
+        .record_audit(AuditEffectPhase::PermissionSelection)
+        .expect("audit overflow has a categorical identity");
+    let operation_overflow = facts
+        .record_operation(
+            OperationEffectPhase::EventDelivery,
+            AgentError::Backpressure,
+        )
+        .expect("operation overflow has a categorical identity");
+    assert_eq!(
+        facts.record_audit(AuditEffectPhase::PermissionDelivery(EffectCorrelation(7))),
+        Some(audit_overflow)
+    );
+    assert_eq!(
+        facts.record_operation(
+            OperationEffectPhase::EventDelivery,
+            AgentError::Backpressure
+        ),
+        Some(operation_overflow)
+    );
+    WorkerFailure::new(AgentError::AuditFailure, [audit_overflow]).validate(&facts);
+    let operation = WorkerFailure::new(AgentError::Backpressure, [operation_overflow]);
+    operation.validate(&facts);
+    assert!(facts.coverage_has_operation(operation.coverage()));
+}

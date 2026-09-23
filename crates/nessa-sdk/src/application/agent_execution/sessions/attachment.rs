@@ -92,7 +92,15 @@ impl Resources {
             std::mem::forget(payload);
             // Future destruction cannot erase a report already returned by poll.
             // Preserve physical and audit evidence and record destruction separately.
-            return result.with_completion_failure(Some(AgentError::CleanupUncertain));
+            let completion_failure = match result.completion_failure().cloned() {
+                Some(first_error) => AgentError::MultipleOperationFailures {
+                    first_error: Box::new(first_error),
+                    subsequent_error: Box::new(AgentError::CleanupUncertain),
+                }
+                .bounded(),
+                None => AgentError::CleanupUncertain,
+            };
+            return result.with_completion_failure(Some(completion_failure));
         }
         result
     }
