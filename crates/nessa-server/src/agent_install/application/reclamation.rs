@@ -114,6 +114,12 @@ pub(crate) fn retain_replacement_and_reclaim_with_lease(
         Some(installation) => installation,
         None => ManagedInstallation::new(terminal.agent().clone(), previous.clone()),
     };
+    if installation.agent() != terminal.agent() {
+        return Err(ReclamationPersistenceFailure::new(
+            ReclamationPersistenceStage::RetainObligation,
+            "retained reclamation state belongs to another agent".into(),
+        ));
+    }
     let already_retained = installation.current() == terminal.target()
         && installation.pending().iter().any(|pending| {
             pending.obligation().origin().request() == terminal.request()
@@ -121,6 +127,12 @@ pub(crate) fn retain_replacement_and_reclaim_with_lease(
                 && pending.obligation().activation().replacement() == terminal.target()
         });
     if !already_retained {
+        if installation.current() != previous {
+            return Err(ReclamationPersistenceFailure::new(
+                ReclamationPersistenceStage::RetainObligation,
+                "retained current artifact contradicts the replacement predecessor".into(),
+            ));
+        }
         installation
             .record_replacement(terminal.target().clone(), terminal.request().clone())
             .map_err(|error| {

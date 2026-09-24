@@ -283,8 +283,7 @@ impl InstallAgentRuntime<'_> {
             .delivery
             .session(request.account_id())
             .map_err(delivery_failure)?;
-        let mut reclamation_warnings = self.recover(delivery.as_mut(), request.account_id())?;
-        reclamation_warnings.extend(match self.store.reclamation_lease(agent) {
+        let mut reclamation_warnings = match self.store.reclamation_lease(agent) {
             Ok(mut lease) => recover_reclamation(lease.as_mut(), self.reclamation_audit, request),
             Err(error) => vec![ReclamationWarning::Persistence(
                 ReclamationPersistenceFailure::new(
@@ -292,7 +291,8 @@ impl InstallAgentRuntime<'_> {
                     error.to_string(),
                 ),
             )],
-        });
+        };
+        reclamation_warnings.extend(self.recover(delivery.as_mut(), request.account_id())?);
         let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
         if self.audit(started)? == AuditAcknowledgement::Replayed {
             return Err(InstallFailure::AttemptReused(request.clone()));

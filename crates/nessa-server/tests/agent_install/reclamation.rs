@@ -210,3 +210,119 @@ fn audit_failure_retries_only_the_retained_event_after_restart() {
     );
     assert!(lease.retained.as_ref().unwrap().pending().is_empty());
 }
+
+#[test]
+fn removal_and_audit_failures_remain_independent_typed_facts() {
+    let (terminal, _, _, _) = replacement();
+    let mut lease = ScriptedLease {
+        effect: RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "artifact directory refused removal".into(),
+        )),
+        ..ScriptedLease::removing()
+    };
+    let audit = RecordingReclamationAudit {
+        records: Mutex::new(Vec::new()),
+        failure: Some(ReclamationAuditFailure::new("audit journal refused".into())),
+    };
+
+    let warnings = retain_replacement_and_reclaim_with_lease(&mut lease, &audit, &terminal)
+        .expect("the obligation and physical outcome are retained");
+
+    let ReclamationWarning::Audit { event, failure } = &warnings[0] else {
+        panic!("both failures remain in the audit warning")
+    };
+    let ReclamationPhysicalOutcome::RemovalFailed(effect_failure) = event.outcome() else {
+        panic!("the physical removal failure remains typed")
+    };
+    assert_eq!(effect_failure.kind(), InstallFailureKind::Unwritable);
+    assert_eq!(
+        effect_failure.detail(),
+        "artifact directory refused removal"
+    );
+    assert_eq!(failure.detail(), "audit journal refused");
+    assert_eq!(lease.effects.len(), 1);
+    assert_eq!(audit.records.lock().unwrap().as_slice(), &[event.clone()]);
+}
+
+#[test]
+fn outcome_retention_failure_does_not_claim_an_audited_attempt() {
+    let (terminal, _, _, _) = replacement();
+    let mut lease = ScriptedLease {
+        fail_at: Some(ReclamationPersistenceStage::RetainOutcome),
+        ..ScriptedLease::removing()
+    };
+    let audit = RecordingReclamationAudit::default();
+
+    let warnings = retain_replacement_and_reclaim_with_lease(&mut lease, &audit, &terminal)
+        .expect("the cleanup obligation itself is durable");
+
+    assert_eq!(lease.effects.len(), 1);
+    assert!(audit.records.lock().unwrap().is_empty());
+    assert_eq!(
+        warnings,
+        vec![ReclamationWarning::Persistence(
+            ReclamationPersistenceFailure::new(
+                ReclamationPersistenceStage::RetainOutcome,
+                "injected persistence refusal".into(),
+            )
+        )]
+    );
+}
+
+#[test]
+fn substituted_reclamation_identity_facts_are_refused_before_effects() {
+    let (terminal, previous, current, request) = replacement();
+    let audit = RecordingReclamationAudit::default();
+
+    let wrong_owner =
+        ManagedInstallation::new(AgentName::parse("codex").unwrap(), previous.clone());
+    let mut lease = ScriptedLease {
+        retained: Some(wrong_owner),
+        ..ScriptedLease::removing()
+    };
+    let failure =
+        retain_replacement_and_reclaim_with_lease(&mut lease, &audit, &terminal).unwrap_err();
+    assert_eq!(
+        failure.stage(),
+        ReclamationPersistenceStage::RetainObligation
+    );
+    assert_eq!(
+        failure.detail(),
+        "retained reclamation state belongs to another agent"
+    );
+    assert!(lease.effects.is_empty());
+
+    let wrong_current = ManagedInstallation::new(terminal.agent().clone(), artifact("3.0.0", 'c'));
+    let mut lease = ScriptedLease {
+        retained: Some(wrong_current),
+        ..ScriptedLease::removing()
+    };
+    let failure =
+        retain_replacement_and_reclaim_with_lease(&mut lease, &audit, &terminal).unwrap_err();
+    assert_eq!(
+        failure.detail(),
+        "retained current artifact contradicts the replacement predecessor"
+    );
+    assert!(lease.effects.is_empty());
+
+    let mut wrong_request = ManagedInstallation::new(terminal.agent().clone(), previous);
+    wrong_request
+        .record_replacement(
+            current,
+            InstallRequest::new("account-a", "another-replacement").unwrap(),
+        )
+        .unwrap();
+    let mut lease = ScriptedLease {
+        retained: Some(wrong_request),
+        ..ScriptedLease::removing()
+    };
+    let failure =
+        retain_replacement_and_reclaim_with_lease(&mut lease, &audit, &terminal).unwrap_err();
+    assert_eq!(
+        failure.detail(),
+        "retained current artifact contradicts the replacement predecessor"
+    );
+    assert!(lease.effects.is_empty());
+    assert!(audit.records.lock().unwrap().is_empty());
+    assert_eq!(terminal.request(), &request);
+}

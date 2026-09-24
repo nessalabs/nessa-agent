@@ -1,9 +1,11 @@
 use super::*;
 use std::cell::RefCell;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
@@ -25,6 +27,8 @@ use crate::agent_install_test_support::temporary_root;
 /// Written out rather than computed so the test would catch a hasher that
 /// hashed something else and agreed with itself.
 const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const USE_PARENT_ROOT: &str = "NESSA_TEST_USE_PARENT_ROOT";
+const USE_DESCENDANT_ADDRESS: &str = "NESSA_TEST_USE_DESCENDANT_ADDRESS";
 
 fn agent() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -275,6 +279,47 @@ fn dropping_an_unconfirmed_generation_does_not_release_its_durable_marker() {
     assert_eq!(active_uses(root.path()), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn use_admission_and_release_acknowledgement_failures_remain_conservative_and_retryable() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"runtime"),
+    )
+    .unwrap();
+    let launch = store.managed_launch(&agent(), &release).unwrap().unwrap();
+    let uses = active_use_directory(root.path());
+    let writable = std::fs::metadata(&uses).unwrap().permissions();
+    let mut refused = writable.clone();
+    refused.set_mode(0o500);
+    std::fs::set_permissions(&uses, refused).unwrap();
+
+    let admission = match launch.admit() {
+        Ok(_) => panic!("an unwritable use journal admitted a generation"),
+        Err(failure) => failure,
+    };
+    assert!(!admission.to_string().is_empty());
+    assert_eq!(active_uses(root.path()), 0);
+
+    std::fs::set_permissions(&uses, writable.clone()).unwrap();
+    let mut generation = launch.admit().unwrap();
+    assert_eq!(active_uses(root.path()), 1);
+    let mut refused = writable.clone();
+    refused.set_mode(0o500);
+    std::fs::set_permissions(&uses, refused).unwrap();
+    let release_failure = generation.release().unwrap_err();
+    assert!(!release_failure.to_string().is_empty());
+    assert_eq!(active_uses(root.path()), 1);
+
+    std::fs::set_permissions(&uses, writable).unwrap();
+    generation.release().unwrap();
+    assert_eq!(active_uses(root.path()), 0);
+}
+
 #[test]
 fn reclamation_preserves_current_and_defers_for_live_or_unresolved_use() {
     let root = temporary_root();
@@ -347,6 +392,140 @@ fn unresolved_use_marker_blocks_reclamation_after_launch_authority_dies() {
         RuntimeReclamationEffect::DeferredInUse
     );
     assert!(artifact_path(root.path()).join("bin/opencode").exists());
+}
+
+#[test]
+fn reclamation_removes_every_file_in_the_retained_full_artifact() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = package("1.18.31");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &gzipped(&tarball(&package_entries()))).unwrap();
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &RuntimeArtifact::for_release(&previous),
+        ),
+        RuntimeReclamationEffect::Removed
+    );
+    for (path, _) in package_entries() {
+        assert!(
+            !package_path(root.path(), path).exists(),
+            "{path} was retained after full-artifact reclamation"
+        );
+    }
+    assert!(store.installed(&agent(), &current).unwrap().is_some());
+}
+
+#[test]
+fn managed_use_surviving_descendant_helper() {
+    let Ok(address) = std::env::var(USE_DESCENDANT_ADDRESS) else {
+        return;
+    };
+    let mut coordinator = TcpStream::connect(address).expect("the parent test is listening");
+    coordinator
+        .write_all(&std::process::id().to_be_bytes())
+        .expect("report descendant readiness");
+    let mut stop = [0_u8; 1];
+    coordinator
+        .read_exact(&mut stop)
+        .expect("the parent test releases the descendant");
+}
+
+#[test]
+fn managed_use_parent_process_helper() {
+    let Ok(root) = std::env::var(USE_PARENT_ROOT) else {
+        return;
+    };
+    let address = std::env::var(USE_DESCENDANT_ADDRESS).expect("descendant coordinator address");
+    let store = ManagedRuntimes::new(root);
+    let previous = release("1.18.31", "bin/opencode");
+    let launch = store
+        .managed_launch(&agent(), &previous)
+        .unwrap()
+        .expect("the parent opens the managed runtime");
+    let _generation = launch.admit().expect("the generation is durably admitted");
+    Command::new(std::env::current_exe().unwrap())
+        .arg("managed_use_surviving_descendant_helper")
+        .arg("--nocapture")
+        .env(USE_DESCENDANT_ADDRESS, address)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn the runtime descendant");
+    std::process::exit(0);
+}
+
+#[test]
+fn parent_death_with_a_surviving_descendant_leaves_a_marker_after_the_os_lock_is_free() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut parent = Command::new(std::env::current_exe().unwrap())
+        .arg("managed_use_parent_process_helper")
+        .arg("--nocapture")
+        .env(USE_PARENT_ROOT, root.path())
+        .env(
+            USE_DESCENDANT_ADDRESS,
+            listener.local_addr().unwrap().to_string(),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn the launcher parent");
+    let (mut descendant, _) = listener.accept().expect("the descendant reports readiness");
+    let mut descendant_pid = [0_u8; 4];
+    descendant.read_exact(&mut descendant_pid).unwrap();
+    let descendant_pid = u32::from_be_bytes(descendant_pid);
+    assert_ne!(descendant_pid, parent.id());
+    assert!(parent.wait().unwrap().success());
+
+    let previous_artifact = RuntimeArtifact::for_release(&previous);
+    let artifact_lock = open_beneath(
+        root.path(),
+        &store.artifact_lock_path(&agent(), &previous_artifact),
+        OpenMode::OpenOrCreate,
+    )
+    .unwrap();
+    artifact_lock
+        .try_lock()
+        .expect("the crashed parent released its shared OS lock");
+    drop(artifact_lock);
+
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &previous_artifact,
+        ),
+        RuntimeReclamationEffect::DeferredInUse,
+        "the durable generation marker survives its launcher and blocks removal"
+    );
+    assert!(artifact_path(root.path()).join("bin/opencode").exists());
+    descendant.write_all(&[1]).unwrap();
 }
 
 #[test]
