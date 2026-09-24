@@ -14,8 +14,11 @@ use crate::agent_install_test_support::{
     FakeSource, FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    sync::{mpsc, Arc, Mutex},
+    time::Duration,
+};
 
 struct BlockingAudit {
     target: InstallTransitionKind,
@@ -107,7 +110,7 @@ impl RuntimeStore for OneShotFailureStore {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<std::path::PathBuf>, StoreFailure> {
+    ) -> Result<Option<PathBuf>, StoreFailure> {
         self.inner.installed(agent, release)
     }
 
@@ -176,7 +179,7 @@ fn assert_incomplete_transition(transition: &InstallTransition) {
     );
 }
 
-fn journal_identities(root: &std::path::Path) -> Vec<(u64, String, String)> {
+fn journal_identities(root: &Path) -> Vec<(u64, String, String)> {
     let mut records = std::fs::read_dir(root.join("audit"))
         .unwrap()
         .filter_map(Result::ok)
@@ -1149,7 +1152,7 @@ fn postcommit_terminal_failure_replays_without_changing_later_journal_order() {
     let audit = CommitTerminalThenFailOnceAudit {
         durable: DurableInstallAudit::new(
             audit_root.path(),
-            std::path::Path::new("audit"),
+            Path::new("audit"),
             Arc::new(FixedClock),
         )
         .unwrap(),
@@ -1194,7 +1197,7 @@ fn precommit_terminal_failure_is_first_published_after_a_later_install() {
     let audit = RefuseTerminalBeforeCommitOnceAudit {
         durable: DurableInstallAudit::new(
             audit_root.path(),
-            std::path::Path::new("audit"),
+            Path::new("audit"),
             Arc::new(FixedClock),
         )
         .unwrap(),
