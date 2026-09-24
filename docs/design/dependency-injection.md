@@ -51,9 +51,13 @@ for draining writes or stopping workers.
 ## Rust desktop host
 
 `src-tauri/src/composition.rs` holds `HostDependencies`: the settings store, the
-shortcut store, the surface credential, the agent credential writer and audit,
-the registered gateway, and the release source. Effectful dependencies are
-host-owned traits with substitutes in tests;
+shortcut store, the surface credential, the agent credential writer, the
+credential-save audit, the independent `CredentialSaveTargets` authority, the
+registered gateway, and the release source. The target authority derives the
+canonical destination from the durable namespace; the save use case compares
+the writer's complete claimed target against it before correlation allocation,
+intent audit, or keychain effect. Effectful dependencies are host-owned traits
+with substitutes in tests;
 the gateway is the concrete `Gateway`, whose own `GatewayHost` is the trait, so
 its substitution happens one level down. `main`'s `setup`
 assembles it once, keeps it to hand the pieces down (`tray::create`,
