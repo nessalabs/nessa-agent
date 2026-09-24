@@ -32,9 +32,9 @@
 //! answers "not installed" for anything that does not describe exactly the
 //! artifact the current pin names, or whose files are not all still there. A
 //! launcher that instead kept an absolute path from an earlier install would
-//! keep a *working* one: superseded artifacts are left where they are, so the
-//! file stays launchable after the pin moves, and the agent Nessa tested would
-//! be silently replaced by one it did not. The path `nessa install-agent`
+//! keep a *working* one: a superseded artifact can remain while a process-use
+//! marker defers its removal, so the file can stay launchable after the pin
+//! moves. The path `nessa install-agent`
 //! prints is therefore a report of what just happened, for a person and for a
 //! caller deciding what to say next. It is not a handle to be stored and
 //! launched from later.
@@ -45,10 +45,12 @@
 //!                                                 -> application::RuntimeStore
 //!                                                 -> application::InstallAudit
 //!                                                 -> application::InstallationDelivery
+//!                                                 -> application::ReclamationAudit
 //! infrastructure::HttpsArchives ------------------> ArchiveSource
 //! infrastructure::ManagedRuntimes ----------------> RuntimeStore
 //! infrastructure::DurableInstallAudit ------------> InstallAudit
 //! infrastructure::DurableInstallationDelivery ----> InstallationDelivery
+//! infrastructure::DurableReclamationAudit --------> ReclamationAudit
 //! domain::PinnedRelease --------------------------> what is allowed to be installed
 //!          └─ domain::ReleaseContents ------------> which files, and what each is for
 //! ```

@@ -427,6 +427,87 @@ fn reclamation_removes_every_file_in_the_retained_full_artifact() {
     assert!(store.installed(&agent(), &current).unwrap().is_some());
 }
 
+#[cfg(unix)]
+#[test]
+fn reclamation_keeps_hardlinked_and_symbolically_replaced_targets() {
+    use std::os::unix::fs::symlink;
+
+    for linked in ["hard", "symbolic"] {
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let previous = release("1.18.31", "bin/opencode");
+        let current = artifact(
+            "1.19.0",
+            "bin/opencode",
+            &"b".repeat(64),
+            "macos",
+            "aarch64",
+        );
+        publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+        let previous_path = artifact_path(root.path()).join("bin/opencode");
+        let outside = root.path().join(format!("outside-{linked}"));
+        if linked == "hard" {
+            std::fs::hard_link(&previous_path, &outside).unwrap();
+        } else {
+            std::fs::write(&outside, b"outside").unwrap();
+            std::fs::remove_file(&previous_path).unwrap();
+            symlink(&outside, &previous_path).unwrap();
+        }
+        publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+        let mut lease = store.reclamation_lease(&agent()).unwrap();
+        let effect = lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &RuntimeArtifact::for_release(&previous),
+        );
+
+        assert!(matches!(
+            effect,
+            RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(_))
+        ));
+        assert!(outside.exists());
+        assert!(previous_path.symlink_metadata().is_ok());
+        assert!(store.installed(&agent(), &current).unwrap().is_some());
+    }
+}
+
+#[test]
+fn reclamation_removes_only_retained_files_and_reports_an_unknown_entry() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let unknown = artifact_path(root.path()).join("bin/not-owned-by-the-pin");
+    std::fs::write(&unknown, b"unknown").unwrap();
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    let effect = lease.remove_superseded(
+        &agent(),
+        &RuntimeArtifact::for_release(&current),
+        &RuntimeArtifact::for_release(&previous),
+    );
+
+    assert!(matches!(
+        effect,
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(_))
+    ));
+    assert!(
+        unknown.exists(),
+        "unknown entries are never deletion authority"
+    );
+    assert!(!artifact_path(root.path()).join("bin/opencode").exists());
+    assert!(store.installed(&agent(), &current).unwrap().is_some());
+}
+
 #[test]
 fn managed_use_surviving_descendant_helper() {
     let Ok(address) = std::env::var(USE_DESCENDANT_ADDRESS) else {

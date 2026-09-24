@@ -5,6 +5,7 @@
 //!                     -> RuntimeStore    (this machine's disk)
 //!                     -> InstallAudit    (durable transition evidence)
 //!                     -> InstallationDelivery (publication recovery state)
+//!                     -> ReclamationAudit (superseded-runtime removal evidence)
 //! ```
 //! Arrows mean calls. These are ports owned here, so the ordering rule in
 //! [`install`] can be tested without a network or a real installation.

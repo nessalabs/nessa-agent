@@ -7,6 +7,7 @@
 //! active ExecutionId -> steer -> Injected / PromptRequired
 //! SessionCloseRequest -> backend close -> CleanupReport (resources + audit)
 //! failed open -> ProviderOpenError -> ProviderCleanup (when resources remain)
+//! executable snapshot -> per-generation use guard -> release after confirmed cleanup
 //! finalized adapter facts -> validated recipe -> ExecutionReport -> storage
 //! ```
 //! Arrows show calls and returned handles. These ports describe a complete

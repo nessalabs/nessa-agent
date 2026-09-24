@@ -2,13 +2,16 @@ use super::*;
 use crate::agent_install::application::{
     AuditAcknowledgement, AuditFailureStage, InstallDeliveryFailure, InstallDeliveryFailureStage,
     InstallationDelivery, InstallationDeliverySession, PendingInstallationDelivery,
-    PreparedInstallation, Publication, PublicationCleanupFailure, PublishFailure, RollbackChange,
+    PreparedInstallation, Publication, PublicationCleanupFailure, PublishFailure, ReclamationAudit,
+    ReclamationAuditFailure, ReclamationPersistenceFailure, ReclamationPersistenceStage,
+    RollbackChange, RuntimeReclamationEffect,
 };
 use crate::agent_install::domain::{
     ArchiveDigest, InstallEventSlot, InstallFailureEvidence, InstallFailureKind, InstallRequest,
     InstallTransitionError, InstallTransitionFacts, InstallTransitionKind, Libc,
-    PublicationOutcome, PublicationPreparation, PublicationSettlement, RecoveryState,
-    ReleasePlatform, ReleaseRequirements, RollbackState, RuntimeArtifact,
+    ManagedInstallation, PublicationOutcome, PublicationPreparation, PublicationSettlement,
+    ReclamationEvent, RecoveryState, ReleasePlatform, ReleaseRequirements, RollbackState,
+    RuntimeArtifact,
 };
 use crate::agent_install::infrastructure::{DurableInstallAudit, DurableInstallationDelivery};
 use crate::agent_install_test_support::{
@@ -113,6 +116,98 @@ impl InstallAudit for LeaseCheckingAudit {
 struct OneShotFailureStore {
     inner: FakeStore,
     failure: Mutex<Option<PublishFailure>>,
+}
+
+#[derive(Clone)]
+struct ExpectedReplacement {
+    agent: AgentName,
+    previous: RuntimeArtifact,
+    current: RuntimeArtifact,
+    request: InstallRequest,
+}
+
+struct OrderingLease {
+    sequence: Arc<Mutex<Vec<&'static str>>>,
+    expected: ExpectedReplacement,
+}
+
+impl PublicationLease for OrderingLease {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        self.sequence.lock().unwrap().push("cleanup-load");
+        Ok(None)
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        let label = match stage {
+            ReclamationPersistenceStage::Read => "cleanup-read",
+            ReclamationPersistenceStage::RetainObligation => "cleanup-obligation",
+            ReclamationPersistenceStage::RetainAdmission => "cleanup-admission",
+            ReclamationPersistenceStage::RetainOutcome => "cleanup-outcome",
+            ReclamationPersistenceStage::RetainAuditAcknowledgement => "cleanup-ack",
+        };
+        self.sequence.lock().unwrap().push(label);
+        if stage == ReclamationPersistenceStage::RetainObligation {
+            assert_eq!(installation.agent(), &self.expected.agent);
+            assert_eq!(installation.current(), &self.expected.current);
+            let pending = installation
+                .pending()
+                .first()
+                .expect("exact cleanup obligation");
+            assert_eq!(pending.obligation().superseded(), &self.expected.previous);
+            assert_eq!(
+                pending.obligation().origin().request(),
+                &self.expected.request
+            );
+            assert_eq!(
+                pending.obligation().activation().replacement(),
+                &self.expected.current
+            );
+        }
+        Ok(())
+    }
+
+    fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        assert_eq!(agent, &self.expected.agent);
+        assert_eq!(current, &self.expected.current);
+        assert_eq!(superseded, &self.expected.previous);
+        self.sequence.lock().unwrap().push("cleanup-effect");
+        RuntimeReclamationEffect::StillPresent
+    }
+
+    fn observe_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        panic!("fresh replacement cleanup must not begin as observation")
+    }
+}
+
+struct OrderingStore {
+    inner: FakeStore,
+    sequence: Arc<Mutex<Vec<&'static str>>>,
+    expected: ExpectedReplacement,
+}
+
+impl OrderingStore {
+    fn lease(&self) -> Box<dyn PublicationLease> {
+        Box::new(OrderingLease {
+            sequence: self.sequence.clone(),
+            expected: self.expected.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -578,6 +673,111 @@ fn installed_outcome(preparation: &PublicationPreparation) -> PublicationOutcome
     )
     .unwrap();
     PublicationOutcome::terminal(preparation, terminal).unwrap()
+}
+
+fn assert_sequence_before(sequence: &[&str], earlier: &str, later: &str) {
+    let earlier = sequence.iter().position(|event| *event == earlier).unwrap();
+    let later = sequence.iter().position(|event| *event == later).unwrap();
+    assert!(earlier < later, "{sequence:?}");
+}
+
+#[test]
+fn normal_replacement_acknowledges_the_exact_cleanup_obligation_before_settlement() {
+    let root = tempfile::tempdir().unwrap();
+    let pinned = crate::agent_install_test_support::release("2.0.0", PINNED_DIGEST, &platform());
+    let previous_release =
+        crate::agent_install_test_support::release("1.0.0", OTHER_DIGEST, &platform());
+    let expected = ExpectedReplacement {
+        agent: agent(),
+        previous: RuntimeArtifact::for_release(&previous_release),
+        current: RuntimeArtifact::for_release(&pinned),
+        request: request(),
+    };
+    let sequence = Arc::new(Mutex::new(Vec::new()));
+    let store = OrderingStore {
+        inner: FakeStore::empty(root.path()),
+        sequence: sequence.clone(),
+        expected,
+    };
+    let delivery = OrderingDelivery {
+        sequence: sequence.clone(),
+        pending: Mutex::new(None),
+    };
+    let reclamation_audit = OrderingReclamationAudit(sequence.clone());
+
+    let installed = InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+        reclamation_audit: &reclamation_audit,
+    }
+    .execute(&agent(), &pinned, &host(), &request())
+    .unwrap();
+
+    assert_eq!(installed.reclamation_warnings.len(), 1);
+    let sequence = sequence.lock().unwrap();
+    assert_sequence_before(&sequence, "delivery-retain", "cleanup-obligation");
+    assert_sequence_before(&sequence, "cleanup-obligation", "cleanup-effect");
+    assert_sequence_before(&sequence, "cleanup-effect", "cleanup-outcome");
+    assert_sequence_before(&sequence, "cleanup-outcome", "cleanup-audit");
+    assert_sequence_before(&sequence, "cleanup-audit", "cleanup-ack");
+    assert_sequence_before(&sequence, "cleanup-ack", "delivery-settle");
+}
+
+#[test]
+fn recovered_replacement_acknowledges_the_exact_cleanup_obligation_before_settlement() {
+    let root = tempfile::tempdir().unwrap();
+    let pinned = crate::agent_install_test_support::release("2.0.0", PINNED_DIGEST, &platform());
+    let previous_release =
+        crate::agent_install_test_support::release("1.0.0", OTHER_DIGEST, &platform());
+    let expected = ExpectedReplacement {
+        agent: agent(),
+        previous: RuntimeArtifact::for_release(&previous_release),
+        current: RuntimeArtifact::for_release(&pinned),
+        request: request(),
+    };
+    let preparation = publication_preparation(expected.current.clone(), request());
+    let terminal = InstallTransition::restore(
+        agent(),
+        expected.current.clone(),
+        request(),
+        InstallTransitionFacts::Replaced(expected.previous.clone()),
+    )
+    .unwrap();
+    let outcome = PublicationOutcome::terminal(&preparation, terminal).unwrap();
+    let prepared = PreparedInstallation::new("recovered-publication".into(), preparation);
+    let sequence = Arc::new(Mutex::new(Vec::new()));
+    let store = OrderingStore {
+        inner: FakeStore::holding(root.path()),
+        sequence: sequence.clone(),
+        expected,
+    };
+    let delivery = OrderingDelivery {
+        sequence: sequence.clone(),
+        pending: Mutex::new(Some(PendingInstallationDelivery::Outcome {
+            prepared,
+            outcome: Box::new(outcome),
+        })),
+    };
+    let reclamation_audit = OrderingReclamationAudit(sequence.clone());
+
+    InstallAgentRuntime {
+        source: &FakeSource::serving(b"unused"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+        reclamation_audit: &reclamation_audit,
+    }
+    .execute(&agent(), &pinned, &host(), &request())
+    .unwrap();
+
+    let sequence = sequence.lock().unwrap();
+    assert_sequence_before(&sequence, "cleanup-obligation", "cleanup-effect");
+    assert_sequence_before(&sequence, "cleanup-effect", "cleanup-outcome");
+    assert_sequence_before(&sequence, "cleanup-outcome", "cleanup-audit");
+    assert_sequence_before(&sequence, "cleanup-audit", "cleanup-ack");
+    assert_sequence_before(&sequence, "cleanup-ack", "delivery-settle");
 }
 
 #[test]
@@ -1302,6 +1502,123 @@ impl RuntimeStore for OneShotFailureStore {
 
     fn discard(&self, staged: StagedArchive) {
         self.inner.discard(staged);
+    }
+}
+
+impl RuntimeStore for OrderingStore {
+    fn installed(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<PathBuf>, StoreFailure> {
+        self.inner.installed(agent, release)
+    }
+
+    fn managed_launch(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+        self.inner.managed_launch(agent, release)
+    }
+
+    fn reclamation_lease(
+        &self,
+        _agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        Ok(self.lease())
+    }
+
+    fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
+        self.inner.stage(agent)
+    }
+
+    fn digest(&self, staged: &mut StagedArchive) -> Result<ArchiveDigest, StoreFailure> {
+        self.inner.digest(staged)
+    }
+
+    fn publish(
+        &self,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
+        _staged: &mut StagedArchive,
+    ) -> Result<Publication, PublishFailure> {
+        self.sequence.lock().unwrap().push("publish");
+        Ok(Publication::new(
+            PathBuf::from("/managed/opencode"),
+            PublicationChange::Replaced(self.expected.previous.clone()),
+            self.lease(),
+        ))
+    }
+
+    fn discard(&self, staged: StagedArchive) {
+        self.inner.discard(staged);
+    }
+}
+
+struct OrderingReclamationAudit(Arc<Mutex<Vec<&'static str>>>);
+
+impl ReclamationAudit for OrderingReclamationAudit {
+    fn record(&self, _event: &ReclamationEvent) -> Result<(), ReclamationAuditFailure> {
+        self.0.lock().unwrap().push("cleanup-audit");
+        Ok(())
+    }
+}
+
+struct OrderingDelivery {
+    sequence: Arc<Mutex<Vec<&'static str>>>,
+    pending: Mutex<Option<PendingInstallationDelivery>>,
+}
+
+struct OrderingDeliverySession<'a>(&'a OrderingDelivery);
+
+impl InstallationDelivery for OrderingDelivery {
+    fn session(
+        &self,
+        _account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        Ok(Box::new(OrderingDeliverySession(self)))
+    }
+}
+
+impl InstallationDeliverySession for OrderingDeliverySession<'_> {
+    fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
+        self.0.sequence.lock().unwrap().push("delivery-pending");
+        Ok(self.0.pending.lock().unwrap().clone())
+    }
+
+    fn prepare(
+        &mut self,
+        preparation: PublicationPreparation,
+    ) -> Result<PreparedInstallation, InstallDeliveryFailure> {
+        self.0.sequence.lock().unwrap().push("delivery-prepare");
+        let prepared = PreparedInstallation::new("ordered-publication".into(), preparation);
+        *self.0.pending.lock().unwrap() =
+            Some(PendingInstallationDelivery::Prepared(prepared.clone()));
+        Ok(prepared)
+    }
+
+    fn retain_outcome(
+        &mut self,
+        prepared: &PreparedInstallation,
+        outcome: &PublicationOutcome,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.0.sequence.lock().unwrap().push("delivery-retain");
+        *self.0.pending.lock().unwrap() = Some(PendingInstallationDelivery::Outcome {
+            prepared: prepared.clone(),
+            outcome: Box::new(outcome.clone()),
+        });
+        Ok(())
+    }
+
+    fn settle(
+        &mut self,
+        _prepared: &PreparedInstallation,
+        _settlement: &PublicationSettlement,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.0.sequence.lock().unwrap().push("delivery-settle");
+        *self.0.pending.lock().unwrap() = None;
+        Ok(())
     }
 }
 
