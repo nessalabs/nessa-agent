@@ -915,7 +915,7 @@ fn contradictory_store_result_leaves_preparation_unresolved() {
     assert_eq!(
         first,
         InstallFailure::Evidence(InstallAttemptError::Contradictory(
-            InstallTransitionError::TargetReportedRestored
+            InstallTransitionError::UnchangedReplacement
         ))
     );
     let preparation = match delivery.pending().unwrap() {
@@ -1836,9 +1836,15 @@ fn incomplete_publication_moves_full_diagnostics_and_bounds_only_audit_evidence(
         .unwrap_err();
 
         let operation_failure = match &failure {
-            InstallFailure::Audit(delivery) if sink_fails => {
+            InstallFailure::Delivery(delivery) if sink_fails => {
                 assert_eq!(delivery.runtime_state(), &RuntimeStateEvidence::Unconfirmed);
-                assert_incomplete_transition(delivery.pending());
+                assert_incomplete_transition(delivery.terminal().unwrap());
+                assert!(delivery.delivery().is_none());
+                assert_eq!(
+                    delivery.audit().unwrap().stage(),
+                    AuditFailureStage::AcknowledgeRecord
+                );
+                assert_eq!(delivery.audit().unwrap().detail(), "sink refused");
                 delivery.operation().unwrap()
             }
             InstallFailure::Recovery { .. } if !sink_fails => &failure,
@@ -1948,15 +1954,21 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
         .unwrap_err();
 
         let operation_failure = match &failure {
-            InstallFailure::Audit(delivery) if sink_fails => {
+            InstallFailure::Delivery(delivery) if sink_fails => {
                 assert_eq!(
                     delivery.runtime_state(),
                     &RuntimeStateEvidence::NoInstalledRuntime
                 );
                 assert_eq!(
-                    delivery.pending().rollback(),
+                    delivery.terminal().unwrap().rollback(),
                     Some(&RollbackState::NoInstalledRuntime)
                 );
+                assert!(delivery.delivery().is_none());
+                assert_eq!(
+                    delivery.audit().unwrap().stage(),
+                    AuditFailureStage::AcknowledgeRecord
+                );
+                assert_eq!(delivery.audit().unwrap().detail(), "sink refused");
                 delivery.operation().unwrap()
             }
             InstallFailure::Store(_) if !sink_fails => &failure,
@@ -2131,11 +2143,25 @@ fn audit_failure_at_replaced_reports_the_new_runtime_and_prior_evidence() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        failure,
-        InstallFailure::Audit(ref evidence)
-            if evidence.runtime_state() == &RuntimeStateEvidence::TargetInstalled
-    ));
+    let InstallFailure::Delivery(evidence) = failure else {
+        panic!("replacement audit failure must retain publication delivery evidence");
+    };
+    assert_eq!(
+        evidence.runtime_state(),
+        &RuntimeStateEvidence::TargetInstalled
+    );
+    assert!(evidence.operation().is_none());
+    assert!(evidence.delivery().is_none());
+    assert_eq!(
+        evidence.audit().unwrap().stage(),
+        AuditFailureStage::AcknowledgeRecord
+    );
+    assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
+    assert_eq!(
+        evidence.terminal().unwrap().kind(),
+        InstallTransitionKind::Replaced
+    );
+    assert_eq!(evidence.terminal().unwrap().previous(), Some(&previous));
     assert_eq!(audit.records().last().unwrap().previous(), Some(&previous));
 }
 
@@ -2162,12 +2188,27 @@ fn audit_failure_at_rollback_preserves_the_publication_failure() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        failure,
-        InstallFailure::Audit(ref evidence)
-            if evidence.runtime_state() == &RuntimeStateEvidence::NoInstalledRuntime
-                && evidence.operation() == Some(&InstallFailure::Store(operation))
-    ));
+    let InstallFailure::Delivery(evidence) = failure else {
+        panic!("rollback audit failure must retain publication delivery evidence");
+    };
+    assert_eq!(
+        evidence.runtime_state(),
+        &RuntimeStateEvidence::NoInstalledRuntime
+    );
+    assert_eq!(
+        evidence.operation(),
+        Some(&InstallFailure::Store(operation))
+    );
+    assert!(evidence.delivery().is_none());
+    assert_eq!(
+        evidence.audit().unwrap().stage(),
+        AuditFailureStage::AcknowledgeRecord
+    );
+    assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
+    assert_eq!(
+        evidence.terminal().unwrap().rollback(),
+        Some(&RollbackState::NoInstalledRuntime)
+    );
 }
 
 #[test]
@@ -2254,12 +2295,27 @@ fn incomplete_recovery_retains_the_confirmed_prior_artifact() {
     )
     .unwrap_err();
 
+    let InstallFailure::Delivery(evidence) = failure else {
+        panic!("incomplete recovery audit failure must retain delivery evidence");
+    };
+    assert_eq!(
+        evidence.runtime_state(),
+        &RuntimeStateEvidence::Restored(previous.clone())
+    );
     assert!(matches!(
-        failure,
-        InstallFailure::Audit(ref evidence)
-            if evidence.operation().is_some()
-                && evidence.runtime_state() == &RuntimeStateEvidence::Restored(previous.clone())
+        evidence.operation(),
+        Some(InstallFailure::Recovery { .. })
     ));
+    assert!(evidence.delivery().is_none());
+    assert_eq!(
+        evidence.audit().unwrap().stage(),
+        AuditFailureStage::AcknowledgeRecord
+    );
+    assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
+    assert_eq!(
+        evidence.terminal().unwrap().recovery().unwrap().0,
+        &RecoveryState::Confirmed(RollbackState::Restored(previous.clone()))
+    );
     let transition = audit.records().pop().unwrap();
     assert!(matches!(
         transition.recovery(),
@@ -2304,11 +2360,16 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
     )
     .unwrap_err();
 
-    let InstallFailure::Audit(evidence) = failure else {
+    let InstallFailure::Delivery(evidence) = failure else {
         panic!("incomplete recovery and audit failure were not retained");
     };
     assert_eq!(evidence.runtime_state(), &RuntimeStateEvidence::Unconfirmed);
-    assert_eq!(evidence.failure().detail(), "sink refused");
+    assert!(evidence.delivery().is_none());
+    assert_eq!(
+        evidence.audit().unwrap().stage(),
+        AuditFailureStage::AcknowledgeRecord
+    );
+    assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
     assert_eq!(
         evidence.operation(),
         Some(&InstallFailure::Recovery {
@@ -2317,6 +2378,7 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
         })
     );
     let transition = audit.records().pop().unwrap();
+    assert_eq!(evidence.terminal(), Some(&transition));
     let (state, failures) = transition.recovery().unwrap();
     assert_eq!(state, &RecoveryState::Unconfirmed);
     assert_eq!(failures.publication().detail(), "record sync failed");
@@ -2351,11 +2413,24 @@ fn audit_failure_after_publication_reports_the_runtime_as_installed() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        failure,
-        InstallFailure::Audit(ref evidence)
-            if evidence.runtime_state() == &RuntimeStateEvidence::TargetInstalled
-    ));
+    let InstallFailure::Delivery(evidence) = failure else {
+        panic!("installed audit failure must retain publication delivery evidence");
+    };
+    assert_eq!(
+        evidence.runtime_state(),
+        &RuntimeStateEvidence::TargetInstalled
+    );
+    assert!(evidence.operation().is_none());
+    assert!(evidence.delivery().is_none());
+    assert_eq!(
+        evidence.audit().unwrap().stage(),
+        AuditFailureStage::AcknowledgeRecord
+    );
+    assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
+    assert_eq!(
+        evidence.terminal().unwrap().kind(),
+        InstallTransitionKind::Installed
+    );
     assert_eq!(store.published(), ["opencode"]);
     assert_eq!(store.discarded().len(), 1);
 }
@@ -2423,11 +2498,24 @@ fn successful_publication_lease_spans_a_failing_audit_and_then_releases() {
         entered.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(dropped.try_recv(), Err(mpsc::TryRecvError::Empty)));
         release.send(()).unwrap();
-        assert!(matches!(
-            install.join().unwrap(),
-            Err(InstallFailure::Audit(ref evidence))
-                if evidence.runtime_state() == &RuntimeStateEvidence::TargetInstalled
-        ));
+        let InstallFailure::Delivery(evidence) = install.join().unwrap().unwrap_err() else {
+            panic!("installed audit failure must retain publication delivery evidence");
+        };
+        assert_eq!(
+            evidence.runtime_state(),
+            &RuntimeStateEvidence::TargetInstalled
+        );
+        assert!(evidence.operation().is_none());
+        assert!(evidence.delivery().is_none());
+        assert_eq!(
+            evidence.audit().unwrap().stage(),
+            AuditFailureStage::AcknowledgeRecord
+        );
+        assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
+        assert_eq!(
+            evidence.terminal().unwrap().kind(),
+            InstallTransitionKind::Installed
+        );
         dropped.recv_timeout(Duration::from_secs(5)).unwrap();
     });
 }
@@ -2523,12 +2611,24 @@ fn uncertain_recovery_lease_spans_failing_audit_and_then_releases() {
         entered.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(dropped.try_recv(), Err(mpsc::TryRecvError::Empty)));
         release.send(()).unwrap();
+        let InstallFailure::Delivery(evidence) = install.join().unwrap().unwrap_err() else {
+            panic!("recovery audit failure must retain publication delivery evidence");
+        };
+        assert_eq!(evidence.runtime_state(), &RuntimeStateEvidence::Unconfirmed);
         assert!(matches!(
-            install.join().unwrap(),
-            Err(InstallFailure::Audit(ref evidence))
-                if evidence.operation().is_some()
-                    && evidence.runtime_state() == &RuntimeStateEvidence::Unconfirmed
+            evidence.operation(),
+            Some(InstallFailure::Recovery { .. })
         ));
+        assert!(evidence.delivery().is_none());
+        assert_eq!(
+            evidence.audit().unwrap().stage(),
+            AuditFailureStage::AcknowledgeRecord
+        );
+        assert_eq!(evidence.audit().unwrap().detail(), "sink refused");
+        assert_eq!(
+            evidence.terminal().unwrap().kind(),
+            InstallTransitionKind::RecoveryIncomplete
+        );
         dropped.recv_timeout(Duration::from_secs(5)).unwrap();
     });
 }

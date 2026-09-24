@@ -14,7 +14,10 @@ use crate::agent_install_test_support::{
     agent, platform, release, request, temporary_root, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
+use nessa_local_storage::{OpenMode, PrivateDirectory};
 use std::{
+    ffi::OsStr,
+    io::Write,
     path::{Path, PathBuf},
     sync::{mpsc, Arc, Barrier},
 };
@@ -161,13 +164,15 @@ fn a_settlement_without_its_outcome_is_rejected_on_restore() {
         &PublicationSettlement::new(&preparation, outcome).unwrap(),
     );
     let encoded = serde_json::to_vec(&settlement).unwrap();
-    std::fs::write(
-        root.path()
-            .join("delivery")
-            .join(format!("{}.settled.json", prepared.record_id())),
-        encoded,
-    )
-    .unwrap();
+    let retained = PrivateDirectory::open_beneath(root.path(), Path::new("delivery")).unwrap();
+    let name = format!("{}.settled.json", prepared.record_id());
+    let mut file = retained
+        .open_file(OsStr::new(&name), OpenMode::CreateNew)
+        .unwrap();
+    file.write_all(&encoded).unwrap();
+    file.sync_all().unwrap();
+    retained.sync().unwrap();
+    let original_records = delivery_records(&root.path().join("delivery"));
 
     let failure = delivery
         .session(request().account_id())
@@ -175,7 +180,11 @@ fn a_settlement_without_its_outcome_is_rejected_on_restore() {
         .pending()
         .unwrap_err();
     assert_eq!(failure.stage(), InstallDeliveryFailureStage::ReadState);
-    assert!(failure.detail().contains("no retained outcome"));
+    assert_eq!(failure.detail(), "settlement has no retained outcome");
+    assert_eq!(
+        delivery_records(&root.path().join("delivery")),
+        original_records
+    );
 }
 
 #[test]
@@ -297,7 +306,10 @@ fn invalid_live_successors_leave_the_durable_predecessor_unchanged() {
         .settle(&prepared, &no_effect_settlement)
         .unwrap_err();
     assert_eq!(failure.stage(), InstallDeliveryFailureStage::Settle);
-    assert!(failure.detail().contains("no retained outcome"));
+    assert_eq!(
+        failure.detail(),
+        "publication settlement does not follow the retained outcome"
+    );
     assert_eq!(delivery_records(&directory), prepared_files);
 
     let other_target = RuntimeArtifact::for_release(&release("1.0.1", OTHER_DIGEST, &platform()));
