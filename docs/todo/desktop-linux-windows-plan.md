@@ -1,8 +1,9 @@
 # Plan: ship the desktop app on Linux and Windows
 
-Status: TODO. macOS is done. Linux implementation is not started. The Windows
-service model is recorded below; its native proof and implementation are not
-started.
+Status: TODO. macOS is done. Linux x86_64 runtime assembly is implemented and
+exercised in CI, but its service adapter, packaging, and release remain TODO.
+The Windows service model is recorded below; its native proof and implementation
+are not started.
 Tracking issue: [nessalabs/nessa-agent#69](https://github.com/nessalabs/nessa-agent/issues/69).
 
 This plan is written in plain language so anyone on the team can follow it.
@@ -20,7 +21,7 @@ flowchart LR
     App[Desktop app window]
     Host{Which OS?}
     Mac[macOS adapter<br/>launchd, ~1,900 lines<br/>DONE]
-    Lin[Linux adapter<br/>NOT STARTED]
+    Lin[Linux adapter<br/>NOT STARTED<br/>runtime resource prepared]
     Win[Windows adapter<br/>NOT STARTED]
     GW[(Gateway service)]
 
@@ -30,12 +31,12 @@ flowchart LR
     Host -->|Windows| Win -.->|"error: needs macOS"| App
 ```
 
-The four things that are macOS-only right now:
+The remaining delivery pieces and the prepared runtime boundary are:
 
 | Piece | What it does | Where |
 | --- | --- | --- |
 | Gateway host adapter | Installs, starts, checks, and retires the background service | `src-tauri/src/gateway/infrastructure/macos/` |
-| Runtime staging | Downloads Node, builds the CLI tools, packs them into the app | `scripts/desktop/prepare-macos.mjs` |
+| Runtime staging | Downloads verified Node, builds the CLI tools, and packs them into local macOS and Linux builds | `scripts/desktop/prepare-runtime.mjs`, `scripts/desktop/prepare-node.mjs`, and the platform composers |
 | Release plumbing | Builds, signs, and publishes the app and the update feed | `scripts/desktop/release-assets.mjs`, `.github/workflows/release.yml` |
 | Bundle check | Proves the built app is signed and safe to ship | `scripts/desktop/verify-bundle.mjs` |
 
@@ -82,10 +83,18 @@ acknowledged before the host may stop the old process.
 
 Do these once. Linux uses them first, Windows reuses them.
 
-1. **Per-platform runtime staging.** Split `prepare-macos.mjs` into a shared
-   core plus a small OS-specific part. The core downloads that OS's Node,
-   builds `nessa` and `nessa-mcp`, installs the claude-acp harness, fingerprints
-   everything, and writes the manifest. Only the signing step differs by OS.
+1. **Per-platform runtime staging (Linux foundation complete).** The shared
+   assembler builds `nessa` and `nessa-mcp`, installs both locked ACP harnesses,
+   includes the model catalogue, fingerprints the tree, and publishes its
+   manifest after platform checks. Shared Node acquisition pins and verifies the
+   official archive before extracting Node and its license. The archive cache is
+   immutable and digest-named: invalid or nonregular objects fail with an exact
+   path and remain untouched instead of being repaired automatically. Exclusive
+   publication coordinates cooperating preparation processes; it does not defend
+   a returned cache path from a same-user process that can rewrite the cache.
+   macOS signs the
+   executables; native Linux x86_64 probes them and includes the tree in local
+   bundles. Windows remains disabled.
 2. **Updater manifest for more targets.** `RELEASE_TARGETS` lists two Darwin
    triples today. Add `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`,
    and make `releaseTarget()` map them to `linux-x86_64` and `windows-x86_64`.
@@ -99,7 +108,7 @@ Do these once. Linux uses them first, Windows reuses them.
 ```mermaid
 flowchart TB
     subgraph Shared["Shared work (once)"]
-        S1[Split runtime staging into core + OS part]
+        S1[Shared runtime staging<br/>Linux foundation DONE]
         S2[Add Linux and Windows updater targets]
         S3[Add runners to release matrix]
         S4[Per-OS bundle verification]
@@ -124,7 +133,12 @@ flowchart TB
 Linux is the easy one. **systemd user units** work almost exactly like launchd,
 so the macOS adapter design carries over.
 
-What to build:
+The runtime resource foundation now prepares native
+`x86_64-unknown-linux-gnu` builds in the existing Ubuntu CI matrix leg. It does
+not register or launch a gateway, add a Linux release target, or establish any
+of the service policy below.
+
+What remains to build:
 
 - A decision about which shell answer wins for the agent's `PATH`.
   `gateway/infrastructure/login_shell.rs` asks bash two ways, because no single
@@ -335,9 +349,9 @@ gantt
     Installer and end-to-end test            :w3, after w2, 2
 ```
 
-Linux first. It proves the shared staging and release pieces with the least new
-design. Windows second, because it needs a lifecycle decision and a signing
-setup before any adapter code is useful.
+Linux runtime staging is the completed first slice. Its service and release
+pieces still come before Windows delivery, because Windows needs a lifecycle
+decision and a signing setup before any adapter code is useful.
 
 ## 7. Existing cross-platform coverage
 
@@ -351,7 +365,7 @@ desktop host can replace a gateway safely.
 
 ## 8. Checklist
 
-- [ ] Shared: split runtime staging into core + OS parts
+- [x] Shared: split runtime staging into core + OS parts and verify Linux x86_64
 - [ ] Shared: add Linux and Windows updater targets and manifest keys
 - [ ] Shared: add `ubuntu-latest` and `windows-latest` to the release matrix
 - [ ] Shared: per-OS bundle verification

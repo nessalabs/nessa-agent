@@ -115,10 +115,11 @@ The local harness manifest and lockfile pin `@agentclientprotocol/codex-acp`
 npm ci --prefix crates/nessa-sdk/harnesses/codex-acp --ignore-scripts --no-audit --no-fund
 ```
 
-The desktop bundle ships one harness per agent, so
-`scripts/desktop/prepare-macos.mjs` installs this one beside the Claude harness
-and records both versions in the runtime manifest. A bundle missing either is
-rejected at startup rather than configured around.
+The desktop runtime ships one harness per agent, so the shared
+`scripts/desktop/prepare-runtime.mjs` assembler installs this one beside the
+Claude harness and records both versions in the manifest selected by the macOS
+and Linux composers. Assembly refuses to publish a manifest when either harness
+is incomplete. Linux service registration and release packaging remain disabled.
 
 ## Verification
 

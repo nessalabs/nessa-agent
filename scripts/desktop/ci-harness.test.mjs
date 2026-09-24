@@ -60,6 +60,18 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
 
+test("the existing Linux matrix leg uniquely owns real runtime assembly", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  assert.equal(workflow.match(/run: node scripts\/desktop\/prepare\.mjs/g)?.length, 1)
+  assert.match(
+    workflow,
+    /name: Assemble the Linux desktop runtime\s+if: runner\.os == 'Linux'\s+run: node scripts\/desktop\/prepare\.mjs/,
+  )
+  const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8")
+  assert.doesNotMatch(releaseWorkflow, /target: x86_64-unknown-linux-gnu/)
+  assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
+})
+
 test("the frontend job owns top-level script tests and their just dependency", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
