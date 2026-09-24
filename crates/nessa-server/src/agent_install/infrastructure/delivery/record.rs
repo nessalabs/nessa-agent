@@ -33,7 +33,7 @@ pub(super) struct StoredSettlement {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum StoredOutcomeFacts {
-    Terminal { transition: StoredTransition },
+    Terminal { transition: Box<StoredTransition> },
     NoPublicationEffect,
 }
 
@@ -119,7 +119,7 @@ impl From<&PublicationOutcome> for StoredOutcomeFacts {
     fn from(value: &PublicationOutcome) -> Self {
         match value.terminal_transition() {
             Some(transition) => Self::Terminal {
-                transition: StoredTransition::from(transition),
+                transition: Box::new(StoredTransition::from(transition)),
             },
             None => {
                 debug_assert!(value.is_no_publication_effect());

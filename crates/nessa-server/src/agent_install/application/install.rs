@@ -74,7 +74,7 @@ pub enum InstallFailure {
     /// Durable publication delivery could not be completed or reconciled.
     Delivery(Box<PublicationDeliveryFailure>),
     /// A prepared publication has no retained terminal in either durable route.
-    UnresolvedPublication(PublicationPreparation),
+    UnresolvedPublication(Box<PublicationPreparation>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,7 +450,9 @@ impl InstallAgentRuntime<'_> {
             return Ok(());
         };
         let (prepared, outcome, retained) = match pending {
-            PendingInstallationDelivery::Outcome { prepared, outcome } => (prepared, outcome, None),
+            PendingInstallationDelivery::Outcome { prepared, outcome } => {
+                (prepared, *outcome, None)
+            }
             PendingInstallationDelivery::Prepared(prepared) => {
                 let Some(terminal) =
                     self.audit
@@ -465,9 +467,9 @@ impl InstallAgentRuntime<'_> {
                             )
                         })?
                 else {
-                    return Err(InstallFailure::UnresolvedPublication(
+                    return Err(InstallFailure::UnresolvedPublication(Box::new(
                         prepared.preparation().clone(),
-                    ));
+                    )));
                 };
                 let outcome =
                     PublicationOutcome::terminal(prepared.preparation(), terminal.clone())

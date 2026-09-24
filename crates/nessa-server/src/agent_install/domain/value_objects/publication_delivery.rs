@@ -40,7 +40,7 @@ pub struct PublicationOutcome {
 enum PublicationOutcomeFacts {
     Terminal {
         preparation: PublicationPreparation,
-        terminal: InstallTransition,
+        terminal: Box<InstallTransition>,
     },
     NoPublicationEffect(PublicationPreparation),
 }
@@ -68,7 +68,7 @@ impl PublicationOutcome {
         Ok(Self {
             facts: PublicationOutcomeFacts::Terminal {
                 preparation: preparation.clone(),
-                terminal,
+                terminal: Box::new(terminal),
             },
         })
     }
@@ -91,7 +91,7 @@ impl PublicationOutcome {
     /// Return the terminal transition when publication had consequential facts.
     pub fn terminal_transition(&self) -> Option<&InstallTransition> {
         match &self.facts {
-            PublicationOutcomeFacts::Terminal { terminal, .. } => Some(terminal),
+            PublicationOutcomeFacts::Terminal { terminal, .. } => Some(terminal.as_ref()),
             PublicationOutcomeFacts::NoPublicationEffect(_) => None,
         }
     }

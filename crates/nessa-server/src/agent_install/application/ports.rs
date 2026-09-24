@@ -573,7 +573,7 @@ pub enum PendingInstallationDelivery {
     Prepared(PreparedInstallation),
     Outcome {
         prepared: PreparedInstallation,
-        outcome: PublicationOutcome,
+        outcome: Box<PublicationOutcome>,
     },
 }
 

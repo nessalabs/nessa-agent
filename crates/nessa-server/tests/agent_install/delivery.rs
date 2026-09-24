@@ -245,7 +245,10 @@ fn dropping_session_after_retained_terminal_recovers_the_exact_event() {
         .unwrap();
     assert_eq!(
         pending,
-        Some(PendingInstallationDelivery::Outcome { prepared, outcome })
+        Some(PendingInstallationDelivery::Outcome {
+            prepared,
+            outcome: Box::new(outcome)
+        })
     );
 }
 
@@ -377,7 +380,7 @@ fn mismatched_terminal_and_no_effect_settlements_preserve_retained_terminal() {
             .unwrap(),
         Some(PendingInstallationDelivery::Outcome {
             prepared,
-            outcome: terminal
+            outcome: Box::new(terminal)
         })
     );
 }

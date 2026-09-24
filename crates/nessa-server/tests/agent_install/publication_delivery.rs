@@ -36,7 +36,10 @@ fn terminal_must_belong_to_the_exact_prepared_attempt() {
         crate::agent_install::domain::InstallRequest::new("unix:501", "other").unwrap(),
     )
     .0;
-    other.verified().unwrap();
+    assert!(matches!(
+        other.verified().unwrap().facts(),
+        InstallTransitionFacts::Verified
+    ));
     let terminal = other.installed().unwrap();
 
     assert!(matches!(

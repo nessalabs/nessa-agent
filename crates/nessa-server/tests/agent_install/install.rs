@@ -262,7 +262,7 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
         }
         state.pending = Some(PendingInstallationDelivery::Outcome {
             prepared: prepared.clone(),
-            outcome: outcome.clone(),
+            outcome: Box::new(outcome.clone()),
         });
         Ok(())
     }
@@ -880,7 +880,10 @@ fn prepared_without_an_exact_outcome_is_not_inferred_as_no_effect() {
     .execute(&agent(), &pinned, &host(), &next_request)
     .unwrap_err();
 
-    assert_eq!(failure, InstallFailure::UnresolvedPublication(preparation));
+    assert_eq!(
+        failure,
+        InstallFailure::UnresolvedPublication(Box::new(preparation))
+    );
     assert!(source.requested().is_empty());
     assert!(store.published().is_empty());
     assert!(store.discarded().is_empty());
@@ -925,7 +928,10 @@ fn contradictory_store_result_leaves_preparation_unresolved() {
     let second = install
         .execute(&agent(), &pinned, &host(), &next_request)
         .unwrap_err();
-    assert_eq!(second, InstallFailure::UnresolvedPublication(preparation));
+    assert_eq!(
+        second,
+        InstallFailure::UnresolvedPublication(Box::new(preparation))
+    );
     assert_eq!(source.requested().len(), 1);
     assert_eq!(store.published().len(), 1);
     assert_eq!(store.discarded().len(), 1);

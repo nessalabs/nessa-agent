@@ -125,7 +125,7 @@ impl InstallationDeliverySession for AcceptingDeliverySession {
     ) -> Result<(), InstallDeliveryFailure> {
         self.pending = Some(PendingInstallationDelivery::Outcome {
             prepared: prepared.clone(),
-            outcome: outcome.clone(),
+            outcome: Box::new(outcome.clone()),
         });
         Ok(())
     }

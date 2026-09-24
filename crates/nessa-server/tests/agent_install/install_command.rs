@@ -449,7 +449,9 @@ fn publication_uncertainty_says_that_later_installs_are_blocked() {
 
     let (mut attempt, _) = install_attempt();
     let preparation = PublicationPreparation::new(attempt.verified().unwrap()).unwrap();
-    let unresolved = explain(&InstallFailure::UnresolvedPublication(preparation));
+    let unresolved = explain(&InstallFailure::UnresolvedPublication(Box::new(
+        preparation,
+    )));
     assert!(unresolved.contains("prior publication result is unknown"));
     assert!(unresolved.contains("new installs for this account are blocked"));
     assert!(unresolved.contains("exact outcome is recovered"));

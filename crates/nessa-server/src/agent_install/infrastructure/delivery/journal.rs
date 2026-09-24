@@ -197,7 +197,7 @@ impl InstallationDeliverySession for DeliverySession<'_> {
             Some(PendingInstallationDelivery::Outcome {
                 prepared: current,
                 outcome,
-            }) if current == *prepared && &outcome == settlement.outcome() => {}
+            }) if current == *prepared && outcome.as_ref() == settlement.outcome() => {}
             Some(_) => {
                 return Err(failure(
                     InstallDeliveryFailureStage::Settle,
@@ -371,7 +371,10 @@ fn scan(
             continue;
         }
         let current = match outcome {
-            Some(outcome) => PendingInstallationDelivery::Outcome { prepared, outcome },
+            Some(outcome) => PendingInstallationDelivery::Outcome {
+                prepared,
+                outcome: Box::new(outcome),
+            },
             None => PendingInstallationDelivery::Prepared(prepared),
         };
         if pending.replace(current).is_some() {
