@@ -5,8 +5,8 @@ import { isAbsolute, join, relative, sep } from "node:path"
 /** Hash the shipped tree, excluding only the generated root manifest. Names,
  * entry kinds, executable bits, and lengths frame the bytes unambiguously.
  * Absolute locations and timestamps do not identify a relocatable runtime.
- * The managed runtime this fingerprints is prepared and verified on macOS only,
- * so the executable bit it reads is a POSIX mode, not a platform-derived guess.
+ * The runtime this fingerprints is prepared and verified on POSIX hosts, so the
+ * executable bit it reads is a POSIX mode, not a platform-derived guess.
  */
 export function runtimeFingerprint(directory) {
   const root = realpathSync(directory)

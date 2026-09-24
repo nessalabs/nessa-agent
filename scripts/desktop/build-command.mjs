@@ -61,17 +61,13 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   })
   const buildEnvironment = desktopStageEnvironment(environment, stage)
   const command = ["exec", "tauri", "build", ...withoutOption(args, "--stage")]
-  if (platform === "darwin") {
-    const identity = environment.APPLE_SIGNING_IDENTITY?.trim() || "-"
-    command.push(
-      "--config",
-      JSON.stringify({
-        bundle: {
-          resources: { "runtime/": "runtime/" },
-          macOS: { signingIdentity: identity },
-        },
-      }),
-    )
+  if (platform === "darwin" || platform === "linux") {
+    const bundle = { resources: { "runtime/": "runtime/" } }
+    if (platform === "darwin") {
+      const identity = environment.APPLE_SIGNING_IDENTITY?.trim() || "-"
+      bundle.macOS = { signingIdentity: identity }
+    }
+    command.push("--config", JSON.stringify({ bundle }))
   }
 
   const pnpm = platform === "win32" ? "pnpm.cmd" : "pnpm"

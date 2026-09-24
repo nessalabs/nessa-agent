@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -28,7 +29,9 @@ function fixture(t) {
   ]) {
     const file = join(root, name)
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, contents)
+    writeFileSync(file, contents, {
+      mode: name.startsWith("target/release/") ? 0o755 : 0o644,
+    })
   }
   for (const [name, dependency, version] of [
     ["claude-acp", "@agentclientprotocol/claude-agent-acp", "0.76.0"],
@@ -56,7 +59,7 @@ function fakeCommands(target, calls) {
       const packageDirectory = join(options.cwd, "node_modules/package")
       mkdirSync(bin, { recursive: true })
       mkdirSync(packageDirectory, { recursive: true })
-      writeFileSync(join(packageDirectory, "index.js"), "entry")
+      writeFileSync(join(packageDirectory, "index.js"), "entry", { mode: 0o755 })
       symlinkSync("../package/index.js", join(bin, "agent"))
     }
   }
@@ -88,6 +91,7 @@ test("assembly publishes one complete relocatable runtime manifest", (t) => {
     run: fakeCommands(target, calls),
     prepareNode({ executable, out: runtime }) {
       cpSync(node, join(runtime, executable))
+      chmodSync(join(runtime, executable), 0o755)
       cpSync(license, join(runtime, "NODE-LICENSE"))
       return "26.8.1"
     },
@@ -164,7 +168,39 @@ test("a mismatched target leaves the last complete runtime untouched", (t) => {
   )
 })
 
-test("invalid cargo metadata leaves the last complete runtime untouched", (t) => {
+test("an output link is refused before build or writes through it", (t) => {
+  const { out, root, target } = fixture(t)
+  const external = join(root, "external-runtime")
+  mkdirSync(dirname(out), { recursive: true })
+  mkdirSync(external)
+  writeFileSync(join(external, "manifest.json"), "external")
+  symlinkSync(external, out)
+  const calls = []
+
+  assert.throws(
+    () =>
+      assembleDesktopRuntime({
+        root,
+        out,
+        executables: runtimeExecutables("darwin"),
+        run: fakeCommands(target, calls),
+        prepareNode() {
+          assert.fail("Node preparation ran through an output link")
+        },
+        finalizeExecutables() {
+          assert.fail("finalization ran through an output link")
+        },
+      }),
+    /owned directory/,
+  )
+  assert.deepEqual(
+    calls.map(({ command }) => command),
+    ["rustc"],
+  )
+  assert.equal(readFileSync(join(external, "manifest.json"), "utf8"), "external")
+})
+
+test("invalid cargo metadata leaves no stale published manifest", (t) => {
   const { out, root, target } = fixture(t)
   mkdirSync(out, { recursive: true })
   writeFileSync(join(out, "manifest.json"), '{"fingerprint":"previous"}')
@@ -189,10 +225,34 @@ test("invalid cargo metadata leaves the last complete runtime untouched", (t) =>
       }),
     /did not report its target directory/,
   )
-  assert.equal(
-    readFileSync(join(out, "manifest.json"), "utf8"),
-    '{"fingerprint":"previous"}',
+  assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
+})
+
+test("a cancelled build leaves no stale published manifest", (t) => {
+  const { out, root } = fixture(t)
+  mkdirSync(out, { recursive: true })
+  writeFileSync(join(out, "manifest.json"), '{"fingerprint":"previous"}')
+
+  assert.throws(
+    () =>
+      assembleDesktopRuntime({
+        root,
+        out,
+        executables: runtimeExecutables("darwin"),
+        run(command) {
+          if (command === "rustc") return "rustc 1.90.0\nhost: aarch64-apple-darwin\n"
+          throw new Error("build cancelled")
+        },
+        prepareNode() {
+          assert.fail("Node preparation ran after cancellation")
+        },
+        finalizeExecutables() {
+          assert.fail("finalization ran after cancellation")
+        },
+      }),
+    /build cancelled/,
   )
+  assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
 })
 
 test("failed platform finalization cannot publish a runtime manifest", (t) => {
@@ -206,7 +266,7 @@ test("failed platform finalization cannot publish a runtime manifest", (t) => {
         executables: runtimeExecutables("darwin"),
         run: fakeCommands(target, []),
         prepareNode({ executable, out: runtime }) {
-          writeFileSync(join(runtime, executable), "node")
+          writeFileSync(join(runtime, executable), "node", { mode: 0o755 })
           writeFileSync(join(runtime, "NODE-LICENSE"), "license")
           return "26.8.1"
         },
@@ -215,6 +275,30 @@ test("failed platform finalization cannot publish a runtime manifest", (t) => {
         },
       }),
     /signing refused/,
+  )
+  assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
+})
+
+test("invalid finalized outputs cannot publish a runtime manifest", (t) => {
+  const { out, root, target } = fixture(t)
+
+  assert.throws(
+    () =>
+      assembleDesktopRuntime({
+        root,
+        out,
+        executables: runtimeExecutables("darwin"),
+        run: fakeCommands(target, []),
+        prepareNode({ executable, out: runtime }) {
+          writeFileSync(join(runtime, executable), "node", { mode: 0o755 })
+          writeFileSync(join(runtime, "NODE-LICENSE"), "license")
+          return "26.8.1"
+        },
+        finalizeExecutables({ executables, out: runtime }) {
+          chmodSync(join(runtime, executables.gateway), 0o644)
+        },
+      }),
+    /not executable: nessa/,
   )
   assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
 })
