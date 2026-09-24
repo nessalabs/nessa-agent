@@ -88,14 +88,16 @@ pub(super) enum StartupWarmUp {
 }
 
 impl StartupWarmUp {
+    #[cfg(unix)]
     pub(super) fn start(&self) {
         match self {
-            #[cfg(unix)]
             Self::Fixed(warm_up) => warm_up.start(),
-            #[cfg(unix)]
             Self::Current(resolver) => resolver.start_warm_up(),
         }
     }
+
+    #[cfg(not(unix))]
+    pub(super) fn start(&self) {}
 }
 
 /// Construct the guarded product route from a previously initialized local registry.
