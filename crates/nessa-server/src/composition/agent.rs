@@ -42,7 +42,7 @@ use crate::agents::domain::AgentId;
 use crate::agents::infrastructure::CredentialedClaudeProvider;
 #[cfg(unix)]
 use crate::conversation::application::ConversationAgent;
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 use crate::core::RunError;
 #[cfg(unix)]
 use nessa_auth::application::ports::Clock;
@@ -62,15 +62,11 @@ use nessa_sdk::{
     },
 };
 use serde::{Deserialize, Deserializer};
-use std::{collections::HashMap, path::PathBuf};
+#[cfg(any(unix, test))]
+use std::collections::HashSet;
 #[cfg(unix)]
-use std::{
-    collections::{BTreeMap, HashSet},
-    ffi::OsString,
-    fs::File,
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, ffi::OsString, fs::File, path::Path, sync::Arc};
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -150,7 +146,6 @@ pub(super) struct AgentRuntime {
     pub tools_enabled: bool,
 }
 
-#[cfg(unix)]
 impl AgentRuntime {
     /// Every absolute path this server would hand the command.
     ///
@@ -158,6 +153,13 @@ impl AgentRuntime {
     /// has to be on this machine for the launch to work, and an argument that is
     /// not a path is the agent's own vocabulary — a subcommand or a flag — which
     /// is nothing for this machine to be asked about.
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(
+            dead_code,
+            reason = "non-Unix production parses but cannot launch agent paths"
+        )
+    )]
     pub fn paths(&self) -> Vec<PathBuf> {
         self.args
             .iter()
@@ -217,7 +219,7 @@ impl AgentsConfig {
     /// Returns [`RunError::Agent`] for a name no adapter exists for, a name with
     /// no configuration under it, no agents at all, or several agents with no
     /// choice stated between them.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub fn selected(&self) -> Result<AgentId, RunError> {
         self.selected_from(&self.agents().into_iter().map(|(agent, _)| agent).collect())
     }
@@ -226,7 +228,7 @@ impl AgentsConfig {
     ///
     /// Deferred agents have no startup runtime entry, but are still concrete
     /// configured choices because their launch is resolved at cold open.
-    #[cfg(unix)]
+    #[cfg(any(unix, test))]
     pub fn selected_from(&self, configured: &HashSet<AgentId>) -> Result<AgentId, RunError> {
         if let Some(name) = self.unknown() {
             return Err(RunError::Agent(format!(

@@ -515,6 +515,6 @@ impl CredentialAdmin for LocalAdmin {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/composition/local_auth.rs"]
 mod tests;
