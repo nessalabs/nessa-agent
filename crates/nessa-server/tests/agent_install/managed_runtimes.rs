@@ -214,6 +214,66 @@ fn artifact_relative() -> PathBuf {
         .join("a".repeat(64))
 }
 
+fn active_use_directory(root: &Path) -> PathBuf {
+    root.join("opencode")
+        .join("active-uses")
+        .join("1.18.31")
+        .join("a".repeat(64))
+}
+
+fn active_uses(root: &Path) -> usize {
+    std::fs::read_dir(active_use_directory(root))
+        .expect("the managed launch creates its marker directory")
+        .count()
+}
+
+#[test]
+fn managed_launch_admits_and_releases_each_process_generation_independently() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"runtime"),
+    )
+    .unwrap();
+    let launch = store
+        .managed_launch(&agent(), &release)
+        .unwrap()
+        .expect("the published runtime is launchable");
+
+    let mut first = launch.admit().unwrap();
+    let mut second = launch.admit().unwrap();
+    assert_eq!(active_uses(root.path()), 2);
+
+    first.release().unwrap();
+    assert_eq!(active_uses(root.path()), 1);
+    second.release().unwrap();
+    assert_eq!(active_uses(root.path()), 0);
+}
+
+#[test]
+fn dropping_an_unconfirmed_generation_does_not_release_its_durable_marker() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"runtime"),
+    )
+    .unwrap();
+    let launch = store
+        .managed_launch(&agent(), &release)
+        .unwrap()
+        .expect("the published runtime is launchable");
+
+    drop(launch.admit().unwrap());
+
+    assert_eq!(active_uses(root.path()), 1);
+}
+
 /// The directories `unpack` expects to already exist, made the way `publish`
 /// makes them.
 ///

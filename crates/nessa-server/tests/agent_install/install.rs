@@ -16,6 +16,7 @@ use crate::agent_install_test_support::{
     temporary_root, FakeSource, FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::{
     path::{Path, PathBuf},
     sync::{mpsc, Arc, Mutex},
@@ -1254,6 +1255,14 @@ impl RuntimeStore for OneShotFailureStore {
         release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure> {
         self.inner.installed(agent, release)
+    }
+
+    fn managed_launch(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+        self.inner.managed_launch(agent, release)
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {

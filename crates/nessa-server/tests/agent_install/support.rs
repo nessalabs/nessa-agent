@@ -19,6 +19,7 @@ use crate::agent_install::domain::{
     PublicationOutcome, PublicationPreparation, PublicationSettlement, ReleaseContents,
     ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
 };
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
 /// pin that the downloaded bytes will not match.
@@ -484,6 +485,16 @@ impl RuntimeStore for FakeStore {
         _release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure> {
         self.installed.clone()
+    }
+
+    fn managed_launch(
+        &self,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
+    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+        self.installed
+            .clone()
+            .map(|path| path.map(ExecutableUseSnapshot::unmanaged))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {

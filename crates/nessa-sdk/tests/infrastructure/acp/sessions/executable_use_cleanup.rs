@@ -1,8 +1,7 @@
 //! Confirmed physical cleanup and durable use release remain separate facts.
 use super::*;
-use crate::{
-    application::agent_execution::providers::ResourceCleanup,
-    infrastructure::acp::sessions::{ExecutableUseError, ExecutableUseGuard},
+use crate::application::agent_execution::providers::{
+    ExecutableUseError, ExecutableUseGuard, ResourceCleanup,
 };
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

@@ -12,6 +12,7 @@ use crate::agent_install::domain::{
 };
 use crate::agent_install::infrastructure::releases_for;
 use crate::composition::desktop::bundled_launch;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
 struct Answers {
     installed: Result<Option<PathBuf>, StoreFailure>,
@@ -33,11 +34,21 @@ impl RuntimeStore for Answers {
         agent: &AgentName,
         release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure> {
+        self.installed.clone()
+    }
+
+    fn managed_launch(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
         self.asked.lock().unwrap().push((
             agent.as_str().to_owned(),
             release.version().as_str().to_owned(),
         ));
-        self.installed.clone()
+        self.installed
+            .clone()
+            .map(|path| path.map(ExecutableUseSnapshot::unmanaged))
     }
 
     fn stage(&self, _agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
@@ -92,10 +103,10 @@ fn verified_current_pin_is_the_launch() {
     let executable = PathBuf::from("/managed/opencode");
     let store = Answers::saying(Ok(Some(executable.clone())));
 
-    assert_eq!(
-        installed_launch(agent, &host, &store).unwrap(),
-        InstalledLaunch::Ready(executable)
-    );
+    let InstalledLaunch::Ready(launch) = installed_launch(agent, &host, &store).unwrap() else {
+        panic!("verified current pin should be ready")
+    };
+    assert_eq!(launch.executable(), executable);
 }
 
 #[test]

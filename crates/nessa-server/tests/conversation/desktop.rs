@@ -1,4 +1,5 @@
 use super::*;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 #[cfg(unix)]
 use std::io::Write;
 
@@ -11,7 +12,7 @@ use crate::agent_install::{
 
 fn opencode_runtime(model: &str) -> AgentRuntime {
     AgentRuntime {
-        command: PathBuf::from("/unverified/opencode"),
+        command: ExecutableUseSnapshot::unmanaged(PathBuf::from("/unverified/opencode")),
         args: vec!["old-argument".into()],
         model: model.into(),
         tools_enabled: false,
@@ -125,7 +126,7 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
     assert_eq!(agents.runtimes["codex"].model, "chosen-codex-model");
     for (id, [command, entry]) in bundled_agents() {
         let runtime = agents.runtime(id).unwrap();
-        assert_eq!(runtime.command, bundle.join(command), "{id:?}");
+        assert_eq!(runtime.command.executable(), bundle.join(command), "{id:?}");
         assert_eq!(runtime.paths(), [bundle.join(entry)], "{id:?}");
     }
     assert_eq!(agents.mcp_servers.len(), 1);
@@ -170,7 +171,7 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
             runtimes: HashMap::from([(
                 "codex".into(),
                 AgentRuntime {
-                    command: root.path().join("old-node"),
+                    command: ExecutableUseSnapshot::unmanaged(root.path().join("old-node")),
                     args: vec![root.path().join("old-codex.js").to_string_lossy().into()],
                     model: "chosen-model".into(),
                     tools_enabled: true,
@@ -219,7 +220,7 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
             runtimes: HashMap::from([(
                 "claude".into(),
                 AgentRuntime {
-                    command: root.path().join("old-node"),
+                    command: ExecutableUseSnapshot::unmanaged(root.path().join("old-node")),
                     args: vec![root.path().join("old-entry.js").to_string_lossy().into()],
                     model: "chosen-model".into(),
                     tools_enabled: true,
@@ -283,7 +284,7 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
     let data = root.path().join("data");
     nessa_local_storage::create_directory(&data).unwrap();
     let runtime = || AgentRuntime {
-        command: root.path().join("old-node"),
+        command: ExecutableUseSnapshot::unmanaged(root.path().join("old-node")),
         args: vec![root.path().join("old-entry.js").to_string_lossy().into()],
         model: "chosen-model".into(),
         tools_enabled: true,
@@ -382,8 +383,8 @@ fn a_verified_current_install_becomes_the_exact_desktop_launch() {
 
     let agents = settings.agents.unwrap();
     let configured = agents.runtime(AgentId::Opencode).unwrap();
-    assert_eq!(configured.command, selected_path);
-    assert_ne!(configured.command, other_path);
+    assert_eq!(configured.command.executable(), selected_path);
+    assert_ne!(configured.command.executable(), other_path);
     assert_eq!(configured.args, ["acp"]);
     assert_eq!(configured.model, "opencode/minimax-m3");
     assert!(!configured.tools_enabled);

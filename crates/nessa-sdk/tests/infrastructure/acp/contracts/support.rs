@@ -2,6 +2,7 @@ pub(super) use crate::application::agent_execution::agents::*;
 pub(super) use crate::application::agent_execution::executions::ExecutionUpdate;
 pub(super) use crate::application::agent_execution::executions::*;
 pub(super) use crate::application::agent_execution::permissions::*;
+pub(super) use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 pub(super) use crate::application::agent_execution::providers::*;
 pub(super) use crate::application::agent_execution::sessions::SessionManager;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
@@ -10,7 +11,7 @@ pub(super) use crate::domain::agent_execution::{
 };
 pub(super) use crate::domain::common::value_objects::TokenLimits;
 pub(super) use crate::domain::model_metadata::entities::ModelMetadata;
-pub(super) use crate::infrastructure::acp::sessions::{AcpConfig, ExecutableUseSnapshot};
+pub(super) use crate::infrastructure::acp::sessions::AcpConfig;
 pub(super) use crate::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 pub(super) use crate::infrastructure::codex_acp::sessions::CodexAcpProvider;
 pub(super) use crate::infrastructure::opencode_acp::sessions::OpencodeAcpProvider;

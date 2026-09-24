@@ -7,6 +7,7 @@ use nessa_sdk::application::agent_execution::executions::{
 use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, PermissionAnswer,
 };
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use nessa_sdk::application::agent_execution::sessions::SessionManager;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageKind};
 use nessa_sdk::domain::agent_execution::permissions::{
@@ -19,7 +20,7 @@ use nessa_sdk::domain::agent_execution::prompts::{
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
-use nessa_sdk::infrastructure::acp::sessions::{AcpConfig, ExecutableUseSnapshot};
+use nessa_sdk::infrastructure::acp::sessions::AcpConfig;
 use nessa_sdk::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 use nessa_sdk::infrastructure::model_metadata_json::load_catalog;
 use nessa_sdk::infrastructure::session_storage::LocalFileStorage;

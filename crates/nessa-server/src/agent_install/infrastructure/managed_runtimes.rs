@@ -6,6 +6,7 @@ use std::io::{self, Read, Seek, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use flate2::read::MultiGzDecoder;
 use nessa_local_storage::{
@@ -15,6 +16,11 @@ use nessa_local_storage::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
+use uuid::Uuid;
+
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutableUse, ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot,
+};
 
 use crate::agent_install::application::{
     Publication, PublicationChange, PublicationCleanupFailure, PublishFailure, RollbackChange,
@@ -225,6 +231,74 @@ pub struct ManagedRuntimes {
     root: PathBuf,
 }
 
+#[derive(Serialize)]
+struct ActiveExecutableUse<'a> {
+    version: &'a str,
+    digest: &'a str,
+}
+
+struct ManagedExecutableUse {
+    root: PathBuf,
+    marker_directory: PathBuf,
+    executable: PathBuf,
+    version: String,
+    digest: String,
+    _artifact_lock: File,
+}
+
+impl ExecutableUse for ManagedExecutableUse {
+    fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError> {
+        let marker_name = format!("{}.json", Uuid::new_v4());
+        let marker_path = self.marker_directory.join(marker_name);
+        let mut staging = PrivateTempFile::new_beneath(&self.root, &self.marker_directory)
+            .map_err(executable_use_error)?;
+        serde_json::to_writer(
+            staging.as_file_mut(),
+            &ActiveExecutableUse {
+                version: &self.version,
+                digest: &self.digest,
+            },
+        )
+        .map_err(|error| ExecutableUseError::new(error.to_string()))?;
+        staging.as_file().sync_all().map_err(executable_use_error)?;
+        staging
+            .persist_beneath(&marker_path)
+            .map_err(executable_use_error)?;
+        sync_directory_beneath(&self.root, &self.marker_directory).map_err(executable_use_error)?;
+        Ok(Box::new(ManagedExecutableUseGuard {
+            root: self.root.clone(),
+            marker_directory: self.marker_directory.clone(),
+            marker_path,
+            removed: false,
+        }))
+    }
+}
+
+struct ManagedExecutableUseGuard {
+    root: PathBuf,
+    marker_directory: PathBuf,
+    marker_path: PathBuf,
+    removed: bool,
+}
+
+impl ExecutableUseGuard for ManagedExecutableUseGuard {
+    fn release(&mut self) -> Result<(), ExecutableUseError> {
+        if !self.removed {
+            remove_file_beneath(&self.root, &self.marker_path).map_err(executable_use_error)?;
+            self.removed = true;
+        }
+        sync_directory_beneath(&self.root, &self.marker_directory).map_err(executable_use_error)
+    }
+}
+
+fn executable_use_error(error: io::Error) -> ExecutableUseError {
+    ExecutableUseError::new(error.to_string())
+}
+
 struct PublicationRecoveryContext<'a> {
     agent: &'a AgentName,
     written: &'a [PathBuf],
@@ -369,6 +443,47 @@ impl ManagedRuntimes {
 
     fn lock_path(&self, agent: &AgentName) -> PathBuf {
         self.agent_root(agent).join("install.lock")
+    }
+
+    fn artifact_lock_directory(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {
+        self.agent_root(agent)
+            .join("use-locks")
+            .join(artifact.version().as_str())
+    }
+
+    fn artifact_lock_path(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {
+        self.artifact_lock_directory(agent, artifact)
+            .join(format!("{}.lock", artifact.digest().as_str()))
+    }
+
+    fn use_marker_directory(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {
+        self.agent_root(agent)
+            .join("active-uses")
+            .join(artifact.version().as_str())
+            .join(artifact.digest().as_str())
+    }
+
+    fn hold_artifact_for_launch(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> Result<File, StoreFailure> {
+        let directory = self.artifact_lock_directory(agent, artifact);
+        self.private_directory(&directory)?;
+        let path = self.artifact_lock_path(agent, artifact);
+        for _ in 0..LOCK_ATTEMPTS {
+            let lock = open_beneath(&self.root, &path, OpenMode::OpenOrCreate)
+                .map_err(|error| at(&self.absolute(&path), error))?;
+            lock.lock_shared()
+                .map_err(|error| at(&self.absolute(&path), error))?;
+            if self.same_file(&lock, &path)? {
+                return Ok(lock);
+            }
+        }
+        Err(StoreFailure::Unreadable(format!(
+            "{}: kept being replaced while a runtime launch was verified",
+            self.absolute(&path).display()
+        )))
     }
 
     /// Where one of this release's files goes, relative to the root.
@@ -962,7 +1077,7 @@ impl ManagedRuntimes {
         let lock = self
             .hold(agent)
             .map_err(|failure| PublishFailure::unchanged(failure, Box::new(())))?;
-        let installed = match self.installed(agent, release) {
+        let installed = match self.installed_observation(agent, release) {
             Ok(installed) => installed,
             Err(failure) => {
                 return Err(PublishFailure::unchanged(failure, Box::new(lock)));
@@ -1049,8 +1164,8 @@ impl ManagedRuntimes {
     }
 }
 
-impl RuntimeStore for ManagedRuntimes {
-    fn installed(
+impl ManagedRuntimes {
+    fn installed_observation(
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
@@ -1122,6 +1237,42 @@ impl RuntimeStore for ManagedRuntimes {
             }
         }
         Ok(Some(self.absolute(&self.launch_path(agent, release))))
+    }
+}
+
+impl RuntimeStore for ManagedRuntimes {
+    fn installed(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<PathBuf>, StoreFailure> {
+        self.installed_observation(agent, release)
+    }
+
+    fn managed_launch(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+        let _publication = self.hold(agent)?;
+        let Some(executable) = self.installed_observation(agent, release)? else {
+            return Ok(None);
+        };
+        let artifact = RuntimeArtifact::for_release(release);
+        let artifact_lock = self.hold_artifact_for_launch(agent, &artifact)?;
+        let marker_directory = self.use_marker_directory(agent, &artifact);
+        self.private_directory(&marker_directory)?;
+        let authority = Arc::new(ManagedExecutableUse {
+            root: self.root.clone(),
+            marker_directory,
+            executable: executable.clone(),
+            version: artifact.version().as_str().to_owned(),
+            digest: artifact.digest().as_str().to_owned(),
+            _artifact_lock: artifact_lock,
+        });
+        ExecutableUseSnapshot::new(executable, authority)
+            .map(Some)
+            .map_err(|error| StoreFailure::Unreadable(error.to_string()))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {

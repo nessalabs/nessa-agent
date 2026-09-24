@@ -2,6 +2,8 @@ use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, InstallAttemptError, InstallEventIdentity, InstallTransition,
     PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
@@ -731,6 +733,17 @@ pub trait RuntimeStore: Send + Sync {
         agent: &AgentName,
         release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure>;
+
+    /// Verify and retain authority to launch one installed managed runtime.
+    ///
+    /// Unlike [`Self::installed`], this is not an observation-only readiness
+    /// query. A returned snapshot prevents physical reclamation while future
+    /// launches remain possible and durably admits each process generation.
+    fn managed_launch(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure>;
 
     /// Create a private file this install may download into.
     ///

@@ -14,20 +14,19 @@
 //! remain separate answers so callers cannot present an I/O failure as proof
 //! that no runtime was installed.
 
-use std::path::PathBuf;
-
 use crate::agent_install::application::{RuntimeStore, StoreFailure};
 use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform};
 use crate::agent_install::infrastructure::{releases_for, PinFileError};
 use crate::agents::domain::AgentId;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
 const OPENCODE_ACP_SUBCOMMAND: &str = "acp";
 
 /// What the current pin and installed-runtime store say about a launch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) enum InstalledLaunch {
     /// The store verified this executable for the current preferred release.
-    Ready(PathBuf),
+    Ready(ExecutableUseSnapshot),
     /// The current preferred release has no installation record.
     Missing,
     /// This build pins no release that runs on this host.
@@ -35,6 +34,19 @@ pub(super) enum InstalledLaunch {
     /// The store had an answer to read but could not read it.
     Unknown(StoreFailure),
 }
+
+impl PartialEq for InstalledLaunch {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Ready(left), Self::Ready(right)) => left.executable() == right.executable(),
+            (Self::Missing, Self::Missing) | (Self::UnsupportedHost, Self::UnsupportedHost) => true,
+            (Self::Unknown(left), Self::Unknown(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for InstalledLaunch {}
 
 /// Why the compiled release description could not be interpreted.
 #[derive(Debug)]
@@ -64,7 +76,7 @@ pub(super) fn installed_launch(
     let Some(release) = preferred_release(releases, host) else {
         return Ok(InstalledLaunch::UnsupportedHost);
     };
-    match store.installed(&name, &release) {
+    match store.managed_launch(&name, &release) {
         Ok(Some(executable)) => Ok(InstalledLaunch::Ready(executable)),
         Ok(None) => Ok(InstalledLaunch::Missing),
         Err(failure) => Ok(InstalledLaunch::Unknown(failure)),

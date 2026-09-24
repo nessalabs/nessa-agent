@@ -10,6 +10,7 @@ use super::{
 };
 use crate::agent_install::infrastructure::{host_platform, ManagedRuntimes};
 use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -62,7 +63,7 @@ fn default_model(agent: AgentId) -> &'static str {
     }
 }
 
-fn managed_runtime(agent: AgentId, command: PathBuf) -> AgentRuntime {
+fn managed_runtime(agent: AgentId, command: ExecutableUseSnapshot) -> AgentRuntime {
     AgentRuntime {
         command,
         args: installed_arguments(agent),
@@ -149,11 +150,11 @@ pub(super) fn configure(
             // Only the bundled launch is replaced. A configured model and its
             // budgets are the user's and survive every upgrade.
             .and_modify(|runtime| {
-                runtime.command = command.clone();
+                runtime.command = ExecutableUseSnapshot::unmanaged(command.clone());
                 runtime.args = args.clone();
             })
             .or_insert_with(|| AgentRuntime {
-                command,
+                command: ExecutableUseSnapshot::unmanaged(command),
                 args,
                 model: default_model(id).into(),
                 tools_enabled: true,

@@ -1,8 +1,10 @@
 //! Trusted host configuration for launching and supervising an ACP process.
 #![deny(missing_docs)]
 
-use super::ExecutableUseSnapshot;
-use crate::application::agent_execution::{agents::AgentError, providers::UserImageSource};
+use crate::application::agent_execution::{
+    agents::AgentError,
+    providers::{ExecutableUseSnapshot, UserImageSource},
+};
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
 use serde::Deserialize;
 use std::{

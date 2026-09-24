@@ -1,13 +1,14 @@
 use super::super::{
     fields,
     profile::AcpProfile,
-    sessions::{binding, AcpConfig, ExecutableUseSnapshot},
+    sessions::{binding, AcpConfig},
     tools::wire,
 };
 use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, ExecutionUpdate,
 };
+use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 
 use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,

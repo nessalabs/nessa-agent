@@ -30,6 +30,7 @@
 //! requests, queues, and snapshots only ever hold references.
 
 mod close;
+mod executable_use;
 mod finalized_execution;
 mod identity;
 mod images;
@@ -40,6 +41,9 @@ mod reports;
 mod session;
 mod steering;
 pub use close::SessionCloseRequest;
+pub use executable_use::{
+    ExecutableUse, ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot,
+};
 pub(crate) use finalized_execution::{
     FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,
 };

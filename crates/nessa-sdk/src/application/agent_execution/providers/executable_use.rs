@@ -70,6 +70,15 @@ pub struct ExecutableUseSnapshot {
     authority: Arc<dyn ExecutableUse>,
 }
 
+impl fmt::Debug for ExecutableUseSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutableUseSnapshot")
+            .field("executable", &self.executable)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ExecutableUseSnapshot {
     /// Creates a snapshot after confirming the path agrees with the authority.
     ///
@@ -136,5 +145,5 @@ impl ExecutableUseGuard for UnmanagedExecutableUseGuard {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/infrastructure/acp/sessions/executable_use.rs"]
+#[path = "../../../../tests/application/agent_execution/providers/executable_use.rs"]
 mod tests;

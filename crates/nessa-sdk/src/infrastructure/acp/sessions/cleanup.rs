@@ -1,8 +1,8 @@
 //! Retain the actual process or pre-start directory until cleanup can be retried.
-use super::{AcpConfig, ExecutableUseGuard};
+use super::AcpConfig;
 use crate::application::agent_execution::{
     agents::AgentError,
-    providers::{CleanupFuture, CleanupReport, CloseOutcome, ProviderCleanup},
+    providers::{CleanupFuture, CleanupReport, CloseOutcome, ExecutableUseGuard, ProviderCleanup},
 };
 use crate::infrastructure::process::{ProcessScope, RetainedDirectory};
 use std::time::Duration;
