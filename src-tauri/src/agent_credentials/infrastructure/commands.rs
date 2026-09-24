@@ -10,7 +10,7 @@ use crate::{
     agent_credentials::{
         application::{
             save_api_key, AgentCredentialStore, CredentialSaveAdmissionFailure,
-            CredentialSaveAudit, CredentialSaveIds, CredentialSaveResult,
+            CredentialSaveAudit, CredentialSaveIds, CredentialSaveResult, CredentialSaveTargets,
         },
         domain::value_objects::CredentialSaveCaller,
     },
@@ -89,12 +89,14 @@ fn request(label: &str, agent: &str, key: String) -> Result<SaveRequest, SaveAge
 
 fn save(
     store: &dyn AgentCredentialStore,
+    targets: &dyn CredentialSaveTargets,
     ids: &dyn CredentialSaveIds,
     audit: &dyn CredentialSaveAudit,
     request: SaveRequest,
 ) -> Result<SaveAgentApiKeyResponse, SaveAgentApiKeyFailure> {
     match save_api_key(
         store,
+        targets,
         ids,
         audit,
         request.caller,
@@ -145,12 +147,19 @@ fn observed(failed: bool) -> AuditStatus {
 
 fn spawn_save(
     store: Arc<dyn AgentCredentialStore>,
+    targets: Arc<dyn CredentialSaveTargets>,
     ids: Arc<dyn CredentialSaveIds>,
     audit: Arc<dyn CredentialSaveAudit>,
     request: SaveRequest,
 ) -> tauri::async_runtime::JoinHandle<Result<SaveAgentApiKeyResponse, SaveAgentApiKeyFailure>> {
     tauri::async_runtime::spawn_blocking(move || {
-        save(store.as_ref(), ids.as_ref(), audit.as_ref(), request)
+        save(
+            store.as_ref(),
+            targets.as_ref(),
+            ids.as_ref(),
+            audit.as_ref(),
+            request,
+        )
     })
 }
 
@@ -164,13 +173,14 @@ pub async fn save_agent_api_key(
 ) -> Result<SaveAgentApiKeyResponse, SaveAgentApiKeyFailure> {
     let request = request(window.label(), &agent, key)?;
     let store = deps.agent_credentials.clone();
+    let targets = deps.credential_save_targets.clone();
     let ids = deps.credential_save_ids.clone();
     let audit = deps.credential_save_audit.clone();
-    spawn_save(store, ids, audit, request).await.map_err(|_| {
-        SaveAgentApiKeyFailure::SaveUncertain {
+    spawn_save(store, targets, ids, audit, request)
+        .await
+        .map_err(|_| SaveAgentApiKeyFailure::SaveUncertain {
             audit_status: AuditStatus::Unknown,
-        }
-    })?
+        })?
 }
 
 #[cfg(test)]
@@ -225,6 +235,15 @@ mod tests {
                 .unwrap()
                 .push((target.agent(), credential.expose().to_owned()));
             Ok(())
+        }
+    }
+
+    impl CredentialSaveTargets for Store {
+        fn target(
+            &self,
+            agent: CredentialAgent,
+        ) -> Result<CredentialSaveTarget, CredentialStoreFailure> {
+            AgentCredentialStore::target(self, agent)
         }
     }
 
@@ -284,7 +303,7 @@ mod tests {
         let audit = Audit::default();
         let candidate = request(panel::SETUP_WINDOW, "claude", "private".into()).unwrap();
 
-        let response = save(&store, &Ids, &audit, candidate).unwrap();
+        let response = save(&store, &store, &Ids, &audit, candidate).unwrap();
 
         assert!(matches!(response.status, SaveStatus::Saved));
         assert_eq!(
@@ -304,7 +323,7 @@ mod tests {
         let candidate = request(panel::SETUP_WINDOW, "opencode", "   ".into()).unwrap();
 
         assert_eq!(
-            save(&store, &Ids, &audit, candidate),
+            save(&store, &store, &Ids, &audit, candidate),
             Err(SaveAgentApiKeyFailure::Refused {
                 audit_status: DeliveredAuditStatus::Failed,
             })
@@ -323,7 +342,7 @@ mod tests {
         let candidate = request(panel::SETUP_WINDOW, "claude", "private".into()).unwrap();
 
         assert_eq!(
-            save(&store, &Ids, &audit, candidate),
+            save(&store, &store, &Ids, &audit, candidate),
             Ok(SaveAgentApiKeyResponse {
                 status: SaveStatus::SavedAuditFailed,
             })
@@ -367,7 +386,7 @@ mod tests {
             &self,
             agent: CredentialAgent,
         ) -> Result<CredentialSaveTarget, CredentialStoreFailure> {
-            Store::default().target(agent)
+            AgentCredentialStore::target(&Store::default(), agent)
         }
 
         fn save_api_key(
@@ -384,6 +403,15 @@ mod tests {
                 released = wake.wait(released).unwrap();
             }
             Ok(())
+        }
+    }
+
+    impl CredentialSaveTargets for GatedStore {
+        fn target(
+            &self,
+            agent: CredentialAgent,
+        ) -> Result<CredentialSaveTarget, CredentialStoreFailure> {
+            AgentCredentialStore::target(self, agent)
         }
     }
 
@@ -427,6 +455,7 @@ mod tests {
                 gate: gate.clone(),
                 entered: Mutex::new(Some(entered)),
             });
+            let targets: Arc<dyn CredentialSaveTargets> = Arc::new(Store::default());
             let audit: Arc<dyn CredentialSaveAudit> = Arc::new(ReportingAudit {
                 outcome: Mutex::new(Some(reported)),
                 fail_outcome,
@@ -434,7 +463,7 @@ mod tests {
             let ids: Arc<dyn CredentialSaveIds> = Arc::new(Ids);
             let request = request(panel::SETUP_WINDOW, "claude", "private".into()).unwrap();
 
-            let response = spawn_save(store, ids, audit, request);
+            let response = spawn_save(store, targets, ids, audit, request);
             admitted
                 .recv_timeout(Duration::from_secs(5))
                 .expect("the production blocking supervisor admitted the store effect");

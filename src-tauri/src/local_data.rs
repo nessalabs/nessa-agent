@@ -1,7 +1,8 @@
 //! Stage-scoped on-disk roots for client data ([ADR 0005](../../docs/adr/done/0005-stage-scoped-local-data.md)).
 //!
 //! `prod` uses the bare app config directory. Every other stage string gets a
-//! subdirectory. Optional `NESSA_INSTANCE` further isolates worktrees/sandboxes.
+//! subdirectory. The desktop configuration root is stage-owned; durable service
+//! instance selection lives in `settings.service` and does not move this root.
 //! The stage is embedded by the build; a runtime override can only confirm it,
 //! never silently move a bundle into another namespace.
 

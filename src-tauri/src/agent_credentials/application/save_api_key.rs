@@ -7,7 +7,10 @@ use crate::agent_credentials::domain::value_objects::{
     CredentialSaveRefusal, CredentialSaveUncertainty,
 };
 
-use super::{AgentCredentialStore, CredentialSaveAudit, CredentialSaveIds, CredentialStoreFailure};
+use super::{
+    AgentCredentialStore, CredentialSaveAudit, CredentialSaveIds, CredentialSaveTargets,
+    CredentialStoreFailure,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialSaveResult {
@@ -32,16 +35,20 @@ pub enum CredentialSaveAdmissionFailure {
 
 pub fn save_api_key(
     store: &dyn AgentCredentialStore,
+    targets: &dyn CredentialSaveTargets,
     ids: &dyn CredentialSaveIds,
     audit: &dyn CredentialSaveAudit,
     caller: CredentialSaveCaller,
     agent: CredentialAgent,
     candidate: Vec<u8>,
 ) -> Result<CredentialSaveResult, CredentialSaveAdmissionFailure> {
+    let expected = catch_unwind(AssertUnwindSafe(|| targets.target(agent)))
+        .map_err(|_| CredentialSaveAdmissionFailure::TargetUnavailable)?
+        .map_err(|_| CredentialSaveAdmissionFailure::TargetUnavailable)?;
     let target = catch_unwind(AssertUnwindSafe(|| store.target(agent)))
         .map_err(|_| CredentialSaveAdmissionFailure::TargetUnavailable)?
         .map_err(|_| CredentialSaveAdmissionFailure::TargetUnavailable)?;
-    if target.agent() != agent {
+    if expected.agent() != agent || target != expected {
         return Err(CredentialSaveAdmissionFailure::TargetMismatch);
     }
     let correlation = catch_unwind(AssertUnwindSafe(|| ids.next()))
@@ -118,6 +125,9 @@ mod tests {
         failure: Option<CredentialStoreFailure>,
         panic_store: bool,
         resolved_agent: Option<CredentialAgent>,
+        resolved_namespace: Option<CredentialNamespace>,
+        resolved_service: Option<String>,
+        resolved_account: Option<String>,
     }
 
     impl AgentCredentialStore for Store {
@@ -126,7 +136,10 @@ mod tests {
             agent: CredentialAgent,
         ) -> Result<CredentialSaveTarget, CredentialStoreFailure> {
             let agent = self.resolved_agent.unwrap_or(agent);
-            let namespace = CredentialNamespace::new("prod".into(), None).unwrap();
+            let namespace = self
+                .resolved_namespace
+                .clone()
+                .unwrap_or_else(|| CredentialNamespace::new("prod".into(), None).unwrap());
             let account = match agent {
                 CredentialAgent::Claude => "prod:claude-api-key",
                 CredentialAgent::Opencode => "prod:opencode-api-key",
@@ -134,8 +147,12 @@ mod tests {
             CredentialSaveTarget::new(
                 agent,
                 namespace,
-                "so.nessa.agent-credentials".into(),
-                account.into(),
+                self.resolved_service
+                    .clone()
+                    .unwrap_or_else(|| "so.nessa.agent-credentials".into()),
+                self.resolved_account
+                    .clone()
+                    .unwrap_or_else(|| account.into()),
             )
             .map_err(|_| CredentialStoreFailure::Invalid)
         }
@@ -148,6 +165,17 @@ mod tests {
             *self.calls.lock().unwrap() += 1;
             assert!(!self.panic_store, "substituted store panicked");
             self.failure.map_or(Ok(()), Err)
+        }
+    }
+
+    struct Targets;
+
+    impl CredentialSaveTargets for Targets {
+        fn target(
+            &self,
+            agent: CredentialAgent,
+        ) -> Result<CredentialSaveTarget, CredentialStoreFailure> {
+            Store::default().target(agent)
         }
     }
 
@@ -201,6 +229,7 @@ mod tests {
     ) -> Result<CredentialSaveResult, CredentialSaveAdmissionFailure> {
         save_api_key(
             store,
+            &Targets,
             &Ids,
             audit,
             CredentialSaveCaller::Setup,
@@ -258,6 +287,36 @@ mod tests {
     }
 
     #[test]
+    fn every_canonical_target_field_must_match_before_admission() {
+        let wrong_namespace =
+            CredentialNamespace::new("prod".into(), Some("other".into())).unwrap();
+        let stores = [
+            Store {
+                resolved_namespace: Some(wrong_namespace),
+                ..Store::default()
+            },
+            Store {
+                resolved_service: Some("other.service".into()),
+                ..Store::default()
+            },
+            Store {
+                resolved_account: Some("prod:other-account".into()),
+                ..Store::default()
+            },
+        ];
+
+        for store in stores {
+            let audit = Audit::default();
+            assert_eq!(
+                run(&store, &audit),
+                Err(CredentialSaveAdmissionFailure::TargetMismatch)
+            );
+            assert_eq!(*store.calls.lock().unwrap(), 0);
+            assert!(audit.records.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn each_supported_agent_keeps_its_canonical_target_in_the_intent() {
         let store = Store::default();
         let audit = Audit::default();
@@ -266,6 +325,7 @@ mod tests {
             assert_eq!(
                 save_api_key(
                     &store,
+                    &Targets,
                     &Ids,
                     &audit,
                     CredentialSaveCaller::Setup,
@@ -290,6 +350,7 @@ mod tests {
         let audit = Audit::default();
         let result = save_api_key(
             &store,
+            &Targets,
             &Ids,
             &audit,
             CredentialSaveCaller::Setup,

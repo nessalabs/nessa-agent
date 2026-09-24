@@ -27,6 +27,14 @@ pub trait AgentCredentialStore: Send + Sync {
     ) -> Result<(), CredentialStoreFailure>;
 }
 
+/// Resolves the canonical audited destination independently of the effect adapter.
+pub trait CredentialSaveTargets: Send + Sync {
+    fn target(
+        &self,
+        agent: CredentialAgent,
+    ) -> Result<CredentialSaveTarget, CredentialStoreFailure>;
+}
+
 /// Generates request correlations without hiding an ambient randomness source.
 pub trait CredentialSaveIds: Send + Sync {
     fn next(&self) -> Result<CredentialSaveCorrelation, CredentialSaveAuditFailure>;

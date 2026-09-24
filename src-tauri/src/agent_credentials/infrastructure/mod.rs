@@ -5,6 +5,8 @@ pub use commands::{
 };
 mod audit;
 pub use audit::{FileCredentialSaveAudit, RandomCredentialSaveIds, UnavailableCredentialSaveAudit};
+mod targets;
+pub use targets::CanonicalCredentialSaveTargets;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

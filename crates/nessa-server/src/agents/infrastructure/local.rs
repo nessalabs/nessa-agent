@@ -185,16 +185,12 @@ impl AgentProbe for LocalAgentProbe {
     fn authenticated(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
         let sign_in = self.sign_in.get(&agent).ok_or(ProbeFailure::NothingToAsk)?;
         let mut unanswered = None;
-        if agent == AgentId::Claude
-            && holds(
-                &mut unanswered,
-                self.credentials
-                    .read(agent)
-                    .map(|credential| credential.is_some())
-                    .map_err(|_| ProbeFailure::Unanswered),
-            )
-        {
-            return Ok(true);
+        if agent == AgentId::Claude {
+            match self.credentials.read(agent) {
+                Ok(Some(_)) => return Ok(true),
+                Ok(None) => {}
+                Err(_) => return Err(ProbeFailure::Unanswered),
+            }
         }
         if holds(&mut unanswered, Self::credentials_file(sign_in)) {
             return Ok(true);

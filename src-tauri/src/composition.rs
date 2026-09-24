@@ -39,10 +39,12 @@ use std::{io, sync::Arc};
 use tauri::{AppHandle, Manager};
 
 use crate::agent_credentials::{
-    application::{AgentCredentialStore, CredentialSaveAudit, CredentialSaveIds},
+    application::{
+        AgentCredentialStore, CredentialSaveAudit, CredentialSaveIds, CredentialSaveTargets,
+    },
     infrastructure::{
-        FileCredentialSaveAudit, LocalAgentCredentialStore, RandomCredentialSaveIds,
-        UnavailableCredentialSaveAudit,
+        CanonicalCredentialSaveTargets, FileCredentialSaveAudit, LocalAgentCredentialStore,
+        RandomCredentialSaveIds, UnavailableCredentialSaveAudit,
     },
 };
 use crate::attachments::{
@@ -72,6 +74,8 @@ pub struct HostDependencies {
     pub settings: Arc<dyn SettingsStore>,
     /// Nessa-owned secure storage for supported local-agent API keys.
     pub agent_credentials: Arc<dyn AgentCredentialStore>,
+    /// Canonical audited destinations, independent of the effect adapter's claim.
+    pub credential_save_targets: Arc<dyn CredentialSaveTargets>,
     /// Correlations for credential-save audit lifecycles.
     pub credential_save_ids: Arc<dyn CredentialSaveIds>,
     /// Durable secret-free intent and outcome records for credential replacement.
@@ -204,6 +208,9 @@ impl HostDependencies {
         Ok(Self {
             settings,
             agent_credentials: Arc::new(LocalAgentCredentialStore::new(
+                service_configuration.credential_namespace().clone(),
+            )),
+            credential_save_targets: Arc::new(CanonicalCredentialSaveTargets::new(
                 service_configuration.credential_namespace().clone(),
             )),
             credential_save_ids: Arc::new(RandomCredentialSaveIds),

@@ -2,7 +2,7 @@
 mod ports;
 pub use ports::{
     AgentCredentialStore, CredentialSaveAudit, CredentialSaveAuditFailure, CredentialSaveIds,
-    CredentialStoreFailure,
+    CredentialSaveTargets, CredentialStoreFailure,
 };
 mod save_api_key;
 pub use save_api_key::{save_api_key, CredentialSaveAdmissionFailure, CredentialSaveResult};

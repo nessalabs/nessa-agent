@@ -12,15 +12,17 @@
 
 use super::*;
 use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentCredentialKind};
+use crate::agents::infrastructure::credentialed_claude::credential_environment;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::Path;
 use tempfile::TempDir;
 
-struct Credentials(Option<(AgentId, String)>);
+struct Credentials(Result<Option<(AgentId, String)>, AgentCredentialFailure>);
 
 impl AgentCredentialSource for Credentials {
     fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
-        let Some((expected, secret)) = &self.0 else {
+        let Some((expected, secret)) = self.0.as_ref().map_err(|failure| *failure)? else {
             return Ok(None);
         };
         if *expected != agent {
@@ -32,16 +34,8 @@ impl AgentCredentialSource for Credentials {
     }
 }
 
-struct UnavailableCredentials;
-
-impl AgentCredentialSource for UnavailableCredentials {
-    fn read(&self, _: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
-        Err(AgentCredentialFailure::Unavailable)
-    }
-}
-
 fn no_credentials() -> Arc<dyn AgentCredentialSource> {
-    Arc::new(Credentials(None))
+    Arc::new(Credentials(Ok(None)))
 }
 
 /// A probe told exactly what composition resolved and nothing more.
@@ -60,9 +54,9 @@ fn agent_probe(
             .into_iter()
             .map(|files| (agent, files))
             .collect(),
-        credentials: Arc::new(Credentials(
-            credential.map(|secret| (agent, secret.to_owned())),
-        )),
+        credentials: Arc::new(Credentials(Ok(
+            credential.map(|secret| (agent, secret.to_owned()))
+        ))),
         sign_in: HashMap::from([(
             agent,
             SignIn {
@@ -371,20 +365,44 @@ fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
 }
 
 #[test]
-fn an_unavailable_nessa_store_still_allows_a_vendor_sign_in_to_answer() {
-    let probe = LocalAgentProbe {
-        launch_files: HashMap::new(),
-        credentials: Arc::new(UnavailableCredentials),
-        sign_in: HashMap::from([(
-            AgentId::Claude,
-            SignIn {
-                credentials: None,
-                vendor_store: Some(signed_in),
-            },
-        )]),
-    };
-
-    assert_eq!(probe.authenticated(AgentId::Claude), Ok(true));
+fn readiness_and_launch_agree_on_every_canonical_source_state() {
+    for (answer, readiness, launch) in [
+        (
+            Ok(Some((AgentId::Claude, "present".into()))),
+            Ok(true),
+            Ok(true),
+        ),
+        (Ok(None), Ok(true), Ok(false)),
+        (
+            Err(AgentCredentialFailure::Unavailable),
+            Err(ProbeFailure::Unanswered),
+            Err(AgentCredentialFailure::Unavailable),
+        ),
+        (
+            Err(AgentCredentialFailure::Invalid),
+            Err(ProbeFailure::Unanswered),
+            Err(AgentCredentialFailure::Invalid),
+        ),
+    ] {
+        let source = Credentials(answer.clone());
+        let probe = LocalAgentProbe {
+            launch_files: HashMap::new(),
+            credentials: Arc::new(Credentials(answer)),
+            sign_in: HashMap::from([(
+                AgentId::Claude,
+                SignIn {
+                    credentials: None,
+                    vendor_store: Some(signed_in),
+                },
+            )]),
+        };
+        assert_eq!(probe.authenticated(AgentId::Claude), readiness);
+        assert_eq!(
+            credential_environment(BTreeMap::new(), &source)
+                .map(|environment| environment.contains_key(OsStr::new("ANTHROPIC_API_KEY"))),
+            launch
+        );
+    }
 }
 
 #[test]

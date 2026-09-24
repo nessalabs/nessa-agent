@@ -1,67 +1,32 @@
-use std::sync::LazyLock;
-
 use nessa_agent_credentials::{
     AgentCredential, AgentCredentialKind, CredentialAgent, CredentialNamespace,
 };
 use security_framework::passwords::set_generic_password;
-use serde::Deserialize;
 
 use crate::agent_credentials::{
-    application::{AgentCredentialStore, CredentialStoreFailure},
+    application::{AgentCredentialStore, CredentialSaveTargets, CredentialStoreFailure},
     domain::value_objects::CredentialSaveTarget,
+    infrastructure::CanonicalCredentialSaveTargets,
 };
-
-const CREDENTIALS_JSON: &str = include_str!("../../../../protocol/defaults/agent-credentials.json");
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CredentialItems {
-    service: String,
-    accounts: CredentialAccounts,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CredentialAccounts {
-    claude: String,
-    opencode: String,
-}
-
-static ITEMS: LazyLock<CredentialItems> = LazyLock::new(|| {
-    serde_json::from_str(CREDENTIALS_JSON)
-        .expect("bundled agent-credentials.json must describe keychain items")
-});
 
 /// The macOS login-keychain writer selected by desktop composition.
 pub struct LocalAgentCredentialStore {
-    namespace: CredentialNamespace,
+    targets: CanonicalCredentialSaveTargets,
 }
 
 impl LocalAgentCredentialStore {
     /// Store credentials under the exact durable service namespace.
     pub fn new(namespace: CredentialNamespace) -> Self {
-        Self { namespace }
+        Self {
+            targets: CanonicalCredentialSaveTargets::new(namespace),
+        }
     }
 
     fn target_for(
         &self,
         agent: CredentialAgent,
     ) -> Result<CredentialSaveTarget, CredentialStoreFailure> {
-        let item = match agent {
-            CredentialAgent::Claude => &ITEMS.accounts.claude,
-            CredentialAgent::Opencode => &ITEMS.accounts.opencode,
-        };
-        let account = self
-            .namespace
-            .account(item)
-            .map_err(|_| CredentialStoreFailure::Invalid)?;
-        CredentialSaveTarget::new(
-            agent,
-            self.namespace.clone(),
-            ITEMS.service.clone(),
-            account,
-        )
-        .map_err(|_| CredentialStoreFailure::Invalid)
+        self.targets.target(agent)
     }
 }
 
