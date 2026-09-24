@@ -262,9 +262,9 @@ fn permit_from_conflicting_same_agent_snapshot_changes_neither_aggregate() {
         "shared-operation",
         shared_trigger.clone(),
     );
-    let mut second = installation('x');
+    let mut second = installation('c');
     second
-        .record_replacement(artifact('y'), shared_request.clone())
+        .record_replacement(artifact('d'), shared_request.clone())
         .unwrap();
     let second_permit = fresh_permit(
         &mut second,

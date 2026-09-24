@@ -1085,6 +1085,8 @@ fn the_store_reaches_nothing_by_a_path_it_did_not_walk() {
                     | "remove_file_beneath"
                     | "sync_directory_beneath"
                     | "OpenMode"
+                    | "PrivateDirectory"
+                    | "PrivateFileType"
                     | "PrivateTempFile"
             ),
             "{name} is not one of the primitives this store reaches the disk through"
