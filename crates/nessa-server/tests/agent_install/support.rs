@@ -418,6 +418,11 @@ impl FakeStore {
         self
     }
 
+    pub(crate) fn reusing(mut self) -> Self {
+        self.publish = Ok(PublicationChange::Reused);
+        self
+    }
+
     pub(crate) fn signalling_lease_drop(mut self, sender: Sender<()>) -> Self {
         self.lease_drop = Some(sender);
         self

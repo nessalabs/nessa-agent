@@ -1,11 +1,13 @@
 use super::*;
 use crate::agent_install::application::{
-    AuditAcknowledgement, AuditFailureStage, Publication, PublicationCleanupFailure,
-    PublishFailure, RollbackChange,
+    AuditAcknowledgement, AuditFailureStage, InstallDeliveryFailure, InstallDeliveryFailureStage,
+    InstallationDelivery, InstallationDeliverySession, PendingInstallationDelivery,
+    PreparedInstallation, Publication, PublicationCleanupFailure, PublishFailure, RollbackChange,
 };
 use crate::agent_install::domain::{
-    ArchiveDigest, InstallFailureEvidence, InstallFailureKind, InstallRequest,
-    InstallTransitionError, InstallTransitionKind, Libc, PublicationPreparation, RecoveryState,
+    ArchiveDigest, InstallEventSlot, InstallFailureEvidence, InstallFailureKind, InstallRequest,
+    InstallTransitionError, InstallTransitionFacts, InstallTransitionKind, Libc,
+    PublicationOutcome, PublicationPreparation, PublicationSettlement, RecoveryState,
     ReleasePlatform, ReleaseRequirements, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install::infrastructure::{DurableInstallAudit, DurableInstallationDelivery};
@@ -110,6 +112,767 @@ impl InstallAudit for LeaseCheckingAudit {
 struct OneShotFailureStore {
     inner: FakeStore,
     failure: Mutex<Option<PublishFailure>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DeliveryCall {
+    Pending,
+    Prepare(PublicationPreparation),
+    Retain(PublicationOutcome),
+    Settle(PublicationSettlement),
+}
+
+#[derive(Default)]
+struct ScriptedDeliveryState {
+    pending: Option<PendingInstallationDelivery>,
+    calls: Vec<DeliveryCall>,
+    prepare_failures: usize,
+    retain_failures: usize,
+    settle_failures: usize,
+}
+
+struct ScriptedDelivery {
+    state: Mutex<ScriptedDeliveryState>,
+    lease_dropped: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
+    lease_checks_remaining: Mutex<usize>,
+}
+
+impl ScriptedDelivery {
+    fn new(
+        prepare_failures: usize,
+        retain_failures: usize,
+        settle_failures: usize,
+        lease_dropped: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
+    ) -> Self {
+        Self {
+            state: Mutex::new(ScriptedDeliveryState {
+                pending: None,
+                calls: Vec::new(),
+                prepare_failures,
+                retain_failures,
+                settle_failures,
+            }),
+            lease_dropped,
+            lease_checks_remaining: Mutex::new(1),
+        }
+    }
+
+    fn calls(&self) -> Vec<DeliveryCall> {
+        self.state.lock().unwrap().calls.clone()
+    }
+
+    fn pending(&self) -> Option<PendingInstallationDelivery> {
+        self.state.lock().unwrap().pending.clone()
+    }
+
+    fn assert_publication_lease_held(&self) {
+        let mut remaining = self.lease_checks_remaining.lock().unwrap();
+        if *remaining > 0 {
+            *remaining -= 1;
+        } else {
+            return;
+        }
+        if let Some(dropped) = &self.lease_dropped {
+            assert!(matches!(
+                dropped.lock().unwrap().try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+        }
+    }
+}
+
+struct ScriptedDeliverySession<'a> {
+    delivery: &'a ScriptedDelivery,
+}
+
+impl InstallationDelivery for ScriptedDelivery {
+    fn session(
+        &self,
+        _account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        Ok(Box::new(ScriptedDeliverySession { delivery: self }))
+    }
+}
+
+impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
+    fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
+        let mut state = self.delivery.state.lock().unwrap();
+        state.calls.push(DeliveryCall::Pending);
+        Ok(state.pending.clone())
+    }
+
+    fn prepare(
+        &mut self,
+        preparation: PublicationPreparation,
+    ) -> Result<PreparedInstallation, InstallDeliveryFailure> {
+        let mut state = self.delivery.state.lock().unwrap();
+        state.calls.push(DeliveryCall::Prepare(preparation.clone()));
+        if state.prepare_failures > 0 {
+            state.prepare_failures -= 1;
+            return Err(InstallDeliveryFailure::new(
+                InstallDeliveryFailureStage::Prepare,
+                "injected preparation failure".into(),
+            ));
+        }
+        if state.pending.is_some() {
+            return Err(InstallDeliveryFailure::new(
+                InstallDeliveryFailureStage::Prepare,
+                "another publication is unresolved".into(),
+            ));
+        }
+        let prepared = PreparedInstallation::new(
+            format!("prepared-{}", preparation.verified().request().request_id()),
+            preparation,
+        );
+        state.pending = Some(PendingInstallationDelivery::Prepared(prepared.clone()));
+        Ok(prepared)
+    }
+
+    fn retain_outcome(
+        &mut self,
+        prepared: &PreparedInstallation,
+        outcome: &PublicationOutcome,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.delivery.assert_publication_lease_held();
+        let mut state = self.delivery.state.lock().unwrap();
+        state.calls.push(DeliveryCall::Retain(outcome.clone()));
+        if state.retain_failures > 0 {
+            state.retain_failures -= 1;
+            return Err(InstallDeliveryFailure::new(
+                InstallDeliveryFailureStage::RetainOutcome,
+                "injected outcome retention failure".into(),
+            ));
+        }
+        state.pending = Some(PendingInstallationDelivery::Outcome {
+            prepared: prepared.clone(),
+            outcome: outcome.clone(),
+        });
+        Ok(())
+    }
+
+    fn settle(
+        &mut self,
+        _prepared: &PreparedInstallation,
+        settlement: &PublicationSettlement,
+    ) -> Result<(), InstallDeliveryFailure> {
+        let mut state = self.delivery.state.lock().unwrap();
+        state.calls.push(DeliveryCall::Settle(settlement.clone()));
+        if state.settle_failures > 0 {
+            state.settle_failures -= 1;
+            return Err(InstallDeliveryFailure::new(
+                InstallDeliveryFailureStage::Settle,
+                "injected settlement failure".into(),
+            ));
+        }
+        state.pending = None;
+        Ok(())
+    }
+}
+
+struct ScriptedAudit {
+    records: Mutex<Vec<InstallTransition>>,
+    fail_terminals: bool,
+    replay_started_after_terminal_replay: bool,
+    lease_dropped: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
+    lease_checks_remaining: Mutex<usize>,
+}
+
+impl ScriptedAudit {
+    fn new(
+        fail_terminals: bool,
+        replay_started_after_terminal_replay: bool,
+        lease_dropped: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
+    ) -> Self {
+        Self {
+            records: Mutex::new(Vec::new()),
+            fail_terminals,
+            replay_started_after_terminal_replay,
+            lease_dropped,
+            lease_checks_remaining: Mutex::new(1),
+        }
+    }
+
+    fn records(&self) -> Vec<InstallTransition> {
+        self.records.lock().unwrap().clone()
+    }
+
+    fn terminal_records(&self) -> Vec<InstallTransition> {
+        self.records()
+            .into_iter()
+            .filter(|record| record.event_identity().slot() == InstallEventSlot::CompletionOutcome)
+            .collect()
+    }
+
+    fn assert_publication_lease_held(&self) {
+        let mut remaining = self.lease_checks_remaining.lock().unwrap();
+        if *remaining > 0 {
+            *remaining -= 1;
+        } else {
+            return;
+        }
+        if let Some(dropped) = &self.lease_dropped {
+            assert!(matches!(
+                dropped.lock().unwrap().try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+        }
+    }
+}
+
+impl InstallAudit for ScriptedAudit {
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        let terminal = transition.event_identity().slot() == InstallEventSlot::CompletionOutcome;
+        if terminal {
+            self.assert_publication_lease_held();
+        }
+        let mut records = self.records.lock().unwrap();
+        let terminal_count = records
+            .iter()
+            .filter(|record| record.event_identity().slot() == InstallEventSlot::CompletionOutcome)
+            .count();
+        if transition.kind() == InstallTransitionKind::Started
+            && self.replay_started_after_terminal_replay
+            && terminal_count >= 2
+        {
+            records.push(transition);
+            return Ok(AuditAcknowledgement::Replayed);
+        }
+        records.push(transition);
+        if terminal && self.fail_terminals {
+            return Err(AuditFailure::new(
+                AuditFailureStage::AcknowledgeRecord,
+                "injected terminal audit failure".into(),
+                None,
+                None,
+            ));
+        }
+        Ok(AuditAcknowledgement::Recorded)
+    }
+
+    fn completion_for(
+        &self,
+        preparation: &PublicationPreparation,
+    ) -> Result<Option<InstallTransition>, AuditFailure> {
+        Ok(self.records.lock().unwrap().iter().find_map(|record| {
+            (record.event_identity().slot() == InstallEventSlot::CompletionOutcome
+                && record.agent() == preparation.verified().agent()
+                && record.target() == preparation.verified().target()
+                && record.request() == preparation.verified().request())
+            .then(|| record.clone())
+        }))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TerminalPublicationCase {
+    Installed,
+    Replaced,
+    RolledBack,
+    RecoveryIncomplete,
+}
+
+impl TerminalPublicationCase {
+    fn expected_kind(self) -> InstallTransitionKind {
+        match self {
+            Self::Installed => InstallTransitionKind::Installed,
+            Self::Replaced => InstallTransitionKind::Replaced,
+            Self::RolledBack => InstallTransitionKind::RolledBack,
+            Self::RecoveryIncomplete => InstallTransitionKind::RecoveryIncomplete,
+        }
+    }
+
+    fn expected_runtime_state(self) -> RuntimeStateEvidence {
+        match self {
+            Self::Installed | Self::Replaced => RuntimeStateEvidence::TargetInstalled,
+            Self::RolledBack => RuntimeStateEvidence::NoInstalledRuntime,
+            Self::RecoveryIncomplete => RuntimeStateEvidence::Unconfirmed,
+        }
+    }
+}
+
+fn assert_terminal_case(
+    case: TerminalPublicationCase,
+    terminal: &InstallTransition,
+    request: &InstallRequest,
+    target: &RuntimeArtifact,
+    previous: &RuntimeArtifact,
+) {
+    assert_eq!(terminal.kind(), case.expected_kind());
+    assert_eq!(terminal.request(), request);
+    assert_eq!(terminal.target(), target);
+    match case {
+        TerminalPublicationCase::Installed => {
+            assert_eq!(terminal.facts(), &InstallTransitionFacts::Installed);
+        }
+        TerminalPublicationCase::Replaced => {
+            assert_eq!(terminal.previous(), Some(previous));
+        }
+        TerminalPublicationCase::RolledBack => {
+            assert_eq!(
+                terminal.rollback(),
+                Some(&RollbackState::NoInstalledRuntime)
+            );
+        }
+        TerminalPublicationCase::RecoveryIncomplete => {
+            let (state, failures) = terminal.recovery().unwrap();
+            assert_eq!(state, &RecoveryState::Unconfirmed);
+            assert_eq!(
+                failures.publication().kind(),
+                InstallFailureKind::Unwritable
+            );
+            assert_eq!(failures.withdrawal(), None);
+            assert_eq!(failures.restoration(), None);
+            assert_eq!(
+                failures.confirmation().unwrap().kind(),
+                InstallFailureKind::MalformedArchive
+            );
+        }
+    }
+}
+
+fn terminal_store(
+    case: TerminalPublicationCase,
+    root: &Path,
+    previous: &RuntimeArtifact,
+    lease_dropped: mpsc::Sender<()>,
+) -> Box<dyn RuntimeStore> {
+    match case {
+        TerminalPublicationCase::Installed => {
+            Box::new(FakeStore::empty(root).signalling_lease_drop(lease_dropped))
+        }
+        TerminalPublicationCase::Replaced => Box::new(
+            FakeStore::empty(root)
+                .replacing(previous.clone())
+                .signalling_lease_drop(lease_dropped),
+        ),
+        TerminalPublicationCase::RolledBack => Box::new(OneShotFailureStore {
+            inner: FakeStore::empty(root),
+            failure: Mutex::new(Some(PublishFailure::rolled_back(
+                StoreFailure::Unwritable("publication failed".into()),
+                RollbackChange::NoInstalledRuntime,
+                Box::new(SignallingLease(lease_dropped)),
+            ))),
+        }),
+        TerminalPublicationCase::RecoveryIncomplete => {
+            let cleanup = PublicationCleanupFailure::new(
+                None,
+                None,
+                Some(StoreFailure::MalformedArchive(
+                    "remaining runtime could not be confirmed".into(),
+                )),
+            )
+            .unwrap();
+            Box::new(OneShotFailureStore {
+                inner: FakeStore::empty(root),
+                failure: Mutex::new(Some(PublishFailure::incomplete(
+                    StoreFailure::Unwritable("publication failed".into()),
+                    None,
+                    cleanup,
+                    Box::new(SignallingLease(lease_dropped)),
+                ))),
+            })
+        }
+    }
+}
+
+fn assert_terminal_operation(case: TerminalPublicationCase, operation: Option<&InstallFailure>) {
+    match case {
+        TerminalPublicationCase::Installed | TerminalPublicationCase::Replaced => {
+            assert_eq!(operation, None);
+        }
+        TerminalPublicationCase::RolledBack => assert!(matches!(
+            operation,
+            Some(InstallFailure::Store(StoreFailure::Unwritable(detail)))
+                if detail == "publication failed"
+        )),
+        TerminalPublicationCase::RecoveryIncomplete => {
+            let Some(InstallFailure::Recovery { operation, cleanup }) = operation else {
+                panic!("expected retained recovery operation, got {operation:?}");
+            };
+            assert_eq!(
+                operation,
+                &StoreFailure::Unwritable("publication failed".into())
+            );
+            assert_eq!(cleanup.withdrawal(), None);
+            assert_eq!(cleanup.restoration(), None);
+            assert_eq!(
+                cleanup.confirmation(),
+                Some(&StoreFailure::MalformedArchive(
+                    "remaining runtime could not be confirmed".into()
+                ))
+            );
+        }
+    }
+}
+
+#[test]
+fn terminal_publication_attempts_outcome_retention_and_audit_independently() {
+    for case in [
+        TerminalPublicationCase::Installed,
+        TerminalPublicationCase::Replaced,
+        TerminalPublicationCase::RolledBack,
+        TerminalPublicationCase::RecoveryIncomplete,
+    ] {
+        for (retain_fails, audit_fails) in
+            [(true, false), (false, true), (true, true), (false, false)]
+        {
+            let root = tempfile::tempdir().unwrap();
+            let (lease_dropped, dropped) = mpsc::channel();
+            let dropped = Arc::new(Mutex::new(dropped));
+            let delivery = ScriptedDelivery::new(
+                0,
+                if retain_fails { 1 } else { 0 },
+                0,
+                Some(Arc::clone(&dropped)),
+            );
+            let audit = ScriptedAudit::new(audit_fails, false, Some(Arc::clone(&dropped)));
+            let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+            let target = RuntimeArtifact::for_release(&pinned);
+            let previous =
+                RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform()));
+            let store = terminal_store(case, root.path(), &previous, lease_dropped);
+            let request = request();
+            let result = InstallAgentRuntime {
+                source: &FakeSource::serving(b"archive bytes"),
+                store: store.as_ref(),
+                audit: &audit,
+                delivery: &delivery,
+            }
+            .execute(&agent(), &pinned, &host(), &request);
+
+            let terminal = audit.terminal_records().pop().unwrap();
+            assert_terminal_case(case, &terminal, &request, &target, &previous);
+            assert_eq!(
+                delivery
+                    .calls()
+                    .iter()
+                    .filter(|call| matches!(call, DeliveryCall::Retain(_)))
+                    .count(),
+                1,
+                "{case:?}: retention was not attempted exactly once"
+            );
+            assert_eq!(
+                audit.terminal_records().len(),
+                1,
+                "{case:?}: audit was not attempted exactly once"
+            );
+            assert!(matches!(dropped.lock().unwrap().try_recv(), Ok(())));
+
+            if retain_fails || audit_fails {
+                let InstallFailure::Delivery(failure) = result.unwrap_err() else {
+                    panic!("{case:?}: expected combined delivery failure");
+                };
+                assert_eq!(failure.runtime_state(), &case.expected_runtime_state());
+                assert_terminal_case(
+                    case,
+                    failure.terminal().unwrap(),
+                    &request,
+                    &target,
+                    &previous,
+                );
+                assert_terminal_operation(case, failure.operation());
+                assert_eq!(
+                    failure.delivery().map(InstallDeliveryFailure::stage),
+                    retain_fails.then_some(InstallDeliveryFailureStage::RetainOutcome)
+                );
+                assert_eq!(
+                    failure.audit().map(AuditFailure::stage),
+                    audit_fails.then_some(AuditFailureStage::AcknowledgeRecord)
+                );
+                assert_eq!(
+                    failure.delivery().map(InstallDeliveryFailure::detail),
+                    retain_fails.then_some("injected outcome retention failure")
+                );
+                assert_eq!(
+                    failure.audit().map(AuditFailure::detail),
+                    audit_fails.then_some("injected terminal audit failure")
+                );
+                assert!(
+                    matches!(
+                        delivery.pending(),
+                        Some(PendingInstallationDelivery::Prepared(_))
+                            if retain_fails
+                    ) || matches!(
+                        delivery.pending(),
+                        Some(PendingInstallationDelivery::Outcome { .. })
+                            if !retain_fails
+                    )
+                );
+            } else {
+                match case {
+                    TerminalPublicationCase::Installed | TerminalPublicationCase::Replaced => {
+                        result.unwrap();
+                    }
+                    TerminalPublicationCase::RolledBack => {
+                        assert!(matches!(result, Err(InstallFailure::Store(_))));
+                    }
+                    TerminalPublicationCase::RecoveryIncomplete => {
+                        assert!(matches!(result, Err(InstallFailure::Recovery { .. })));
+                    }
+                }
+                assert!(delivery.pending().is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn combined_terminal_failures_block_a_fresh_request_before_install_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let (lease_dropped, dropped) = mpsc::channel();
+    let dropped = Arc::new(Mutex::new(dropped));
+    let delivery = ScriptedDelivery::new(0, 2, 0, Some(Arc::clone(&dropped)));
+    let audit = ScriptedAudit::new(true, false, Some(Arc::clone(&dropped)));
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path()).signalling_lease_drop(lease_dropped);
+    let install = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+        delivery: &delivery,
+    };
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+
+    let first = install
+        .execute(&agent(), &pinned, &host(), &request())
+        .unwrap_err();
+    assert!(matches!(first, InstallFailure::Delivery(_)));
+    assert!(matches!(
+        delivery.pending(),
+        Some(PendingInstallationDelivery::Prepared(_))
+    ));
+    let second_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
+    let second = install
+        .execute(&agent(), &pinned, &host(), &second_request)
+        .unwrap_err();
+    let InstallFailure::Delivery(second) = second else {
+        panic!("prepared recovery must fail before a new attempt starts");
+    };
+    assert_eq!(
+        second.delivery().unwrap().stage(),
+        InstallDeliveryFailureStage::RetainOutcome
+    );
+    assert_eq!(
+        second.audit().unwrap().stage(),
+        AuditFailureStage::AcknowledgeRecord
+    );
+    assert_eq!(source.requested().len(), 1);
+    assert_eq!(store.published().len(), 1);
+    assert_eq!(store.discarded().len(), 1);
+    assert!(audit
+        .records()
+        .iter()
+        .all(|record| record.request().request_id() != "install-request-2"));
+}
+
+#[test]
+fn settlement_failure_recovers_by_audit_without_repeating_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let (lease_dropped, dropped) = mpsc::channel();
+    let dropped = Arc::new(Mutex::new(dropped));
+    let delivery = ScriptedDelivery::new(0, 0, 1, Some(Arc::clone(&dropped)));
+    let audit = ScriptedAudit::new(false, true, Some(Arc::clone(&dropped)));
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path()).signalling_lease_drop(lease_dropped);
+    let install = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+        delivery: &delivery,
+    };
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+
+    let failure = install
+        .execute(&agent(), &pinned, &host(), &request())
+        .unwrap_err();
+    assert!(matches!(
+        failure,
+        InstallFailure::Delivery(ref evidence)
+            if evidence.delivery().unwrap().stage() == InstallDeliveryFailureStage::Settle
+    ));
+    let next_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
+    let next = install
+        .execute(&agent(), &pinned, &host(), &next_request)
+        .unwrap_err();
+
+    assert_eq!(next, InstallFailure::AttemptReused(next_request));
+    assert_eq!(source.requested().len(), 1);
+    assert_eq!(store.published().len(), 1);
+    assert_eq!(store.discarded().len(), 1);
+    assert_eq!(audit.terminal_records().len(), 2);
+    assert_eq!(
+        delivery
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DeliveryCall::Retain(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        delivery
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DeliveryCall::Settle(_)))
+            .count(),
+        2
+    );
+    assert!(delivery.pending().is_none());
+}
+
+#[test]
+fn no_effect_outcomes_are_explicit_for_reuse_and_prepublication_failure() {
+    for publication_fails in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let expected_failure =
+            publication_fails.then(|| StoreFailure::Unwritable("publication did not begin".into()));
+        let store: Box<dyn RuntimeStore> = if let Some(failure) = &expected_failure {
+            Box::new(FakeStore::empty(root.path()).failing_to_publish(failure.clone()))
+        } else {
+            Box::new(FakeStore::empty(root.path()).reusing())
+        };
+        let delivery = ScriptedDelivery::new(0, 0, 0, None);
+        let audit = ScriptedAudit::new(false, false, None);
+        let result = InstallAgentRuntime {
+            source: &FakeSource::serving(b"archive bytes"),
+            store: store.as_ref(),
+            audit: &audit,
+            delivery: &delivery,
+        }
+        .execute(
+            &agent(),
+            &release("1.18.31", PINNED_DIGEST, &platform()),
+            &host(),
+            &request(),
+        );
+
+        match expected_failure {
+            Some(expected) => assert_eq!(result.unwrap_err(), InstallFailure::Store(expected)),
+            None => {
+                result.unwrap();
+            }
+        }
+        let calls = delivery.calls();
+        assert!(matches!(
+            calls
+                .iter()
+                .find(|call| matches!(call, DeliveryCall::Retain(_))),
+            Some(DeliveryCall::Retain(
+                PublicationOutcome::NoPublicationEffect(_)
+            ))
+        ));
+        assert!(audit.terminal_records().is_empty());
+        assert!(delivery.pending().is_none());
+    }
+}
+
+#[test]
+fn preparation_failure_discards_staging_without_publishing() {
+    let root = tempfile::tempdir().unwrap();
+    let delivery = ScriptedDelivery::new(1, 0, 0, None);
+    let store = FakeStore::empty(root.path());
+    let failure = InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Delivery(ref evidence)
+            if evidence.delivery().unwrap().stage() == InstallDeliveryFailureStage::Prepare
+    ));
+    assert!(store.published().is_empty());
+    assert_eq!(store.discarded().len(), 1);
+    assert!(delivery.pending().is_none());
+}
+
+#[test]
+fn prepared_without_an_exact_outcome_is_not_inferred_as_no_effect() {
+    let root = tempfile::tempdir().unwrap();
+    let delivery = ScriptedDelivery::new(0, 0, 0, None);
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let original_request = request();
+    let (mut attempt, _) = InstallAttempt::start(
+        agent(),
+        RuntimeArtifact::for_release(&pinned),
+        original_request.clone(),
+    );
+    let preparation = PublicationPreparation::new(attempt.verified().unwrap()).unwrap();
+    delivery
+        .session(original_request.account_id())
+        .unwrap()
+        .prepare(preparation.clone())
+        .unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let next_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+    }
+    .execute(&agent(), &pinned, &host(), &next_request)
+    .unwrap_err();
+
+    assert_eq!(failure, InstallFailure::UnresolvedPublication(preparation));
+    assert!(source.requested().is_empty());
+    assert!(store.published().is_empty());
+    assert!(store.discarded().is_empty());
+    assert!(matches!(
+        delivery.pending(),
+        Some(PendingInstallationDelivery::Prepared(_))
+    ));
+}
+
+#[test]
+fn contradictory_store_result_leaves_preparation_unresolved() {
+    let root = tempfile::tempdir().unwrap();
+    let delivery = ScriptedDelivery::new(0, 0, 0, None);
+    let audit = ScriptedAudit::new(false, false, None);
+    let source = FakeSource::serving(b"archive bytes");
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let target = RuntimeArtifact::for_release(&pinned);
+    let store = FakeStore::empty(root.path()).replacing(target);
+    let install = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+        delivery: &delivery,
+    };
+
+    let first = install
+        .execute(&agent(), &pinned, &host(), &request())
+        .unwrap_err();
+    assert_eq!(
+        first,
+        InstallFailure::Evidence(InstallAttemptError::Contradictory(
+            InstallTransitionError::TargetReportedRestored
+        ))
+    );
+    let preparation = match delivery.pending().unwrap() {
+        PendingInstallationDelivery::Prepared(prepared) => prepared.preparation().clone(),
+        PendingInstallationDelivery::Outcome { .. } => {
+            panic!("a contradictory store result must not be retained as an outcome")
+        }
+    };
+    let next_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
+    let second = install
+        .execute(&agent(), &pinned, &host(), &next_request)
+        .unwrap_err();
+    assert_eq!(second, InstallFailure::UnresolvedPublication(preparation));
+    assert_eq!(source.requested().len(), 1);
+    assert_eq!(store.published().len(), 1);
+    assert_eq!(store.discarded().len(), 1);
 }
 
 impl RuntimeStore for OneShotFailureStore {
