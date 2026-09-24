@@ -167,6 +167,13 @@ pub enum RuntimeStateEvidence {
     Unconfirmed,
 }
 
+struct TerminalCompletion {
+    outcome: PublicationOutcome,
+    terminal: InstallTransition,
+    runtime_state: RuntimeStateEvidence,
+    operation: Option<InstallFailure>,
+}
+
 impl fmt::Display for InstallFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -410,10 +417,12 @@ impl InstallAgentRuntime<'_> {
                 let (_, warnings) = self.finish_terminal(
                     delivery,
                     &prepared,
-                    outcome,
-                    transition,
-                    RuntimeStateEvidence::TargetInstalled,
-                    None,
+                    TerminalCompletion {
+                        outcome,
+                        terminal: transition,
+                        runtime_state: RuntimeStateEvidence::TargetInstalled,
+                        operation: None,
+                    },
                     Some(&mut publication),
                 )?;
                 Ok((publication.executable().to_owned(), warnings))
@@ -470,10 +479,12 @@ impl InstallAgentRuntime<'_> {
                 let result = self.finish_terminal(
                     delivery,
                     &prepared,
-                    retained,
-                    transition,
-                    runtime_state,
-                    Some(outcome),
+                    TerminalCompletion {
+                        outcome: retained,
+                        terminal: transition,
+                        runtime_state,
+                        operation: Some(outcome),
+                    },
                     None,
                 );
                 drop(publication_lease);
@@ -632,12 +643,15 @@ impl InstallAgentRuntime<'_> {
         &self,
         delivery: &mut dyn InstallationDeliverySession,
         prepared: &PreparedInstallation,
-        outcome: PublicationOutcome,
-        terminal: InstallTransition,
-        runtime_state: RuntimeStateEvidence,
-        operation: Option<InstallFailure>,
+        completion: TerminalCompletion,
         mut publication: Option<&mut Publication>,
     ) -> Result<(Option<InstallFailure>, Vec<ReclamationWarning>), InstallFailure> {
+        let TerminalCompletion {
+            outcome,
+            terminal,
+            runtime_state,
+            operation,
+        } = completion;
         let retained = delivery.retain_outcome(prepared, &outcome).err();
         let audited = self.audit.record(terminal.clone()).err();
         if retained.is_some() || audited.is_some() {

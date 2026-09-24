@@ -80,7 +80,7 @@ fn fresh_permit(
         .admit_reclamation(replacement_request, operation(operation_id), trigger)
         .unwrap()
     {
-        AdmissionResult::Fresh { permit, .. } => permit,
+        AdmissionResult::Fresh { permit, .. } => *permit,
         AdmissionResult::Existing(_) => panic!("expected fresh admission"),
     }
 }

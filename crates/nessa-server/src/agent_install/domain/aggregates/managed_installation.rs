@@ -272,7 +272,7 @@ impl ManagedInstallation {
         };
         Ok(AdmissionResult::Fresh {
             admission: Box::new(admission),
-            permit,
+            permit: Box::new(permit),
         })
     }
 
@@ -461,7 +461,7 @@ fn work_for(operation: &ReclamationOperation) -> ReclamationWork {
 pub enum AdmissionResult {
     Fresh {
         admission: Box<ReclamationAdmission>,
-        permit: RemovalPermit,
+        permit: Box<RemovalPermit>,
     },
     Existing(ReclamationWork),
 }

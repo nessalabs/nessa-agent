@@ -606,6 +606,7 @@ impl ManagedRuntimes {
             Err(error) => return Err(unreadable(error)),
         };
         retained.verify_binding().map_err(unreadable)?;
+        let mut any_marker = false;
         for entry in retained.entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
             if entry.file_type() != PrivateFileType::RegularFile {
@@ -614,10 +615,10 @@ impl ManagedRuntimes {
                     self.absolute(&directory).display()
                 )));
             }
-            return Ok(true);
+            any_marker = true;
         }
         retained.verify_binding().map_err(unreadable)?;
-        Ok(false)
+        Ok(any_marker)
     }
 
     fn remove_superseded_under_lock(

@@ -1,7 +1,7 @@
 use super::*;
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchivePath, FileRole, InstallAttempt, ReclamationAuditState, ReleaseContents,
-    ReleaseFile, ReleaseVersion,
+    ArchiveDigest, ArchivePath, FileRole, InstallAttempt, ReclamationAuditState,
+    ReclamationPhysicalOutcome, ReleaseContents, ReleaseFile, ReleaseVersion,
 };
 use std::sync::Mutex;
 

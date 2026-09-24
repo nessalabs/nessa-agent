@@ -2,9 +2,9 @@ use super::*;
 use crate::agent_install::application::{
     AuditAcknowledgement, AuditFailureStage, InstallDeliveryFailure, InstallDeliveryFailureStage,
     InstallationDelivery, InstallationDeliverySession, PendingInstallationDelivery,
-    PreparedInstallation, Publication, PublicationCleanupFailure, PublishFailure, ReclamationAudit,
-    ReclamationAuditFailure, ReclamationPersistenceFailure, ReclamationPersistenceStage,
-    RollbackChange, RuntimeReclamationEffect,
+    PreparedInstallation, Publication, PublicationCleanupFailure, PublicationLease, PublishFailure,
+    ReclamationAudit, ReclamationAuditFailure, ReclamationPersistenceFailure,
+    ReclamationPersistenceStage, RollbackChange, RuntimeReclamationEffect,
 };
 use crate::agent_install::domain::{
     ArchiveDigest, InstallEventSlot, InstallFailureEvidence, InstallFailureKind, InstallRequest,

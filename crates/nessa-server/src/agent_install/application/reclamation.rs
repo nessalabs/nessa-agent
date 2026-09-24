@@ -277,20 +277,20 @@ fn process_obligation_with_lease(
                 admission.0.obligation().superseded(),
             );
             match effect {
-                RuntimeReclamationEffect::Removed => installation.confirm_removed(admission.1),
+                RuntimeReclamationEffect::Removed => installation.confirm_removed(*admission.1),
                 RuntimeReclamationEffect::AlreadyAbsent => {
-                    installation.confirm_already_absent(admission.1)
+                    installation.confirm_already_absent(*admission.1)
                 }
                 RuntimeReclamationEffect::DeferredCurrent
                 | RuntimeReclamationEffect::DeferredInUse
                 | RuntimeReclamationEffect::StillPresent => {
-                    installation.record_still_present(admission.1)
+                    installation.record_still_present(*admission.1)
                 }
                 RuntimeReclamationEffect::Failed(failure) => {
-                    installation.record_removal_failure(admission.1, failure_evidence(&failure))
+                    installation.record_removal_failure(*admission.1, failure_evidence(&failure))
                 }
                 RuntimeReclamationEffect::SyncUncertain(failure) => installation
-                    .record_removal_sync_uncertain(admission.1, failure_evidence(&failure)),
+                    .record_removal_sync_uncertain(*admission.1, failure_evidence(&failure)),
             }
             .map_err(|error| error.to_string())
         }
