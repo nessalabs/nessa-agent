@@ -54,6 +54,12 @@ fn audit_root() -> (tempfile::TempDir, std::path::PathBuf) {
     (temporary, root)
 }
 
+fn record_path(event: &ReclamationEvent) -> std::path::PathBuf {
+    std::path::Path::new(RECORDS).join(DurableReclamationAudit::operation_name(
+        event.admission().operation_id(),
+    ))
+}
+
 #[test]
 fn replay_accepts_only_the_exact_durable_reclamation_event() {
     let (_temporary, root) = audit_root();
@@ -61,7 +67,7 @@ fn replay_accepts_only_the_exact_durable_reclamation_event() {
     let removed = event(ReclamationPhysicalOutcome::Removed);
 
     audit.record(&removed).unwrap();
-    let path = root.join(DurableReclamationAudit::record_path(&removed));
+    let path = root.join(record_path(&removed));
     let original = std::fs::read(&path).unwrap();
     audit.record(&removed).unwrap();
 
@@ -74,7 +80,7 @@ fn replay_requires_file_sync_and_post_publish_directory_sync_is_recoverable() {
     let audit = DurableReclamationAudit::new(&root).unwrap();
     let removed = event(ReclamationPhysicalOutcome::Removed);
     audit.record(&removed).unwrap();
-    let path = root.join(DurableReclamationAudit::record_path(&removed));
+    let path = root.join(record_path(&removed));
     let original = std::fs::read(&path).unwrap();
 
     let replay = audit
@@ -97,7 +103,7 @@ fn replay_requires_file_sync_and_post_publish_directory_sync_is_recoverable() {
         })
         .unwrap_err();
     assert_eq!(publish.detail(), "injected record directory sync failure");
-    let path = root.join(DurableReclamationAudit::record_path(&removed));
+    let path = root.join(record_path(&removed));
     let published = std::fs::read(&path).unwrap();
     audit
         .record(&removed)
@@ -112,7 +118,7 @@ fn conflicting_facts_for_one_operation_are_refused_without_replacing_the_origina
     let removed = event(ReclamationPhysicalOutcome::Removed);
     let still_present = event(ReclamationPhysicalOutcome::StillPresent);
     audit.record(&removed).unwrap();
-    let path = root.join(DurableReclamationAudit::record_path(&removed));
+    let path = root.join(record_path(&removed));
     let original = std::fs::read(&path).unwrap();
 
     let failure = audit.record(&still_present).unwrap_err();
@@ -145,7 +151,7 @@ fn oversized_record_is_rejected_before_decode() {
     let audit = DurableReclamationAudit::new(&root).unwrap();
     let removed = event(ReclamationPhysicalOutcome::Removed);
     audit.record(&removed).unwrap();
-    let path = root.join(DurableReclamationAudit::record_path(&removed));
+    let path = root.join(record_path(&removed));
     std::fs::write(path, vec![b'x'; MAXIMUM_AUDIT_RECORD_BYTES as usize + 1]).unwrap();
 
     let failure = audit
@@ -188,9 +194,7 @@ fn replacing_the_retained_records_directory_refuses_lookup_and_append() {
 
     assert!(lookup.detail().contains("changed") || lookup.detail().contains("binding"));
     assert!(append.detail().contains("changed") || append.detail().contains("binding"));
-    assert!(!root
-        .join(DurableReclamationAudit::record_path(&removed))
-        .exists());
+    assert!(!root.join(record_path(&removed)).exists());
 }
 
 #[cfg(unix)]
@@ -200,7 +204,7 @@ fn replacing_lock_or_records_authority_after_acquisition_refuses_acknowledgement
     let audit = DurableReclamationAudit::new(&root).unwrap();
     let removed = event(ReclamationPhysicalOutcome::Removed);
     audit.record(&removed).unwrap();
-    let record_path = root.join(DurableReclamationAudit::record_path(&removed));
+    let record_path = root.join(record_path(&removed));
     let original = std::fs::read(&record_path).unwrap();
 
     let lock_path = root.join(RECORDS).join(LOCK);
@@ -226,9 +230,7 @@ fn replacing_lock_or_records_authority_after_acquisition_refuses_acknowledgement
         authority_failure.detail().contains("changed")
             || authority_failure.detail().contains("binding")
     );
-    assert!(!root
-        .join(DurableReclamationAudit::record_path(&removed))
-        .exists());
+    assert!(!root.join(record_path(&removed)).exists());
 }
 
 #[cfg(unix)]

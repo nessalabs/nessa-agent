@@ -66,15 +66,6 @@ impl DurableReclamationAudit {
         Ok(Self { records_authority })
     }
 
-    fn record_path(event: &ReclamationEvent) -> PathBuf {
-        Self::operation_path(event.admission().operation_id())
-    }
-
-    fn operation_path(operation_id: &ReclamationOperationId) -> PathBuf {
-        let digest = Sha256::digest(operation_id.as_str().as_bytes());
-        Path::new(RECORDS).join(format!("{digest:x}.json"))
-    }
-
     fn operation_name(operation_id: &ReclamationOperationId) -> String {
         let digest = Sha256::digest(operation_id.as_str().as_bytes());
         format!("{digest:x}.json")
