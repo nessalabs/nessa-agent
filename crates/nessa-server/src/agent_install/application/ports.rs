@@ -292,13 +292,62 @@ pub enum PublicationChange {
     Replaced(RuntimeArtifact),
 }
 
+/// Physical result of one admitted superseded-runtime removal attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeReclamationEffect {
+    /// Every retained file was removed and the containing directory was synced.
+    Removed,
+    /// None of the retained files remained when recovery observed them.
+    AlreadyAbsent,
+    /// The target became the current artifact again and must be preserved.
+    DeferredCurrent,
+    /// A live launch authority, process generation, or unresolved marker still owns the target.
+    DeferredInUse,
+    /// Removal failed before durability could be established.
+    Failed(StoreFailure),
+    /// Files were removed, but the directory update could not be acknowledged as durable.
+    SyncUncertain(StoreFailure),
+}
+
 /// Keeps the store's per-agent publication authority through the immediate
 /// audit attempt. An error return drops the lease; a later bounded redelivery
 /// can therefore be observed after another install. Implementations normally
 /// own the publication lock handle.
-pub trait PublicationLease: Send {}
+pub trait PublicationLease: Send {
+    /// Attempt one bounded removal while retaining the runtime publication lock.
+    fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect;
+}
 
-impl<T: Send> PublicationLease for T {}
+impl PublicationLease for () {
+    fn remove_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+}
+
+impl PublicationLease for File {
+    fn remove_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+}
 
 /// A runtime publication and the state it actually changed under the store's
 /// publication lock.
@@ -337,6 +386,15 @@ impl Publication {
 
     pub fn change(&self) -> &PublicationChange {
         &self.change
+    }
+
+    pub fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        self._lease.remove_superseded(agent, current, superseded)
     }
 }
 
@@ -744,6 +802,13 @@ pub trait RuntimeStore: Send + Sync {
         agent: &AgentName,
         release: &PinnedRelease,
     ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure>;
+
+    /// Acquire the publication authority used for reclamation recovery when no
+    /// installation publication already owns it.
+    fn reclamation_lease(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure>;
 
     /// Create a private file this install may download into.
     ///

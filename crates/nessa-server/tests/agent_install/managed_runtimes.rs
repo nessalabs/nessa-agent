@@ -274,6 +274,80 @@ fn dropping_an_unconfirmed_generation_does_not_release_its_durable_marker() {
     assert_eq!(active_uses(root.path()), 1);
 }
 
+#[test]
+fn reclamation_preserves_current_and_defers_for_live_or_unresolved_use() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = artifact(
+        "1.18.31",
+        "bin/opencode",
+        &"a".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let launch = store.managed_launch(&agent(), &previous).unwrap().unwrap();
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+    let previous_artifact = RuntimeArtifact::for_release(&previous);
+    let current_artifact = RuntimeArtifact::for_release(&current);
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(&agent(), &current_artifact, &current_artifact),
+        RuntimeReclamationEffect::DeferredCurrent
+    );
+    assert_eq!(
+        lease.remove_superseded(&agent(), &current_artifact, &previous_artifact),
+        RuntimeReclamationEffect::DeferredInUse
+    );
+    drop(lease);
+    drop(launch);
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(&agent(), &current_artifact, &previous_artifact),
+        RuntimeReclamationEffect::Removed
+    );
+    assert!(store.installed(&agent(), &current).unwrap().is_some());
+}
+
+#[test]
+fn unresolved_use_marker_blocks_reclamation_after_launch_authority_dies() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let launch = store.managed_launch(&agent(), &previous).unwrap().unwrap();
+    drop(launch.admit().unwrap());
+    drop(launch);
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &RuntimeArtifact::for_release(&previous),
+        ),
+        RuntimeReclamationEffect::DeferredInUse
+    );
+    assert!(artifact_path(root.path()).join("bin/opencode").exists());
+}
+
 /// The directories `unpack` expects to already exist, made the way `publish`
 /// makes them.
 ///

@@ -19,6 +19,6 @@ pub use ports::{
     InstallAudit, InstallDeliveryFailure, InstallDeliveryFailureStage, InstallationDelivery,
     InstallationDeliverySession, PendingInstallationDelivery, PreparedInstallation, Publication,
     PublicationChange, PublicationCleanupFailure, PublicationLease, PublicationRecovery,
-    PublishFailure, PublishedAuditRecord, RollbackChange, RuntimeStore, SourceFailure,
-    StagedArchive, StoreFailure,
+    PublishFailure, PublishedAuditRecord, RollbackChange, RuntimeReclamationEffect, RuntimeStore,
+    SourceFailure, StagedArchive, StoreFailure,
 };

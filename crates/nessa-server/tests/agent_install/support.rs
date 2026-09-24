@@ -10,8 +10,8 @@ use crate::agent_install::application::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
     InstallDeliveryFailure, InstallationDelivery, InstallationDeliverySession,
     PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
-    PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
-    SourceFailure, StagedArchive, StoreFailure,
+    PublicationCleanupFailure, PublicationLease, PublicationRecovery, PublishFailure,
+    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
@@ -495,6 +495,13 @@ impl RuntimeStore for FakeStore {
         self.installed
             .clone()
             .map(|path| path.map(ExecutableUseSnapshot::unmanaged))
+    }
+
+    fn reclamation_lease(
+        &self,
+        _agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        Ok(Box::new(()))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {

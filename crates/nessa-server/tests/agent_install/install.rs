@@ -1265,6 +1265,13 @@ impl RuntimeStore for OneShotFailureStore {
         self.inner.managed_launch(agent, release)
     }
 
+    fn reclamation_lease(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        self.inner.reclamation_lease(agent)
+    }
+
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
         self.inner.stage(agent)
     }

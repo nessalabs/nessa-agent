@@ -11,7 +11,8 @@ use std::sync::Arc;
 use flate2::read::MultiGzDecoder;
 use nessa_local_storage::{
     create_directory, create_directory_beneath, open_beneath, remove_directory_beneath,
-    remove_file_beneath, sync_directory_beneath, OpenMode, PrivateTempFile,
+    remove_file_beneath, sync_directory_beneath, OpenMode, PrivateDirectory, PrivateFileType,
+    PrivateTempFile,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,8 +24,8 @@ use nessa_sdk::application::agent_execution::providers::{
 };
 
 use crate::agent_install::application::{
-    Publication, PublicationChange, PublicationCleanupFailure, PublishFailure, RollbackChange,
-    RuntimeStore, StagedArchive, StoreFailure,
+    Publication, PublicationChange, PublicationCleanupFailure, PublicationLease, PublishFailure,
+    RollbackChange, RuntimeReclamationEffect, RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, FileRole, PinnedRelease, ReleaseContents, ReleaseFile,
@@ -285,6 +286,29 @@ struct ManagedExecutableUseGuard {
     removed: bool,
 }
 
+struct ManagedPublicationLease {
+    root: PathBuf,
+    agent: AgentName,
+    _lock: File,
+}
+
+impl PublicationLease for ManagedPublicationLease {
+    fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        if agent != &self.agent {
+            return RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+                "reclamation authority belongs to another agent".into(),
+            ));
+        }
+        ManagedRuntimes::new(self.root.clone())
+            .remove_superseded_under_lock(agent, current, superseded)
+    }
+}
+
 impl ExecutableUseGuard for ManagedExecutableUseGuard {
     fn release(&mut self) -> Result<(), ExecutableUseError> {
         if !self.removed {
@@ -461,6 +485,142 @@ impl ManagedRuntimes {
             .join("active-uses")
             .join(artifact.version().as_str())
             .join(artifact.digest().as_str())
+    }
+
+    fn recorded_content_directories(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> Vec<PathBuf> {
+        let root = self.recorded_artifact_root(agent, artifact);
+        artifact
+            .contents()
+            .files()
+            .iter()
+            .flat_map(|file| file.path().directories())
+            .map(|directory| root.join(directory))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn active_use_remains(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> Result<bool, StoreFailure> {
+        let directory = self.use_marker_directory(agent, artifact);
+        let retained = match PrivateDirectory::open_beneath(&self.root, &directory) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(unreadable(error)),
+        };
+        retained.verify_binding().map_err(unreadable)?;
+        for entry in retained.entries().map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            if entry.file_type() != PrivateFileType::RegularFile {
+                return Err(StoreFailure::Unreadable(format!(
+                    "{} contains an unsafe executable-use marker",
+                    self.absolute(&directory).display()
+                )));
+            }
+            return Ok(true);
+        }
+        retained.verify_binding().map_err(unreadable)?;
+        Ok(false)
+    }
+
+    fn remove_superseded_under_lock(
+        &self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        let observed = match self.recorded_artifact(agent) {
+            Ok(observed) => observed,
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        };
+        if observed.as_ref() != Some(current) {
+            return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(
+                "installed runtime changed after reclamation admission".into(),
+            ));
+        }
+        if current.physical_identity() == superseded.physical_identity() {
+            return RuntimeReclamationEffect::DeferredCurrent;
+        }
+        if let Err(error) = self.private_directory(&self.artifact_lock_directory(agent, superseded))
+        {
+            return RuntimeReclamationEffect::Failed(error);
+        }
+        let lock_path = self.artifact_lock_path(agent, superseded);
+        let artifact_lock = match open_beneath(&self.root, &lock_path, OpenMode::OpenOrCreate) {
+            Ok(lock) => lock,
+            Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
+        };
+        if artifact_lock.try_lock().is_err() {
+            return RuntimeReclamationEffect::DeferredInUse;
+        }
+        match self.active_use_remains(agent, superseded) {
+            Ok(true) => return RuntimeReclamationEffect::DeferredInUse,
+            Ok(false) => {}
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        }
+
+        let mut present = Vec::new();
+        for file in superseded.contents().files() {
+            let path = self.recorded_file_path(agent, superseded, file.path());
+            match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
+                Ok(file) if file.metadata().is_ok_and(|metadata| metadata.len() != 0) => {
+                    present.push(path)
+                }
+                Ok(_) => {
+                    return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(format!(
+                        "{} is not a complete managed runtime file",
+                        self.absolute(&path).display()
+                    )))
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
+            }
+        }
+        if present.is_empty() {
+            return RuntimeReclamationEffect::AlreadyAbsent;
+        }
+        let mut failures = Vec::new();
+        for path in &present {
+            if let Err(error) = remove_file_beneath(&self.root, path) {
+                failures.push(format!("{}: {error}", self.absolute(path).display()));
+            }
+        }
+        if !failures.is_empty() {
+            return RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(format!(
+                "could not remove superseded runtime files: {}",
+                failures.join("; ")
+            )));
+        }
+        let artifact_root = self.recorded_artifact_root(agent, superseded);
+        if let Err(error) = sync_directory_beneath(&self.root, &artifact_root) {
+            return RuntimeReclamationEffect::SyncUncertain(unwritable(error));
+        }
+        let mut directories = self.recorded_content_directories(agent, superseded);
+        directories.reverse();
+        for directory in directories {
+            if let Err(error) = remove_directory_beneath(&self.root, &directory) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    return RuntimeReclamationEffect::Failed(unwritable(error));
+                }
+            }
+        }
+        if let Err(error) = remove_directory_beneath(&self.root, &artifact_root) {
+            if error.kind() != io::ErrorKind::NotFound {
+                return RuntimeReclamationEffect::Failed(unwritable(error));
+            }
+        }
+        let version_root = self.version_root(agent, superseded.version());
+        if let Err(error) = sync_directory_beneath(&self.root, &version_root) {
+            return RuntimeReclamationEffect::SyncUncertain(unwritable(error));
+        }
+        RuntimeReclamationEffect::Removed
     }
 
     fn hold_artifact_for_launch(
@@ -1087,7 +1247,11 @@ impl ManagedRuntimes {
             return Ok(Publication::new(
                 installed,
                 PublicationChange::Reused,
-                Box::new(lock),
+                Box::new(ManagedPublicationLease {
+                    root: self.root.clone(),
+                    agent: agent.clone(),
+                    _lock: lock,
+                }),
             ));
         }
 
@@ -1159,7 +1323,11 @@ impl ManagedRuntimes {
         Ok(Publication::new(
             self.absolute(&self.launch_path(agent, release)),
             change,
-            Box::new(lock),
+            Box::new(ManagedPublicationLease {
+                root: self.root.clone(),
+                agent: agent.clone(),
+                _lock: lock,
+            }),
         ))
     }
 }
@@ -1273,6 +1441,17 @@ impl RuntimeStore for ManagedRuntimes {
         ExecutableUseSnapshot::new(executable, authority)
             .map(Some)
             .map_err(|error| StoreFailure::Unreadable(error.to_string()))
+    }
+
+    fn reclamation_lease(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        Ok(Box::new(ManagedPublicationLease {
+            root: self.root.clone(),
+            agent: agent.clone(),
+            _lock: self.hold(agent)?,
+        }))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {

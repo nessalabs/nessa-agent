@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::agent_install::application::{
-    Publication, PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
+    Publication, PublicationLease, PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
@@ -49,6 +49,13 @@ impl RuntimeStore for Answers {
         self.installed
             .clone()
             .map(|path| path.map(ExecutableUseSnapshot::unmanaged))
+    }
+
+    fn reclamation_lease(
+        &self,
+        _agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        unreachable!("launch resolution does not reclaim runtimes")
     }
 
     fn stage(&self, _agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
