@@ -1,11 +1,15 @@
-use std::fmt;
-use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::{
+    fmt,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use super::reclamation::{ReclamationPersistenceFailure, ReclamationPersistenceStage};
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, InstallAttemptError, InstallEventIdentity, InstallTransition,
-    PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
-    RuntimeArtifact,
+    ManagedInstallation, PinnedRelease, PublicationOutcome, PublicationPreparation,
+    PublicationSettlement, RuntimeArtifact,
 };
 
 /// Why an archive could not be fetched.
@@ -290,13 +294,143 @@ pub enum PublicationChange {
     Replaced(RuntimeArtifact),
 }
 
+/// Physical result of one admitted superseded-runtime removal attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeReclamationEffect {
+    /// Every retained file was removed and the containing directory was synced.
+    Removed,
+    /// None of the retained files remained when recovery observed them.
+    AlreadyAbsent,
+    /// The target became the current artifact again and must be preserved.
+    DeferredCurrent,
+    /// A live launch authority, process generation, or unresolved marker still owns the target.
+    DeferredInUse,
+    /// Observation found retained files after an interrupted removal admission.
+    StillPresent,
+    /// Removal failed before durability could be established.
+    Failed(StoreFailure),
+    /// Files were removed, but the directory update could not be acknowledged as durable.
+    SyncUncertain(StoreFailure),
+}
+
 /// Keeps the store's per-agent publication authority through the immediate
 /// audit attempt. An error return drops the lease; a later bounded redelivery
 /// can therefore be observed after another install. Implementations normally
 /// own the publication lock handle.
-pub trait PublicationLease: Send {}
+pub trait PublicationLease: Send {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure>;
 
-impl<T: Send> PublicationLease for T {}
+    fn retain_reclamation(
+        &mut self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure>;
+
+    /// Attempt one bounded removal while retaining the runtime publication lock.
+    fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect;
+
+    fn observe_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect;
+}
+
+impl PublicationLease for () {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            ReclamationPersistenceStage::Read,
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        _installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            stage,
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+
+    fn remove_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+
+    fn observe_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+}
+
+impl PublicationLease for File {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            ReclamationPersistenceStage::Read,
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        _installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            stage,
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+
+    fn remove_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+
+    fn observe_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+}
 
 /// A runtime publication and the state it actually changed under the store's
 /// publication lock.
@@ -335,6 +469,38 @@ impl Publication {
 
     pub fn change(&self) -> &PublicationChange {
         &self.change
+    }
+
+    pub fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        self._lease.remove_superseded(agent, current, superseded)
+    }
+
+    pub fn observe_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        self._lease.observe_superseded(agent, current, superseded)
+    }
+
+    pub fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        self._lease.load_reclamation()
+    }
+
+    pub fn retain_reclamation(
+        &mut self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        self._lease.retain_reclamation(installation, stage)
     }
 }
 
@@ -580,6 +746,11 @@ pub enum PendingInstallationDelivery {
 pub trait InstallationDeliverySession {
     fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure>;
 
+    fn settled(
+        &mut self,
+        delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure>;
+
     fn prepare(
         &mut self,
         preparation: PublicationPreparation,
@@ -699,6 +870,185 @@ pub trait ArchiveSource: Send + Sync {
     ) -> Result<(), SourceFailure>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedExecutableUseFailure(String);
+
+impl ManagedExecutableUseFailure {
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self(detail.into())
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ManagedExecutableUseFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ManagedExecutableUseFailure {}
+
+pub trait ManagedExecutableUseGuard: Send {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure>;
+}
+
+pub enum ManagedExecutableUseAdmissionOwner {
+    Confirmed(Box<dyn ManagedExecutableUseGuard>),
+    Uncertain(Box<dyn ManagedExecutableUseGuard>),
+}
+
+impl ManagedExecutableUseAdmissionOwner {
+    pub fn into_guard(self) -> Box<dyn ManagedExecutableUseGuard> {
+        match self {
+            Self::Confirmed(guard) | Self::Uncertain(guard) => guard,
+        }
+    }
+}
+
+pub struct ManagedExecutableUseAdmissionFailure {
+    failure: ManagedExecutableUseFailure,
+    owner: Option<ManagedExecutableUseAdmissionOwner>,
+}
+
+impl ManagedExecutableUseAdmissionFailure {
+    pub fn without_owner(failure: ManagedExecutableUseFailure) -> Self {
+        Self {
+            failure,
+            owner: None,
+        }
+    }
+
+    pub fn with_confirmed_generation(
+        failure: ManagedExecutableUseFailure,
+        guard: Box<dyn ManagedExecutableUseGuard>,
+    ) -> Self {
+        Self {
+            failure,
+            owner: Some(ManagedExecutableUseAdmissionOwner::Confirmed(guard)),
+        }
+    }
+
+    pub fn with_uncertain_generation(
+        failure: ManagedExecutableUseFailure,
+        guard: Box<dyn ManagedExecutableUseGuard>,
+    ) -> Self {
+        Self {
+            failure,
+            owner: Some(ManagedExecutableUseAdmissionOwner::Uncertain(guard)),
+        }
+    }
+
+    pub fn failure(&self) -> &ManagedExecutableUseFailure {
+        &self.failure
+    }
+
+    pub fn detail(&self) -> &str {
+        self.failure.detail()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ManagedExecutableUseFailure,
+        Option<ManagedExecutableUseAdmissionOwner>,
+    ) {
+        (self.failure, self.owner)
+    }
+}
+
+impl fmt::Debug for ManagedExecutableUseAdmissionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ownership = match &self.owner {
+            Some(ManagedExecutableUseAdmissionOwner::Confirmed(_)) => "confirmed",
+            Some(ManagedExecutableUseAdmissionOwner::Uncertain(_)) => "uncertain",
+            None => "none",
+        };
+        formatter
+            .debug_struct("ManagedExecutableUseAdmissionFailure")
+            .field("failure", &self.failure)
+            .field("ownership", &ownership)
+            .finish()
+    }
+}
+
+impl fmt::Display for ManagedExecutableUseAdmissionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.failure.fmt(formatter)
+    }
+}
+
+impl std::error::Error for ManagedExecutableUseAdmissionFailure {}
+
+pub trait ManagedExecutableUse: Send + Sync {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure>;
+}
+
+#[derive(Clone)]
+pub struct ManagedLaunchSnapshot {
+    executable: PathBuf,
+    authority: Arc<dyn ManagedExecutableUse>,
+}
+
+impl ManagedLaunchSnapshot {
+    pub fn new(executable: PathBuf, authority: Arc<dyn ManagedExecutableUse>) -> Self {
+        Self {
+            executable,
+            authority,
+        }
+    }
+
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        self.authority.admit()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unmanaged(executable: PathBuf) -> Self {
+        Self::new(executable, Arc::new(TestUnmanagedExecutableUse))
+    }
+}
+
+#[cfg(test)]
+struct TestUnmanagedExecutableUse;
+
+#[cfg(test)]
+impl ManagedExecutableUse for TestUnmanagedExecutableUse {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        Ok(Box::new(TestUnmanagedExecutableUseGuard))
+    }
+}
+
+#[cfg(test)]
+struct TestUnmanagedExecutableUseGuard;
+
+#[cfg(test)]
+impl ManagedExecutableUseGuard for TestUnmanagedExecutableUseGuard {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ManagedLaunchSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManagedLaunchSnapshot")
+            .field("executable", &self.executable)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Where installed runtimes live on this machine.
 ///
 /// The filesystem side of installing, behind one port so that the use case
@@ -731,6 +1081,24 @@ pub trait RuntimeStore: Send + Sync {
         agent: &AgentName,
         release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure>;
+
+    /// Verify and retain authority to launch one installed managed runtime.
+    ///
+    /// Unlike [`Self::installed`], this is not an observation-only readiness
+    /// query. A returned snapshot prevents physical reclamation while future
+    /// launches remain possible and durably admits each process generation.
+    fn managed_launch(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure>;
+
+    /// Acquire the publication authority used for reclamation recovery when no
+    /// installation publication already owns it.
+    fn reclamation_lease(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure>;
 
     /// Create a private file this install may download into.
     ///

@@ -268,7 +268,7 @@ impl OpencodeAcpProvider {
     // prompt, before Opencode is given a mode that acts.
 
     fn launch_command(&self, private_home: &Path) -> Command {
-        let mut command = Command::new(&self.config.executable);
+        let mut command = Command::new(self.config.executable.executable());
         command
             .args(&self.config.arguments)
             .current_dir(&self.config.workspace)

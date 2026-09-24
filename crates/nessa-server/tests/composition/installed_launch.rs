@@ -1,21 +1,61 @@
 //! Installed launch resolution over a substitute runtime store.
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use super::*;
 use crate::agent_install::application::{
-    Publication, PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
+    ManagedExecutableUse, ManagedExecutableUseAdmissionFailure, ManagedExecutableUseFailure,
+    ManagedExecutableUseGuard, ManagedLaunchSnapshot, Publication, PublicationLease,
+    PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
 };
 use crate::agent_install::infrastructure::releases_for;
 use crate::composition::desktop::bundled_launch;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseAdmissionOwner;
 
 struct Answers {
     installed: Result<Option<PathBuf>, StoreFailure>,
     asked: Mutex<Vec<(String, String)>>,
+}
+
+struct FailedAdmission {
+    releases: Arc<AtomicUsize>,
+    uncertain: bool,
+}
+
+impl ManagedExecutableUse for FailedAdmission {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        Err(if self.uncertain {
+            ManagedExecutableUseAdmissionFailure::with_uncertain_generation(
+                ManagedExecutableUseFailure::new("admission durability is uncertain"),
+                Box::new(ReleaseOwner(self.releases.clone())),
+            )
+        } else {
+            ManagedExecutableUseAdmissionFailure::with_confirmed_generation(
+                ManagedExecutableUseFailure::new("admission durability is uncertain"),
+                Box::new(ReleaseOwner(self.releases.clone())),
+            )
+        })
+    }
+}
+
+struct ReleaseOwner(Arc<AtomicUsize>);
+
+impl ManagedExecutableUseGuard for ReleaseOwner {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 impl Answers {
@@ -30,14 +70,31 @@ impl Answers {
 impl RuntimeStore for Answers {
     fn installed(
         &self,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
+    ) -> Result<Option<PathBuf>, StoreFailure> {
+        self.installed.clone()
+    }
+
+    fn managed_launch(
+        &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<PathBuf>, StoreFailure> {
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
         self.asked.lock().unwrap().push((
             agent.as_str().to_owned(),
             release.version().as_str().to_owned(),
         ));
-        self.installed.clone()
+        self.installed
+            .clone()
+            .map(|path| path.map(ManagedLaunchSnapshot::unmanaged))
+    }
+
+    fn reclamation_lease(
+        &self,
+        _agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        unreachable!("launch resolution does not reclaim runtimes")
     }
 
     fn stage(&self, _agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
@@ -92,10 +149,10 @@ fn verified_current_pin_is_the_launch() {
     let executable = PathBuf::from("/managed/opencode");
     let store = Answers::saying(Ok(Some(executable.clone())));
 
-    assert_eq!(
-        installed_launch(agent, &host, &store).unwrap(),
-        InstalledLaunch::Ready(executable)
-    );
+    let InstalledLaunch::Ready(launch) = installed_launch(agent, &host, &store).unwrap() else {
+        panic!("verified current pin should be ready")
+    };
+    assert_eq!(launch.executable(), executable);
 }
 
 #[test]
@@ -159,4 +216,56 @@ fn installed_arguments_are_agent_specific() {
     assert_eq!(installed_arguments(AgentId::Opencode), ["acp"]);
     assert!(installed_arguments(AgentId::Claude).is_empty());
     assert!(installed_arguments(AgentId::Codex).is_empty());
+}
+
+#[test]
+fn composition_preserves_a_failed_pre_spawn_generations_release_owner() {
+    let releases = Arc::new(AtomicUsize::new(0));
+    let managed = ManagedLaunchSnapshot::new(
+        PathBuf::from("/managed/opencode"),
+        Arc::new(FailedAdmission {
+            releases: releases.clone(),
+            uncertain: false,
+        }),
+    );
+    let sdk = managed_launch(managed).unwrap();
+
+    let failure = match sdk.admit() {
+        Ok(_) => panic!("managed admission failure must cross composition"),
+        Err(failure) => failure,
+    };
+    assert_eq!(
+        failure.error(),
+        &ExecutableUseError::new("admission durability is uncertain")
+    );
+    let (_, guard) = failure.into_parts();
+    let owner = guard.expect("composition must carry the exact managed generation owner");
+    assert!(matches!(owner, ExecutableUseAdmissionOwner::Confirmed(_)));
+    let mut guard = owner.into_guard();
+    guard.release().unwrap();
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn composition_preserves_uncertain_pre_admission_reconciliation_ownership() {
+    let releases = Arc::new(AtomicUsize::new(0));
+    let managed = ManagedLaunchSnapshot::new(
+        PathBuf::from("/managed/opencode"),
+        Arc::new(FailedAdmission {
+            releases: releases.clone(),
+            uncertain: true,
+        }),
+    );
+    let sdk = managed_launch(managed).unwrap();
+
+    let failure = match sdk.admit() {
+        Ok(_) => panic!("uncertain managed admission must cross composition"),
+        Err(failure) => failure,
+    };
+    let (_, owner) = failure.into_parts();
+    let owner = owner.expect("composition must carry uncertain reconciliation ownership");
+    assert!(matches!(owner, ExecutableUseAdmissionOwner::Uncertain(_)));
+    let mut guard = owner.into_guard();
+    guard.release().unwrap();
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
 }

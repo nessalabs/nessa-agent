@@ -40,11 +40,11 @@ use crate::conversation::application::ConversationAgent;
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
-    application::agent_execution::providers::UserImageSource,
+    application::agent_execution::providers::{ExecutableUseSnapshot, UserImageSource},
     domain::model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
     infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
@@ -81,7 +81,8 @@ pub(super) struct AgentsConfig {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AgentRuntime {
     /// The executable this server runs for this agent.
-    pub command: PathBuf,
+    #[serde(deserialize_with = "unmanaged_executable")]
+    pub command: ExecutableUseSnapshot,
     /// What that executable is handed. A Node harness takes its entry script; an
     /// agent that speaks ACP itself takes its own subcommand.
     #[serde(default)]
@@ -128,6 +129,13 @@ impl AgentRuntime {
             .filter(|path| path.is_absolute())
             .collect()
     }
+}
+
+fn unmanaged_executable<'de, D>(deserializer: D) -> Result<ExecutableUseSnapshot, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    PathBuf::deserialize(deserializer).map(ExecutableUseSnapshot::unmanaged)
 }
 
 impl AgentsConfig {
@@ -215,7 +223,7 @@ impl AgentsConfig {
             // is not a path this server resolves at all — it is the agent's own
             // vocabulary, passed through untouched — so there is nothing here to
             // reject it for.
-            if !runtime.command.is_absolute()
+            if !runtime.command.executable().is_absolute()
                 || runtime.model.trim().is_empty()
                 || runtime.output_tokens == 0
                 || runtime.context_tokens <= runtime.output_tokens
@@ -692,7 +700,7 @@ mod build {
             .workspace
             .canonicalize()
             .is_ok_and(|workspace| workspace.is_dir())
-            && runtime.command.is_file()
+            && runtime.command.executable().is_file()
             && runtime.paths().iter().all(|path| path.exists())
     }
 

@@ -2,6 +2,7 @@ pub(super) use crate::application::agent_execution::agents::*;
 pub(super) use crate::application::agent_execution::executions::ExecutionUpdate;
 pub(super) use crate::application::agent_execution::executions::*;
 pub(super) use crate::application::agent_execution::permissions::*;
+pub(super) use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 pub(super) use crate::application::agent_execution::providers::*;
 pub(super) use crate::application::agent_execution::sessions::SessionManager;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
@@ -156,7 +157,7 @@ pub(super) fn test_acp_configuration(
     })
     .unwrap();
     let config = AcpConfig {
-        executable: PathBuf::from("/usr/bin/python3"),
+        executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3")),
         arguments: vec![
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/infrastructure/acp/contracts/fixtures/claude_acp_test_handler.py")

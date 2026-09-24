@@ -273,16 +273,17 @@ impl AttachmentLease {
                 None => error.clone(),
             });
         }
-        CleanupReport::new(
-            if prior.is_confirmed() {
+        let resources = match (prior.resources(), report.resources()) {
+            (ResourceCleanup::Confirmed(_), _) => prior.resources().clone(),
+            (_, ResourceCleanup::Confirmed(_)) => report.resources().clone(),
+            (ResourceCleanup::ReleasePending { .. }, ResourceCleanup::Unconfirmed(_)) => {
                 prior.resources().clone()
-            } else {
-                report.resources().clone()
-            },
-            audit,
-        )
-        .with_operation_failure(failure)
-        .with_completion_failure(completion_failure)
+            }
+            _ => report.resources().clone(),
+        };
+        CleanupReport::new(resources, audit)
+            .with_operation_failure(failure)
+            .with_completion_failure(completion_failure)
     }
     // Re-observing a report adds no new failure. Flatten only this diagnostic
     // grouping; other typed errors retain their own lifecycle meaning intact.

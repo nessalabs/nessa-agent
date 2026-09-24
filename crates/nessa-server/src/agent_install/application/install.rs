@@ -1,12 +1,18 @@
-use std::fmt;
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
 use super::ports::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, InstallDeliveryFailure,
     InstallDeliveryFailureStage, InstallationDelivery, InstallationDeliverySession,
-    PendingInstallationDelivery, PreparedInstallation, PublicationChange,
+    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
     PublicationCleanupFailure, PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure,
     StagedArchive, StoreFailure,
+};
+use super::reclamation::{
+    acknowledge_replacement_settlement, acknowledge_replacement_settlement_on_publication,
+    recover_reclamation, require_replacement_cleanup_acknowledgement,
+    require_replacement_cleanup_acknowledgement_on_publication, retain_replacement_and_reclaim,
+    retain_replacement_and_reclaim_with_lease, ReclamationAudit, ReclamationOperationIds,
+    ReclamationPersistenceFailure, ReclamationPersistenceStage, ReclamationWarning,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError,
@@ -36,6 +42,8 @@ pub struct InstalledRuntime {
     /// unpacking. Which of the two put the file there is not a distinction
     /// anybody watching can see, and not one worth reporting.
     pub downloaded: bool,
+    /// Superseded-runtime cleanup that was durably deferred or whose audit failed.
+    pub reclamation_warnings: Vec<ReclamationWarning>,
 }
 
 /// Why an agent runtime is not installed.
@@ -76,6 +84,13 @@ pub enum InstallFailure {
     Delivery(Box<PublicationDeliveryFailure>),
     /// A prepared publication has no retained terminal in either durable route.
     UnresolvedPublication(Box<PublicationPreparation>),
+    /// Replacement succeeded, but its exact cleanup obligation could not be retained.
+    Reclamation {
+        terminal: Box<InstallTransition>,
+        failure: ReclamationPersistenceFailure,
+    },
+    /// Earlier replacement cleanup or settlement evidence could not be reconciled.
+    ReclamationRecovery(Vec<ReclamationWarning>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +170,13 @@ pub enum RuntimeStateEvidence {
     Unconfirmed,
 }
 
+struct TerminalCompletion {
+    outcome: PublicationOutcome,
+    terminal: InstallTransition,
+    runtime_state: RuntimeStateEvidence,
+    operation: Option<InstallFailure>,
+}
+
 impl fmt::Display for InstallFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -201,6 +223,20 @@ impl fmt::Display for InstallFailure {
                 "install request {} has an unresolved prepared publication",
                 preparation.verified().request().request_id()
             ),
+            Self::Reclamation { terminal, failure } => write!(
+                f,
+                "runtime {} replaced its predecessor, but the cleanup obligation was not retained: {failure}",
+                terminal.target().version()
+            ),
+            Self::ReclamationRecovery(warnings) => {
+                f.write_str(
+                    "a replacement cannot be reconciled with its cleanup and publication evidence: ",
+                )?;
+                match warnings.first() {
+                    Some(warning) => write!(f, "{warning:?}"),
+                    None => f.write_str("unknown reclamation failure"),
+                }
+            }
         }
     }
 }
@@ -236,6 +272,8 @@ pub struct InstallAgentRuntime<'a> {
     pub store: &'a dyn RuntimeStore,
     pub audit: &'a dyn InstallAudit,
     pub delivery: &'a dyn InstallationDelivery,
+    pub reclamation_audit: &'a dyn ReclamationAudit,
+    pub reclamation_operation_ids: &'a dyn ReclamationOperationIds,
 }
 
 impl InstallAgentRuntime<'_> {
@@ -265,12 +303,31 @@ impl InstallAgentRuntime<'_> {
             .delivery
             .session(request.account_id())
             .map_err(delivery_failure)?;
-        self.recover(delivery.as_mut(), request.account_id())?;
+        let mut reclamation_warnings = self.recover(delivery.as_mut(), request.account_id())?;
+        let recovered_reclamation = match self.store.reclamation_lease(agent) {
+            Ok(mut lease) => recover_reclamation(
+                lease.as_mut(),
+                self.reclamation_audit,
+                self.reclamation_operation_ids,
+                delivery.as_mut(),
+                agent,
+                request,
+            )
+            .map_err(InstallFailure::ReclamationRecovery)?,
+            Err(error) => vec![ReclamationWarning::Persistence(
+                ReclamationPersistenceFailure::new(
+                    ReclamationPersistenceStage::Read,
+                    error.to_string(),
+                ),
+            )],
+        };
+        reclamation_warnings.extend(recovered_reclamation);
         let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
         if self.audit(started)? == AuditAcknowledgement::Replayed {
             return Err(InstallFailure::AttemptReused(request.clone()));
         }
-        if let Some(runtime) = self.already_installed(agent, release)? {
+        if let Some(mut runtime) = self.already_installed(agent, release)? {
+            runtime.reclamation_warnings = reclamation_warnings;
             return Ok(runtime);
         }
         let mut staged = self.store.stage(agent).map_err(InstallFailure::Store)?;
@@ -280,10 +337,13 @@ impl InstallAgentRuntime<'_> {
         // thing this operation writes. Discarding it on the failure path too is
         // what keeps a run of refused downloads from filling the disk.
         self.store.discard(staged);
+        let (executable, mut publication_warnings) = outcome?;
+        reclamation_warnings.append(&mut publication_warnings);
         Ok(InstalledRuntime {
             version: release.version().clone(),
-            executable: outcome?,
+            executable,
             downloaded: true,
+            reclamation_warnings,
         })
     }
 
@@ -305,6 +365,7 @@ impl InstallAgentRuntime<'_> {
             version: release.version().clone(),
             executable,
             downloaded: false,
+            reclamation_warnings: Vec::new(),
         }))
     }
 
@@ -317,7 +378,7 @@ impl InstallAgentRuntime<'_> {
         attempt: &mut InstallAttempt,
         staged: &mut StagedArchive,
         delivery: &mut dyn InstallationDeliverySession,
-    ) -> Result<PathBuf, InstallFailure> {
+    ) -> Result<(PathBuf, Vec<ReclamationWarning>), InstallFailure> {
         self.source
             .download(
                 release.archive_url().as_str(),
@@ -352,7 +413,7 @@ impl InstallAgentRuntime<'_> {
             ));
         }
         match self.store.publish(agent, release, staged) {
-            Ok(publication) => {
+            Ok(mut publication) => {
                 let transition = match publication.change() {
                     PublicationChange::Reused => {
                         attempt.reused().map_err(InstallFailure::Evidence)?;
@@ -364,7 +425,7 @@ impl InstallAgentRuntime<'_> {
                             RuntimeStateEvidence::TargetInstalled,
                             None,
                         )?;
-                        return Ok(publication.executable().to_owned());
+                        return Ok((publication.executable().to_owned(), Vec::new()));
                     }
                     PublicationChange::Installed => {
                         attempt.installed().map_err(InstallFailure::Evidence)?
@@ -375,15 +436,18 @@ impl InstallAgentRuntime<'_> {
                 };
                 let outcome = PublicationOutcome::terminal(&preparation, transition.clone())
                     .map_err(|error| delivery_domain_failure(error.to_string()))?;
-                let _ = self.finish_terminal(
+                let (_, warnings) = self.finish_terminal(
                     delivery,
                     &prepared,
-                    outcome,
-                    transition,
-                    RuntimeStateEvidence::TargetInstalled,
-                    None,
+                    TerminalCompletion {
+                        outcome,
+                        terminal: transition,
+                        runtime_state: RuntimeStateEvidence::TargetInstalled,
+                        operation: None,
+                    },
+                    Some(&mut publication),
                 )?;
-                Ok(publication.executable().to_owned())
+                Ok((publication.executable().to_owned(), warnings))
             }
             Err(publish) => {
                 let (failure, recovery, publication_lease) = publish.into_parts();
@@ -437,13 +501,18 @@ impl InstallAgentRuntime<'_> {
                 let result = self.finish_terminal(
                     delivery,
                     &prepared,
-                    retained,
-                    transition,
-                    runtime_state,
-                    Some(outcome),
+                    TerminalCompletion {
+                        outcome: retained,
+                        terminal: transition,
+                        runtime_state,
+                        operation: Some(outcome),
+                    },
+                    None,
                 );
                 drop(publication_lease);
-                Err(result?.expect("the publication failure is returned after settlement"))
+                Err(result?
+                    .0
+                    .expect("the publication failure is returned after settlement"))
             }
         }
     }
@@ -452,9 +521,9 @@ impl InstallAgentRuntime<'_> {
         &self,
         delivery: &mut dyn InstallationDeliverySession,
         selected_account_id: &str,
-    ) -> Result<(), InstallFailure> {
+    ) -> Result<Vec<ReclamationWarning>, InstallFailure> {
         let Some(pending) = delivery.pending().map_err(delivery_failure)? else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let (prepared, outcome, retained) = match pending {
             PendingInstallationDelivery::Outcome { prepared, outcome } => {
@@ -517,6 +586,49 @@ impl InstallAgentRuntime<'_> {
                 None,
             ));
         }
+        let mut reclamation_warnings = Vec::new();
+        let mut reclamation_lease = None;
+        if let Some(terminal) = outcome
+            .terminal_transition()
+            .filter(|event| event.requires_reclamation())
+        {
+            let mut lease = self
+                .store
+                .reclamation_lease(terminal.agent())
+                .map_err(|error| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure: ReclamationPersistenceFailure::new(
+                        ReclamationPersistenceStage::Read,
+                        error.to_string(),
+                    ),
+                })?;
+            reclamation_warnings = retain_replacement_and_reclaim_with_lease(
+                lease.as_mut(),
+                self.reclamation_audit,
+                self.reclamation_operation_ids,
+                terminal,
+                &prepared,
+            )
+            .map_err(|failure| InstallFailure::Reclamation {
+                terminal: Box::new(terminal.clone()),
+                failure,
+            })?;
+            reclamation_lease = Some(lease);
+        }
+        if reclamation_blocks_settlement(&reclamation_warnings) {
+            return Err(InstallFailure::ReclamationRecovery(reclamation_warnings));
+        }
+        if let (Some(lease), Some(terminal)) = (
+            reclamation_lease.as_deref_mut(),
+            outcome.terminal_transition(),
+        ) {
+            require_replacement_cleanup_acknowledgement(lease, &prepared, terminal).map_err(
+                |failure| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure,
+                },
+            )?;
+        }
         let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
             .map_err(|error| delivery_domain_failure(error.to_string()))?;
         if let Err(error) = delivery.settle(&prepared, &settlement) {
@@ -533,7 +645,18 @@ impl InstallAgentRuntime<'_> {
                 None,
             ));
         }
-        Ok(())
+        if let (Some(mut lease), Some(terminal)) = (
+            reclamation_lease,
+            settlement.outcome().terminal_transition(),
+        ) {
+            acknowledge_replacement_settlement(lease.as_mut(), &prepared, terminal).map_err(
+                |failure| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure,
+                },
+            )?;
+        }
+        Ok(reclamation_warnings)
     }
 
     fn finish_no_effect(
@@ -571,11 +694,15 @@ impl InstallAgentRuntime<'_> {
         &self,
         delivery: &mut dyn InstallationDeliverySession,
         prepared: &PreparedInstallation,
-        outcome: PublicationOutcome,
-        terminal: InstallTransition,
-        runtime_state: RuntimeStateEvidence,
-        operation: Option<InstallFailure>,
-    ) -> Result<Option<InstallFailure>, InstallFailure> {
+        completion: TerminalCompletion,
+        mut publication: Option<&mut Publication>,
+    ) -> Result<(Option<InstallFailure>, Vec<ReclamationWarning>), InstallFailure> {
+        let TerminalCompletion {
+            outcome,
+            terminal,
+            runtime_state,
+            operation,
+        } = completion;
         let retained = delivery.retain_outcome(prepared, &outcome).err();
         let audited = self.audit.record(terminal.clone()).err();
         if retained.is_some() || audited.is_some() {
@@ -586,6 +713,47 @@ impl InstallAgentRuntime<'_> {
                 retained,
                 audited,
             ));
+        }
+        let reclamation_warnings = if terminal.requires_reclamation() {
+            let publication = publication
+                .as_mut()
+                .ok_or_else(|| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure: ReclamationPersistenceFailure::new(
+                        ReclamationPersistenceStage::RetainObligation,
+                        "replacement publication did not retain reclamation authority".into(),
+                    ),
+                })?;
+            retain_replacement_and_reclaim(
+                publication,
+                self.reclamation_audit,
+                self.reclamation_operation_ids,
+                &terminal,
+                prepared,
+            )
+            .map_err(|failure| InstallFailure::Reclamation {
+                terminal: Box::new(terminal.clone()),
+                failure,
+            })?
+        } else {
+            Vec::new()
+        };
+        if reclamation_blocks_settlement(&reclamation_warnings) {
+            return Err(InstallFailure::ReclamationRecovery(reclamation_warnings));
+        }
+        if terminal.requires_reclamation() {
+            let publication = publication
+                .as_mut()
+                .expect("replacement cleanup retained its publication authority");
+            require_replacement_cleanup_acknowledgement_on_publication(
+                publication,
+                prepared,
+                &terminal,
+            )
+            .map_err(|failure| InstallFailure::Reclamation {
+                terminal: Box::new(terminal.clone()),
+                failure,
+            })?;
         }
         let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
             .map_err(|error| delivery_domain_failure(error.to_string()))?;
@@ -598,7 +766,17 @@ impl InstallAgentRuntime<'_> {
                 None,
             ));
         }
-        Ok(operation)
+        if terminal.requires_reclamation() {
+            let publication = publication
+                .as_mut()
+                .expect("replacement cleanup retained its publication authority");
+            acknowledge_replacement_settlement_on_publication(publication, prepared, &terminal)
+                .map_err(|failure| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure,
+                })?;
+        }
+        Ok((operation, reclamation_warnings))
     }
 
     fn audit(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, InstallFailure> {
@@ -647,6 +825,12 @@ impl fmt::Display for AuditRetryError {
 }
 
 impl std::error::Error for AuditRetryError {}
+
+fn reclamation_blocks_settlement(warnings: &[ReclamationWarning]) -> bool {
+    warnings
+        .iter()
+        .any(|warning| !matches!(warning, ReclamationWarning::Outcome(_)))
+}
 
 fn rollback_state(rollback: &RollbackChange) -> RollbackState {
     match rollback {

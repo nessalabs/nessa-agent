@@ -9,7 +9,9 @@ use rustls::crypto::CryptoProvider;
 use crate::agent_install::application::{InstallAgentRuntime, RuntimeStore};
 use crate::agent_install::domain::AgentName;
 use crate::agent_install::infrastructure::{host_platform, releases_for, ManagedRuntimes};
-use crate::agent_install_test_support::{audit, delivery, request, temporary_root};
+use crate::agent_install_test_support::{
+    audit, delivery, reclamation_audit, request, temporary_root,
+};
 
 #[test]
 fn building_a_client_names_the_tls_backend_this_process_uses() {
@@ -286,6 +288,8 @@ fn installs_the_pinned_release() {
     let source = HttpsArchives::new().expect("an https client");
 
     let installed = InstallAgentRuntime {
+        reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -329,6 +333,8 @@ fn installs_the_pinned_release() {
     // Asking again must be free. This is what stops a first-run surface from
     // downloading a hundred megabytes because somebody pressed the button twice.
     let again = InstallAgentRuntime {
+        reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),

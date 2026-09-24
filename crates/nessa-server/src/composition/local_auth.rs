@@ -197,7 +197,7 @@ fn launch_files(
                     (
                         id,
                         AgentLaunchFiles {
-                            command: runtime.command.clone(),
+                            command: runtime.command.executable().to_owned(),
                             paths: runtime.paths(),
                             environment: super::agent::launch_environment(id),
                         },

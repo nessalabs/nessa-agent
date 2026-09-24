@@ -44,7 +44,10 @@ fn an_agent_is_started_by_a_command_and_its_arguments() {
     let value = r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"codex":{"command":"/usr/local/bin/codex","args":["acp"],"model":"configured-model","toolsEnabled":true}}}"#;
     let config: AgentsConfig = serde_json::from_str(value).unwrap();
     let codex = config.runtime(AgentId::Codex).unwrap();
-    assert_eq!(codex.command, std::path::Path::new("/usr/local/bin/codex"));
+    assert_eq!(
+        codex.command.executable(),
+        std::path::Path::new("/usr/local/bin/codex")
+    );
     assert_eq!(codex.args, ["acp"]);
     // A subcommand is the agent's own vocabulary, not a file this machine is
     // asked about, so nothing here has to exist for the configuration to be

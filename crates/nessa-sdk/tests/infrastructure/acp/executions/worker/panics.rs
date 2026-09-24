@@ -79,7 +79,7 @@ fn spawn_worker<P: AcpProfile>(
     oneshot::Receiver<Result<ExecutionSessionId, AgentError>>,
 ) {
     let (root, config, capabilities) = profile_setup();
-    let mut command = tokio::process::Command::new(&config.executable);
+    let mut command = tokio::process::Command::new(config.executable.executable());
     command
         .args(&config.arguments)
         .env_clear()
@@ -94,7 +94,8 @@ fn spawn_worker<P: AcpProfile>(
     let (events, stream) = EventQueueBudget::new().channel(16);
     let (ready, startup) = oneshot::channel();
     let (operations, _) = watch::channel(ProviderOperationCapabilities::default());
-    let recovery = Arc::new(ProcessCleanup::new(config.clone()));
+    let executable_use = config.executable.admit().unwrap();
+    let recovery = Arc::new(ProcessCleanup::new(config.clone(), executable_use));
     let task = tokio::spawn(run(
         scope,
         profile,

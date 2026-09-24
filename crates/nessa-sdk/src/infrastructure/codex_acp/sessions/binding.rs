@@ -131,7 +131,7 @@ impl CodexAcpProvider {
         config.to_string()
     }
     fn launch_command(&self) -> Command {
-        let mut command = Command::new(&self.config.executable);
+        let mut command = Command::new(self.config.executable.executable());
         command
             .args(&self.config.arguments)
             .current_dir(&self.config.workspace)

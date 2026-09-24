@@ -4,20 +4,27 @@
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc::Sender, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc::Sender,
+    Arc, Mutex,
+};
 
 use crate::agent_install::application::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
     InstallDeliveryFailure, InstallationDelivery, InstallationDeliverySession,
-    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
-    PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
-    SourceFailure, StagedArchive, StoreFailure,
+    ManagedLaunchSnapshot, PendingInstallationDelivery, PreparedInstallation, Publication,
+    PublicationChange, PublicationCleanupFailure, PublicationLease, PublicationRecovery,
+    PublishFailure, ReclamationAudit, ReclamationAuditFailure, ReclamationOperationIds,
+    ReclamationPersistenceFailure, ReclamationPersistenceStage, RollbackChange,
+    RuntimeReclamationEffect, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
-    InstallRequest, InstallTransition, InstallTransitionKind, Libc, PinnedRelease,
-    PublicationOutcome, PublicationPreparation, PublicationSettlement, ReleaseContents,
-    ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
+    InstallRequest, InstallTransition, InstallTransitionKind, Libc, ManagedInstallation,
+    PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
+    ReclamationEvent, ReclamationOperationId, ReleaseContents, ReleaseFile, ReleasePlatform,
+    ReleaseRequirements, ReleaseVersion, RuntimeArtifact,
 };
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
@@ -28,6 +35,48 @@ pub(crate) const OTHER_DIGEST: &str =
 /// A digest standing for whatever the fake store will say it hashed.
 pub(crate) const PINNED_DIGEST: &str =
     "1111111111111111111111111111111111111111111111111111111111111111";
+
+struct AcceptingReclamationAudit;
+
+impl ReclamationAudit for AcceptingReclamationAudit {
+    fn record(&self, _event: &ReclamationEvent) -> Result<(), ReclamationAuditFailure> {
+        Ok(())
+    }
+
+    fn event_for(
+        &self,
+        _operation_id: &ReclamationOperationId,
+    ) -> Result<Option<ReclamationEvent>, ReclamationAuditFailure> {
+        Ok(None)
+    }
+}
+
+pub(crate) fn next_reclamation_operation_id() -> ReclamationOperationId {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    ReclamationOperationId::new(format!(
+        "test-reclamation-{}",
+        NEXT.fetch_add(1, Ordering::SeqCst)
+    ))
+    .unwrap()
+}
+
+struct TestReclamationOperationIds;
+
+impl ReclamationOperationIds for TestReclamationOperationIds {
+    fn next(&self) -> Result<ReclamationOperationId, ReclamationPersistenceFailure> {
+        Ok(next_reclamation_operation_id())
+    }
+}
+
+pub(crate) fn reclamation_operation_ids() -> &'static dyn ReclamationOperationIds {
+    static IDS: TestReclamationOperationIds = TestReclamationOperationIds;
+    &IDS
+}
+
+pub(crate) fn reclamation_audit() -> &'static dyn ReclamationAudit {
+    static AUDIT: AcceptingReclamationAudit = AcceptingReclamationAudit;
+    &AUDIT
+}
 
 /// A store root that is private, the way the real one is.
 ///
@@ -93,6 +142,7 @@ pub(crate) struct AcceptingDelivery;
 
 struct AcceptingDeliverySession {
     pending: Option<PendingInstallationDelivery>,
+    settled: Option<(PreparedInstallation, PublicationSettlement)>,
 }
 
 impl InstallationDelivery for AcceptingDelivery {
@@ -100,13 +150,27 @@ impl InstallationDelivery for AcceptingDelivery {
         &self,
         _account_id: &str,
     ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
-        Ok(Box::new(AcceptingDeliverySession { pending: None }))
+        Ok(Box::new(AcceptingDeliverySession {
+            pending: None,
+            settled: None,
+        }))
     }
 }
 
 impl InstallationDeliverySession for AcceptingDeliverySession {
     fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
         Ok(self.pending.clone())
+    }
+
+    fn settled(
+        &mut self,
+        delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure> {
+        Ok(self
+            .settled
+            .as_ref()
+            .filter(|(prepared, _)| prepared.record_id() == delivery_id)
+            .cloned())
     }
 
     fn prepare(
@@ -132,10 +196,11 @@ impl InstallationDeliverySession for AcceptingDeliverySession {
 
     fn settle(
         &mut self,
-        _prepared: &PreparedInstallation,
-        _settlement: &PublicationSettlement,
+        prepared: &PreparedInstallation,
+        settlement: &PublicationSettlement,
     ) -> Result<(), InstallDeliveryFailure> {
         self.pending = None;
+        self.settled = Some((prepared.clone(), settlement.clone()));
         Ok(())
     }
 }
@@ -345,6 +410,7 @@ pub(crate) struct FakeStore {
     publish: Result<PublicationChange, StoreFailure>,
     recovery: PublicationRecovery,
     lease_drop: Option<Sender<()>>,
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
     /// How many archives this store has staged, so each gets its own name.
     staged: std::sync::atomic::AtomicUsize,
     calls: Mutex<StoreCalls>,
@@ -361,6 +427,7 @@ impl FakeStore {
             publish: Ok(PublicationChange::Installed),
             recovery: PublicationRecovery::NotRequired,
             lease_drop: None,
+            reclamation: Arc::new(Mutex::new(None)),
             staged: std::sync::atomic::AtomicUsize::new(0),
             calls: Mutex::new(StoreCalls::default()),
         }
@@ -486,6 +553,25 @@ impl RuntimeStore for FakeStore {
         self.installed.clone()
     }
 
+    fn managed_launch(
+        &self,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
+        self.installed
+            .clone()
+            .map(|path| path.map(ManagedLaunchSnapshot::unmanaged))
+    }
+
+    fn reclamation_lease(
+        &self,
+        _agent: &AgentName,
+    ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
+        Ok(Box::new(FakeReclamationLease {
+            reclamation: Arc::clone(&self.reclamation),
+        }))
+    }
+
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
         if let Some(failure) = self.stage.clone() {
             return Err(failure);
@@ -536,28 +622,25 @@ impl RuntimeStore for FakeStore {
                 Publication::new(
                     self.root.join("opencode"),
                     change,
-                    self.lease_drop.clone().map_or_else(
-                        || {
-                            Box::new(())
-                                as Box<dyn crate::agent_install::application::PublicationLease>
-                        },
-                        |sender| Box::new(DropSignal(sender)),
-                    ),
+                    lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
                 )
             })
             .map_err(|failure| match self.recovery.clone() {
-                PublicationRecovery::NotRequired => {
-                    PublishFailure::unchanged(failure, lease(self.lease_drop.clone()))
-                }
-                PublicationRecovery::RolledBack(rollback) => {
-                    PublishFailure::rolled_back(failure, rollback, lease(self.lease_drop.clone()))
-                }
+                PublicationRecovery::NotRequired => PublishFailure::unchanged(
+                    failure,
+                    lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
+                ),
+                PublicationRecovery::RolledBack(rollback) => PublishFailure::rolled_back(
+                    failure,
+                    rollback,
+                    lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
+                ),
                 PublicationRecovery::Incomplete { rollback, cleanup } => {
                     PublishFailure::incomplete(
                         failure,
                         rollback,
                         cleanup,
-                        lease(self.lease_drop.clone()),
+                        lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
                     )
                 }
             })
@@ -572,19 +655,104 @@ impl RuntimeStore for FakeStore {
     }
 }
 
-struct DropSignal(Sender<()>);
+struct DropSignal {
+    sender: Sender<()>,
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
+}
+
+struct FakeReclamationLease {
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
+}
 
 fn lease(
     sender: Option<Sender<()>>,
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
 ) -> Box<dyn crate::agent_install::application::PublicationLease> {
-    sender.map_or_else(
-        || Box::new(()) as Box<dyn crate::agent_install::application::PublicationLease>,
-        |sender| Box::new(DropSignal(sender)),
-    )
+    match sender {
+        Some(sender) => Box::new(DropSignal {
+            sender,
+            reclamation,
+        }),
+        None => Box::new(FakeReclamationLease { reclamation }) as Box<dyn PublicationLease>,
+    }
 }
+
+fn clone_installation(installation: &ManagedInstallation) -> ManagedInstallation {
+    ManagedInstallation::restore(
+        installation.agent().clone(),
+        installation.current().clone(),
+        installation.pending().to_vec(),
+        installation.replacement_receipt().cloned(),
+    )
+    .expect("test reclamation state remains valid")
+}
+
+fn load_test_reclamation(
+    reclamation: &Mutex<Option<ManagedInstallation>>,
+) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+    Ok(reclamation.lock().unwrap().as_ref().map(clone_installation))
+}
+
+fn retain_test_reclamation(
+    reclamation: &Mutex<Option<ManagedInstallation>>,
+    installation: &ManagedInstallation,
+    _stage: ReclamationPersistenceStage,
+) -> Result<(), ReclamationPersistenceFailure> {
+    *reclamation.lock().unwrap() = Some(clone_installation(installation));
+    Ok(())
+}
+
+fn remove_test_superseded(
+    _agent: &AgentName,
+    _current: &RuntimeArtifact,
+    _superseded: &RuntimeArtifact,
+) -> RuntimeReclamationEffect {
+    RuntimeReclamationEffect::AlreadyAbsent
+}
+
+macro_rules! impl_test_reclamation_lease {
+    ($lease:ty, $state:ident) => {
+        impl PublicationLease for $lease {
+            fn load_reclamation(
+                &mut self,
+            ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+                load_test_reclamation(&self.$state)
+            }
+
+            fn retain_reclamation(
+                &mut self,
+                installation: &ManagedInstallation,
+                stage: ReclamationPersistenceStage,
+            ) -> Result<(), ReclamationPersistenceFailure> {
+                retain_test_reclamation(&self.$state, installation, stage)
+            }
+
+            fn remove_superseded(
+                &mut self,
+                agent: &AgentName,
+                current: &RuntimeArtifact,
+                superseded: &RuntimeArtifact,
+            ) -> RuntimeReclamationEffect {
+                remove_test_superseded(agent, current, superseded)
+            }
+
+            fn observe_superseded(
+                &mut self,
+                agent: &AgentName,
+                current: &RuntimeArtifact,
+                superseded: &RuntimeArtifact,
+            ) -> RuntimeReclamationEffect {
+                remove_test_superseded(agent, current, superseded)
+            }
+        }
+    };
+}
+
+impl_test_reclamation_lease!(FakeReclamationLease, reclamation);
+impl_test_reclamation_lease!(DropSignal, reclamation);
 
 impl Drop for DropSignal {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        let _ = self.sender.send(());
     }
 }

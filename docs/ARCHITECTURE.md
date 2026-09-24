@@ -236,6 +236,14 @@ are written here.
 - Gateway updates serialize by launchd service identity. Managed replacement
   requires correlated cleanup and audit acknowledgement; failed retirement never
   authorizes bootout. The pre-protocol gateway has one explicit legacy path.
+- Installed agent runtime launches carry an inseparable executable and use
+  authority. Every managed spawn records one bounded durable generation before
+  process creation; only confirmed no-spawn or process-tree cleanup records its
+  release. Superseded artifact removal holds the publication lock, rechecks the
+  current artifact, takes the artifact lock without waiting, and requires a
+  complete released-generation inventory. Replacement delivery remains unsettled
+  until its exact cleanup obligation is durable, and a later replacement requires
+  the exact retained settlement receipt.
 - Failures at the edges — blur, sizing, tray, viewport — are reported and
   survivable, not fatal. The panel opening unblurred, or without a tray, beats
   the panel not opening.

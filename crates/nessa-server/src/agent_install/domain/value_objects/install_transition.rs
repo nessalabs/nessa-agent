@@ -43,6 +43,14 @@ impl RuntimeArtifact {
     pub fn contents(&self) -> &ReleaseContents {
         &self.contents
     }
+
+    /// Return the on-disk identity shared by every description of these bytes.
+    ///
+    /// Contents remain part of the complete artifact evidence, while version
+    /// and digest identify the physical directory that reclamation protects.
+    pub fn physical_identity(&self) -> (&ReleaseVersion, &ArchiveDigest) {
+        (&self.version, &self.digest)
+    }
 }
 
 /// The verified local account and command invocation that requested an install.
@@ -405,6 +413,15 @@ impl InstallTransition {
             InstallTransitionFacts::Replaced(value) => Some(value),
             _ => None,
         }
+    }
+
+    /// Whether this completion superseded different physical runtime bytes.
+    ///
+    /// A changed retained description with the same version and digest does
+    /// not authorize removal of the directory that still holds the target.
+    pub fn requires_reclamation(&self) -> bool {
+        self.previous()
+            .is_some_and(|previous| previous.physical_identity() != self.target.physical_identity())
     }
 
     pub fn rollback(&self) -> Option<&RollbackState> {

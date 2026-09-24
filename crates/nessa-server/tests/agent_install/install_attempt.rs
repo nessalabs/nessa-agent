@@ -1,7 +1,8 @@
 use super::*;
 use crate::agent_install::domain::{
-    InstallAttemptError, InstallFailureEvidence, InstallFailureKind, InstallTransitionError,
-    InstallTransitionKind, RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
+    ArchivePath, FileRole, InstallAttemptError, InstallFailureEvidence, InstallFailureKind,
+    InstallTransitionError, InstallTransitionKind, RecoveryFailureEvidence, RecoveryState,
+    ReleaseContents, ReleaseFile, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{
     agent, platform, release, request, OTHER_DIGEST, PINNED_DIGEST,
@@ -58,6 +59,31 @@ fn an_artifact_cannot_replace_or_restore_itself() {
         rollback.rolled_back(RollbackState::Restored(target)),
         Err(InstallAttemptError::Contradictory(_))
     ));
+}
+
+#[test]
+fn reclamation_is_owned_by_distinct_physical_identity_not_changed_contents() {
+    let target = artifact("1.18.31", PINNED_DIGEST);
+    let metadata_only = RuntimeArtifact::new(
+        target.version().clone(),
+        target.digest().clone(),
+        ReleaseContents::new(vec![ReleaseFile::new(
+            ArchivePath::parse("renamed/bin/opencode").unwrap(),
+            FileRole::Launch,
+        )])
+        .unwrap(),
+    );
+    let distinct = artifact("1.18.31", OTHER_DIGEST);
+
+    let (mut metadata_attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
+    let _ = metadata_attempt.verified().unwrap();
+    let metadata_replacement = metadata_attempt.replaced(metadata_only).unwrap();
+    assert!(!metadata_replacement.requires_reclamation());
+
+    let (mut distinct_attempt, _) = InstallAttempt::start(agent(), target, request());
+    let _ = distinct_attempt.verified().unwrap();
+    let distinct_replacement = distinct_attempt.replaced(distinct).unwrap();
+    assert!(distinct_replacement.requires_reclamation());
 }
 
 #[test]

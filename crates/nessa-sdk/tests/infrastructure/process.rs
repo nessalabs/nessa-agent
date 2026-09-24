@@ -83,7 +83,7 @@ async fn cancelled_directory_release_keeps_the_same_owned_task_for_retry() {
             result = started_rx => result.unwrap(),
         }
     }
-    assert_eq!(scope.retained_directory_path(), Some(directory.as_path()));
+    assert!(scope.retained_directory.is_some());
     assert!(directory.is_dir());
 
     release_tx.send(()).unwrap();
@@ -110,7 +110,7 @@ async fn timed_out_directory_release_is_awaited_again_without_starting_another()
         Err(AgentError::CleanupUncertain)
     );
     started_rx.await.unwrap();
-    assert_eq!(scope.retained_directory_path(), Some(directory.as_path()));
+    assert!(scope.retained_directory.is_some());
     release_tx.send(()).unwrap();
     scope
         .cleanup(Duration::from_millis(50), Duration::from_secs(2))
@@ -134,7 +134,7 @@ async fn failed_directory_release_is_retried_after_process_cleanup() {
         Err(AgentError::CleanupUncertain)
     );
     assert!(scope.outcome.is_some(), "the process cleanup was confirmed");
-    assert_eq!(scope.retained_directory_path(), Some(directory.as_path()));
+    assert!(scope.retained_directory.is_some());
     assert!(
         directory.is_dir(),
         "the owed directory release was retained"

@@ -123,6 +123,68 @@ impl InstallationDeliverySession for DeliverySession<'_> {
         Ok(pending)
     }
 
+    fn settled(
+        &mut self,
+        delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure> {
+        self.delivery.verify(&self.current_lock)?;
+        let parsed = Uuid::parse_str(delivery_id).map_err(|_| {
+            failure(
+                InstallDeliveryFailureStage::ReadState,
+                "replacement receipt has an invalid delivery id",
+            )
+        })?;
+        if parsed.to_string() != delivery_id {
+            return Err(failure(
+                InstallDeliveryFailureStage::ReadState,
+                "replacement receipt has a non-canonical delivery id",
+            ));
+        }
+        let preparation_name = format!("{delivery_id}.prepared.json");
+        let preparation_name = OsStr::new(&preparation_name);
+        match self
+            .delivery
+            .directory
+            .open_file(preparation_name, OpenMode::Read)
+        {
+            Ok(file) => drop(file),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(failure(InstallDeliveryFailureStage::ReadState, error));
+            }
+        }
+        let preparation: StoredPreparation = read(&self.delivery.directory, preparation_name)?;
+        let prepared = preparation.restore()?;
+        if prepared.preparation().verified().request().account_id() != self.account_id {
+            return Err(failure(
+                InstallDeliveryFailureStage::ReadState,
+                "replacement receipt belongs to another account",
+            ));
+        }
+        let outcome: StoredOutcome = read(
+            &self.delivery.directory,
+            OsStr::new(&format!("{delivery_id}.outcome.json")),
+        )?;
+        let outcome = outcome.restore(&prepared)?;
+        let settlement_name = format!("{delivery_id}.settled.json");
+        let settlement_name = OsStr::new(&settlement_name);
+        match self
+            .delivery
+            .directory
+            .open_file(settlement_name, OpenMode::Read)
+        {
+            Ok(file) => drop(file),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(failure(InstallDeliveryFailureStage::ReadState, error));
+            }
+        }
+        let settlement: StoredSettlement = read(&self.delivery.directory, settlement_name)?;
+        let settlement = settlement.restore(&prepared, &outcome)?;
+        self.delivery.verify(&self.current_lock)?;
+        Ok(Some((prepared, settlement)))
+    }
+
     fn prepare(
         &mut self,
         preparation: PublicationPreparation,

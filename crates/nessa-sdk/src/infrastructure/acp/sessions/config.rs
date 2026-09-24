@@ -1,7 +1,10 @@
 //! Trusted host configuration for launching and supervising an ACP process.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::{agents::AgentError, providers::UserImageSource};
+use crate::application::agent_execution::{
+    agents::AgentError,
+    providers::{ExecutableUseSnapshot, UserImageSource},
+};
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
 use serde::Deserialize;
 use std::{
@@ -30,9 +33,9 @@ pub struct StdioMcpServer {
 /// Only trusted composition may choose the executable and its arguments.
 #[derive(Clone)]
 pub struct AcpConfig {
-    /// Absolute path to the trusted provider executable. The adapter launches it directly,
-    /// without a shell.
-    pub executable: PathBuf,
+    /// Trusted provider executable and the authority required before each launch.
+    /// The adapter admits a distinct use generation immediately before spawning it.
+    pub executable: ExecutableUseSnapshot,
     /// Noncredential arguments passed verbatim in order. These select restoration context;
     /// never place secrets in arguments. Only trusted composition may supply them.
     pub arguments: Vec<OsString>,
@@ -200,7 +203,7 @@ impl AcpConfig {
                 "context and credential environment keys must be disjoint".into(),
             ));
         }
-        if !self.executable.is_absolute() || !self.workspace.is_absolute() {
+        if !self.executable.executable().is_absolute() || !self.workspace.is_absolute() {
             return Err(AgentError::Configuration(
                 "executable and workspace must be absolute paths".into(),
             ));

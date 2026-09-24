@@ -126,12 +126,26 @@ fn preparation_and_exact_outcome_survive_reopen_until_settled() {
     let settlement = PublicationSettlement::new(&preparation, outcome).unwrap();
     reopened.settle(&prepared, &settlement).unwrap();
     drop(reopened);
-    assert!(delivery
-        .session(request().account_id())
-        .unwrap()
-        .pending()
-        .unwrap()
-        .is_none());
+    let mut settled = delivery.session(request().account_id()).unwrap();
+    assert!(settled.pending().unwrap().is_none());
+    assert_eq!(
+        settled.settled(prepared.record_id()).unwrap(),
+        Some((prepared.clone(), settlement))
+    );
+    assert_eq!(
+        settled
+            .settled("00000000-0000-0000-0000-000000000000")
+            .unwrap(),
+        None
+    );
+    drop(settled);
+    let mut wrong_account = delivery.session("unix:502").unwrap();
+    let failure = wrong_account.settled(prepared.record_id()).unwrap_err();
+    assert_eq!(failure.stage(), InstallDeliveryFailureStage::ReadState);
+    assert_eq!(
+        failure.detail(),
+        "replacement receipt belongs to another account"
+    );
 }
 
 #[test]

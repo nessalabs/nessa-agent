@@ -9,8 +9,8 @@ use crate::agent_install::domain::{
     ReleaseVersion, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{
-    agent, audit, host, installs, platform, release as test_release, request, temporary_root,
-    FakeSource, FakeStore, PINNED_DIGEST,
+    agent, audit, host, installs, platform, reclamation_audit, release as test_release, request,
+    temporary_root, FakeSource, FakeStore, PINNED_DIGEST,
 };
 use nessa_local_storage::create_directory;
 #[cfg(unix)]
@@ -435,6 +435,8 @@ fn publication_uncertainty_says_that_later_installs_are_blocked() {
     let store = FakeStore::empty(root.path());
     let release = test_release("1.18.31", PINNED_DIGEST, &platform());
     let delivery_failure = InstallAgentRuntime {
+        reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -466,6 +468,7 @@ fn what_the_command_prints_is_one_line_of_json() {
         version: ReleaseVersion::parse("1.18.31").expect("usable version"),
         executable: Path::new("/tmp/agents/opencode/1.18.31/opencode").to_owned(),
         downloaded: true,
+        reclamation_warnings: Vec::new(),
     };
     let mut written = Vec::new();
 
@@ -493,6 +496,7 @@ fn an_install_that_downloaded_nothing_says_so() {
         version: ReleaseVersion::parse("1.18.31").expect("usable version"),
         executable: Path::new("/tmp/agents/opencode/1.18.31/opencode").to_owned(),
         downloaded: false,
+        reclamation_warnings: Vec::new(),
     };
 
     assert_eq!(
@@ -522,6 +526,7 @@ fn a_runtime_whose_path_is_not_text_is_not_reported_as_a_path_that_is() {
         // directory name a filesystem accepts and UTF-8 does not.
         executable: Path::new(OsStr::from_bytes(b"/tmp/\x80/opencode")).to_owned(),
         downloaded: true,
+        reclamation_warnings: Vec::new(),
     };
 
     let refused = report(&opencode(), &installed).expect_err("the path is not text");
