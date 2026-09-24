@@ -1,18 +1,17 @@
 //! Installed launch resolution over a substitute runtime store.
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::{path::PathBuf, sync::Mutex};
 
 use super::*;
 use crate::agent_install::application::{
-    Publication, PublicationLease, PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
+    ManagedLaunchSnapshot, Publication, PublicationLease, PublishFailure, RuntimeStore,
+    StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
 };
 use crate::agent_install::infrastructure::releases_for;
 use crate::composition::desktop::bundled_launch;
-use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
 struct Answers {
     installed: Result<Option<PathBuf>, StoreFailure>,
@@ -41,14 +40,14 @@ impl RuntimeStore for Answers {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
         self.asked.lock().unwrap().push((
             agent.as_str().to_owned(),
             release.version().as_str().to_owned(),
         ));
         self.installed
             .clone()
-            .map(|path| path.map(ExecutableUseSnapshot::unmanaged))
+            .map(|path| path.map(ManagedLaunchSnapshot::unmanaged))
     }
 
     fn reclamation_lease(

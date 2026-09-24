@@ -1,20 +1,25 @@
-use super::*;
-use std::cell::RefCell;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::RecvTimeoutError;
-use std::time::Duration;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::{
+    cell::RefCell,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc::RecvTimeoutError,
+        Arc, Barrier,
+    },
+    time::Duration,
+};
 
 use nessa_local_storage::OpenMode;
 
 use sha2::Sha256;
 use tar::{EntryType, Header};
 
+use super::*;
 use crate::agent_install::application::PublicationRecovery;
 use crate::agent_install::domain::{
     AdmissionResult, AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, InstallRequest,
@@ -227,8 +232,17 @@ fn active_use_directory(root: &Path) -> PathBuf {
 }
 
 fn active_uses(root: &Path) -> usize {
-    std::fs::read_dir(active_use_directory(root))
+    let directory = active_use_directory(root);
+    std::fs::read_dir(&directory)
         .expect("the managed launch creates its marker directory")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|name| name.strip_suffix(".expected.json").map(str::to_owned))
+        .filter(|generation| {
+            !directory
+                .join(format!("{generation}.released.json"))
+                .exists()
+        })
         .count()
 }
 
@@ -277,6 +291,449 @@ fn dropping_an_unconfirmed_generation_does_not_release_its_durable_marker() {
     drop(launch.admit().unwrap());
 
     assert_eq!(active_uses(root.path()), 1);
+}
+
+#[test]
+fn missing_inventory_blocks_launch_and_reclamation_after_reopen() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    std::fs::remove_file(active_use_directory(root.path()).join("inventory.json")).unwrap();
+    assert!(matches!(
+        store.managed_launch(&agent(), &previous),
+        Err(StoreFailure::Unreadable(_))
+    ));
+
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert!(matches!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &RuntimeArtifact::for_release(&previous),
+        ),
+        RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(_))
+    ));
+    assert!(artifact_path(root.path()).join("bin/opencode").exists());
+}
+
+#[test]
+fn inventory_reference_without_admission_record_blocks_reclamation() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let previous_artifact = RuntimeArtifact::for_release(&previous);
+    let directory = store.use_marker_directory(&agent(), &previous_artifact);
+    let record = ExecutableUseGeneration {
+        agent: agent().as_str().to_owned(),
+        version: previous_artifact.version().as_str().to_owned(),
+        digest: previous_artifact.digest().as_str().to_owned(),
+        generation: "interrupted-generation".into(),
+    };
+    store
+        .retain_use_generation(&directory, &record.generation, "expected", &record)
+        .unwrap();
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &previous_artifact,
+        ),
+        RuntimeReclamationEffect::DeferredInUse
+    );
+}
+
+#[test]
+fn missing_generation_phase_never_becomes_cleanup_permission() {
+    for missing in ["expected", "admitted", "released"] {
+        let root = temporary_root();
+        let store = ManagedRuntimes::new(root.path());
+        let previous = release("1.18.31", "bin/opencode");
+        let current = artifact(
+            "1.19.0",
+            "bin/opencode",
+            &"b".repeat(64),
+            "macos",
+            "aarch64",
+        );
+        publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+        let launch = store.managed_launch(&agent(), &previous).unwrap().unwrap();
+        let mut use_guard = launch.admit().unwrap();
+        use_guard.release().unwrap();
+        drop(use_guard);
+        drop(launch);
+        let directory = active_use_directory(root.path());
+        let generation = std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .find_map(|name| name.strip_suffix(".expected.json").map(str::to_owned))
+            .unwrap();
+        std::fs::remove_file(directory.join(format!("{generation}.{missing}.json"))).unwrap();
+        publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+        let mut lease = store.reclamation_lease(&agent()).unwrap();
+        let effect = lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &RuntimeArtifact::for_release(&previous),
+        );
+        assert!(matches!(
+            effect,
+            RuntimeReclamationEffect::DeferredInUse
+                | RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(_))
+        ));
+        assert!(artifact_path(root.path()).join("bin/opencode").exists());
+    }
+}
+
+#[test]
+fn conflicting_generation_reuse_preserves_original_record_and_blocks_cleanup() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&previous);
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let directory = store.use_marker_directory(&agent(), &artifact);
+    let generation = "fixed-generation";
+    let original = ExecutableUseGeneration {
+        agent: agent().as_str().to_owned(),
+        version: artifact.version().as_str().to_owned(),
+        digest: artifact.digest().as_str().to_owned(),
+        generation: generation.into(),
+    };
+    store
+        .retain_use_generation(&directory, generation, "expected", &original)
+        .unwrap();
+    let conflicting = ExecutableUseGeneration {
+        agent: original.agent.clone(),
+        version: original.version.clone(),
+        digest: original.digest.clone(),
+        generation: "substituted-generation".into(),
+    };
+    let path = directory.join(format!("{generation}.expected.json"));
+    let before = std::fs::read(root.path().join(&path)).unwrap();
+
+    assert!(matches!(
+        store.retain_use_generation(&directory, generation, "expected", &conflicting),
+        Err(StoreFailure::Unreadable(_))
+    ));
+    assert_eq!(std::fs::read(root.path().join(path)).unwrap(), before);
+}
+
+#[test]
+fn generation_with_wrong_artifact_binding_blocks_cleanup() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let artifact = RuntimeArtifact::for_release(&previous);
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let directory = store.use_marker_directory(&agent(), &artifact);
+    let generation = "wrong-binding";
+    let expected = ExecutableUseGeneration {
+        agent: agent().as_str().to_owned(),
+        version: artifact.version().as_str().to_owned(),
+        digest: artifact.digest().as_str().to_owned(),
+        generation: generation.into(),
+    };
+    store
+        .retain_use_generation(&directory, generation, "expected", &expected)
+        .unwrap();
+    let wrong = ExecutableUseGeneration {
+        agent: "another-agent".into(),
+        version: expected.version.clone(),
+        digest: expected.digest.clone(),
+        generation: expected.generation.clone(),
+    };
+    store
+        .retain_use_generation(&directory, generation, "admitted", &wrong)
+        .unwrap();
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert!(matches!(
+        lease.remove_superseded(&agent(), &RuntimeArtifact::for_release(&current), &artifact,),
+        RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(_))
+    ));
+    assert!(artifact_path(root.path()).join("bin/opencode").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_use_mutation_and_artifact_locks_detect_replacement() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&release);
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+
+    let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    let mutation = store.hold_use_mutation(&marker_directory).unwrap();
+    std::fs::rename(
+        root.path().join(&marker_directory),
+        root.path().join("displaced-active-use"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.path().join(&marker_directory)).unwrap();
+    assert!(matches!(
+        mutation.verify(),
+        Err(StoreFailure::Unreadable(_))
+    ));
+
+    let artifact_lock = store.hold_artifact_for_launch(&agent(), &artifact).unwrap();
+    let artifact_lock_path = store.artifact_lock_path(&agent(), &artifact);
+    std::fs::remove_file(root.path().join(&artifact_lock_path)).unwrap();
+    std::fs::write(root.path().join(&artifact_lock_path), b"replacement").unwrap();
+    assert_eq!(
+        store.same_file(&artifact_lock, &artifact_lock_path),
+        Ok(false)
+    );
+}
+
+#[test]
+fn all_released_generations_allow_reclamation_without_erasing_terminal_evidence() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let launch = store.managed_launch(&agent(), &previous).unwrap().unwrap();
+    let mut generation = launch.admit().unwrap();
+    generation.release().unwrap();
+    drop(generation);
+    drop(launch);
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &RuntimeArtifact::for_release(&previous),
+        ),
+        RuntimeReclamationEffect::Removed
+    );
+    assert!(
+        std::fs::read_dir(active_use_directory(root.path()))
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".released.json")),
+        "released generation evidence remains after physical artifact cleanup"
+    );
+}
+
+#[test]
+fn release_record_survives_directory_sync_failure_and_is_reacknowledged_after_reopen() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let previous_artifact = RuntimeArtifact::for_release(&previous);
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let directory = store.use_marker_directory(&agent(), &previous_artifact);
+    let generation = "release-sync-uncertain";
+    let record = ExecutableUseGeneration {
+        agent: agent().as_str().to_owned(),
+        version: previous_artifact.version().as_str().to_owned(),
+        digest: previous_artifact.digest().as_str().to_owned(),
+        generation: generation.into(),
+    };
+    for phase in ["expected", "admitted"] {
+        store
+            .retain_use_generation(&directory, generation, phase, &record)
+            .unwrap();
+    }
+    let failure = store
+        .retain_use_generation_with(&directory, generation, "released", &record, |_| {
+            Err(std::io::Error::other(
+                "injected release directory sync failure",
+            ))
+        })
+        .unwrap_err();
+    assert!(failure
+        .to_string()
+        .contains("injected release directory sync failure"));
+
+    let reopened = ManagedRuntimes::new(root.path());
+    reopened
+        .retain_use_generation(&directory, generation, "released", &record)
+        .expect("exact replay re-syncs the immutable released record");
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&reopened, &current, &archive("bin/opencode", b"current")).unwrap();
+    let mut lease = reopened.reclamation_lease(&agent()).unwrap();
+    assert_eq!(
+        lease.remove_superseded(
+            &agent(),
+            &RuntimeArtifact::for_release(&current),
+            &previous_artifact,
+        ),
+        RuntimeReclamationEffect::Removed
+    );
+}
+
+#[test]
+fn concurrent_admissions_are_serialized_into_distinct_complete_generations() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let launch = store.managed_launch(&agent(), &release).unwrap().unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let launch = launch.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let mut generation = launch.admit().unwrap();
+                generation.release().unwrap();
+            })
+        })
+        .collect();
+    barrier.wait();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+
+    let directory = active_use_directory(root.path());
+    assert_eq!(
+        std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".expected.json"))
+            .count(),
+        2
+    );
+    assert_eq!(active_uses(root.path()), 0);
+}
+
+#[test]
+fn bounded_generation_capacity_refuses_the_next_spawn_admission() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let artifact = RuntimeArtifact::for_release(&release);
+    let directory = store.use_marker_directory(&agent(), &artifact);
+    for index in 0..MAXIMUM_USE_GENERATIONS {
+        let generation = format!("retained-{index}");
+        let record = ExecutableUseGeneration {
+            agent: agent().as_str().to_owned(),
+            version: artifact.version().as_str().to_owned(),
+            digest: artifact.digest().as_str().to_owned(),
+            generation: generation.clone(),
+        };
+        store
+            .retain_use_generation(&directory, &generation, "expected", &record)
+            .unwrap();
+        store
+            .retain_use_generation(&directory, &generation, "admitted", &record)
+            .unwrap();
+        store
+            .retain_use_generation(&directory, &generation, "released", &record)
+            .unwrap();
+    }
+    let launch = store.managed_launch(&agent(), &release).unwrap().unwrap();
+
+    let failure = match launch.admit() {
+        Ok(_) => panic!("capacity must refuse a new process-use generation"),
+        Err(failure) => failure,
+    };
+
+    assert_eq!(
+        failure.detail(),
+        "executable-use inventory reached its generation capacity"
+    );
+    assert_eq!(active_uses(root.path()), 0);
+}
+
+#[test]
+fn oversized_reclamation_state_is_rejected_before_decode() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    std::fs::write(
+        store.reclamation_path(&agent()),
+        vec![b'x'; MAXIMUM_RECLAMATION_STATE_BYTES as usize + 1],
+    )
+    .unwrap();
+
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    let failure = match lease.load_reclamation() {
+        Ok(_) => panic!("oversized state must not be decoded"),
+        Err(failure) => failure,
+    };
+
+    assert_eq!(failure.stage(), ReclamationPersistenceStage::Read);
+    assert_eq!(
+        failure.detail(),
+        "reclamation state exceeds its durable size bound"
+    );
+}
+
+#[test]
+fn reclamation_encoder_refuses_the_first_byte_past_its_fixed_capacity() {
+    let mut encoded = BoundedJsonBuffer::new(
+        MAXIMUM_RECLAMATION_STATE_BYTES,
+        "reclamation state exceeds its durable size bound",
+    );
+    encoded
+        .write_all(&vec![b'x'; MAXIMUM_RECLAMATION_STATE_BYTES as usize])
+        .unwrap();
+    let failure = encoded.write_all(b"x").unwrap_err();
+
+    assert_eq!(
+        failure.to_string(),
+        "reclamation state exceeds its durable size bound"
+    );
+    assert_eq!(
+        encoded.bytes.len(),
+        MAXIMUM_RECLAMATION_STATE_BYTES as usize
+    );
 }
 
 #[cfg(unix)]
@@ -430,8 +887,6 @@ fn reclamation_removes_every_file_in_the_retained_full_artifact() {
 #[cfg(unix)]
 #[test]
 fn reclamation_keeps_hardlinked_and_symbolically_replaced_targets() {
-    use std::os::unix::fs::symlink;
-
     for linked in ["hard", "symbolic"] {
         let root = temporary_root();
         let store = ManagedRuntimes::new(root.path());

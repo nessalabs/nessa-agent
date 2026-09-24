@@ -38,5 +38,6 @@ pub use value_objects::{
     ReclamationAuditState, ReclamationCause, ReclamationError, ReclamationEvent,
     ReclamationObligation, ReclamationOperationId, ReclamationPhysicalOutcome, ReclamationTrigger,
     RecoveryFailureEvidence, RecoveryState, ReleaseContents, ReleaseFile, ReleasePlatform,
-    ReleaseRequirements, ReleaseVersion, RollbackState, RuntimeArtifact,
+    ReleaseRequirements, ReleaseVersion, ReplacementReceipt, ReplacementSettlementState,
+    RollbackState, RuntimeArtifact,
 };

@@ -4,25 +4,28 @@
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc::Sender, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc::Sender,
+    Mutex,
+};
 
 use crate::agent_install::application::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
     InstallDeliveryFailure, InstallationDelivery, InstallationDeliverySession,
-    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
-    PublicationCleanupFailure, PublicationLease, PublicationRecovery, PublishFailure,
-    ReclamationAudit, ReclamationAuditFailure, ReclamationPersistenceFailure,
-    ReclamationPersistenceStage, RollbackChange, RuntimeReclamationEffect, RuntimeStore,
-    SourceFailure, StagedArchive, StoreFailure,
+    ManagedLaunchSnapshot, PendingInstallationDelivery, PreparedInstallation, Publication,
+    PublicationChange, PublicationCleanupFailure, PublicationLease, PublicationRecovery,
+    PublishFailure, ReclamationAudit, ReclamationAuditFailure, ReclamationOperationIds,
+    ReclamationPersistenceFailure, ReclamationPersistenceStage, RollbackChange,
+    RuntimeReclamationEffect, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
     InstallRequest, InstallTransition, InstallTransitionKind, Libc, ManagedInstallation,
     PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
-    ReclamationEvent, ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
-    ReleaseVersion, RuntimeArtifact,
+    ReclamationEvent, ReclamationOperationId, ReleaseContents, ReleaseFile, ReleasePlatform,
+    ReleaseRequirements, ReleaseVersion, RuntimeArtifact,
 };
-use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
 /// pin that the downloaded bytes will not match.
@@ -39,6 +42,35 @@ impl ReclamationAudit for AcceptingReclamationAudit {
     fn record(&self, _event: &ReclamationEvent) -> Result<(), ReclamationAuditFailure> {
         Ok(())
     }
+
+    fn event_for(
+        &self,
+        _operation_id: &ReclamationOperationId,
+    ) -> Result<Option<ReclamationEvent>, ReclamationAuditFailure> {
+        Ok(None)
+    }
+}
+
+pub(crate) fn next_reclamation_operation_id() -> ReclamationOperationId {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    ReclamationOperationId::new(format!(
+        "test-reclamation-{}",
+        NEXT.fetch_add(1, Ordering::SeqCst)
+    ))
+    .unwrap()
+}
+
+struct TestReclamationOperationIds;
+
+impl ReclamationOperationIds for TestReclamationOperationIds {
+    fn next(&self) -> Result<ReclamationOperationId, ReclamationPersistenceFailure> {
+        Ok(next_reclamation_operation_id())
+    }
+}
+
+pub(crate) fn reclamation_operation_ids() -> &'static dyn ReclamationOperationIds {
+    static IDS: TestReclamationOperationIds = TestReclamationOperationIds;
+    &IDS
 }
 
 pub(crate) fn reclamation_audit() -> &'static dyn ReclamationAudit {
@@ -110,6 +142,7 @@ pub(crate) struct AcceptingDelivery;
 
 struct AcceptingDeliverySession {
     pending: Option<PendingInstallationDelivery>,
+    settled: Option<(PreparedInstallation, PublicationSettlement)>,
 }
 
 impl InstallationDelivery for AcceptingDelivery {
@@ -117,13 +150,27 @@ impl InstallationDelivery for AcceptingDelivery {
         &self,
         _account_id: &str,
     ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
-        Ok(Box::new(AcceptingDeliverySession { pending: None }))
+        Ok(Box::new(AcceptingDeliverySession {
+            pending: None,
+            settled: None,
+        }))
     }
 }
 
 impl InstallationDeliverySession for AcceptingDeliverySession {
     fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
         Ok(self.pending.clone())
+    }
+
+    fn settled(
+        &mut self,
+        delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure> {
+        Ok(self
+            .settled
+            .as_ref()
+            .filter(|(prepared, _)| prepared.record_id() == delivery_id)
+            .cloned())
     }
 
     fn prepare(
@@ -149,10 +196,11 @@ impl InstallationDeliverySession for AcceptingDeliverySession {
 
     fn settle(
         &mut self,
-        _prepared: &PreparedInstallation,
-        _settlement: &PublicationSettlement,
+        prepared: &PreparedInstallation,
+        settlement: &PublicationSettlement,
     ) -> Result<(), InstallDeliveryFailure> {
         self.pending = None;
+        self.settled = Some((prepared.clone(), settlement.clone()));
         Ok(())
     }
 }
@@ -507,10 +555,10 @@ impl RuntimeStore for FakeStore {
         &self,
         _agent: &AgentName,
         _release: &PinnedRelease,
-    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
         self.installed
             .clone()
-            .map(|path| path.map(ExecutableUseSnapshot::unmanaged))
+            .map(|path| path.map(ManagedLaunchSnapshot::unmanaged))
     }
 
     fn reclamation_lease(

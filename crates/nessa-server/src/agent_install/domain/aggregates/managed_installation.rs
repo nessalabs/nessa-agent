@@ -3,7 +3,8 @@ use std::fmt;
 use crate::agent_install::domain::{
     AgentName, InstallFailureEvidence, InstallRequest, ReclamationActivation, ReclamationAdmission,
     ReclamationAuditState, ReclamationEvent, ReclamationObligation, ReclamationOperationId,
-    ReclamationPhysicalOutcome, ReclamationTrigger, RuntimeArtifact,
+    ReclamationPhysicalOutcome, ReclamationTrigger, ReplacementReceipt, ReplacementSettlementState,
+    RuntimeArtifact,
 };
 
 /// Persistable progress for one reclamation operation.
@@ -43,16 +44,17 @@ impl PendingReclamation {
             if operation.admission().obligation() != &obligation {
                 return Err(ManagedInstallationError::ObligationMismatch);
             }
+            if last_acknowledged_operation_id.as_ref() == Some(operation.admission().operation_id())
+            {
+                return Err(ManagedInstallationError::DuplicateOperationId);
+            }
             if matches!(
                 operation,
                 ReclamationOperation::EffectRecorded(event)
                     if event.audit() == ReclamationAuditState::Acknowledged
+                        && !event.outcome().completes_obligation()
             ) {
                 return Err(ManagedInstallationError::AcknowledgedOperationRetained);
-            }
-            if last_acknowledged_operation_id.as_ref() == Some(operation.admission().operation_id())
-            {
-                return Err(ManagedInstallationError::DuplicateOperationId);
             }
         }
         Ok(Self {
@@ -90,6 +92,7 @@ pub struct ManagedInstallation {
     agent: AgentName,
     current: RuntimeArtifact,
     pending: Vec<PendingReclamation>,
+    replacement_receipt: Option<ReplacementReceipt>,
 }
 
 impl ManagedInstallation {
@@ -98,6 +101,7 @@ impl ManagedInstallation {
             agent,
             current,
             pending: Vec::new(),
+            replacement_receipt: None,
         }
     }
 
@@ -106,6 +110,7 @@ impl ManagedInstallation {
         agent: AgentName,
         current: RuntimeArtifact,
         mut pending: Vec<PendingReclamation>,
+        replacement_receipt: Option<ReplacementReceipt>,
     ) -> Result<Self, ManagedInstallationError> {
         for item in &pending {
             validate_restored_operation(&agent, &current, item.operation.as_ref())?;
@@ -144,10 +149,23 @@ impl ManagedInstallation {
                 return Err(ManagedInstallationError::DuplicateOperationId);
             }
         }
+        if let Some(receipt) = &replacement_receipt {
+            if receipt.obligation().activation().replacement() != &current {
+                return Err(ManagedInstallationError::ReceiptCurrentMismatch);
+            }
+            if receipt.settlement() == ReplacementSettlementState::Pending
+                && !pending
+                    .iter()
+                    .any(|item| item.obligation() == receipt.obligation())
+            {
+                return Err(ManagedInstallationError::ReceiptObligationMissing);
+            }
+        }
         Ok(Self {
             agent,
             current,
             pending,
+            replacement_receipt,
         })
     }
 
@@ -163,6 +181,11 @@ impl ManagedInstallation {
         &self.pending
     }
 
+    /// Return the latest accepted replacement's independent delivery receipt.
+    pub fn replacement_receipt(&self) -> Option<&ReplacementReceipt> {
+        self.replacement_receipt.as_ref()
+    }
+
     /// Record a replacement while retaining the prior artifact and its cause.
     ///
     /// An effect-pending operation must be resolved first. The application must
@@ -173,6 +196,13 @@ impl ManagedInstallation {
         replacement: RuntimeArtifact,
         request: InstallRequest,
     ) -> Result<ReclamationUpdate, ManagedInstallationError> {
+        if self
+            .replacement_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.settlement() == ReplacementSettlementState::Pending)
+        {
+            return Err(ManagedInstallationError::SettlementPending);
+        }
         if self.pending.iter().any(|pending| {
             matches!(
                 pending.operation.as_ref(),
@@ -224,6 +254,105 @@ impl ManagedInstallation {
         Ok(ReclamationUpdate::Created(obligation))
     }
 
+    /// Bind the authoritative obligation for a replacement to its delivery identity.
+    pub fn retain_replacement_receipt(
+        &mut self,
+        delivery_id: impl Into<String>,
+        replacement_request: &InstallRequest,
+    ) -> Result<ReplacementReceipt, ManagedInstallationError> {
+        let obligation = self
+            .pending
+            .iter()
+            .find(|pending| pending.obligation.activation().request() == replacement_request)
+            .map(|pending| pending.obligation.clone())
+            .ok_or(ManagedInstallationError::UnknownObligation)?;
+        let receipt = ReplacementReceipt::new(delivery_id, obligation)
+            .map_err(|_| ManagedInstallationError::DeliveryIdentity)?;
+        if let Some(existing) = &self.replacement_receipt {
+            if existing == &receipt {
+                return Ok(existing.clone());
+            }
+            if existing.settlement() == ReplacementSettlementState::Pending {
+                return Err(ManagedInstallationError::SettlementPending);
+            }
+        }
+        self.replacement_receipt = Some(receipt.clone());
+        Ok(receipt)
+    }
+
+    /// Confirm that exact cleanup and audit evidence permits publication settlement.
+    pub fn replacement_settlement_ready(
+        &self,
+        delivery_id: &str,
+        replacement_request: &InstallRequest,
+    ) -> Result<(), ManagedInstallationError> {
+        let receipt = self
+            .replacement_receipt
+            .as_ref()
+            .ok_or(ManagedInstallationError::ReceiptObligationMissing)?;
+        if receipt.delivery_id() != delivery_id
+            || receipt.obligation().activation().request() != replacement_request
+        {
+            return Err(ManagedInstallationError::DeliveryIdentity);
+        }
+        if receipt.settlement() == ReplacementSettlementState::Settled {
+            return Ok(());
+        }
+        let pending = self
+            .pending
+            .iter()
+            .find(|pending| pending.obligation() == receipt.obligation())
+            .ok_or(ManagedInstallationError::ReceiptObligationMissing)?;
+        let acknowledged = matches!(
+            pending.operation(),
+            Some(ReclamationOperation::EffectRecorded(event))
+                if event.audit() == ReclamationAuditState::Acknowledged
+        ) || pending.last_acknowledged_operation_id().is_some();
+        if !acknowledged {
+            return Err(ManagedInstallationError::SettlementBeforeCleanup);
+        }
+        Ok(())
+    }
+
+    /// Acknowledge exact settlement and retire completed cleanup state.
+    pub fn acknowledge_replacement_settlement(
+        &mut self,
+        delivery_id: &str,
+        replacement_request: &InstallRequest,
+    ) -> Result<ReplacementReceipt, ManagedInstallationError> {
+        self.replacement_settlement_ready(delivery_id, replacement_request)?;
+        let receipt = self
+            .replacement_receipt
+            .as_ref()
+            .ok_or(ManagedInstallationError::ReceiptObligationMissing)?
+            .clone();
+        if receipt.delivery_id() != delivery_id
+            || receipt.obligation().activation().request() != replacement_request
+        {
+            return Err(ManagedInstallationError::DeliveryIdentity);
+        }
+        if receipt.settlement() == ReplacementSettlementState::Settled {
+            return Ok(receipt);
+        }
+        let index = self
+            .pending
+            .iter()
+            .position(|pending| pending.obligation() == receipt.obligation())
+            .ok_or(ManagedInstallationError::ReceiptObligationMissing)?;
+        let complete = matches!(
+            self.pending[index].operation(),
+            Some(ReclamationOperation::EffectRecorded(event))
+                if event.audit() == ReclamationAuditState::Acknowledged
+                    && event.outcome().completes_obligation()
+        );
+        if complete {
+            self.pending.remove(index);
+        }
+        let settled = receipt.settled();
+        self.replacement_receipt = Some(settled.clone());
+        Ok(settled)
+    }
+
     /// Admit a fresh effect, or return the work already owned by an exact replay.
     pub fn admit_reclamation(
         &mut self,
@@ -234,7 +363,7 @@ impl ManagedInstallation {
         let index = self
             .pending
             .iter()
-            .position(|pending| pending.obligation.origin().request() == replacement_request)
+            .position(|pending| pending.obligation.activation().request() == replacement_request)
             .ok_or(ManagedInstallationError::UnknownObligation)?;
         if let Some(operation) = &self.pending[index].operation {
             if operation.admission().operation_id() == &operation_id
@@ -283,7 +412,7 @@ impl ManagedInstallation {
         let pending = self
             .pending
             .iter()
-            .find(|pending| pending.obligation.origin().request() == replacement_request)
+            .find(|pending| pending.obligation.activation().request() == replacement_request)
             .ok_or(ManagedInstallationError::UnknownObligation)?;
         Ok(match &pending.operation {
             Some(operation) => work_for(operation),
@@ -370,6 +499,37 @@ impl ManagedInstallation {
         Ok(event)
     }
 
+    /// Restore an exact event found in the immutable audit before observing an
+    /// interrupted physical effect. Audit evidence is accepted only for the
+    /// same admission retained by this aggregate.
+    pub fn recover_audited_event(
+        &mut self,
+        operation_id: &ReclamationOperationId,
+        event: ReclamationEvent,
+    ) -> Result<ReclamationEvent, ManagedInstallationError> {
+        let index = self
+            .pending
+            .iter()
+            .position(|pending| {
+                matches!(
+                    &pending.operation,
+                    Some(ReclamationOperation::ObservationPending(admission))
+                        if admission.operation_id() == operation_id
+                )
+            })
+            .ok_or(ManagedInstallationError::UnknownOperation)?;
+        let Some(ReclamationOperation::ObservationPending(admission)) =
+            self.pending[index].operation.as_ref()
+        else {
+            unreachable!("the search above selected an interrupted effect");
+        };
+        if event.admission() != admission || event.audit() != ReclamationAuditState::Pending {
+            return Err(ManagedInstallationError::ObligationMismatch);
+        }
+        self.pending[index].operation = Some(ReclamationOperation::EffectRecorded(event.clone()));
+        Ok(event)
+    }
+
     /// Acknowledge one event and retire or reopen its bounded obligation state.
     pub fn acknowledge_audit(
         &mut self,
@@ -392,14 +552,16 @@ impl ManagedInstallation {
             unreachable!("the search above selected a recorded effect");
         };
         let acknowledged = event.acknowledged();
-        let retire = acknowledged.outcome().completes_obligation()
-            || self.pending[index]
-                .obligation
-                .superseded()
-                .physical_identity()
-                == self.current.physical_identity();
+        let retire = self.pending[index]
+            .obligation
+            .superseded()
+            .physical_identity()
+            == self.current.physical_identity();
         if retire {
             self.pending.remove(index);
+        } else if acknowledged.outcome().completes_obligation() {
+            self.pending[index].operation =
+                Some(ReclamationOperation::EffectRecorded(acknowledged.clone()));
         } else {
             self.pending[index].last_acknowledged_operation_id = Some(operation_id.clone());
         }
@@ -452,7 +614,11 @@ fn work_for(operation: &ReclamationOperation) -> ReclamationWork {
             ReclamationWork::Observe(Box::new(admission.clone()))
         }
         ReclamationOperation::EffectRecorded(event) => {
-            ReclamationWork::Audit(Box::new(event.clone()))
+            if event.audit() == ReclamationAuditState::Acknowledged {
+                ReclamationWork::SettlementPending(Box::new(event.clone()))
+            } else {
+                ReclamationWork::Audit(Box::new(event.clone()))
+            }
         }
     }
 }
@@ -474,6 +640,7 @@ pub enum ReclamationWork {
     EffectInProgress(Box<ReclamationAdmission>),
     Observe(Box<ReclamationAdmission>),
     Audit(Box<ReclamationEvent>),
+    SettlementPending(Box<ReclamationEvent>),
 }
 
 /// Recovery observation of an effect admitted before a restart.
@@ -517,6 +684,11 @@ pub enum ManagedInstallationError {
     AcknowledgedOperationRetained,
     AdmissionOwnerMismatch,
     AdmissionCurrentMismatch,
+    SettlementPending,
+    DeliveryIdentity,
+    SettlementBeforeCleanup,
+    ReceiptCurrentMismatch,
+    ReceiptObligationMissing,
 }
 
 impl fmt::Display for ManagedInstallationError {
@@ -539,6 +711,17 @@ impl fmt::Display for ManagedInstallationError {
             }
             Self::AdmissionCurrentMismatch => {
                 "pending reclamation admission does not match the current artifact"
+            }
+            Self::SettlementPending => "the prior replacement settlement is still pending",
+            Self::DeliveryIdentity => "replacement settlement delivery identity disagrees",
+            Self::SettlementBeforeCleanup => {
+                "replacement cannot settle before cleanup and audit acknowledgement"
+            }
+            Self::ReceiptCurrentMismatch => {
+                "replacement receipt activation does not match the current artifact"
+            }
+            Self::ReceiptObligationMissing => {
+                "pending replacement receipt has no matching cleanup obligation"
             }
         })
     }

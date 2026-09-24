@@ -2,6 +2,76 @@ use std::fmt;
 
 use super::{AgentName, InstallFailureEvidence, InstallRequest, RuntimeArtifact};
 
+/// Whether the exact replacement publication has been durably settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplacementSettlementState {
+    /// Cleanup ownership exists, but settlement evidence is not acknowledged.
+    Pending,
+    /// The exact delivery settlement has been acknowledged by the aggregate.
+    Settled,
+}
+
+/// Immutable correlation between a replacement delivery and its cleanup obligation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplacementReceipt {
+    delivery_id: String,
+    obligation: ReclamationObligation,
+    settlement: ReplacementSettlementState,
+}
+
+impl ReplacementReceipt {
+    /// Create a pending receipt for the exact delivery identity and obligation.
+    pub fn new(
+        delivery_id: impl Into<String>,
+        obligation: ReclamationObligation,
+    ) -> Result<Self, ReclamationError> {
+        Self::restore(delivery_id, obligation, ReplacementSettlementState::Pending)
+    }
+
+    /// Restore a receipt after validating its bounded delivery identity.
+    pub fn restore(
+        delivery_id: impl Into<String>,
+        obligation: ReclamationObligation,
+        settlement: ReplacementSettlementState,
+    ) -> Result<Self, ReclamationError> {
+        let delivery_id = delivery_id.into();
+        if delivery_id.is_empty()
+            || delivery_id.len() > 255
+            || delivery_id.chars().any(char::is_control)
+        {
+            return Err(ReclamationError::DeliveryId);
+        }
+        Ok(Self {
+            delivery_id,
+            obligation,
+            settlement,
+        })
+    }
+
+    /// Return the durable delivery record identity.
+    pub fn delivery_id(&self) -> &str {
+        &self.delivery_id
+    }
+
+    /// Return the exact cleanup obligation bound to the replacement.
+    pub fn obligation(&self) -> &ReclamationObligation {
+        &self.obligation
+    }
+
+    /// Return whether publication settlement has been acknowledged.
+    pub fn settlement(&self) -> ReplacementSettlementState {
+        self.settlement
+    }
+
+    pub(crate) fn settled(&self) -> Self {
+        Self {
+            delivery_id: self.delivery_id.clone(),
+            obligation: self.obligation.clone(),
+            settlement: ReplacementSettlementState::Settled,
+        }
+    }
+}
+
 /// A durable obligation to reclaim one superseded physical runtime artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReclamationObligation {
@@ -36,6 +106,9 @@ impl ReclamationObligation {
             && origin != activation
         {
             return Err(ReclamationError::ConflictingActivation);
+        }
+        if origin.request().account_id() != activation.request().account_id() {
+            return Err(ReclamationError::OwnerMismatch);
         }
         Ok(Self {
             superseded,
@@ -183,6 +256,14 @@ impl ReclamationAdmission {
         if obligation.superseded().physical_identity() == current.physical_identity() {
             return Err(ReclamationError::CurrentArtifact);
         }
+        let owner = obligation.origin().request().account_id();
+        if trigger
+            .triggering_install()
+            .or_else(|| trigger.caller())
+            .is_some_and(|request| request.account_id() != owner)
+        {
+            return Err(ReclamationError::OwnerMismatch);
+        }
         Ok(Self {
             agent,
             operation_id,
@@ -283,6 +364,8 @@ impl ReclamationEvent {
 pub enum ReclamationError {
     CurrentArtifact,
     ConflictingActivation,
+    OwnerMismatch,
+    DeliveryId,
     OperationId,
 }
 
@@ -293,6 +376,10 @@ impl fmt::Display for ReclamationError {
             Self::ConflictingActivation => {
                 "one replacement request cannot describe conflicting obligation activations"
             }
+            Self::OwnerMismatch => {
+                "reclamation origin, activation, and trigger must have one owner account"
+            }
+            Self::DeliveryId => "replacement delivery identity must be non-empty plain text",
             Self::OperationId => "reclamation operation identity must be non-empty plain text",
         })
     }

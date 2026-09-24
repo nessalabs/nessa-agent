@@ -7,7 +7,7 @@
 //! managed_runtimes -> RuntimeStore, holding installed runtimes under one directory
 //! audit            -> InstallAudit, committing a locked, sequenced durable journal
 //! delivery         -> InstallationDelivery, retaining publication recovery facts
-//! runtime_reclamation -> reclamation state and immutable removal audit records
+//! runtime_reclamation -> reclamation identities, state, and immutable removal audit records
 //! ```
 //! Arrows mean "implements" or "provides". Nothing here decides whether an
 //! archive is trustworthy; that is the release's own rule, applied by the
@@ -23,4 +23,4 @@ pub use delivery::DurableInstallationDelivery;
 pub use https_archives::{HttpsArchives, NoHttpsClient};
 pub use managed_runtimes::ManagedRuntimes;
 pub use pinned_releases::{host_platform, releases_for, PinFileError};
-pub use runtime_reclamation::DurableReclamationAudit;
+pub use runtime_reclamation::{DurableReclamationAudit, UuidReclamationOperationIds};

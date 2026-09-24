@@ -5,7 +5,7 @@
 //! publishes the executable the store verified for that exact pin.
 //!
 //! ```text
-//! pinned releases + host -> preferred release -> RuntimeStore::installed
+//! pinned releases + host -> preferred release -> RuntimeStore::managed_launch
 //!                                                    |
 //!                         installed / missing / unreadable
 //! ```
@@ -14,11 +14,17 @@
 //! remain separate answers so callers cannot present an I/O failure as proof
 //! that no runtime was installed.
 
-use crate::agent_install::application::{RuntimeStore, StoreFailure};
+use std::{path::Path, sync::Arc};
+
+use crate::agent_install::application::{
+    ManagedExecutableUseGuard, ManagedLaunchSnapshot, RuntimeStore, StoreFailure,
+};
 use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform};
 use crate::agent_install::infrastructure::{releases_for, PinFileError};
 use crate::agents::domain::AgentId;
-use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutableUse, ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot,
+};
 
 const OPENCODE_ACP_SUBCOMMAND: &str = "acp";
 
@@ -53,6 +59,7 @@ impl Eq for InstalledLaunch {}
 pub(super) enum LaunchError {
     Pins(PinFileError),
     Name(String),
+    ManagedUse(String),
 }
 
 impl std::fmt::Display for LaunchError {
@@ -60,6 +67,7 @@ impl std::fmt::Display for LaunchError {
         match self {
             Self::Pins(error) => write!(out, "pinned releases could not be read: {error}"),
             Self::Name(name) => write!(out, "{name} is not a valid installed-agent name"),
+            Self::ManagedUse(error) => write!(out, "managed launch authority is invalid: {error}"),
         }
     }
 }
@@ -77,10 +85,48 @@ pub(super) fn installed_launch(
         return Ok(InstalledLaunch::UnsupportedHost);
     };
     match store.managed_launch(&name, &release) {
-        Ok(Some(executable)) => Ok(InstalledLaunch::Ready(executable)),
+        Ok(Some(executable)) => managed_launch(executable)
+            .map(InstalledLaunch::Ready)
+            .map_err(|error| LaunchError::ManagedUse(error.to_string())),
         Ok(None) => Ok(InstalledLaunch::Missing),
         Err(failure) => Ok(InstalledLaunch::Unknown(failure)),
     }
+}
+
+struct SdkExecutableUseBridge {
+    snapshot: ManagedLaunchSnapshot,
+}
+
+impl ExecutableUse for SdkExecutableUseBridge {
+    fn executable(&self) -> &Path {
+        self.snapshot.executable()
+    }
+
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError> {
+        self.snapshot
+            .admit()
+            .map(|guard| {
+                Box::new(SdkExecutableUseGuardBridge(guard)) as Box<dyn ExecutableUseGuard>
+            })
+            .map_err(|error| ExecutableUseError::new(error.to_string()))
+    }
+}
+
+struct SdkExecutableUseGuardBridge(Box<dyn ManagedExecutableUseGuard>);
+
+impl ExecutableUseGuard for SdkExecutableUseGuardBridge {
+    fn release(&mut self) -> Result<(), ExecutableUseError> {
+        self.0
+            .release()
+            .map_err(|error| ExecutableUseError::new(error.to_string()))
+    }
+}
+
+fn managed_launch(
+    snapshot: ManagedLaunchSnapshot,
+) -> Result<ExecutableUseSnapshot, ExecutableUseError> {
+    let executable = snapshot.executable().to_owned();
+    ExecutableUseSnapshot::new(executable, Arc::new(SdkExecutableUseBridge { snapshot }))
 }
 
 /// The arguments for an installed agent's ACP entry point.

@@ -5,7 +5,8 @@ use crate::agent_install::domain::{
     InstallRequest, ManagedInstallation, PendingReclamation, ReclamationActivation,
     ReclamationAdmission, ReclamationAuditState, ReclamationEvent, ReclamationObligation,
     ReclamationOperation, ReclamationOperationId, ReclamationPhysicalOutcome, ReclamationTrigger,
-    ReleaseContents, ReleaseFile, ReleaseVersion, RuntimeArtifact,
+    ReleaseContents, ReleaseFile, ReleaseVersion, ReplacementReceipt, ReplacementSettlementState,
+    RuntimeArtifact,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -14,6 +15,15 @@ pub(in crate::agent_install::infrastructure) struct StoredManagedInstallation {
     agent: String,
     current: StoredArtifact,
     pending: Vec<StoredPending>,
+    replacement_receipt: Option<StoredReplacementReceipt>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredReplacementReceipt {
+    delivery_id: String,
+    obligation: StoredObligation,
+    settled: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -133,6 +143,9 @@ impl StoredManagedInstallation {
             agent: value.agent().as_str().to_owned(),
             current: StoredArtifact::from(value.current()),
             pending: value.pending().iter().map(StoredPending::from).collect(),
+            replacement_receipt: value
+                .replacement_receipt()
+                .map(StoredReplacementReceipt::from),
         }
     }
 
@@ -146,6 +159,34 @@ impl StoredManagedInstallation {
                 .into_iter()
                 .map(StoredPending::restore)
                 .collect::<Result<Vec<_>, _>>()?,
+            self.replacement_receipt
+                .map(StoredReplacementReceipt::restore)
+                .transpose()?,
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+
+impl From<&ReplacementReceipt> for StoredReplacementReceipt {
+    fn from(value: &ReplacementReceipt) -> Self {
+        Self {
+            delivery_id: value.delivery_id().to_owned(),
+            obligation: StoredObligation::from(value.obligation()),
+            settled: value.settlement() == ReplacementSettlementState::Settled,
+        }
+    }
+}
+
+impl StoredReplacementReceipt {
+    fn restore(self) -> Result<ReplacementReceipt, String> {
+        ReplacementReceipt::restore(
+            self.delivery_id,
+            self.obligation.restore()?,
+            if self.settled {
+                ReplacementSettlementState::Settled
+            } else {
+                ReplacementSettlementState::Pending
+            },
         )
         .map_err(|error| error.to_string())
     }

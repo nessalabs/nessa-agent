@@ -436,6 +436,7 @@ fn publication_uncertainty_says_that_later_installs_are_blocked() {
     let release = test_release("1.18.31", PINNED_DIGEST, &platform());
     let delivery_failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),

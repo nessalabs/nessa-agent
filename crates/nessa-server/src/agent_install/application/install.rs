@@ -1,5 +1,4 @@
-use std::fmt;
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
 use super::ports::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, InstallDeliveryFailure,
@@ -9,9 +8,11 @@ use super::ports::{
     StagedArchive, StoreFailure,
 };
 use super::reclamation::{
-    recover_reclamation, retain_replacement_and_reclaim, retain_replacement_and_reclaim_with_lease,
-    ReclamationAudit, ReclamationPersistenceFailure, ReclamationPersistenceStage,
-    ReclamationWarning,
+    acknowledge_replacement_settlement, acknowledge_replacement_settlement_on_publication,
+    recover_reclamation, require_replacement_cleanup_acknowledgement,
+    require_replacement_cleanup_acknowledgement_on_publication, retain_replacement_and_reclaim,
+    retain_replacement_and_reclaim_with_lease, ReclamationAudit, ReclamationOperationIds,
+    ReclamationPersistenceFailure, ReclamationPersistenceStage, ReclamationWarning,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError,
@@ -88,6 +89,8 @@ pub enum InstallFailure {
         terminal: Box<InstallTransition>,
         failure: ReclamationPersistenceFailure,
     },
+    /// Earlier replacement cleanup or settlement evidence could not be reconciled.
+    ReclamationRecovery(Vec<ReclamationWarning>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +228,15 @@ impl fmt::Display for InstallFailure {
                 "runtime {} replaced its predecessor, but the cleanup obligation was not retained: {failure}",
                 terminal.target().version()
             ),
+            Self::ReclamationRecovery(warnings) => {
+                f.write_str(
+                    "a replacement cannot be reconciled with its cleanup and publication evidence: ",
+                )?;
+                match warnings.first() {
+                    Some(warning) => write!(f, "{warning:?}"),
+                    None => f.write_str("unknown reclamation failure"),
+                }
+            }
         }
     }
 }
@@ -261,6 +273,7 @@ pub struct InstallAgentRuntime<'a> {
     pub audit: &'a dyn InstallAudit,
     pub delivery: &'a dyn InstallationDelivery,
     pub reclamation_audit: &'a dyn ReclamationAudit,
+    pub reclamation_operation_ids: &'a dyn ReclamationOperationIds,
 }
 
 impl InstallAgentRuntime<'_> {
@@ -290,8 +303,17 @@ impl InstallAgentRuntime<'_> {
             .delivery
             .session(request.account_id())
             .map_err(delivery_failure)?;
-        let mut reclamation_warnings = match self.store.reclamation_lease(agent) {
-            Ok(mut lease) => recover_reclamation(lease.as_mut(), self.reclamation_audit, request),
+        let mut reclamation_warnings = self.recover(delivery.as_mut(), request.account_id())?;
+        let recovered_reclamation = match self.store.reclamation_lease(agent) {
+            Ok(mut lease) => recover_reclamation(
+                lease.as_mut(),
+                self.reclamation_audit,
+                self.reclamation_operation_ids,
+                delivery.as_mut(),
+                agent,
+                request,
+            )
+            .map_err(InstallFailure::ReclamationRecovery)?,
             Err(error) => vec![ReclamationWarning::Persistence(
                 ReclamationPersistenceFailure::new(
                     ReclamationPersistenceStage::Read,
@@ -299,7 +321,7 @@ impl InstallAgentRuntime<'_> {
                 ),
             )],
         };
-        reclamation_warnings.extend(self.recover(delivery.as_mut(), request.account_id())?);
+        reclamation_warnings.extend(recovered_reclamation);
         let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
         if self.audit(started)? == AuditAcknowledgement::Replayed {
             return Err(InstallFailure::AttemptReused(request.clone()));
@@ -565,6 +587,7 @@ impl InstallAgentRuntime<'_> {
             ));
         }
         let mut reclamation_warnings = Vec::new();
+        let mut reclamation_lease = None;
         if let Some(terminal) = outcome
             .terminal_transition()
             .filter(|event| event.previous().is_some())
@@ -582,12 +605,29 @@ impl InstallAgentRuntime<'_> {
             reclamation_warnings = retain_replacement_and_reclaim_with_lease(
                 lease.as_mut(),
                 self.reclamation_audit,
+                self.reclamation_operation_ids,
                 terminal,
+                &prepared,
             )
             .map_err(|failure| InstallFailure::Reclamation {
                 terminal: Box::new(terminal.clone()),
                 failure,
             })?;
+            reclamation_lease = Some(lease);
+        }
+        if reclamation_blocks_settlement(&reclamation_warnings) {
+            return Err(InstallFailure::ReclamationRecovery(reclamation_warnings));
+        }
+        if let (Some(lease), Some(terminal)) = (
+            reclamation_lease.as_deref_mut(),
+            outcome.terminal_transition(),
+        ) {
+            require_replacement_cleanup_acknowledgement(lease, &prepared, terminal).map_err(
+                |failure| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure,
+                },
+            )?;
         }
         let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
             .map_err(|error| delivery_domain_failure(error.to_string()))?;
@@ -604,6 +644,17 @@ impl InstallAgentRuntime<'_> {
                 Some(error),
                 None,
             ));
+        }
+        if let (Some(mut lease), Some(terminal)) = (
+            reclamation_lease,
+            settlement.outcome().terminal_transition(),
+        ) {
+            acknowledge_replacement_settlement(lease.as_mut(), &prepared, terminal).map_err(
+                |failure| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure,
+                },
+            )?;
         }
         Ok(reclamation_warnings)
     }
@@ -673,15 +724,37 @@ impl InstallAgentRuntime<'_> {
                         "replacement publication did not retain reclamation authority".into(),
                     ),
                 })?;
-            retain_replacement_and_reclaim(publication, self.reclamation_audit, &terminal).map_err(
-                |failure| InstallFailure::Reclamation {
-                    terminal: Box::new(terminal.clone()),
-                    failure,
-                },
-            )?
+            retain_replacement_and_reclaim(
+                publication,
+                self.reclamation_audit,
+                self.reclamation_operation_ids,
+                &terminal,
+                prepared,
+            )
+            .map_err(|failure| InstallFailure::Reclamation {
+                terminal: Box::new(terminal.clone()),
+                failure,
+            })?
         } else {
             Vec::new()
         };
+        if reclamation_blocks_settlement(&reclamation_warnings) {
+            return Err(InstallFailure::ReclamationRecovery(reclamation_warnings));
+        }
+        if terminal.previous().is_some() {
+            let publication = publication
+                .as_mut()
+                .expect("replacement cleanup retained its publication authority");
+            require_replacement_cleanup_acknowledgement_on_publication(
+                publication,
+                prepared,
+                &terminal,
+            )
+            .map_err(|failure| InstallFailure::Reclamation {
+                terminal: Box::new(terminal.clone()),
+                failure,
+            })?;
+        }
         let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
             .map_err(|error| delivery_domain_failure(error.to_string()))?;
         if let Err(error) = delivery.settle(prepared, &settlement) {
@@ -692,6 +765,16 @@ impl InstallAgentRuntime<'_> {
                 Some(error),
                 None,
             ));
+        }
+        if terminal.previous().is_some() {
+            let publication = publication
+                .as_mut()
+                .expect("replacement cleanup retained its publication authority");
+            acknowledge_replacement_settlement_on_publication(publication, prepared, &terminal)
+                .map_err(|failure| InstallFailure::Reclamation {
+                    terminal: Box::new(terminal.clone()),
+                    failure,
+                })?;
         }
         Ok((operation, reclamation_warnings))
     }
@@ -742,6 +825,12 @@ impl fmt::Display for AuditRetryError {
 }
 
 impl std::error::Error for AuditRetryError {}
+
+fn reclamation_blocks_settlement(warnings: &[ReclamationWarning]) -> bool {
+    warnings
+        .iter()
+        .any(|warning| !matches!(warning, ReclamationWarning::Outcome(_)))
+}
 
 fn rollback_state(rollback: &RollbackChange) -> RollbackState {
     match rollback {

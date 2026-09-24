@@ -1,17 +1,18 @@
 use super::*;
 use crate::agent_install::application::{
     AuditAcknowledgement, AuditFailureStage, InstallDeliveryFailure, InstallDeliveryFailureStage,
-    InstallationDelivery, InstallationDeliverySession, PendingInstallationDelivery,
-    PreparedInstallation, Publication, PublicationCleanupFailure, PublicationLease, PublishFailure,
-    ReclamationAudit, ReclamationAuditFailure, ReclamationPersistenceFailure,
-    ReclamationPersistenceStage, RollbackChange, RuntimeReclamationEffect,
+    InstallationDelivery, InstallationDeliverySession, ManagedLaunchSnapshot,
+    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationCleanupFailure,
+    PublicationLease, PublishFailure, ReclamationAudit, ReclamationAuditFailure,
+    ReclamationPersistenceFailure, ReclamationPersistenceStage, RollbackChange,
+    RuntimeReclamationEffect,
 };
 use crate::agent_install::domain::{
     ArchiveDigest, InstallEventSlot, InstallFailureEvidence, InstallFailureKind, InstallRequest,
     InstallTransitionError, InstallTransitionFacts, InstallTransitionKind, Libc,
     ManagedInstallation, PublicationOutcome, PublicationPreparation, PublicationSettlement,
-    ReclamationEvent, RecoveryState, ReleasePlatform, ReleaseRequirements, RollbackState,
-    RuntimeArtifact,
+    ReclamationEvent, ReclamationOperationId, RecoveryState, ReleasePlatform, ReleaseRequirements,
+    RollbackState, RuntimeArtifact,
 };
 use crate::agent_install::infrastructure::{DurableInstallAudit, DurableInstallationDelivery};
 use crate::agent_install_test_support::{
@@ -19,7 +20,6 @@ use crate::agent_install_test_support::{
     request, temporary_root, FakeSource, FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
-use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::{
     path::{Path, PathBuf},
     sync::{mpsc, Arc, Mutex},
@@ -163,6 +163,7 @@ struct ExpectedReplacement {
 struct OrderingLease {
     sequence: Arc<Mutex<Vec<&'static str>>>,
     expected: ExpectedReplacement,
+    retained: Option<ManagedInstallation>,
 }
 
 impl PublicationLease for OrderingLease {
@@ -170,7 +171,15 @@ impl PublicationLease for OrderingLease {
         &mut self,
     ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
         self.sequence.lock().unwrap().push("cleanup-load");
-        Ok(None)
+        Ok(self.retained.as_ref().map(|installation| {
+            ManagedInstallation::restore(
+                installation.agent().clone(),
+                installation.current().clone(),
+                installation.pending().to_vec(),
+                installation.replacement_receipt().cloned(),
+            )
+            .unwrap()
+        }))
     }
 
     fn retain_reclamation(
@@ -203,6 +212,15 @@ impl PublicationLease for OrderingLease {
                 &self.expected.current
             );
         }
+        self.retained = Some(
+            ManagedInstallation::restore(
+                installation.agent().clone(),
+                installation.current().clone(),
+                installation.pending().to_vec(),
+                installation.replacement_receipt().cloned(),
+            )
+            .unwrap(),
+        );
         Ok(())
     }
 
@@ -240,6 +258,7 @@ impl OrderingStore {
         Box::new(OrderingLease {
             sequence: self.sequence.clone(),
             expected: self.expected.clone(),
+            retained: None,
         })
     }
 }
@@ -255,6 +274,7 @@ enum DeliveryCall {
 #[derive(Default)]
 struct ScriptedDeliveryState {
     pending: Option<PendingInstallationDelivery>,
+    settled: Vec<(PreparedInstallation, PublicationSettlement)>,
     calls: Vec<DeliveryCall>,
     selected_accounts: Vec<String>,
     prepared_override: Option<PublicationPreparation>,
@@ -280,6 +300,7 @@ impl ScriptedDelivery {
         Self {
             state: Mutex::new(ScriptedDeliveryState {
                 pending: None,
+                settled: Vec::new(),
                 calls: Vec::new(),
                 selected_accounts: Vec::new(),
                 prepared_override: None,
@@ -364,6 +385,21 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
         Ok(state.pending.clone())
     }
 
+    fn settled(
+        &mut self,
+        delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure> {
+        Ok(self
+            .delivery
+            .state
+            .lock()
+            .unwrap()
+            .settled
+            .iter()
+            .find(|(prepared, _)| prepared.record_id() == delivery_id)
+            .cloned())
+    }
+
     fn prepare(
         &mut self,
         preparation: PublicationPreparation,
@@ -426,7 +462,7 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
 
     fn settle(
         &mut self,
-        _prepared: &PreparedInstallation,
+        prepared: &PreparedInstallation,
         settlement: &PublicationSettlement,
     ) -> Result<(), InstallDeliveryFailure> {
         let mut state = self.delivery.state.lock().unwrap();
@@ -438,6 +474,7 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
                 "injected settlement failure".into(),
             ));
         }
+        state.settled.push((prepared.clone(), settlement.clone()));
         state.pending = None;
         Ok(())
     }
@@ -745,6 +782,7 @@ fn normal_replacement_acknowledges_the_exact_cleanup_obligation_before_settlemen
         audit: audit(),
         delivery: &delivery,
         reclamation_audit: &reclamation_audit,
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
     }
     .execute(&agent(), &pinned, &host(), &request())
     .unwrap();
@@ -802,6 +840,7 @@ fn recovered_replacement_acknowledges_the_exact_cleanup_obligation_before_settle
         audit: audit(),
         delivery: &delivery,
         reclamation_audit: &reclamation_audit,
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
     }
     .execute(&agent(), &pinned, &host(), &request())
     .unwrap();
@@ -812,6 +851,60 @@ fn recovered_replacement_acknowledges_the_exact_cleanup_obligation_before_settle
     assert_sequence_before(&sequence, "cleanup-outcome", "cleanup-audit");
     assert_sequence_before(&sequence, "cleanup-audit", "cleanup-ack");
     assert_sequence_before(&sequence, "cleanup-ack", "delivery-settle");
+}
+
+#[test]
+fn reclamation_audit_failure_keeps_the_replacement_delivery_unsettled() {
+    let root = tempfile::tempdir().unwrap();
+    let pinned = crate::agent_install_test_support::release("2.0.0", PINNED_DIGEST, &platform());
+    let previous = RuntimeArtifact::for_release(&crate::agent_install_test_support::release(
+        "1.0.0",
+        OTHER_DIGEST,
+        &platform(),
+    ));
+    let sequence = Arc::new(Mutex::new(Vec::new()));
+    let store = OrderingStore {
+        inner: FakeStore::empty(root.path()),
+        sequence: sequence.clone(),
+        expected: ExpectedReplacement {
+            agent: agent(),
+            previous,
+            current: RuntimeArtifact::for_release(&pinned),
+            request: request(),
+        },
+    };
+    let delivery = OrderingDelivery {
+        sequence: sequence.clone(),
+        pending: Mutex::new(None),
+    };
+
+    let failure = InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+        reclamation_audit: &RefusingReclamationAudit,
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
+    }
+    .execute(&agent(), &pinned, &host(), &request())
+    .unwrap_err();
+
+    let InstallFailure::ReclamationRecovery(warnings) = failure else {
+        panic!("the exact cleanup audit failure must block delivery settlement")
+    };
+    assert!(matches!(
+        warnings.as_slice(),
+        [crate::agent_install::application::ReclamationWarning::Audit { failure, .. }]
+            if failure.detail() == "reclamation audit refused"
+    ));
+    let sequence = sequence.lock().unwrap();
+    assert!(sequence.contains(&"cleanup-outcome"));
+    assert!(!sequence.contains(&"cleanup-ack"));
+    assert!(!sequence.contains(&"delivery-settle"));
+    assert!(matches!(
+        delivery.pending.lock().unwrap().as_ref(),
+        Some(PendingInstallationDelivery::Outcome { .. })
+    ));
 }
 
 #[test]
@@ -843,6 +936,8 @@ fn terminal_publication_attempts_outcome_retention_and_audit_independently() {
             let request = request();
             let result = InstallAgentRuntime {
                 reclamation_audit: reclamation_audit(),
+                reclamation_operation_ids:
+                    crate::agent_install_test_support::reclamation_operation_ids(),
                 source: &FakeSource::serving(b"archive bytes"),
                 store: store.as_ref(),
                 audit: &audit,
@@ -937,6 +1032,7 @@ fn combined_terminal_failures_block_a_fresh_request_before_install_effects() {
     let store = FakeStore::empty(root.path()).signalling_lease_drop(lease_dropped);
     let install = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -997,6 +1093,8 @@ fn settlement_failure_recovers_by_audit_without_repeating_publication() {
         let original_request = request();
         let install = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &source,
             store: store.as_ref(),
             audit: &audit,
@@ -1108,6 +1206,8 @@ fn no_effect_outcomes_are_explicit_for_reuse_and_prepublication_failure() {
         let audit = ScriptedAudit::new(false, false, None);
         let result = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &FakeSource::serving(b"archive bytes"),
             store: store.as_ref(),
             audit: &audit,
@@ -1145,6 +1245,7 @@ fn preparation_failure_discards_staging_without_publishing() {
     let store = FakeStore::empty(root.path());
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &FakeSource::serving(b"archive bytes"),
         store: &store,
         audit: audit(),
@@ -1197,6 +1298,8 @@ fn returned_preparation_must_match_the_locally_verified_attempt_before_publicati
 
         let failure = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &source,
             store: &store,
             audit: &audit,
@@ -1252,6 +1355,7 @@ fn exact_returned_preparation_allows_publication() {
 
     InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &FakeSource::serving(b"archive bytes"),
         store: &store,
         audit: audit(),
@@ -1332,6 +1436,7 @@ fn assert_recovery_refusal(
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -1371,6 +1476,7 @@ fn preparation_acknowledgement_failure_persists_and_blocks_before_more_effects()
     let pinned = release("1.18.31", PINNED_DIGEST, &platform());
     let install = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1427,6 +1533,7 @@ fn prepared_without_an_exact_outcome_is_not_inferred_as_no_effect() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1459,6 +1566,7 @@ fn contradictory_store_result_leaves_preparation_unresolved() {
     let store = FakeStore::empty(root.path()).replacing(target);
     let install = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -1506,7 +1614,7 @@ impl RuntimeStore for OneShotFailureStore {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
         self.inner.managed_launch(agent, release)
     }
 
@@ -1552,7 +1660,7 @@ impl RuntimeStore for OrderingStore {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
         self.inner.managed_launch(agent, release)
     }
 
@@ -1592,10 +1700,35 @@ impl RuntimeStore for OrderingStore {
 
 struct OrderingReclamationAudit(Arc<Mutex<Vec<&'static str>>>);
 
+struct RefusingReclamationAudit;
+
+impl ReclamationAudit for RefusingReclamationAudit {
+    fn record(&self, _event: &ReclamationEvent) -> Result<(), ReclamationAuditFailure> {
+        Err(ReclamationAuditFailure::new(
+            "reclamation audit refused".into(),
+        ))
+    }
+
+    fn event_for(
+        &self,
+        _operation_id: &ReclamationOperationId,
+    ) -> Result<Option<ReclamationEvent>, ReclamationAuditFailure> {
+        Ok(None)
+    }
+}
+
 impl ReclamationAudit for OrderingReclamationAudit {
     fn record(&self, _event: &ReclamationEvent) -> Result<(), ReclamationAuditFailure> {
         self.0.lock().unwrap().push("cleanup-audit");
         Ok(())
+    }
+
+    fn event_for(
+        &self,
+        _operation_id: &ReclamationOperationId,
+    ) -> Result<Option<ReclamationEvent>, ReclamationAuditFailure> {
+        self.0.lock().unwrap().push("cleanup-audit-lookup");
+        Ok(None)
     }
 }
 
@@ -1619,6 +1752,14 @@ impl InstallationDeliverySession for OrderingDeliverySession<'_> {
     fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
         self.0.sequence.lock().unwrap().push("delivery-pending");
         Ok(self.0.pending.lock().unwrap().clone())
+    }
+
+    fn settled(
+        &mut self,
+        _delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure> {
+        self.0.sequence.lock().unwrap().push("delivery-settled");
+        Ok(None)
     }
 
     fn prepare(
@@ -1794,6 +1935,7 @@ fn a_matching_archive_is_published() {
 
     let installed = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1821,6 +1963,7 @@ fn a_mismatched_archive_is_never_unpacked() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1859,6 +2002,7 @@ fn a_rejected_archive_is_discarded() {
 
     let _ = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1884,6 +2028,7 @@ fn a_successful_install_discards_its_archive_too() {
 
     InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1910,6 +2055,7 @@ fn installing_what_is_already_installed_downloads_nothing() {
 
     let installed = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1944,6 +2090,7 @@ fn a_release_the_store_does_not_hold_is_downloaded() {
 
     let installed = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -1975,6 +2122,7 @@ fn what_is_measured_is_what_is_unpacked() {
 
     InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2005,6 +2153,7 @@ fn a_store_that_cannot_stage_a_download_fails_before_fetching() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2039,6 +2188,7 @@ fn a_release_for_another_platform_is_refused_before_anything_is_fetched() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2066,6 +2216,7 @@ fn a_download_failure_is_reported_as_one() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2100,6 +2251,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2130,6 +2282,7 @@ fn a_store_that_cannot_say_what_is_installed_does_not_download() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2158,6 +2311,7 @@ fn the_pinned_url_is_what_gets_fetched() {
 
     InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -2232,6 +2386,8 @@ fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
 
         let failure = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &source,
             store: &store,
             audit: audit(),
@@ -2261,6 +2417,7 @@ fn a_new_install_records_one_correlated_legal_sequence() {
     let audit = RecordingAudit::default();
     InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2300,6 +2457,7 @@ fn replacement_evidence_uses_the_artifact_seen_under_the_publication_lock() {
     let audit = RecordingAudit::default();
     InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2327,6 +2485,7 @@ fn digest_rejection_is_audited_and_the_archive_is_discarded() {
     let audit = RecordingAudit::default();
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2358,6 +2517,7 @@ fn store_rollback_is_audited_without_hiding_the_store_failure() {
     let audit = RecordingAudit::default();
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2387,6 +2547,7 @@ fn audit_failure_after_verification_is_visible_and_prevents_publication() {
     let audit = RecordingAudit::failing_on(InstallTransitionKind::Verified, "sink refused");
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2418,6 +2579,7 @@ fn audit_failure_at_started_prevents_install_effects() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2449,6 +2611,7 @@ fn replayed_start_refuses_request_reexecution_before_any_install_effect() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2475,6 +2638,7 @@ fn retained_pending_transition_can_be_redelivered_without_repeating_install_effe
     let audit = FailOnceAudit(Mutex::new(false));
     let install = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2533,6 +2697,8 @@ fn incomplete_publication_moves_full_diagnostics_and_bounds_only_audit_evidence(
 
         let failure = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &FakeSource::serving(b"archive bytes"),
             store: &store,
             audit: &audit,
@@ -2601,6 +2767,8 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
         let audit = RecordingAudit::default();
         let failure = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &FakeSource::serving(b"archive bytes"),
             store: &store,
             audit: &audit,
@@ -2653,6 +2821,8 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
 
         let failure = InstallAgentRuntime {
             reclamation_audit: reclamation_audit(),
+            reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(
+            ),
             source: &FakeSource::serving(b"archive bytes"),
             store: &store,
             audit: &audit,
@@ -2717,6 +2887,7 @@ fn publication_lease_survives_until_evidence_validation_returns() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &FakeSource::serving(b"archive bytes"),
         store: &store,
         audit: audit(),
@@ -2757,6 +2928,7 @@ fn postcommit_terminal_failure_replays_without_changing_later_journal_order() {
     .unwrap();
     let install = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2807,6 +2979,7 @@ fn precommit_terminal_failure_is_recovered_before_a_later_install() {
     .unwrap();
     let install = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2847,6 +3020,7 @@ fn audit_failure_at_replaced_reports_the_new_runtime_and_prior_evidence() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2893,6 +3067,7 @@ fn audit_failure_at_rollback_preserves_the_publication_failure() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -2946,6 +3121,7 @@ fn cleanup_failure_is_visible_without_replacing_the_publication_failure() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -3002,6 +3178,7 @@ fn incomplete_recovery_retains_the_confirmed_prior_artifact() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -3068,6 +3245,7 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
 
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -3122,6 +3300,7 @@ fn audit_failure_after_publication_reports_the_runtime_as_installed() {
     let audit = RecordingAudit::failing_on(InstallTransitionKind::Installed, "sink refused");
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -3165,6 +3344,7 @@ fn audit_failure_preserves_digest_rejection_and_cleanup() {
     let audit = RecordingAudit::failing_on(InstallTransitionKind::DigestRejected, "sink refused");
     let failure = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: &audit,
@@ -3207,6 +3387,8 @@ fn successful_publication_lease_spans_a_failing_audit_and_then_releases() {
         let install = threads.spawn(|| {
             InstallAgentRuntime {
                 reclamation_audit: reclamation_audit(),
+                reclamation_operation_ids:
+                    crate::agent_install_test_support::reclamation_operation_ids(),
                 source: &source,
                 store: &store,
                 audit: &audit,
@@ -3268,6 +3450,8 @@ fn rollback_lease_spans_successful_audit_and_then_releases() {
         let install = threads.spawn(|| {
             InstallAgentRuntime {
                 reclamation_audit: reclamation_audit(),
+                reclamation_operation_ids:
+                    crate::agent_install_test_support::reclamation_operation_ids(),
                 source: &source,
                 store: &store,
                 audit: &audit,
@@ -3322,6 +3506,8 @@ fn uncertain_recovery_lease_spans_failing_audit_and_then_releases() {
         let install = threads.spawn(|| {
             InstallAgentRuntime {
                 reclamation_audit: reclamation_audit(),
+                reclamation_operation_ids:
+                    crate::agent_install_test_support::reclamation_operation_ids(),
                 source: &source,
                 store: &store,
                 audit: &audit,

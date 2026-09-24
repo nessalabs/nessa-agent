@@ -1,7 +1,9 @@
 //! Construct the agent installer and report what it did.
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use nessa_local_storage::create_directory;
 use serde_json::{json, Value};
@@ -15,7 +17,7 @@ use crate::agent_install::domain::{
 };
 use crate::agent_install::infrastructure::{
     host_platform, releases_for, DurableInstallAudit, DurableInstallationDelivery,
-    DurableReclamationAudit, HttpsArchives, ManagedRuntimes,
+    DurableReclamationAudit, HttpsArchives, ManagedRuntimes, UuidReclamationOperationIds,
 };
 use crate::core::RunError;
 use crate::env::Environment;
@@ -78,6 +80,7 @@ fn install(
         audit: &audit,
         delivery: &delivery,
         reclamation_audit: &reclamation_audit,
+        reclamation_operation_ids: &UuidReclamationOperationIds,
     }
     // Flattening the typed failure into prose is this surface's limitation,
     // not the design. `explain` already knows which failures are worth trying
@@ -230,6 +233,9 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::Reclamation { .. } => format!(
             "{failure}; the replacement is installed, but publication remains unsettled until its cleanup obligation is retained"
         ),
+        InstallFailure::ReclamationRecovery(_) => format!(
+            "{failure}; publication and new installs are blocked until the exact replacement cleanup evidence is reconciled"
+        ),
     }
 }
 
@@ -289,10 +295,21 @@ fn reclamation_warning(warning: &ReclamationWarning) -> Value {
             "stage": format!("{:?}", failure.stage()),
             "detail": failure.detail(),
         }),
+        ReclamationWarning::OutcomePersistence { event, failure } => {
+            reclamation_event("outcome_persistence", event, Some(failure.detail()))
+        }
         ReclamationWarning::Outcome(event) => reclamation_event("outcome", event, None),
         ReclamationWarning::Audit { event, failure } => {
             reclamation_event("audit", event, Some(failure.detail()))
         }
+        ReclamationWarning::AuditLookup {
+            operation_id,
+            failure,
+        } => json!({
+            "kind": "audit_lookup",
+            "operationId": operation_id.as_str(),
+            "detail": failure.detail(),
+        }),
     }
 }
 

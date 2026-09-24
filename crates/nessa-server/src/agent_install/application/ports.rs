@@ -1,8 +1,9 @@
-use std::fmt;
-use std::fs::File;
-use std::path::{Path, PathBuf};
-
-use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
+use std::{
+    fmt,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use super::reclamation::{ReclamationPersistenceFailure, ReclamationPersistenceStage};
 use crate::agent_install::domain::{
@@ -407,6 +408,7 @@ impl PublicationLease for File {
             "runtime reclamation requires its managed publication authority".into(),
         ))
     }
+
     fn remove_superseded(
         &mut self,
         _agent: &AgentName,
@@ -744,6 +746,11 @@ pub enum PendingInstallationDelivery {
 pub trait InstallationDeliverySession {
     fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure>;
 
+    fn settled(
+        &mut self,
+        delivery_id: &str,
+    ) -> Result<Option<(PreparedInstallation, PublicationSettlement)>, InstallDeliveryFailure>;
+
     fn prepare(
         &mut self,
         preparation: PublicationPreparation,
@@ -863,6 +870,92 @@ pub trait ArchiveSource: Send + Sync {
     ) -> Result<(), SourceFailure>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedExecutableUseFailure(String);
+
+impl ManagedExecutableUseFailure {
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self(detail.into())
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ManagedExecutableUseFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ManagedExecutableUseFailure {}
+
+pub trait ManagedExecutableUseGuard: Send {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure>;
+}
+
+pub trait ManagedExecutableUse: Send + Sync {
+    fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure>;
+}
+
+#[derive(Clone)]
+pub struct ManagedLaunchSnapshot {
+    executable: PathBuf,
+    authority: Arc<dyn ManagedExecutableUse>,
+}
+
+impl ManagedLaunchSnapshot {
+    pub fn new(executable: PathBuf, authority: Arc<dyn ManagedExecutableUse>) -> Self {
+        Self {
+            executable,
+            authority,
+        }
+    }
+
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+        self.authority.admit()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unmanaged(executable: PathBuf) -> Self {
+        Self::new(executable, Arc::new(TestUnmanagedExecutableUse))
+    }
+}
+
+#[cfg(test)]
+struct TestUnmanagedExecutableUse;
+
+#[cfg(test)]
+impl ManagedExecutableUse for TestUnmanagedExecutableUse {
+    fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+        Ok(Box::new(TestUnmanagedExecutableUseGuard))
+    }
+}
+
+#[cfg(test)]
+struct TestUnmanagedExecutableUseGuard;
+
+#[cfg(test)]
+impl ManagedExecutableUseGuard for TestUnmanagedExecutableUseGuard {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ManagedLaunchSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManagedLaunchSnapshot")
+            .field("executable", &self.executable)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Where installed runtimes live on this machine.
 ///
 /// The filesystem side of installing, behind one port so that the use case
@@ -905,7 +998,7 @@ pub trait RuntimeStore: Send + Sync {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure>;
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure>;
 
     /// Acquire the publication authority used for reclamation recovery when no
     /// installation publication already owns it.

@@ -86,6 +86,165 @@ fn fresh_permit(
 }
 
 #[test]
+fn exact_settlement_receipt_retires_only_its_completed_obligation() {
+    let mut installation = installation('a');
+    let replacement = request("a-to-b");
+    installation
+        .record_replacement(artifact('b'), replacement.clone())
+        .unwrap();
+    let receipt = installation
+        .retain_replacement_receipt("delivery-a-to-b", &replacement)
+        .unwrap();
+    let permit = fresh_permit(
+        &mut installation,
+        &replacement,
+        "cleanup-a",
+        ReclamationTrigger::ReplacementFollowUp,
+    );
+    installation.confirm_removed(permit).unwrap();
+    installation
+        .acknowledge_audit(&operation("cleanup-a"))
+        .unwrap();
+
+    assert!(matches!(
+        installation.work(&replacement),
+        Ok(ReclamationWork::SettlementPending(_))
+    ));
+    assert_eq!(
+        installation.acknowledge_replacement_settlement("other-delivery", &replacement),
+        Err(ManagedInstallationError::DeliveryIdentity)
+    );
+    assert_eq!(installation.replacement_receipt(), Some(&receipt));
+    let settled = installation
+        .acknowledge_replacement_settlement("delivery-a-to-b", &replacement)
+        .unwrap();
+
+    assert_eq!(settled.settlement(), ReplacementSettlementState::Settled);
+    assert!(installation.pending().is_empty());
+    installation
+        .record_replacement(artifact('c'), request("b-to-c"))
+        .expect("an exact settled receipt allows the successor replacement");
+}
+
+#[test]
+fn settled_receipt_keeps_acknowledged_incomplete_cleanup_pending() {
+    let mut installation = installation('a');
+    let replacement = request("a-to-b");
+    installation
+        .record_replacement(artifact('b'), replacement.clone())
+        .unwrap();
+    installation
+        .retain_replacement_receipt("delivery-a-to-b", &replacement)
+        .unwrap();
+    let permit = fresh_permit(
+        &mut installation,
+        &replacement,
+        "cleanup-a",
+        ReclamationTrigger::ReplacementFollowUp,
+    );
+    installation.record_still_present(permit).unwrap();
+    installation
+        .acknowledge_audit(&operation("cleanup-a"))
+        .unwrap();
+
+    installation
+        .acknowledge_replacement_settlement("delivery-a-to-b", &replacement)
+        .expect("durable unsuccessful cleanup evidence does not make publication ambiguous");
+
+    assert_eq!(installation.pending().len(), 1);
+    assert_eq!(
+        installation.replacement_receipt().unwrap().settlement(),
+        ReplacementSettlementState::Settled
+    );
+}
+
+#[test]
+fn reactivation_receipt_uses_the_authoritative_original_obligation_identity() {
+    let mut installation = installation('a');
+    let a_to_b = request("a-to-b");
+    installation
+        .record_replacement(artifact('b'), a_to_b.clone())
+        .unwrap();
+    installation
+        .retain_replacement_receipt("delivery-a-to-b", &a_to_b)
+        .unwrap();
+    let permit = fresh_permit(
+        &mut installation,
+        &a_to_b,
+        "cleanup-a-deferred",
+        ReclamationTrigger::ReplacementFollowUp,
+    );
+    installation.record_still_present(permit).unwrap();
+    installation
+        .acknowledge_audit(&operation("cleanup-a-deferred"))
+        .unwrap();
+    installation
+        .acknowledge_replacement_settlement("delivery-a-to-b", &a_to_b)
+        .unwrap();
+
+    let b_to_a = request("b-to-a");
+    installation
+        .record_replacement(artifact('a'), b_to_a.clone())
+        .unwrap();
+    installation
+        .retain_replacement_receipt("delivery-b-to-a", &b_to_a)
+        .unwrap();
+    let permit = fresh_permit(
+        &mut installation,
+        &b_to_a,
+        "cleanup-b",
+        ReclamationTrigger::ReplacementFollowUp,
+    );
+    installation.confirm_removed(permit).unwrap();
+    installation
+        .acknowledge_audit(&operation("cleanup-b"))
+        .unwrap();
+    installation
+        .acknowledge_replacement_settlement("delivery-b-to-a", &b_to_a)
+        .unwrap();
+
+    let a_to_c = request("a-to-c");
+    installation
+        .record_replacement(artifact('c'), a_to_c.clone())
+        .unwrap();
+    let receipt = installation
+        .retain_replacement_receipt("delivery-a-to-c", &a_to_c)
+        .unwrap();
+
+    assert_eq!(receipt.delivery_id(), "delivery-a-to-c");
+    assert_eq!(
+        receipt.obligation().origin().request().request_id(),
+        "a-to-b"
+    );
+    assert_eq!(
+        receipt.obligation().activation().request().request_id(),
+        "a-to-c"
+    );
+    assert_eq!(receipt.obligation().superseded(), &artifact('a'));
+}
+
+#[test]
+fn restore_rejects_receipt_current_and_pending_obligation_contradictions() {
+    let obligation =
+        ReclamationObligation::after_replacement(artifact('a'), artifact('b'), request("a-to-b"))
+            .unwrap();
+    let receipt = ReplacementReceipt::new("delivery-a-to-b", obligation.clone()).unwrap();
+    assert!(matches!(
+        ManagedInstallation::restore(
+            agent("opencode"),
+            artifact('c'),
+            vec![PendingReclamation::restore(obligation.clone(), None, None).unwrap()],
+            Some(receipt.clone()),
+        ),
+        Err(ManagedInstallationError::ReceiptCurrentMismatch)
+    ));
+    assert!(matches!(
+        ManagedInstallation::restore(agent("opencode"), artifact('b'), Vec::new(), Some(receipt),),
+        Err(ManagedInstallationError::ReceiptObligationMissing)
+    ));
+}
+
+#[test]
 fn deferred_a_to_b_survives_restart_and_later_c_with_original_correlation() {
     let mut original = installation('a');
     let replace_a = request("a-to-b");
@@ -120,6 +279,7 @@ fn deferred_a_to_b_survives_restart_and_later_c_with_original_correlation() {
         original.agent().clone(),
         original.current().clone(),
         original.pending().to_vec(),
+        None,
     )
     .unwrap();
     let restored_before = restored.pending().to_vec();
@@ -350,6 +510,7 @@ fn already_absent_observation_does_not_fabricate_confirmed_removal() {
         installation.agent().clone(),
         installation.current().clone(),
         installation.pending().to_vec(),
+        None,
     )
     .unwrap();
 
@@ -494,6 +655,7 @@ fn restore_rejects_conflicting_targets_correlations_and_progress() {
                 pending_a.clone(),
                 PendingReclamation::restore(conflicting_target, None, None).unwrap(),
             ],
+            None,
         ),
         Err(ManagedInstallationError::DuplicatePhysicalTarget)
     ));
@@ -505,6 +667,7 @@ fn restore_rejects_conflicting_targets_correlations_and_progress() {
                 pending_a.clone(),
                 PendingReclamation::restore(duplicate_correlation, None, None).unwrap(),
             ],
+            None,
         ),
         Err(ManagedInstallationError::DuplicateCorrelation)
     ));
@@ -574,6 +737,7 @@ fn restore_rejects_conflicting_targets_correlations_and_progress() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionCurrentMismatch)
     ));
@@ -592,6 +756,7 @@ fn restore_rejects_conflicting_targets_correlations_and_progress() {
             None,
         )
         .unwrap()],
+        None,
     )
     .unwrap();
     assert!(matches!(
@@ -626,6 +791,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionCurrentMismatch)
     ));
@@ -645,6 +811,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
             None,
         )
         .unwrap()],
+        None,
     )
     .unwrap();
     assert!(matches!(
@@ -670,6 +837,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionCurrentMismatch)
     ));
@@ -690,6 +858,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionCurrentMismatch)
     ));
@@ -711,6 +880,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
             None,
         )
         .unwrap()],
+        None,
     )
     .unwrap();
     assert!(matches!(
@@ -734,6 +904,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionOwnerMismatch)
     ));
@@ -756,6 +927,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionOwnerMismatch)
     ));
@@ -781,6 +953,7 @@ fn restore_enforces_owner_and_current_by_operation_phase() {
                 None,
             )
             .unwrap()],
+            None,
         ),
         Err(ManagedInstallationError::AdmissionOwnerMismatch)
     ));

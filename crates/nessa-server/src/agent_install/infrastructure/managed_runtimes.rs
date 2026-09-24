@@ -1,12 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
 #[cfg(unix)]
 use std::fs::Permissions;
-use std::io::{self, Read, Seek, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
+    fs::File,
+    io::{self, Read, Seek, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use flate2::read::MultiGzDecoder;
 use nessa_local_storage::{
@@ -19,14 +22,11 @@ use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
 use uuid::Uuid;
 
-use nessa_sdk::application::agent_execution::providers::{
-    ExecutableUse, ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot,
-};
-
 use crate::agent_install::application::{
-    Publication, PublicationChange, PublicationCleanupFailure, PublicationLease, PublishFailure,
-    ReclamationPersistenceFailure, ReclamationPersistenceStage, RollbackChange,
-    RuntimeReclamationEffect, RuntimeStore, StagedArchive, StoreFailure,
+    ManagedExecutableUse, ManagedExecutableUseFailure, ManagedExecutableUseGuard,
+    ManagedLaunchSnapshot, Publication, PublicationChange, PublicationCleanupFailure,
+    PublicationLease, PublishFailure, ReclamationPersistenceFailure, ReclamationPersistenceStage,
+    RollbackChange, RuntimeReclamationEffect, RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, FileRole, ManagedInstallation, PinnedRelease,
@@ -58,6 +58,43 @@ const MAXIMUM_UNPACKED_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// How much of an entry is moved out of the archive at a time.
 const UNPACK_CHUNK: usize = 64 * 1024;
+const MAXIMUM_USE_GENERATIONS: usize = 1024;
+const MAXIMUM_USE_RECORD_BYTES: u64 = 16 * 1024;
+const MAXIMUM_RECLAMATION_STATE_BYTES: u64 = 1024 * 1024;
+
+struct BoundedJsonBuffer {
+    bytes: Vec<u8>,
+    maximum: usize,
+    message: &'static str,
+}
+
+impl BoundedJsonBuffer {
+    fn new(maximum: u64, message: &'static str) -> Self {
+        Self {
+            bytes: Vec::with_capacity((maximum as usize).min(64 * 1024)),
+            maximum: maximum as usize,
+            message,
+        }
+    }
+}
+
+impl Write for BoundedJsonBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let length = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .filter(|length| *length <= self.maximum)
+            .ok_or_else(|| io::Error::other(self.message))?;
+        self.bytes.reserve(length - self.bytes.len());
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 /// What is recorded beside an installed runtime.
 ///
@@ -234,58 +271,111 @@ pub struct ManagedRuntimes {
     root: PathBuf,
 }
 
-#[derive(Serialize)]
-struct ActiveExecutableUse<'a> {
-    version: &'a str,
-    digest: &'a str,
-}
-
-struct ManagedExecutableUse {
-    root: PathBuf,
-    marker_directory: PathBuf,
-    executable: PathBuf,
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+struct ExecutableUseInventory {
+    agent: String,
     version: String,
     digest: String,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+struct ExecutableUseGeneration {
+    agent: String,
+    version: String,
+    digest: String,
+    generation: String,
+}
+
+struct DurableManagedExecutableUse {
+    root: PathBuf,
+    marker_directory: PathBuf,
+    agent: AgentName,
+    artifact: RuntimeArtifact,
     _artifact_lock: File,
 }
 
-impl ExecutableUse for ManagedExecutableUse {
-    fn executable(&self) -> &Path {
-        &self.executable
-    }
-
-    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError> {
-        let marker_name = format!("{}.json", Uuid::new_v4());
-        let marker_path = self.marker_directory.join(marker_name);
-        let mut staging = PrivateTempFile::new_beneath(&self.root, &self.marker_directory)
-            .map_err(executable_use_error)?;
-        serde_json::to_writer(
-            staging.as_file_mut(),
-            &ActiveExecutableUse {
-                version: &self.version,
-                digest: &self.digest,
-            },
-        )
-        .map_err(|error| ExecutableUseError::new(error.to_string()))?;
-        staging.as_file().sync_all().map_err(executable_use_error)?;
-        staging
-            .persist_beneath(&marker_path)
-            .map_err(executable_use_error)?;
-        sync_directory_beneath(&self.root, &self.marker_directory).map_err(executable_use_error)?;
-        Ok(Box::new(ManagedExecutableUseGuard {
+impl ManagedExecutableUse for DurableManagedExecutableUse {
+    fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+        let store = ManagedRuntimes::new(self.root.clone());
+        let mutation = store
+            .hold_use_mutation(&self.marker_directory)
+            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+        let inventory = ExecutableUseInventory {
+            agent: self.agent.as_str().to_owned(),
+            version: self.artifact.version().as_str().to_owned(),
+            digest: self.artifact.digest().as_str().to_owned(),
+        };
+        store
+            .validate_use_inventory(&self.marker_directory, &inventory)
+            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+        store
+            .active_use_remains(&self.agent, &self.artifact)
+            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+        if store
+            .use_generation_count(&self.marker_directory)
+            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?
+            >= MAXIMUM_USE_GENERATIONS
+        {
+            return Err(ManagedExecutableUseFailure::new(
+                "executable-use inventory reached its generation capacity",
+            ));
+        }
+        let generation = Uuid::new_v4().to_string();
+        let record = ExecutableUseGeneration {
+            agent: self.agent.as_str().to_owned(),
+            version: self.artifact.version().as_str().to_owned(),
+            digest: self.artifact.digest().as_str().to_owned(),
+            generation: generation.clone(),
+        };
+        store
+            .retain_use_generation(&self.marker_directory, &generation, "expected", &record)
+            .and_then(|()| {
+                store.retain_use_generation(
+                    &self.marker_directory,
+                    &generation,
+                    "admitted",
+                    &record,
+                )
+            })
+            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+        mutation
+            .verify()
+            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+        Ok(Box::new(DurableManagedExecutableUseGuard {
             root: self.root.clone(),
             marker_directory: self.marker_directory.clone(),
-            marker_path,
-            removed: false,
+            record,
+            released: false,
         }))
     }
 }
 
-struct ManagedExecutableUseGuard {
+struct DurableManagedExecutableUseGuard {
     root: PathBuf,
     marker_directory: PathBuf,
-    marker_path: PathBuf,
-    removed: bool,
+    record: ExecutableUseGeneration,
+    released: bool,
+}
+
+struct UseMutation {
+    directory: PrivateDirectory,
+    lock: File,
+}
+
+impl UseMutation {
+    fn verify(&self) -> Result<(), StoreFailure> {
+        self.directory.verify_binding().map_err(unreadable)?;
+        if !self
+            .directory
+            .named_file_is(OsStr::new("admission.lock"), &self.lock)
+            .map_err(unreadable)?
+        {
+            return Err(StoreFailure::Unreadable(
+                "executable-use admission lock was replaced after acquisition".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 struct ManagedPublicationLease {
@@ -346,18 +436,28 @@ impl PublicationLease for ManagedPublicationLease {
     }
 }
 
-impl ExecutableUseGuard for ManagedExecutableUseGuard {
-    fn release(&mut self) -> Result<(), ExecutableUseError> {
-        if !self.removed {
-            remove_file_beneath(&self.root, &self.marker_path).map_err(executable_use_error)?;
-            self.removed = true;
+impl ManagedExecutableUseGuard for DurableManagedExecutableUseGuard {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
+        if !self.released {
+            let store = ManagedRuntimes::new(self.root.clone());
+            let mutation = store
+                .hold_use_mutation(&self.marker_directory)
+                .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            store
+                .retain_use_generation(
+                    &self.marker_directory,
+                    &self.record.generation,
+                    "released",
+                    &self.record,
+                )
+                .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            mutation
+                .verify()
+                .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            self.released = true;
         }
-        sync_directory_beneath(&self.root, &self.marker_directory).map_err(executable_use_error)
+        Ok(())
     }
-}
-
-fn executable_use_error(error: io::Error) -> ExecutableUseError {
-    ExecutableUseError::new(error.to_string())
 }
 
 struct PublicationRecoveryContext<'a> {
@@ -515,7 +615,7 @@ impl ManagedRuntimes {
         agent: &AgentName,
     ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
         let path = self.reclamation_path(agent);
-        let file = match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
+        let mut file = match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -525,9 +625,45 @@ impl ManagedRuntimes {
                 ))
             }
         };
-        let stored: StoredManagedInstallation = serde_json::from_reader(file).map_err(|error| {
-            ReclamationPersistenceFailure::new(ReclamationPersistenceStage::Read, error.to_string())
-        })?;
+        if file
+            .metadata()
+            .map_err(|error| {
+                ReclamationPersistenceFailure::new(
+                    ReclamationPersistenceStage::Read,
+                    error.to_string(),
+                )
+            })?
+            .len()
+            > MAXIMUM_RECLAMATION_STATE_BYTES
+        {
+            return Err(ReclamationPersistenceFailure::new(
+                ReclamationPersistenceStage::Read,
+                "reclamation state exceeds its durable size bound".into(),
+            ));
+        }
+        let mut encoded = Vec::new();
+        file.by_ref()
+            .take(MAXIMUM_RECLAMATION_STATE_BYTES + 1)
+            .read_to_end(&mut encoded)
+            .map_err(|error| {
+                ReclamationPersistenceFailure::new(
+                    ReclamationPersistenceStage::Read,
+                    error.to_string(),
+                )
+            })?;
+        if encoded.len() as u64 > MAXIMUM_RECLAMATION_STATE_BYTES {
+            return Err(ReclamationPersistenceFailure::new(
+                ReclamationPersistenceStage::Read,
+                "reclamation state grew past its durable size bound".into(),
+            ));
+        }
+        let stored: StoredManagedInstallation =
+            serde_json::from_slice(&encoded).map_err(|error| {
+                ReclamationPersistenceFailure::new(
+                    ReclamationPersistenceStage::Read,
+                    error.to_string(),
+                )
+            })?;
         stored.restore().map(Some).map_err(|error| {
             ReclamationPersistenceFailure::new(ReclamationPersistenceStage::Read, error)
         })
@@ -540,14 +676,22 @@ impl ManagedRuntimes {
     ) -> Result<(), ReclamationPersistenceFailure> {
         self.private_directory(&self.agent_root(installation.agent()))
             .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
-        let mut staging =
-            PrivateTempFile::new_beneath(&self.root, &self.agent_root(installation.agent()))
-                .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        let mut encoded = BoundedJsonBuffer::new(
+            MAXIMUM_RECLAMATION_STATE_BYTES,
+            "reclamation state exceeds its durable size bound",
+        );
         serde_json::to_writer_pretty(
-            staging.as_file_mut(),
+            &mut encoded,
             &StoredManagedInstallation::from_domain(installation),
         )
         .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        let mut staging =
+            PrivateTempFile::new_beneath(&self.root, &self.agent_root(installation.agent()))
+                .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        staging
+            .as_file_mut()
+            .write_all(&encoded.bytes)
+            .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
         staging
             .as_file()
             .sync_all()
@@ -575,6 +719,208 @@ impl ManagedRuntimes {
             .join("active-uses")
             .join(artifact.version().as_str())
             .join(artifact.digest().as_str())
+    }
+
+    fn use_inventory(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> ExecutableUseInventory {
+        ExecutableUseInventory {
+            agent: agent.as_str().to_owned(),
+            version: artifact.version().as_str().to_owned(),
+            digest: artifact.digest().as_str().to_owned(),
+        }
+    }
+
+    fn sync_use_inventory_directories(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> Result<(), StoreFailure> {
+        let marker = self.use_marker_directory(agent, artifact);
+        for directory in [
+            marker.clone(),
+            marker
+                .parent()
+                .expect("the marker has an artifact-version parent")
+                .to_owned(),
+            self.agent_root(agent).join("active-uses"),
+            self.agent_root(agent),
+            PathBuf::new(),
+        ] {
+            sync_directory_beneath(&self.root, &directory).map_err(unwritable)?;
+        }
+        Ok(())
+    }
+
+    fn hold_use_mutation(&self, directory: &Path) -> Result<UseMutation, StoreFailure> {
+        for _ in 0..LOCK_ATTEMPTS {
+            let authority =
+                PrivateDirectory::open_beneath(&self.root, directory).map_err(unreadable)?;
+            let lock = authority
+                .open_file(OsStr::new("admission.lock"), OpenMode::OpenOrCreate)
+                .map_err(unreadable)?;
+            lock.lock().map_err(unreadable)?;
+            let mutation = UseMutation {
+                directory: authority,
+                lock,
+            };
+            if mutation.verify().is_ok() {
+                return Ok(mutation);
+            }
+        }
+        Err(StoreFailure::Unreadable(
+            "executable-use admission lock kept being replaced".into(),
+        ))
+    }
+
+    fn retain_immutable_json<T: Serialize>(
+        &self,
+        directory: &Path,
+        path: &Path,
+        value: &T,
+    ) -> Result<(), StoreFailure> {
+        self.retain_immutable_json_with(directory, path, value, |directory| {
+            sync_directory_beneath(&self.root, directory)
+        })
+    }
+
+    fn retain_immutable_json_with<T: Serialize>(
+        &self,
+        directory: &Path,
+        path: &Path,
+        value: &T,
+        durable: impl Fn(&Path) -> io::Result<()>,
+    ) -> Result<(), StoreFailure> {
+        let mut staging =
+            PrivateTempFile::new_beneath(&self.root, directory).map_err(unwritable)?;
+        let mut encoded = BoundedJsonBuffer::new(
+            MAXIMUM_USE_RECORD_BYTES,
+            "executable-use record exceeds its durable size bound",
+        );
+        serde_json::to_writer(&mut encoded, value)
+            .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
+        staging
+            .as_file_mut()
+            .write_all(&encoded.bytes)
+            .map_err(unwritable)?;
+        staging.as_file().sync_all().map_err(unwritable)?;
+        staging.publish_new_beneath(path).map_err(unwritable)?;
+        durable(directory).map_err(unwritable)
+    }
+
+    fn read_bounded_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        path: &Path,
+    ) -> Result<T, StoreFailure> {
+        let mut file =
+            open_beneath(&self.root, path, OpenMode::ReadNonblocking).map_err(unreadable)?;
+        if file.metadata().map_err(unreadable)?.len() > MAXIMUM_USE_RECORD_BYTES {
+            return Err(StoreFailure::Unreadable(format!(
+                "{} exceeds its executable-use record bound",
+                self.absolute(path).display()
+            )));
+        }
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take(MAXIMUM_USE_RECORD_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(unreadable)?;
+        if bytes.len() as u64 > MAXIMUM_USE_RECORD_BYTES {
+            return Err(StoreFailure::Unreadable(format!(
+                "{} grew past its executable-use record bound",
+                self.absolute(path).display()
+            )));
+        }
+        serde_json::from_slice(&bytes).map_err(|error| StoreFailure::Unreadable(error.to_string()))
+    }
+
+    fn initialize_use_inventory(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> Result<(), StoreFailure> {
+        let directory = self.use_marker_directory(agent, artifact);
+        self.private_directory(&directory)?;
+        let expected = self.use_inventory(agent, artifact);
+        let path = directory.join("inventory.json");
+        match self.retain_immutable_json(&directory, &path, &expected) {
+            Ok(()) => self.sync_use_inventory_directories(agent, artifact),
+            Err(original) => match self.validate_use_inventory(&directory, &expected) {
+                Ok(()) => self.sync_use_inventory_directories(agent, artifact),
+                Err(_) => Err(original),
+            },
+        }
+    }
+
+    fn validate_use_inventory(
+        &self,
+        directory: &Path,
+        expected: &ExecutableUseInventory,
+    ) -> Result<(), StoreFailure> {
+        let restored: ExecutableUseInventory =
+            self.read_bounded_json(&directory.join("inventory.json"))?;
+        if &restored != expected {
+            return Err(StoreFailure::Unreadable(
+                "executable-use inventory belongs to another artifact".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn use_generation_count(&self, directory: &Path) -> Result<usize, StoreFailure> {
+        let retained = PrivateDirectory::open_beneath(&self.root, directory).map_err(unreadable)?;
+        retained.verify_binding().map_err(unreadable)?;
+        let mut count = 0usize;
+        for entry in retained.entries().map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            if entry
+                .name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(".expected.json"))
+            {
+                count += 1;
+                if count > MAXIMUM_USE_GENERATIONS {
+                    break;
+                }
+            }
+        }
+        retained.verify_binding().map_err(unreadable)?;
+        Ok(count)
+    }
+
+    fn retain_use_generation(
+        &self,
+        directory: &Path,
+        generation: &str,
+        phase: &str,
+        record: &ExecutableUseGeneration,
+    ) -> Result<(), StoreFailure> {
+        self.retain_use_generation_with(directory, generation, phase, record, |directory| {
+            sync_directory_beneath(&self.root, directory)
+        })
+    }
+
+    fn retain_use_generation_with(
+        &self,
+        directory: &Path,
+        generation: &str,
+        phase: &str,
+        record: &ExecutableUseGeneration,
+        durable: impl Fn(&Path) -> io::Result<()>,
+    ) -> Result<(), StoreFailure> {
+        let path = directory.join(format!("{generation}.{phase}.json"));
+        match self.retain_immutable_json_with(directory, &path, record, &durable) {
+            Ok(()) => Ok(()),
+            Err(original) => match self.read_bounded_json::<ExecutableUseGeneration>(&path) {
+                Ok(existing) if existing == *record => durable(directory).map_err(unwritable),
+                Ok(_) => Err(StoreFailure::Unreadable(
+                    "executable-use generation identity has conflicting facts".into(),
+                )),
+                Err(_) => Err(original),
+            },
+        }
     }
 
     fn recorded_content_directories(
@@ -606,7 +952,10 @@ impl ManagedRuntimes {
             Err(error) => return Err(unreadable(error)),
         };
         retained.verify_binding().map_err(unreadable)?;
-        let mut any_marker = false;
+        let expected_inventory = self.use_inventory(agent, artifact);
+        self.validate_use_inventory(&directory, &expected_inventory)?;
+        let mut generations: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut entries = 0usize;
         for entry in retained.entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
             if entry.file_type() != PrivateFileType::RegularFile {
@@ -615,10 +964,68 @@ impl ManagedRuntimes {
                     self.absolute(&directory).display()
                 )));
             }
-            any_marker = true;
+            let name = entry.name();
+            let Some(name) = name.to_str() else {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use inventory contains a non-text name".into(),
+                ));
+            };
+            if matches!(name, "inventory.json" | "admission.lock") {
+                continue;
+            }
+            entries += 1;
+            if entries > MAXIMUM_USE_GENERATIONS * 3 {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use inventory exceeds its generation capacity".into(),
+                ));
+            }
+            let Some((generation, phase)) = name
+                .strip_suffix(".json")
+                .and_then(|name| name.rsplit_once('.'))
+            else {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use inventory contains an unknown record".into(),
+                ));
+            };
+            if !matches!(phase, "expected" | "admitted" | "released") {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use inventory contains an unknown phase".into(),
+                ));
+            }
+            let record: ExecutableUseGeneration = self.read_bounded_json(&directory.join(name))?;
+            if record.agent != agent.as_str()
+                || record.version != artifact.version().as_str()
+                || record.digest != artifact.digest().as_str()
+                || record.generation != generation
+            {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use generation contradicts its artifact or identity".into(),
+                ));
+            }
+            generations
+                .entry(generation.to_owned())
+                .or_default()
+                .insert(phase.to_owned());
         }
         retained.verify_binding().map_err(unreadable)?;
-        Ok(any_marker)
+        if generations.len() > MAXIMUM_USE_GENERATIONS {
+            return Err(StoreFailure::Unreadable(
+                "executable-use inventory exceeds its generation capacity".into(),
+            ));
+        }
+        for phases in generations.values() {
+            if !phases.contains("expected")
+                || (phases.contains("released") && !phases.contains("admitted"))
+            {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use inventory contains an orphan generation record".into(),
+                ));
+            }
+            if !phases.contains("admitted") || !phases.contains("released") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn remove_superseded_under_lock(
@@ -651,7 +1058,25 @@ impl ManagedRuntimes {
         if artifact_lock.try_lock().is_err() {
             return RuntimeReclamationEffect::DeferredInUse;
         }
-        match self.active_use_remains(agent, superseded) {
+        match self.same_file(&artifact_lock, &lock_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(
+                    "artifact-use lock was replaced after acquisition".into(),
+                ))
+            }
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        }
+        let use_directory = self.use_marker_directory(agent, superseded);
+        let use_mutation = match self.hold_use_mutation(&use_directory) {
+            Ok(lock) => lock,
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        };
+        let active_use = self.active_use_remains(agent, superseded);
+        if let Err(error) = use_mutation.verify() {
+            return RuntimeReclamationEffect::Failed(error);
+        }
+        match active_use {
             Ok(true) => return RuntimeReclamationEffect::DeferredInUse,
             Ok(false) => {}
             Err(error) => return RuntimeReclamationEffect::Failed(error),
@@ -674,9 +1099,7 @@ impl ManagedRuntimes {
                 Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
             }
         }
-        if present.is_empty() {
-            return RuntimeReclamationEffect::AlreadyAbsent;
-        }
+        let removed_files = !present.is_empty();
         let mut failures = Vec::new();
         for path in &present {
             if let Err(error) = remove_file_beneath(&self.root, path) {
@@ -690,6 +1113,19 @@ impl ManagedRuntimes {
             )));
         }
         let artifact_root = self.recorded_artifact_root(agent, superseded);
+        if !removed_files {
+            match PrivateDirectory::open_beneath(&self.root, &artifact_root) {
+                Ok(directory) => {
+                    if let Err(error) = directory.verify_binding() {
+                        return RuntimeReclamationEffect::Failed(unreadable(error));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return RuntimeReclamationEffect::AlreadyAbsent
+                }
+                Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
+            }
+        }
         if let Err(error) = sync_directory_beneath(&self.root, &artifact_root) {
             return RuntimeReclamationEffect::SyncUncertain(unwritable(error));
         }
@@ -711,7 +1147,11 @@ impl ManagedRuntimes {
         if let Err(error) = sync_directory_beneath(&self.root, &version_root) {
             return RuntimeReclamationEffect::SyncUncertain(unwritable(error));
         }
-        RuntimeReclamationEffect::Removed
+        if removed_files {
+            RuntimeReclamationEffect::Removed
+        } else {
+            RuntimeReclamationEffect::AlreadyAbsent
+        }
     }
 
     fn observe_superseded_under_lock(
@@ -744,7 +1184,25 @@ impl ManagedRuntimes {
         if artifact_lock.try_lock().is_err() {
             return RuntimeReclamationEffect::DeferredInUse;
         }
-        match self.active_use_remains(agent, superseded) {
+        match self.same_file(&artifact_lock, &lock_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(
+                    "artifact-use lock was replaced after acquisition".into(),
+                ))
+            }
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        }
+        let use_directory = self.use_marker_directory(agent, superseded);
+        let use_mutation = match self.hold_use_mutation(&use_directory) {
+            Ok(lock) => lock,
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        };
+        let active_use = self.active_use_remains(agent, superseded);
+        if let Err(error) = use_mutation.verify() {
+            return RuntimeReclamationEffect::Failed(error);
+        }
+        match active_use {
             Ok(true) => return RuntimeReclamationEffect::DeferredInUse,
             Ok(false) => {}
             Err(error) => return RuntimeReclamationEffect::Failed(error),
@@ -1052,6 +1510,7 @@ impl ManagedRuntimes {
         release: &PinnedRelease,
         durable: impl Fn(&Path) -> io::Result<()>,
     ) -> Result<(), StoreFailure> {
+        self.initialize_use_inventory(agent, &RuntimeArtifact::for_release(release))?;
         // A rename survives a crash only once the directory holding it does —
         // and that directory only once the one holding *it* does. Every level
         // from the executable's own directory up to this store's root can have
@@ -1566,7 +2025,7 @@ impl RuntimeStore for ManagedRuntimes {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-    ) -> Result<Option<ExecutableUseSnapshot>, StoreFailure> {
+    ) -> Result<Option<ManagedLaunchSnapshot>, StoreFailure> {
         let _publication = self.hold(agent)?;
         let Some(executable) = self.installed_observation(agent, release)? else {
             return Ok(None);
@@ -1575,17 +2034,15 @@ impl RuntimeStore for ManagedRuntimes {
         let artifact_lock = self.hold_artifact_for_launch(agent, &artifact)?;
         let marker_directory = self.use_marker_directory(agent, &artifact);
         self.private_directory(&marker_directory)?;
-        let authority = Arc::new(ManagedExecutableUse {
+        self.validate_use_inventory(&marker_directory, &self.use_inventory(agent, &artifact))?;
+        let authority = Arc::new(DurableManagedExecutableUse {
             root: self.root.clone(),
             marker_directory,
-            executable: executable.clone(),
-            version: artifact.version().as_str().to_owned(),
-            digest: artifact.digest().as_str().to_owned(),
+            agent: agent.clone(),
+            artifact,
             _artifact_lock: artifact_lock,
         });
-        ExecutableUseSnapshot::new(executable, authority)
-            .map(Some)
-            .map_err(|error| StoreFailure::Unreadable(error.to_string()))
+        Ok(Some(ManagedLaunchSnapshot::new(executable, authority)))
     }
 
     fn reclamation_lease(

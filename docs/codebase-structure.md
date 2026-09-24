@@ -938,13 +938,14 @@ record's random UUID, sequence, and observation time describe its physical
 publication and do not change that semantic identity.
 
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
-first resumes durable superseded-runtime work and recovers an admitted
-publication for the account, then does
+first recovers an admitted publication for the account and then resumes its
+durable superseded-runtime work before it does
 installed-already, download, hash, accept, publish, and never unpacks
 an archive that was not accepted. Its ports are `ArchiveSource` (the network),
 `RuntimeStore` (this machine's disk), `InstallAudit` (durable transition
 evidence), `InstallationDelivery` (publication admission and recovery), and
-`ReclamationAudit` (immutable evidence for each bounded removal attempt). The
+`ReclamationAudit` (immutable evidence for each bounded removal attempt), with
+`ReclamationOperationIds` as the injected source of fresh removal identities. The
 delivery session holds one lock from recovery through settlement. It durably
 prepares after verification and before publication, retains the exact terminal
 independently of audit acknowledgement, and settles only a matching outcome. A
@@ -956,8 +957,13 @@ prior valid artifact while holding the store's per-agent lock and returns that
 authority as a lease. The use case keeps the lease through both immediate durable delivery attempts
 and drops it when `execute` returns. A later invocation must recover and
 acknowledge the retained terminal before it admits another install effect.
-An exact replacement retains a domain-owned cleanup obligation on that same
-lease before publication settlement. One invocation makes at most one removal
+An exact replacement retains a domain-owned cleanup obligation and an
+independent receipt naming the exact delivery preparation on that same lease
+before publication settlement. Cleanup completion does not erase that receipt:
+after settlement the delivery owner returns the exact settled fact, and only
+then may the aggregate acknowledge the receipt and admit a successor
+replacement. Missing or contradictory settlement evidence blocks successor
+effects. One invocation makes at most one removal
 attempt per eligible obligation, retains the physical outcome before audit,
 and reports removal, persistence, and audit failures as separate typed facts
 without reversing the successful install. An interrupted admitted effect
@@ -1002,10 +1008,15 @@ ordinary way. So no symbolic link between the root and a runtime can send a
 read, a write or a removal outside the store, and the installed executable is
 private to its owner like everything else there. Managed launch resolution
 also returns an inseparable executable-use authority: each spawn durably admits
-one generation while holding a shared artifact lock, and cleanup releases only
-that generation after it confirms the process tree is gone or no spawn
-occurred. Dropped guards, launcher death, task cancellation, and failed release
-acknowledgement leave a durable marker. Reclamation holds the publication lock,
+one generation while holding a shared artifact lock. A bounded per-artifact
+inventory is initialized before publication becomes launchable; each generation
+has separate immutable expected, admitted, and released records, so a missing
+inventory, orphan phase, reused identity, or interrupted admission is
+conservative after restart. Cleanup releases only that generation after it
+confirms the process tree is gone or no spawn occurred. Dropped guards, launcher
+death, task cancellation, and failed release acknowledgement leave durable
+evidence; physical cleanup confirmation remains separate from release
+acknowledgement and never regresses when the latter fails. Reclamation holds the publication lock,
 rechecks the current artifact, takes the superseded artifact lock without
 waiting, and refuses current, busy, marked, linked, or unowned targets. It
 removes only the complete retained `ReleaseContents` through anchored storage

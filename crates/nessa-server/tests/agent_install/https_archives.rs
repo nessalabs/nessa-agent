@@ -289,6 +289,7 @@ fn installs_the_pinned_release() {
 
     let installed = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),
@@ -333,6 +334,7 @@ fn installs_the_pinned_release() {
     // downloading a hundred megabytes because somebody pressed the button twice.
     let again = InstallAgentRuntime {
         reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
         source: &source,
         store: &store,
         audit: audit(),

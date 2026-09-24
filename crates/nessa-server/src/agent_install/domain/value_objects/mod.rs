@@ -39,5 +39,5 @@ pub use release_contents::{ArchivePath, FileRole, ReleaseContents, ReleaseFile};
 pub use runtime_reclamation::{
     ReclamationActivation, ReclamationAdmission, ReclamationAuditState, ReclamationCause,
     ReclamationError, ReclamationEvent, ReclamationObligation, ReclamationOperationId,
-    ReclamationPhysicalOutcome, ReclamationTrigger,
+    ReclamationPhysicalOutcome, ReclamationTrigger, ReplacementReceipt, ReplacementSettlementState,
 };
