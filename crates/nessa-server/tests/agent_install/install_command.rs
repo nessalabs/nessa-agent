@@ -1,12 +1,17 @@
 use super::*;
 use crate::agent_install::application::{
-    AuditAcknowledgement, InstallAudit, InstalledRuntime, StoreFailure,
+    AuditAcknowledgement, InstallAudit, InstallDeliveryFailure, InstallDeliveryFailureStage,
+    InstallationDelivery, InstallationDeliverySession, InstalledRuntime, StoreFailure,
 };
 use crate::agent_install::domain::{
     ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, InstallAttempt, InstallTransition,
-    Libc, PinnedRelease, ReleasePlatform, ReleaseRequirements, ReleaseVersion, RuntimeArtifact,
+    Libc, PinnedRelease, PublicationPreparation, ReleasePlatform, ReleaseRequirements,
+    ReleaseVersion, RuntimeArtifact,
 };
-use crate::agent_install_test_support::{installs, request, temporary_root};
+use crate::agent_install_test_support::{
+    agent, audit, host, installs, platform, release as test_release, request, temporary_root,
+    FakeSource, FakeStore, PINNED_DIGEST,
+};
 use nessa_local_storage::create_directory;
 #[cfg(unix)]
 use std::{
@@ -64,6 +69,20 @@ fn install_attempt() -> (InstallAttempt, InstallTransition) {
         RuntimeArtifact::for_release(&release),
         request(),
     )
+}
+
+struct RefusingDelivery;
+
+impl InstallationDelivery for RefusingDelivery {
+    fn session(
+        &self,
+        _account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        Err(InstallDeliveryFailure::new(
+            InstallDeliveryFailureStage::ReadState,
+            "injected uncertain delivery state".into(),
+        ))
+    }
 }
 
 #[test]
@@ -407,6 +426,33 @@ fn a_failure_says_that_nothing_was_installed() {
             "{failure:?} does not say whether anything was installed: {message}"
         );
     }
+}
+
+#[test]
+fn publication_uncertainty_says_that_later_installs_are_blocked() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let release = test_release("1.18.31", PINNED_DIGEST, &platform());
+    let delivery_failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: audit(),
+        delivery: &RefusingDelivery,
+    }
+    .execute(&agent(), &release, &host(), &request())
+    .unwrap_err();
+    let delivery_message = explain(&delivery_failure);
+    assert!(delivery_message.contains("publication evidence is uncertain"));
+    assert!(delivery_message.contains("new installs for this account are blocked"));
+    assert!(delivery_message.contains("recovery succeeds"));
+
+    let (mut attempt, _) = install_attempt();
+    let preparation = PublicationPreparation::new(attempt.verified().unwrap()).unwrap();
+    let unresolved = explain(&InstallFailure::UnresolvedPublication(preparation));
+    assert!(unresolved.contains("prior publication result is unknown"));
+    assert!(unresolved.contains("new installs for this account are blocked"));
+    assert!(unresolved.contains("exact outcome is recovered"));
 }
 
 #[test]

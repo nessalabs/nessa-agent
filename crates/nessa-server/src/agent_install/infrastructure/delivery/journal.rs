@@ -431,7 +431,7 @@ fn read<T: DeserializeOwned>(
     directory: &PrivateDirectory,
     name: &OsStr,
 ) -> Result<T, InstallDeliveryFailure> {
-    let mut file = directory
+    let file = directory
         .open_file(name, OpenMode::Read)
         .map_err(|error| failure(InstallDeliveryFailureStage::ReadState, error))?;
     if !directory

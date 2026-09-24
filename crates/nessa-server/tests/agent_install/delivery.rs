@@ -196,9 +196,8 @@ fn preparation_published_before_acknowledgement_failure_blocks_fresh_session() {
 
     assert_eq!(failure.stage(), InstallDeliveryFailureStage::Prepare);
     assert_eq!(failure.detail(), "injected acknowledgement failure");
-    let mut reopened = delivery_at(root.path())
-        .session(request().account_id())
-        .unwrap();
+    let reopened_delivery = delivery_at(root.path());
+    let mut reopened = reopened_delivery.session(request().account_id()).unwrap();
     let Some(PendingInstallationDelivery::Prepared(prepared)) = reopened.pending().unwrap() else {
         panic!("the published preparation must remain conservatively unresolved");
     };
@@ -217,9 +216,8 @@ fn dropping_session_after_preparation_never_settles_and_blocks_recovery() {
         .prepare(preparation.clone())
         .unwrap();
 
-    let mut reopened = delivery_at(root.path())
-        .session(request().account_id())
-        .unwrap();
+    let reopened_delivery = delivery_at(root.path());
+    let mut reopened = reopened_delivery.session(request().account_id()).unwrap();
     assert_eq!(
         reopened.pending().unwrap(),
         Some(PendingInstallationDelivery::Prepared(prepared))
@@ -262,9 +260,9 @@ fn separate_delivery_instances_serialize_sessions_on_the_named_lock() {
     let (acquired, acquisition) = mpsc::channel();
 
     std::thread::scope(|threads| {
-        let barrier = Arc::clone(&barrier);
-        threads.spawn(|| {
-            barrier.wait();
+        let worker_barrier = Arc::clone(&barrier);
+        threads.spawn(move || {
+            worker_barrier.wait();
             attempting.send(()).unwrap();
             let _session = second.session(request().account_id()).unwrap();
             acquired.send(()).unwrap();

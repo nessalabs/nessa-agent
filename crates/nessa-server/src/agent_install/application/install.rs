@@ -708,7 +708,7 @@ fn formatter_delivery_failure(
             formatter,
             "publication evidence is unresolved: {delivery}; audit also failed: {audit}"
         ),
-        (Some(delivery), None) => delivery.fmt(formatter),
+        (Some(delivery), None) => write!(formatter, "{delivery}"),
         (None, Some(audit)) => write!(formatter, "publication audit failed: {audit}"),
         (None, None) => formatter.write_str("publication evidence is unresolved"),
     }
@@ -716,10 +716,10 @@ fn formatter_delivery_failure(
 
 fn runtime_state_for_transition(transition: &InstallTransition) -> RuntimeStateEvidence {
     match transition.facts() {
-        InstallTransitionFacts::Installed | InstallTransitionFacts::Replaced { .. } => {
+        InstallTransitionFacts::Installed | InstallTransitionFacts::Replaced(_) => {
             RuntimeStateEvidence::TargetInstalled
         }
-        InstallTransitionFacts::RolledBack { state } => match state {
+        InstallTransitionFacts::RolledBack(state) => match state {
             RollbackState::Restored(artifact) => RuntimeStateEvidence::Restored(artifact.clone()),
             RollbackState::NoInstalledRuntime => RuntimeStateEvidence::NoInstalledRuntime,
         },

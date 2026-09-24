@@ -215,6 +215,14 @@ fn explain(failure: &InstallFailure) -> String {
             format!("{failure}; no unaudited runtime was reported as installed")
         }
         InstallFailure::Audit(_) => failure.to_string(),
+        InstallFailure::Delivery(_) => format!(
+            "{failure}; publication evidence is uncertain, and new installs for this account are \
+             blocked until recovery succeeds"
+        ),
+        InstallFailure::UnresolvedPublication(_) => format!(
+            "{failure}; the prior publication result is unknown, and new installs for this account \
+             are blocked until its exact outcome is recovered"
+        ),
     }
 }
 
