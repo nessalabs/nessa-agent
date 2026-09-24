@@ -523,39 +523,48 @@ test("nonregular cache entries are refused without mutation", async (t) => {
     url: "https://example.invalid/node-fixture.tar.gz",
   }
   for (const kind of ["symlink", "directory", "FIFO"]) {
-    await t.test(kind, () => {
-      const root = mkdtempSync(join(tmpdir(), "nessa-node-nonregular-"))
-      t.after(() => rmSync(root, { recursive: true, force: true }))
-      const cache = join(root, "cache")
-      const archive = join(cache, release.archive)
-      mkdirSync(cache)
-      if (kind === "symlink") {
-        const external = join(root, "external")
-        writeFileSync(external, "preserve")
-        symlinkSync(external, archive)
-      } else if (kind === "directory") {
-        mkdirSync(archive)
-        writeFileSync(join(archive, "marker"), "preserve")
-      } else {
-        execFileSync("mkfifo", [archive])
-      }
-      let downloaded = false
-      assert.throws(
-        () =>
-          acquireVerifiedNodeArchive({
-            cache,
-            release,
-            download() {
-              downloaded = true
-            },
-          }),
-        new RegExp(kind === "symlink" ? "symbolic link" : kind),
-      )
-      assert.equal(downloaded, false)
-      if (kind === "symlink") assert.equal(readFileSync(archive, "utf8"), "preserve")
-      if (kind === "directory")
-        assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
-    })
+    await t.test(
+      kind,
+      {
+        skip:
+          kind === "FIFO" && process.platform === "win32"
+            ? "Windows does not provide the POSIX mkfifo utility"
+            : false,
+      },
+      () => {
+        const root = mkdtempSync(join(tmpdir(), "nessa-node-nonregular-"))
+        t.after(() => rmSync(root, { recursive: true, force: true }))
+        const cache = join(root, "cache")
+        const archive = join(cache, release.archive)
+        mkdirSync(cache)
+        if (kind === "symlink") {
+          const external = join(root, "external")
+          writeFileSync(external, "preserve")
+          symlinkSync(external, archive)
+        } else if (kind === "directory") {
+          mkdirSync(archive)
+          writeFileSync(join(archive, "marker"), "preserve")
+        } else {
+          execFileSync("mkfifo", [archive])
+        }
+        let downloaded = false
+        assert.throws(
+          () =>
+            acquireVerifiedNodeArchive({
+              cache,
+              release,
+              download() {
+                downloaded = true
+              },
+            }),
+          new RegExp(kind === "symlink" ? "symbolic link" : kind),
+        )
+        assert.equal(downloaded, false)
+        if (kind === "symlink") assert.equal(readFileSync(archive, "utf8"), "preserve")
+        if (kind === "directory")
+          assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
+      },
+    )
   }
 })
 
