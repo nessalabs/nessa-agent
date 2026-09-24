@@ -16,16 +16,16 @@ impl ReadAgentReadiness<'_> {
     /// An agent this server has nothing configured for is not asked about at
     /// all. Asking anyway would put two "this machine could not answer" lines
     /// in the log for every such agent on every check, about a machine that was
-    /// never the problem. An agent that needs no account is not asked the
-    /// second question for the same reason: there is no sign-in on this machine
-    /// to find, so asking could only produce a failure to report.
+    /// never the problem. A future agent that needs no account would omit the
+    /// second answer for the same reason: there would be no sign-in on this
+    /// machine to find.
     pub fn execute(&self, agent: AgentId) -> Readiness {
-        Readiness::from_host(self.probe.configured(agent).then(|| {
+        Readiness::from_host(self.probe.evidence(agent).map(|evidence| {
             (
-                answer(agent, "installed", self.probe.installed(agent)),
-                agent
-                    .needs_sign_in()
-                    .then(|| answer(agent, "authenticated", self.probe.authenticated(agent))),
+                answer(agent, "installed", evidence.installed),
+                evidence
+                    .authenticated
+                    .map(|answer_| answer(agent, "authenticated", answer_)),
             )
         }))
     }

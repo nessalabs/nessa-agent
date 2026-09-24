@@ -36,26 +36,24 @@ pub enum ProbeFailure {
     Unanswered,
 }
 
+/// One internally coherent observation of an agent on this host.
+pub struct AgentProbeEvidence {
+    /// Whether the resolved launch was installed when this observation was made.
+    pub installed: Result<bool, ProbeFailure>,
+    /// Whether the launch had a supported credential, when it needs one.
+    pub authenticated: Option<Result<bool, ProbeFailure>>,
+}
+
 /// What the host can be asked about an agent, and nothing more.
 ///
-/// Separate questions rather than one answer, so that the rule turning them
-/// into a readiness lives in the domain — and so that an adapter cannot decide
-/// policy by reporting a state directly.
+/// Separate fields in one observation keep the rule turning them into a
+/// readiness in the domain, while preventing an adapter from deciding policy
+/// by reporting a state directly.
 pub trait AgentProbe: Send + Sync {
-    /// Whether this server has anything configured to launch for this agent.
+    /// Observe current launch and credential evidence for `agent`.
     ///
-    /// Answered from the configuration alone, so it never fails: the
-    /// configuration is in memory and has already been read. Asked apart from
-    /// [`Self::installed`] because "this build was not set up for it" and "it
-    /// is not on this machine" are different facts, and only one of them is
-    /// fixed by installing anything.
-    fn configured(&self, agent: AgentId) -> bool;
-
-    /// Whether the agent's adapter is installed with this server.
-    fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure>;
-
-    /// Whether anything on this machine is signed in to the agent. Asked, never
-    /// read: an implementation that has to handle the credential to answer is
-    /// the wrong implementation.
-    fn authenticated(&self, agent: AgentId) -> Result<bool, ProbeFailure>;
+    /// `None` means this server has no configuration for the agent. Credential
+    /// values never cross this port. A later decision takes a fresh observation
+    /// because files and secure storage can change after this method returns.
+    fn evidence(&self, agent: AgentId) -> Option<AgentProbeEvidence>;
 }

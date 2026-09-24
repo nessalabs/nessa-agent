@@ -39,12 +39,8 @@ impl Readiness {
     /// about this agent's presence on the machine — they are about a launch
     /// nobody configured.
     ///
-    /// The inner `None`, in place of a sign-in answer, is an agent that needs
-    /// no account: Opencode reaches the models Nessa runs it on with nothing
-    /// signed in anywhere, so there is no sign-in to have found and none to ask
-    /// anybody for. Absent rather than `Yes`, because `Yes` would mean this
-    /// machine found a sign-in — which is a different thing to be wrong about,
-    /// and the one a diagnostic would repeat.
+    /// The inner `None`, in place of a sign-in answer, is reserved for an agent
+    /// whose configured launch needs no credential.
     ///
     /// Otherwise installation is decided first, because it is the reason
     /// signing in would not help. An agent this machine cannot locate is one

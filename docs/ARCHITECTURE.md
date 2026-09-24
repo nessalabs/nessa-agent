@@ -398,8 +398,8 @@ are infrastructure data in `protocol/defaults/agent-credentials.json`; provider
 environment mapping stays in the gateway adapter. Desktop composition writes
 validated API keys to the matching login-keychain item through a host-owned port
 and records correlated, secret-free intent and outcome evidence. Gateway
-composition injects one credential source into readiness and Claude process
-launch. See the
+composition injects one credential source into readiness, Claude process launch,
+and the current OpenCode cold-open resolver. See the
 [crate guide](../crates/nessa-agent-credentials/README.md).
 
 ## Gateway authorization

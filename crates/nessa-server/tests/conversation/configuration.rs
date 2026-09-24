@@ -340,6 +340,7 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     // Absent rather than present-and-broken: the conversation service answers a
@@ -369,6 +370,7 @@ fn every_configured_agent_that_can_be_built_is() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     assert_eq!(built.providers.len(), 2);
@@ -416,6 +418,7 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     assert!(built.providers.contains_key(&AgentId::Opencode));
@@ -427,8 +430,8 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
 ///
 /// Said out loud here because it is invisible everywhere else. The binding
 /// declares image input whenever composition supplies a byte source, which is
-/// the right declaration; the catalogue is what withholds it. All three
-/// `opencode` entries record no `imageInput` limits — `mimo-v2.5-free`
+/// the right declaration; the catalogue is what withholds it. The `opencode`
+/// entries record no `imageInput` limits — `mimo-v2.5-free`
 /// declares `input.image` and records none — and `EffectiveCapabilities`
 /// offers image input only where the limits are, so the effective modality is
 /// text.
@@ -454,6 +457,7 @@ fn no_opencode_model_nessa_ships_can_be_sent_an_image() {
         "opencode/nemotron-3-ultra-free",
         "opencode/big-pickle",
         "opencode/mimo-v2.5-free",
+        "opencode/minimax-m3",
     ] {
         let config: AgentsConfig = serde_json::from_value(serde_json::json!({
             "catalog": shipped,
@@ -469,11 +473,36 @@ fn no_opencode_model_nessa_ships_can_be_sent_an_image() {
         .unwrap();
 
         assert_eq!(
-            image_limits(&config).unwrap(),
+            image_limits(&config, &[]).unwrap(),
             None,
             "{model} records image limits; the binding's docstring says none does"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_deferred_managed_model_still_bounds_the_shared_image_store() {
+    let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/../nessa-sdk/data/models.json");
+    let config: AgentsConfig = serde_json::from_value(serde_json::json!({
+        "catalog": shipped,
+        "workspace": "/workspace",
+        "selected": "claude",
+        "runtimes": {"claude": {
+            "command": "/claude",
+            "args": [],
+            "model": "claude-sonnet-5",
+            "toolsEnabled": false,
+        }},
+    }))
+    .unwrap();
+
+    assert!(image_limits(&config, &[]).unwrap().is_some());
+    assert_eq!(
+        image_limits(&config, &[(AgentId::Opencode, "opencode/minimax-m3")]).unwrap(),
+        None,
+        "a cold-resolved model still shares the same attachment store"
+    );
 }
 
 /// The two ways an agent can be left out are told apart, because readiness
@@ -499,6 +528,7 @@ fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     assert!(!built.providers.contains_key(&AgentId::Opencode));
@@ -529,6 +559,7 @@ fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     assert!(!built.providers.contains_key(&AgentId::Opencode));
@@ -557,7 +588,8 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
-        no_credentials()
+        no_credentials(),
+        &HashSet::new()
     )
     .is_err());
 }

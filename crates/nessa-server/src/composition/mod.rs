@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
-//!                                   -> one provider per configured agent
+//!                                   -> fixed providers + current-agent resolver
 //!                                   -> storage / audit
 //!                                   -> attachments (one store, shared)
 //!                                   -> AgentWarmUp -> readiness port
@@ -18,6 +18,8 @@ pub use root::CompositionRoot;
 
 mod auth_command;
 mod credential_registry;
+#[cfg(unix)]
+mod current_agent;
 mod install_command;
 mod installed_launch;
 mod local_auth;

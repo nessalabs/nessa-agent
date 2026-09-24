@@ -460,8 +460,10 @@ export function Onboarding({
         <div role="group" aria-label="Agent" className="flex flex-col gap-2">
           {AGENT_CHOICES.map((choice) => {
             const readiness = agentReadiness(state, choice.id)
-            const canSaveClaudeKey =
-              choice.id === "claude" &&
+            const keyAgent =
+              choice.id === "claude" || choice.id === "opencode" ? choice.id : undefined
+            const canSaveApiKey =
+              keyAgent !== undefined &&
               readiness === "needs-authentication" &&
               apiKeys !== undefined &&
               (gatewayStartup.state === "ready" || gatewayStartup.state === "unmanaged")
@@ -476,13 +478,21 @@ export function Onboarding({
                   selected={state.agent === choice.id}
                   onSelect={onChoose}
                 />
-                {canSaveClaudeKey ? (
-                  <AgentApiKeyForm
-                    agent="claude"
-                    agentName="Claude"
-                    onSave={saveAgentApiKey}
-                    onSaved={onRecheck}
-                  />
+                {choice.id === "opencode" ? (
+                  <p className="nessa-text-2 text-muted-foreground">
+                    OpenCode uses the metered MiniMax M3 model through Zen. Your provider
+                    account may be charged when you send messages.
+                  </p>
+                ) : null}
+                {canSaveApiKey ? (
+                  <div className="flex flex-col gap-2">
+                    <AgentApiKeyForm
+                      agent={keyAgent}
+                      agentName={choice.name}
+                      onSave={saveAgentApiKey}
+                      onSaved={onRecheck}
+                    />
+                  </div>
                 ) : null}
               </React.Fragment>
             )

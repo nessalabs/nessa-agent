@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use crate::agents::application::{AgentProbe, ProbeFailure};
+use crate::agents::application::{AgentProbe, AgentProbeEvidence, ProbeFailure};
 use crate::agents::domain::AgentId;
 
 /// A host with both of its answers fixed in advance, including the answer that
@@ -28,16 +28,11 @@ impl StubAgentProbe {
 impl AgentProbe for StubAgentProbe {
     /// Configured for every agent: these tests are about what the machine
     /// answers, and an unconfigured agent is never asked.
-    fn configured(&self, _agent: AgentId) -> bool {
-        true
-    }
-
-    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        self.installed
-    }
-
-    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        self.authenticated
+    fn evidence(&self, _agent: AgentId) -> Option<AgentProbeEvidence> {
+        Some(AgentProbeEvidence {
+            installed: self.installed,
+            authenticated: Some(self.authenticated),
+        })
     }
 }
 
@@ -122,16 +117,11 @@ impl WaitingAgentProbe {
 }
 
 impl AgentProbe for WaitingAgentProbe {
-    fn configured(&self, _agent: AgentId) -> bool {
-        true
-    }
-
-    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+    fn evidence(&self, _agent: AgentId) -> Option<AgentProbeEvidence> {
         self.probe();
-        Ok(true)
-    }
-
-    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        Ok(true)
+        Some(AgentProbeEvidence {
+            installed: Ok(true),
+            authenticated: Some(Ok(true)),
+        })
     }
 }

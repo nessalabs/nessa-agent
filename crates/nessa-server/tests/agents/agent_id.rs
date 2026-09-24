@@ -42,10 +42,10 @@ fn nessa_drives_claude_codex_and_opencode() {
 /// Whether an agent needs an account is a fact about the agent, so it is the
 /// same on every host and every agent has to say which it is.
 #[test]
-fn only_the_agent_that_reaches_a_model_without_an_account_says_it_needs_none() {
-    assert!(AgentId::Claude.needs_sign_in());
-    assert!(AgentId::Codex.needs_sign_in());
-    assert!(!AgentId::Opencode.needs_sign_in());
+fn every_configured_agent_requires_its_supported_account_evidence() {
+    for agent in AgentId::ALL {
+        assert!(agent.needs_sign_in(), "{agent:?}");
+    }
 }
 
 #[test]

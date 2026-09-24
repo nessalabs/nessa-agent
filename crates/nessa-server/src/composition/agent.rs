@@ -55,7 +55,7 @@ use std::{
     sync::Arc,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
@@ -79,7 +79,7 @@ pub(super) struct AgentsConfig {
 }
 
 /// How one agent is started, within the shared configuration above.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AgentRuntime {
     /// The executable this server runs for this agent.
@@ -183,27 +183,35 @@ impl AgentsConfig {
     /// Returns [`RunError::Agent`] for a name no adapter exists for, a name with
     /// no configuration under it, no agents at all, or several agents with no
     /// choice stated between them.
+    #[cfg(test)]
     pub fn selected(&self) -> Result<AgentId, RunError> {
+        self.selected_from(&self.agents().into_iter().map(|(agent, _)| agent).collect())
+    }
+
+    /// The default agent among the identities composition can resolve.
+    ///
+    /// Deferred agents have no startup runtime entry, but are still concrete
+    /// configured choices because their launch is resolved at cold open.
+    pub fn selected_from(&self, configured: &HashSet<AgentId>) -> Result<AgentId, RunError> {
         if let Some(name) = self.unknown() {
             return Err(RunError::Agent(format!(
                 "configured agent \"{name}\" has no adapter in Nessa"
             )));
         }
-        let configured = self.agents();
         if let Some(name) = &self.selected {
             let agent = AgentId::parse(name).ok_or_else(|| {
                 RunError::Agent(format!("selected agent \"{name}\" has no adapter in Nessa"))
             })?;
-            if self.runtime(agent).is_none() {
+            if !configured.contains(&agent) {
                 return Err(RunError::Agent(format!(
-                    "selected agent \"{name}\" has no configuration under \"runtimes\""
+                    "selected agent \"{name}\" is not configured"
                 )));
             }
             return Ok(agent);
         }
-        match configured.as_slice() {
-            [(agent, _)] => Ok(*agent),
-            [] => Err(RunError::Agent(
+        match configured.len() {
+            1 => Ok(*configured.iter().next().expect("one configured agent")),
+            0 => Err(RunError::Agent(
                 "configure at least one agent under \"agents.runtimes\"".into(),
             )),
             _ => Err(RunError::Agent(
@@ -212,8 +220,8 @@ impl AgentsConfig {
         }
     }
 
-    fn validate(&self) -> Result<(), RunError> {
-        self.selected()?;
+    fn validate_for(&self, configured: &HashSet<AgentId>) -> Result<(), RunError> {
+        self.selected_from(configured)?;
         if [&self.catalog, &self.workspace]
             .iter()
             .any(|path| !path.is_absolute())
@@ -357,6 +365,8 @@ fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let keys: &[&str] = match agent {
         AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+        // OpenCode credentials have one owner: the injected stage-scoped
+        // source used by the current-agent resolver.
         AgentId::Opencode => &[],
     };
     let mut environment = BTreeMap::new();
@@ -406,13 +416,21 @@ pub(super) fn model(
     config: &AgentsConfig,
     runtime: &AgentRuntime,
 ) -> Result<ModelMetadata, RunError> {
+    model_by_id(agent, config, &runtime.model)
+}
+
+fn model_by_id(
+    agent: AgentId,
+    config: &AgentsConfig,
+    model_id: &str,
+) -> Result<ModelMetadata, RunError> {
     ModelMetadata::try_from(
         load_catalog(
             File::open(&config.catalog)
                 .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
         )
         .map_err(|e| RunError::Agent(e.to_string()))?
-        .select(catalog_provider(agent), &runtime.model)
+        .select(catalog_provider(agent), model_id)
         .map_err(|e| RunError::Agent(e.to_string()))?,
     )
     .map_err(|e| RunError::Agent(e.to_string()))
@@ -430,10 +448,17 @@ pub(super) fn model(
 /// `None` is a gateway that keeps no images: either no configured model
 /// publishes image input, or the models between them share no encoding, and in
 /// both cases there is no image this gateway could store and then send.
-pub(super) fn image_limits(config: &AgentsConfig) -> Result<Option<ImageInputLimits>, RunError> {
+pub(super) fn image_limits(
+    config: &AgentsConfig,
+    deferred_models: &[(AgentId, &str)],
+) -> Result<Option<ImageInputLimits>, RunError> {
     let mut strictest: Option<ImageInputLimits> = None;
-    for (agent, runtime) in config.agents() {
-        let Some(limits) = model(agent, config, runtime)?.image_input().cloned() else {
+    let configured = config
+        .agents()
+        .into_iter()
+        .map(|(agent, runtime)| (agent, runtime.model.as_str()));
+    for (agent, model_id) in configured.chain(deferred_models.iter().copied()) {
+        let Some(limits) = model_by_id(agent, config, model_id)?.image_input().cloned() else {
             // A model that takes no images cannot be met by any image at all.
             return Ok(None);
         };
@@ -504,10 +529,11 @@ fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageIn
 /// it is set to is not a degraded server.
 ///
 /// Most of readiness is answered somewhere else and deliberately stays that
-/// way: `LocalAgentProbe` stats each agent's command on every ask, so an agent
-/// missing here because it is not installed yet still reports `not-installed`
-/// now and `ready` the moment a person installs it. Narrowing the probe to what
-/// was built at startup would freeze that answer to what was true once.
+/// way: the current-agent resolver reads the managed store on every ask, so an
+/// agent missing here because it is not installed yet still reports
+/// `not-installed` now and `ready` after a later verified install. Narrowing
+/// the probe to what was built at startup would freeze that answer to what was
+/// true once.
 ///
 /// That holds for everything an install can change and for nothing else, which
 /// is why the agents left out come back in two groups rather than one. See
@@ -519,12 +545,28 @@ pub(super) fn providers(
     clock: Arc<dyn Clock>,
     images: Arc<dyn UserImageSource>,
     credentials: Arc<dyn AgentCredentialSource>,
+    deferred: &HashSet<AgentId>,
 ) -> Result<ConfiguredAgents, RunError> {
-    config.validate()?;
-    let selected = config.selected()?;
+    let configured: HashSet<_> = config
+        .agents()
+        .into_iter()
+        .map(|(agent, _)| agent)
+        .chain(deferred.iter().copied())
+        .collect();
+    config.validate_for(&configured)?;
+    let selected = config.selected_from(&configured)?;
     let mut providers = HashMap::new();
     let mut unavailable = HashSet::new();
+    let dependencies = ProviderDependencies {
+        directory: directory.to_owned(),
+        clock,
+        images,
+        credentials,
+    };
     for (agent, runtime) in config.agents() {
+        if deferred.contains(&agent) {
+            continue;
+        }
         // Every agent is given the source, not only the one whose profile is
         // known to use it: the runtime sends an image only to an agent that
         // advertised `promptCapabilities.image`, so an agent that takes none is
@@ -536,10 +578,8 @@ pub(super) fn providers(
             agent,
             config,
             runtime,
-            directory,
-            clock.clone(),
-            images.clone(),
-            credentials.clone(),
+            &dependencies,
+            credential_environment(agent),
         ) {
             Ok(provider) => provider,
             Err(failure) if agent == selected => return Err(failure),
@@ -581,6 +621,27 @@ pub(super) fn providers(
         unavailable,
     })
 }
+
+/// Build one provider from a launch and credential observation owned by composition.
+#[cfg(unix)]
+pub(super) fn provider_for(
+    agent: AgentId,
+    config: &AgentsConfig,
+    runtime: &AgentRuntime,
+    dependencies: &ProviderDependencies,
+    credential_environment: BTreeMap<OsString, OsString>,
+) -> Result<ConversationAgent, RunError> {
+    let build::ProviderComposition {
+        provider,
+        execution_audit,
+    } = build::provider(agent, config, runtime, dependencies, credential_environment)?;
+    Ok(ConversationAgent {
+        provider,
+        execution_audit,
+        reserved_output_tokens: runtime.output_tokens,
+        readiness: None,
+    })
+}
 #[cfg(not(unix))]
 pub(super) fn providers(
     config: &AgentsConfig,
@@ -588,8 +649,15 @@ pub(super) fn providers(
     _: Arc<dyn Clock>,
     _: Arc<dyn UserImageSource>,
     _: Arc<dyn AgentCredentialSource>,
+    deferred: &HashSet<AgentId>,
 ) -> Result<ConfiguredAgents, RunError> {
-    config.validate()?;
+    let configured: HashSet<_> = config
+        .agents()
+        .into_iter()
+        .map(|(agent, _)| agent)
+        .chain(deferred.iter().copied())
+        .collect();
+    config.validate_for(&configured)?;
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
     ))
@@ -619,15 +687,23 @@ pub(super) struct ConfiguredAgents {
     /// for: an agent in the configuration that nobody has installed.
     pub unavailable: HashSet<AgentId>,
 }
+
+/// Effects shared by every provider generation built for one conversation root.
+#[derive(Clone)]
+pub(super) struct ProviderDependencies {
+    pub(super) directory: PathBuf,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) images: Arc<dyn UserImageSource>,
+    pub(super) credentials: Arc<dyn AgentCredentialSource>,
+}
 #[cfg(unix)]
 mod build {
     use super::super::agent_budgets as budgets;
     use super::{
-        AgentCredentialSource, AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider,
+        AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider, ProviderDependencies,
         RunError,
     };
     use crate::conversation::infrastructure::DurableExecutionAudit;
-    use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
         application::agent_execution::{
             agents::AgentError,
@@ -648,12 +724,7 @@ mod build {
             opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
-    use std::{
-        collections::BTreeMap,
-        ffi::OsString,
-        path::{Path, PathBuf},
-        sync::Arc,
-    };
+    use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
 
     pub(super) struct ProviderComposition {
         pub(super) provider: Arc<dyn AgentProvider>,
@@ -763,10 +834,8 @@ mod build {
         agent: AgentId,
         config: &AgentsConfig,
         runtime: &AgentRuntime,
-        directory: &Path,
-        clock: Arc<dyn Clock>,
-        images: Arc<dyn UserImageSource>,
-        credentials: Arc<dyn AgentCredentialSource>,
+        dependencies: &ProviderDependencies,
+        credential_environment: BTreeMap<OsString, OsString>,
     ) -> Result<ProviderComposition, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
         let model = super::model(agent, config, runtime)?;
@@ -782,15 +851,20 @@ mod build {
         }
         let limits = TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
             .map_err(|e| RunError::Agent(e.to_string()))?;
-        let audit =
-            Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
+        let audit = Arc::new(
+            DurableExecutionAudit::new(
+                dependencies.directory.join("audit"),
+                dependencies.clock.clone(),
+            )
+            .map_err(invalid)?,
+        );
         let acp = launch_configuration(
             config,
             runtime,
             workspace,
             super::process_environment(agent),
-            super::credential_environment(agent),
-            Some(images),
+            credential_environment,
+            Some(dependencies.images.clone()),
         );
         let prompt = system_prompt()?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
@@ -802,7 +876,7 @@ mod build {
                     limits,
                     audit.clone(),
                     prompt,
-                    credentials,
+                    dependencies.credentials.clone(),
                 )
                 .map_err(failed)?,
             ),

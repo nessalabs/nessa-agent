@@ -138,7 +138,7 @@ def configs():
 
 
 def model_id():
-    return "exact-fixture-model"
+    return os.environ.get("NESSA_EXPECTED_OPENCODE_MODEL", "exact-fixture-model")
 
 
 for line in sys.stdin:

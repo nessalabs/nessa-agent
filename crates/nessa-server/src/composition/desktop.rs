@@ -3,12 +3,11 @@
 //! The credentials this app needs are created by
 //! [`super::provisioning::ensure_local_credentials`], which the developer loop
 //! asks for by the same name; nothing here provisions separately.
-use super::installed_launch::{installed_arguments, installed_launch, InstalledLaunch};
+use super::installed_launch::installed_arguments;
 use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
-use crate::agent_install::infrastructure::{host_platform, ManagedRuntimes};
 use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use std::collections::HashMap;
@@ -59,11 +58,11 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
-        AgentId::Opencode => "opencode/big-pickle",
+        AgentId::Opencode => "opencode/minimax-m3",
     }
 }
 
-fn managed_runtime(agent: AgentId, command: ExecutableUseSnapshot) -> AgentRuntime {
+pub(super) fn managed_runtime(agent: AgentId, command: ExecutableUseSnapshot) -> AgentRuntime {
     AgentRuntime {
         command,
         args: installed_arguments(agent),
@@ -162,38 +161,6 @@ pub(super) fn configure(
                 output_tokens: 4096,
             });
     }
-    let store = ManagedRuntimes::new(data.join("agents"));
-    let host = host_platform();
-    for agent in AgentId::ALL.iter().copied() {
-        if bundled_launch(agent).is_some() {
-            continue;
-        }
-        let resolution = installed_launch(agent, &host, &store).map_err(unusable_runtime)?;
-        match resolution {
-            InstalledLaunch::Ready(command) => {
-                let args = installed_arguments(agent);
-                agents
-                    .runtimes
-                    .entry(agent.name().into())
-                    .and_modify(|runtime| {
-                        runtime.command = command.clone();
-                        runtime.args = args.clone();
-                    })
-                    .or_insert_with(|| managed_runtime(agent, command));
-            }
-            InstalledLaunch::Unknown(failure) => {
-                tracing::warn!(
-                    agent = agent.name(),
-                    %failure,
-                    "the optional installed runtime could not be verified"
-                );
-                remove_unverified_runtime(agents, agent);
-            }
-            InstalledLaunch::Missing | InstalledLaunch::UnsupportedHost => {
-                remove_unverified_runtime(agents, agent);
-            }
-        }
-    }
     // Only the Nessa-owned server is replaced. User-configured MCP servers retain their settings.
     agents.mcp_servers.retain(|server| server.name != "nessa");
     agents
@@ -211,21 +178,6 @@ pub(super) fn configure(
     Ok(())
 }
 
-/// Remove a launch the current store did not verify without leaving an invalid
-/// selected/runtime pair behind.
-fn remove_unverified_runtime(agents: &mut AgentsConfig, agent: AgentId) {
-    let was_selected = agents.selected.as_deref() == Some(agent.name());
-    agents.runtimes.remove(agent.name());
-    if was_selected {
-        // The complete bundled-runtime check above proves this entry exists.
-        // Naming it directly keeps fallback deterministic even if HashMap
-        // iteration order changes.
-        agents.selected = agents
-            .runtimes
-            .contains_key(DEFAULT_AGENT.name())
-            .then(|| DEFAULT_AGENT.name().to_owned());
-    }
-}
 fn failure(error: impl std::fmt::Display) -> RunError {
     RunError::Agent(error.to_string())
 }

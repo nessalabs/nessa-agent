@@ -46,6 +46,7 @@ use std::{
     future::Future,
     mem,
     panic::AssertUnwindSafe,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, OnceLock,
@@ -152,6 +153,30 @@ pub struct ConversationAgent {
     pub readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 
+/// One asynchronous current-generation agent lookup.
+pub type ConversationAgentFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<ConversationAgent>, ConversationError>> + Send + 'a>>;
+
+/// Resolves the current provider generation for one cold conversation slot.
+///
+/// Implementations return an owned configuration so no registry guard crosses
+/// storage or provider effects. Existing live slots never call this port.
+pub trait ConversationAgentSource: Send + Sync {
+    fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_>;
+}
+
+#[derive(Clone)]
+struct FixedConversationAgentSource {
+    agents: HashMap<AgentId, ConversationAgent>,
+}
+
+impl ConversationAgentSource for FixedConversationAgentSource {
+    fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
+        let configured = self.agents.get(&agent).cloned();
+        Box::pin(async move { Ok(configured) })
+    }
+}
+
 /// Every agent this server can start, and the one a caller who names none gets.
 ///
 /// One value rather than two parameters, because the two are only valid
@@ -160,8 +185,9 @@ pub struct ConversationAgent {
 /// [`ConversationAgents`] has to consider the pairing invalid.
 #[derive(Clone)]
 pub struct ConversationAgents {
-    agents: HashMap<AgentId, ConversationAgent>,
+    configured: HashSet<AgentId>,
     default_agent: AgentId,
+    source: Arc<dyn ConversationAgentSource>,
 }
 impl ConversationAgents {
     /// # Errors
@@ -178,18 +204,48 @@ impl ConversationAgents {
         {
             return Err(ConversationError::InvalidInput);
         }
+        let configured = agents.keys().copied().collect();
         Ok(Self {
-            agents,
+            configured,
             default_agent,
+            source: Arc::new(FixedConversationAgentSource { agents }),
         })
     }
-    /// What runs this agent, or nothing where this server cannot start it.
-    fn get(&self, agent: AgentId) -> Option<&ConversationAgent> {
-        self.agents.get(&agent)
+
+    /// Construct a current-generation source with its pure configured set and default.
+    pub fn from_source(
+        configured: HashSet<AgentId>,
+        default_agent: AgentId,
+        source: Arc<dyn ConversationAgentSource>,
+    ) -> Result<Self, ConversationError> {
+        if !configured.contains(&default_agent) || configured.is_empty() {
+            return Err(ConversationError::InvalidInput);
+        }
+        Ok(Self {
+            configured,
+            default_agent,
+            source,
+        })
     }
-    /// The agent a creation that names none is made on.
-    fn default_agent(&self) -> AgentId {
-        self.default_agent
+
+    fn select(&self, requested: Option<AgentId>) -> Result<AgentId, ConversationError> {
+        let agent = requested.unwrap_or(self.default_agent);
+        self.configured
+            .contains(&agent)
+            .then_some(agent)
+            .ok_or(ConversationError::AgentNotConfigured)
+    }
+
+    async fn resolve(&self, agent: AgentId) -> Result<ConversationAgent, ConversationError> {
+        let configured = self
+            .source
+            .resolve(agent)
+            .await?
+            .ok_or(ConversationError::AgentNotConfigured)?;
+        if configured.reserved_output_tokens == 0 {
+            return Err(ConversationError::InvalidInput);
+        }
+        Ok(configured)
     }
 }
 #[derive(Clone, Copy)]
@@ -495,14 +551,12 @@ impl ConversationService {
             // conversation that does not need that agent at all. The same is
             // true of a name no adapter exists for, which is why that one is
             // carried this far instead of being refused where it was parsed.
-            let agent = match agent {
-                Some(RequestedAgent::Known(agent)) => agent,
+            let requested = match agent {
+                Some(RequestedAgent::Known(agent)) => Some(agent),
                 Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
-                None => service.inner.agents.default_agent(),
+                None => None,
             };
-            if service.inner.agents.get(agent).is_none() {
-                return Err(ConversationError::AgentNotConfigured);
-            }
+            let agent = service.inner.agents.select(requested)?;
             let proposed = Conversation::new(
                 id.clone(),
                 caller.organization_id.clone(),
@@ -678,16 +732,23 @@ impl ConversationService {
                                     holds: false,
                                 }
                             })?;
-                            let configured = service
-                                .inner
-                                .agents
-                                .get(record.agent())
-                                .cloned()
-                                .ok_or(OpeningFailure {
-                                    cause: ConversationError::AgentNotConfigured,
-                                    cleanup: None,
-                                    holds: false,
-                                })?;
+                            let mut stops = service.inner.stops.subscribe();
+                            let configured = tokio::select! {
+                                resolved = service.inner.agents.resolve(record.agent()) => {
+                                    resolved.map_err(|cause| OpeningFailure {
+                                        cause,
+                                        cleanup: None,
+                                        holds: false,
+                                    })?
+                                }
+                                _ = stops.changed() => {
+                                    return Err(OpeningFailure {
+                                        cause: ConversationError::Unavailable,
+                                        cleanup: None,
+                                        holds: false,
+                                    });
+                                }
+                            };
                             let session_id = SessionId::new(id.to_string()).expect("UUID session key");
                             let manager = SessionManager::open(
                                 Some(session_id),
@@ -772,7 +833,6 @@ impl ConversationService {
                             let attachment_id = id.clone();
                             let attachment_service = service.clone();
                             let readiness = configured.readiness.clone();
-                            let mut stops = service.inner.stops.subscribe();
                             let owner = tokio::spawn(async move {
                                 if let Some(readiness) = readiness {
                                     let cancellation = authorization.cancellation();
