@@ -35,9 +35,9 @@
 //! That is reported where it is asked about — setup says the agent is not set
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
-use crate::agents::{
-    application::AgentCredentialSource, domain::AgentId, infrastructure::CredentialedClaudeProvider,
-};
+#[cfg(unix)]
+use crate::agents::infrastructure::CredentialedClaudeProvider;
+use crate::agents::{application::AgentCredentialSource, domain::AgentId};
 use crate::conversation::application::ConversationAgent;
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;

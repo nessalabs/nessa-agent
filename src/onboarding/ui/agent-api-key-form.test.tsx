@@ -133,6 +133,36 @@ describe("agent API-key entry", () => {
     expect(container.textContent).not.toContain("sk-private-value")
   })
 
+  it("submits multibyte text whole and reports the domain byte limit honestly", async () => {
+    const boundary = "é".repeat(8192)
+    const overBoundary = `${boundary}é`
+    const save = vi.fn(async (_agent: string, key: string) => {
+      if (new TextEncoder().encode(key).byteLength > 16 * 1024) {
+        throw new AgentApiKeySaveRejected({ reason: "invalid-credential" })
+      }
+      return { status: "saved" as const }
+    })
+    await React.act(async () => {
+      root.render(
+        <AgentApiKeyForm
+          agent="claude"
+          agentName="Claude"
+          onSave={save}
+          onSaved={() => {}}
+        />,
+      )
+    })
+
+    await enterAndSubmit(boundary)
+    expect(save).toHaveBeenLastCalledWith("claude", boundary)
+
+    const input = await enterAndSubmit(overBoundary)
+    expect(save).toHaveBeenLastCalledWith("claude", overBoundary)
+    expect(input.value).toBe(overBoundary)
+    expect(container.textContent).toContain("This key is not valid")
+    expect(container.textContent).not.toContain(overBoundary)
+  })
+
   it("reports a refresh failure without relabeling the persisted save", async () => {
     const save = vi.fn(async () => ({ status: "saved" as const }))
     const saved = vi.fn(async () => {

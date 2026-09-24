@@ -369,6 +369,45 @@ mod tests {
     }
 
     #[test]
+    fn multibyte_candidates_obey_the_domain_byte_boundary_before_the_store_effect() {
+        let store = Store::default();
+        let audit = Audit::default();
+
+        assert_eq!(
+            save_api_key(
+                &store,
+                &Targets,
+                &Ids,
+                &audit,
+                CredentialSaveCaller::Setup,
+                CredentialAgent::Claude,
+                "é".repeat(8192).into_bytes(),
+            ),
+            Ok(CredentialSaveResult::Saved)
+        );
+        assert_eq!(
+            save_api_key(
+                &store,
+                &Targets,
+                &Ids,
+                &audit,
+                CredentialSaveCaller::Setup,
+                CredentialAgent::Claude,
+                "é".repeat(8193).into_bytes(),
+            ),
+            Ok(CredentialSaveResult::Refused {
+                failure: CredentialSaveRefusal::Invalid,
+                outcome_audit_failed: false,
+            })
+        );
+        assert_eq!(*store.calls.lock().unwrap(), 1);
+        assert_eq!(
+            *audit.records.lock().unwrap(),
+            vec!["intent", "outcome", "intent", "outcome"]
+        );
+    }
+
+    #[test]
     fn confirmed_effect_survives_outcome_audit_failure() {
         let store = Store::default();
         let audit = Audit {

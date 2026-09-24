@@ -144,7 +144,10 @@ impl HostDependencies {
     pub fn assemble(app: &AppHandle, stage: String) -> tauri::Result<Self> {
         let config_root = local_data::config_root(app, &stage);
         let settings: Arc<dyn SettingsStore> = Arc::new(SettingsFile::at(config_root.clone()));
-        let durable = settings.load().service;
+        // These fields own the service registration and its credential
+        // namespace. A corrupt or unreadable authority cannot be replaced by
+        // defaults without potentially starting and addressing another service.
+        let durable = settings.load_service()?;
         let home = app.path().home_dir()?;
         let service_configuration = ServiceConfiguration::new(
             stage.clone(),

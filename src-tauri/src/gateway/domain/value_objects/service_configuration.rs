@@ -61,10 +61,12 @@ impl ServiceConfiguration {
         &self.data_root
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn port(&self) -> u16 {
         self.port
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn claude_config_directory(&self) -> Option<&Path> {
         self.claude_config_directory.as_deref()
     }

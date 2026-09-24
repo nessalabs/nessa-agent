@@ -12,8 +12,10 @@
 
 use super::*;
 use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentCredentialKind};
+#[cfg(unix)]
 use crate::agents::infrastructure::credentialed_claude::credential_environment;
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::ffi::OsStr;
 use std::path::Path;
 use tempfile::TempDir;
@@ -364,6 +366,7 @@ fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn readiness_and_launch_agree_on_every_canonical_source_state() {
     for (answer, readiness, launch) in [
