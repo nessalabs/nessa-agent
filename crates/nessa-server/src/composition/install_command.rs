@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use nessa_local_storage::create_directory;
 use serde_json::{json, Value};
 
 use crate::agent_install::application::{
@@ -60,17 +61,12 @@ fn install(
 ) -> Result<InstalledRuntime, RunError> {
     let host = host_platform();
     let release = pinned(agent, &host)?;
-    let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
-    let store = ManagedRuntimes::new(root);
     let data_root = root
         .parent()
         .ok_or_else(|| RunError::Agent("invalid agent runtime directory".into()))?;
-    let audit = DurableInstallAudit::new(
-        data_root,
-        Path::new("audit/agent-install"),
-        Arc::new(super::local_auth::SystemClock),
-    )
-    .map_err(|error| RunError::Agent(error.to_string()))?;
+    let audit = install_audit(data_root)?;
+    let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
+    let store = ManagedRuntimes::new(root);
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
@@ -99,6 +95,17 @@ fn install(
         "agent runtime installed"
     );
     Ok(installed)
+}
+
+/// Create the install journal beneath the selected private data namespace.
+fn install_audit(data_root: &Path) -> Result<DurableInstallAudit, RunError> {
+    create_directory(data_root).map_err(|error| RunError::Agent(error.to_string()))?;
+    DurableInstallAudit::new(
+        data_root,
+        Path::new("audit/agent-install"),
+        Arc::new(super::local_auth::SystemClock),
+    )
+    .map_err(|error| RunError::Agent(error.to_string()))
 }
 
 /// The tested release for this agent on this machine.

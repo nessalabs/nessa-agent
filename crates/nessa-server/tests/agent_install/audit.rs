@@ -15,6 +15,8 @@ use nessa_auth::application::ports::Clock;
 use serde::{ser::SerializeSeq, Serialize, Serializer};
 use std::{
     cell::Cell,
+    ffi::OsStr,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Barrier},
 };
@@ -34,11 +36,11 @@ fn target() -> RuntimeArtifact {
     RuntimeArtifact::for_release(&release("1.18.31", PINNED_DIGEST, &platform()))
 }
 
-fn audit_at(root: &std::path::Path) -> DurableInstallAudit {
-    DurableInstallAudit::new(root, std::path::Path::new("audit"), Arc::new(FixedClock)).unwrap()
+fn audit_at(root: &Path) -> DurableInstallAudit {
+    DurableInstallAudit::new(root, Path::new("audit"), Arc::new(FixedClock)).unwrap()
 }
 
-fn json_records(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+fn json_records(directory: &Path) -> Vec<PathBuf> {
     let mut records = std::fs::read_dir(directory)
         .unwrap()
         .filter_map(Result::ok)
@@ -50,6 +52,19 @@ fn json_records(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
         .collect::<Vec<_>>();
     records.sort();
     records
+}
+
+#[cfg(unix)]
+fn native_file_inventory(directory: &Path) -> Vec<(OsString, Vec<u8>)> {
+    let mut entries = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (entry.file_name(), std::fs::read(entry.path()).unwrap())
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
 }
 
 #[test]
@@ -151,14 +166,12 @@ fn interrupted_reservation_child() {
     let Some(root) = std::env::var_os("NESSA_AUDIT_RESERVATION_ROOT") else {
         return;
     };
-    let directory =
-        PrivateDirectory::open_beneath(std::path::Path::new(&root), std::path::Path::new("audit"))
-            .unwrap();
+    let directory = PrivateDirectory::open_beneath(Path::new(&root), Path::new("audit")).unwrap();
     let mut reservation = directory.reserve_temp().unwrap();
     reservation.as_file_mut().write_all(b"interrupted").unwrap();
     reservation.as_file().sync_all().unwrap();
     std::fs::write(
-        std::path::Path::new(&root).join("reservation-name"),
+        Path::new(&root).join("reservation-name"),
         reservation.name().to_string_lossy().as_bytes(),
     )
     .unwrap();
@@ -340,13 +353,9 @@ fn restored_recovery_rejects_both_confirmation_state_contradictions() {
             fixture_failure.detail()
         );
         let encoded = serde_json::to_vec(&stored).unwrap();
-        let retained =
-            PrivateDirectory::open_beneath(root.path(), std::path::Path::new("audit")).unwrap();
+        let retained = PrivateDirectory::open_beneath(root.path(), Path::new("audit")).unwrap();
         let mut file = retained
-            .open_file(
-                std::ffi::OsStr::new("00000000000000000003.json"),
-                OpenMode::ReadWrite,
-            )
+            .open_file(OsStr::new("00000000000000000003.json"), OpenMode::ReadWrite)
             .unwrap();
         file.set_len(0).unwrap();
         file.rewind().unwrap();
@@ -395,22 +404,71 @@ fn contradictory_facts_in_one_domain_slot_are_rejected_without_claiming_incoming
     ));
 }
 
+#[cfg(windows)]
+fn assert_append_replay_and_next_sequence(audit: &DurableInstallAudit, directory: &Path) {
+    let (mut attempt, started) = InstallAttempt::start(agent(), target(), request());
+    assert_eq!(
+        audit.record(started.clone()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    assert_eq!(
+        audit.record(started).unwrap(),
+        AuditAcknowledgement::Replayed
+    );
+    assert_eq!(
+        audit.record(attempt.verified().unwrap()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    assert_eq!(
+        json_records(directory),
+        vec![
+            directory.join("00000000000000000001.json"),
+            directory.join("00000000000000000002.json"),
+        ]
+    );
+}
+
 #[test]
 fn replacing_the_named_lock_is_detected_before_append() {
     let root = temporary_root();
     let directory = root.path().join("audit");
     let audit = audit_at(root.path());
-    std::fs::remove_file(directory.join(LOCK_NAME)).unwrap();
-    std::fs::write(directory.join(LOCK_NAME), b"").unwrap();
-    let (_, started) = InstallAttempt::start(agent(), target(), request());
+    let retained = PrivateDirectory::open_beneath(root.path(), Path::new("audit"))
+        .expect("the journal directory is retained");
+    let original_lock = retained
+        .open_file(OsStr::new(LOCK_NAME), OpenMode::Read)
+        .unwrap();
 
-    let failure = audit.record(started).unwrap_err();
+    match std::fs::remove_file(directory.join(LOCK_NAME)) {
+        Ok(()) => {
+            std::fs::write(directory.join(LOCK_NAME), b"").unwrap();
+            let (_, started) = InstallAttempt::start(agent(), target(), request());
+            let failure = audit.record(started).unwrap_err();
 
-    assert!(matches!(
-        failure.stage(),
-        AuditFailureStage::AcquireLock | AuditFailureStage::VerifyAuthority
-    ));
-    assert!(json_records(&directory).is_empty());
+            assert!(matches!(
+                failure.stage(),
+                AuditFailureStage::AcquireLock | AuditFailureStage::VerifyAuthority
+            ));
+            assert!(!retained
+                .named_file_is(OsStr::new(LOCK_NAME), &original_lock)
+                .unwrap());
+            assert!(json_records(&directory).is_empty());
+        }
+        Err(error) => {
+            #[cfg(windows)]
+            {
+                assert_eq!(error.raw_os_error(), Some(32));
+                retained.verify_binding().unwrap();
+                assert!(retained
+                    .named_file_is(OsStr::new(LOCK_NAME), &original_lock)
+                    .unwrap());
+                assert!(json_records(&directory).is_empty());
+                assert_append_replay_and_next_sequence(&audit, &directory);
+            }
+            #[cfg(not(windows))]
+            panic!("the lock mutation failed unexpectedly: {error}");
+        }
+    }
 }
 
 #[test]
@@ -419,18 +477,48 @@ fn renaming_the_retained_directory_cannot_redirect_append_to_a_replacement() {
     let directory = root.path().join("audit");
     let moved = root.path().join("moved-audit");
     let audit = audit_at(root.path());
-    std::fs::rename(&directory, &moved).unwrap();
-    std::fs::create_dir(&directory).unwrap();
-    let (_, started) = InstallAttempt::start(agent(), target(), request());
+    let retained = PrivateDirectory::open_beneath(root.path(), Path::new("audit"))
+        .expect("the journal directory is retained");
+    let original_lock = retained
+        .open_file(OsStr::new(LOCK_NAME), OpenMode::Read)
+        .unwrap();
 
-    let failure = audit.record(started).unwrap_err();
+    match std::fs::rename(&directory, &moved) {
+        Ok(()) => {
+            std::fs::create_dir(&directory).unwrap();
+            let (_, started) = InstallAttempt::start(agent(), target(), request());
+            let failure = audit.record(started).unwrap_err();
 
-    assert!(matches!(
-        failure.stage(),
-        AuditFailureStage::AcquireLock | AuditFailureStage::VerifyAuthority
-    ));
-    assert!(json_records(&directory).is_empty());
-    assert!(json_records(&moved).is_empty());
+            assert!(matches!(
+                failure.stage(),
+                AuditFailureStage::AcquireLock | AuditFailureStage::VerifyAuthority
+            ));
+            assert!(json_records(&directory).is_empty());
+            assert!(json_records(&moved).is_empty());
+            assert!(moved.join(LOCK_NAME).is_file());
+            assert!(!directory.join(LOCK_NAME).exists());
+            let moved_retained =
+                PrivateDirectory::open_beneath(root.path(), Path::new("moved-audit")).unwrap();
+            assert!(moved_retained
+                .named_file_is(OsStr::new(LOCK_NAME), &original_lock)
+                .unwrap());
+        }
+        Err(error) => {
+            #[cfg(windows)]
+            {
+                assert_eq!(error.raw_os_error(), Some(32));
+                assert!(directory.is_dir());
+                assert!(!moved.exists());
+                retained.verify_binding().unwrap();
+                assert!(retained
+                    .named_file_is(OsStr::new(LOCK_NAME), &original_lock)
+                    .unwrap());
+                assert_append_replay_and_next_sequence(&audit, &directory);
+            }
+            #[cfg(not(windows))]
+            panic!("the directory mutation failed unexpectedly: {error}");
+        }
+    }
 }
 
 #[test]
@@ -521,13 +609,9 @@ fn temporary_near_misses_and_non_regular_matching_names_are_refused() {
 fn oversized_record_is_refused_by_the_bounded_reader_before_decode() {
     let root = temporary_root();
     let audit = audit_at(root.path());
-    let retained =
-        PrivateDirectory::open_beneath(root.path(), std::path::Path::new("audit")).unwrap();
+    let retained = PrivateDirectory::open_beneath(root.path(), Path::new("audit")).unwrap();
     let mut file = retained
-        .open_file(
-            std::ffi::OsStr::new("00000000000000000001.json"),
-            OpenMode::CreateNew,
-        )
+        .open_file(OsStr::new("00000000000000000001.json"), OpenMode::CreateNew)
         .unwrap();
     file.write_all(&vec![b' '; MAX_AUDIT_RECORD_BYTES + 1])
         .unwrap();
@@ -670,7 +754,7 @@ fn nested_audit_directory_is_created_beneath_the_trusted_root() {
     let root = temporary_root();
     let audit = DurableInstallAudit::new(
         root.path(),
-        std::path::Path::new("audit/agent-install"),
+        Path::new("audit/agent-install"),
         Arc::new(FixedClock),
     )
     .unwrap();
@@ -713,7 +797,7 @@ fn cross_process_writer_child() {
         return;
     };
     let request_id = std::env::var("NESSA_AUDIT_CHILD_REQUEST").unwrap();
-    let audit = audit_at(std::path::Path::new(&root));
+    let audit = audit_at(Path::new(&root));
     let (_, started) = InstallAttempt::start(
         agent(),
         target(),
@@ -783,22 +867,36 @@ fn a_non_utf8_record_name_is_rejected_without_lossy_aliasing() {
     let root = temporary_root();
     let directory = root.path().join("audit");
     let audit = audit_at(root.path());
+    let retained = PrivateDirectory::open_beneath(root.path(), Path::new("audit"))
+        .expect("the journal directory is retained");
     let name = OsString::from_vec(vec![b'0', 0xff, b'.', b'j', b's', b'o', b'n']);
-    match std::fs::write(directory.join(name), b"{}") {
-        Ok(()) => {
+    let original = native_file_inventory(&directory);
+    match retained.open_file(&name, OpenMode::CreateNew) {
+        Ok(mut file) => {
+            file.write_all(b"native name").unwrap();
+            file.sync_all().unwrap();
+            drop(file);
+            retained.sync().unwrap();
+            let fixture = native_file_inventory(&directory);
             let (_, started) = InstallAttempt::start(agent(), target(), request());
-            assert_eq!(
-                audit.record(started).unwrap_err().stage(),
-                AuditFailureStage::ReadJournal
-            );
+            let failure = audit.record(started).unwrap_err();
+            assert_eq!(failure.stage(), AuditFailureStage::ReadJournal);
+            assert_eq!(failure.detail(), "audit record name is not UTF-8");
+            assert_eq!(native_file_inventory(&directory), fixture);
+            assert!(fixture
+                .iter()
+                .any(|(entry, content)| entry == &name && content == b"native name"));
+            assert!(!directory.join("00000000000000000001.json").exists());
         }
         Err(error) => {
             assert_eq!(
                 error.raw_os_error(),
-                Some(92),
+                Some(libc::EILSEQ),
                 "the platform neither created the non-UTF-8 name nor refused it as EILSEQ"
             );
+            // This filesystem rejected the native fixture itself, so this
+            // branch proves setup refusal and does not exercise the scanner.
+            assert_eq!(native_file_inventory(&directory), original);
         }
     }
-    assert!(json_records(&directory).is_empty());
 }

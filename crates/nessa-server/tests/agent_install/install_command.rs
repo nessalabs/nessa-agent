@@ -1,12 +1,23 @@
 use super::*;
-use crate::agent_install::domain::{Libc, ReleasePlatform, ReleaseRequirements};
-use std::path::Path;
-
-use crate::agent_install::application::{InstalledRuntime, StoreFailure};
+use crate::agent_install::application::{
+    AuditAcknowledgement, InstallAudit, InstalledRuntime, StoreFailure,
+};
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, PinnedRelease, ReleaseVersion,
+    ArchiveDigest, ArchiveRejected, ArchiveSize, ArchiveUrl, InstallAttempt, InstallTransition,
+    Libc, PinnedRelease, ReleasePlatform, ReleaseRequirements, ReleaseVersion, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{installs, request, temporary_root};
+use nessa_local_storage::create_directory;
+#[cfg(unix)]
+use std::{
+    ffi::OsStr,
+    fs::Permissions,
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{MetadataExt, PermissionsExt},
+    },
+};
+use std::{fs, path::Path};
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -35,6 +46,166 @@ fn rejection() -> ArchiveRejected {
     .expect("a release whose requirements fit its platform")
     .accept(&digest('b'))
     .expect_err("another archive is not the pinned one")
+}
+
+fn install_attempt() -> (InstallAttempt, InstallTransition) {
+    let release = PinnedRelease::new(
+        ReleaseVersion::parse("1.0.0").expect("usable version"),
+        ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
+        ReleaseRequirements::default(),
+        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveSize::parse(46_009_615).expect("a measured archive"),
+        digest('a'),
+        installs("package/bin/opencode"),
+    )
+    .expect("a release whose requirements fit its platform");
+    InstallAttempt::start(
+        opencode(),
+        RuntimeArtifact::for_release(&release),
+        request(),
+    )
+}
+
+#[test]
+fn audit_factory_creates_a_missing_selected_namespace_and_reopens_its_journal() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data_root = temporary.path().join("data/ci/instances/install-e2e");
+    assert!(!data_root.exists());
+
+    let audit = install_audit(&data_root).expect("the selected namespace is initialized");
+    let (mut attempt, started) = install_attempt();
+    assert_eq!(
+        audit.record(started.clone()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    drop(audit);
+
+    let reopened = install_audit(&data_root).expect("the existing private namespace reopens");
+    assert_eq!(
+        reopened.record(started).unwrap(),
+        AuditAcknowledgement::Replayed
+    );
+    assert_eq!(
+        reopened.record(attempt.verified().unwrap()).unwrap(),
+        AuditAcknowledgement::Recorded
+    );
+    let journal = data_root.join("audit/agent-install");
+    assert!(journal.join("audit.lock").is_file());
+    assert!(journal.join("00000000000000000001.json").is_file());
+    assert!(journal.join("00000000000000000002.json").is_file());
+    assert!(!temporary.path().join("audit").exists());
+    #[cfg(unix)]
+    {
+        let audit_directory = data_root.join("audit");
+        for directory in [
+            data_root.as_path(),
+            audit_directory.as_path(),
+            journal.as_path(),
+        ] {
+            assert_eq!(
+                fs::metadata(directory).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+}
+
+#[test]
+fn audit_factory_reuses_the_exact_existing_private_namespace() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data_root = temporary.path().join("selected");
+    create_directory(&data_root).unwrap();
+    #[cfg(unix)]
+    let before = fs::metadata(&data_root).unwrap();
+
+    let _audit = install_audit(&data_root).expect("an existing private namespace is valid");
+    let after = fs::metadata(&data_root).unwrap();
+
+    assert_eq!(fs::canonicalize(&data_root).unwrap(), data_root);
+    assert!(after.is_dir());
+    #[cfg(unix)]
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+}
+
+#[test]
+fn audit_factory_rejects_a_file_as_the_selected_namespace_without_runtime_effects() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data_root = temporary.path().join("selected");
+    fs::write(&data_root, b"not a directory").unwrap();
+
+    assert!(install_audit(&data_root).is_err());
+    assert_eq!(fs::read(&data_root).unwrap(), b"not a directory");
+    assert!(!temporary.path().join("agents").exists());
+    assert!(!temporary.path().join("audit").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn install_stops_at_a_namespace_initialization_failure_before_runtime_effects() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data_root = temporary.path().join("selected");
+    let runtime_root = data_root.join("agents");
+    fs::write(&data_root, b"not a directory").unwrap();
+
+    let failure = install(&opencode(), &runtime_root, &request())
+        .expect_err("an unsafe selected namespace stops installation");
+
+    assert!(failure.to_string().contains("agent setup failed"));
+    assert_eq!(fs::read(&data_root).unwrap(), b"not a directory");
+    assert!(!runtime_root.exists());
+    assert!(!temporary.path().join("audit").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_factory_rejects_linked_or_non_private_namespaces_without_outside_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let outside = temporary.path().join("outside");
+    create_directory(&outside).unwrap();
+    let linked = temporary.path().join("linked");
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    assert!(install_audit(&linked).is_err());
+    assert!(fs::read_dir(&outside).unwrap().next().is_none());
+
+    let public = temporary.path().join("public");
+    fs::create_dir(&public).unwrap();
+    fs::set_permissions(&public, Permissions::from_mode(0o755)).unwrap();
+    assert!(install_audit(&public).is_err());
+    assert!(fs::read_dir(&public).unwrap().next().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_factory_rejects_a_nested_audit_link_without_writing_outside() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data_root = temporary.path().join("selected");
+    let outside = temporary.path().join("outside");
+    create_directory(&data_root).unwrap();
+    create_directory(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, data_root.join("audit")).unwrap();
+
+    assert!(install_audit(&data_root).is_err());
+    assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    assert!(!data_root.join("agent-install").exists());
+}
+
+#[test]
+fn audit_factory_keeps_selected_namespaces_isolated() {
+    let temporary = tempfile::tempdir().unwrap();
+    let first_root = temporary.path().join("first");
+    let second_root = temporary.path().join("second");
+    let first = install_audit(&first_root).unwrap();
+    let _second = install_audit(&second_root).unwrap();
+    let (_, started) = install_attempt();
+
+    first.record(started).unwrap();
+
+    assert!(first_root
+        .join("audit/agent-install/00000000000000000001.json")
+        .is_file());
+    assert!(!second_root
+        .join("audit/agent-install/00000000000000000001.json")
+        .exists());
 }
 
 /// Install the pinned Opencode release from inside an async runtime, the way
@@ -122,6 +293,10 @@ fn nothing_is_written_for_an_agent_with_no_release() {
     assert!(
         !root.path().join("gemini").exists(),
         "a refused install left a directory behind"
+    );
+    assert!(
+        !root.path().parent().unwrap().join("audit").exists(),
+        "pin refusal initialized audit storage"
     );
 }
 
@@ -279,9 +454,6 @@ fn an_install_that_downloaded_nothing_says_so() {
 #[cfg(unix)]
 #[test]
 fn a_runtime_whose_path_is_not_text_is_not_reported_as_a_path_that_is() {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
     let installed = InstalledRuntime {
         version: ReleaseVersion::parse("1.18.31").expect("usable version"),
         // A lone 0x80 is a continuation byte with nothing to continue: a

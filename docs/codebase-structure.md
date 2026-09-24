@@ -1011,7 +1011,10 @@ directory, lock, or record replacement is still refused.
 picks the build for this machine — the most demanding of the pinned releases
 that run on it — supplies a fresh correlation identity and the effective local
 account whose private data receives the runtime, and reports one line of JSON on
-stdout. `scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
+stdout. After pin and platform admission, composition creates or verifies the
+selected private data namespace before it constructs the audit beneath that
+root; an unsafe namespace stops the command before download or publication.
+`scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
 and hashing every platform's archives. Composition reads the store at every
 start through `composition/installed_launch.rs`, which answers with a launch or
 with nothing and never with a path it wrote down earlier. Tests under
