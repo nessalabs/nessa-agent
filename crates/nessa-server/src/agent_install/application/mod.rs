@@ -20,11 +20,12 @@ pub use install::{
 pub use ports::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, AuditRecordEvidence,
     InstallAudit, InstallDeliveryFailure, InstallDeliveryFailureStage, InstallationDelivery,
-    InstallationDeliverySession, ManagedExecutableUse, ManagedExecutableUseFailure,
-    ManagedExecutableUseGuard, ManagedLaunchSnapshot, PendingInstallationDelivery,
-    PreparedInstallation, Publication, PublicationChange, PublicationCleanupFailure,
-    PublicationLease, PublicationRecovery, PublishFailure, PublishedAuditRecord, RollbackChange,
-    RuntimeReclamationEffect, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    InstallationDeliverySession, ManagedExecutableUse, ManagedExecutableUseAdmissionFailure,
+    ManagedExecutableUseFailure, ManagedExecutableUseGuard, ManagedLaunchSnapshot,
+    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
+    PublicationCleanupFailure, PublicationLease, PublicationRecovery, PublishFailure,
+    PublishedAuditRecord, RollbackChange, RuntimeReclamationEffect, RuntimeStore, SourceFailure,
+    StagedArchive, StoreFailure,
 };
 pub use reclamation::{
     ReclamationAudit, ReclamationAuditFailure, ReclamationOperationIds,

@@ -614,6 +614,100 @@ fn release_record_survives_directory_sync_failure_and_is_reacknowledged_after_re
 }
 
 #[test]
+fn failed_generation_retention_returns_the_exact_never_spawned_owner() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&release);
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    let authority = DurableManagedExecutableUse {
+        root: root.path().to_owned(),
+        marker_directory: marker_directory.clone(),
+        agent: agent(),
+        artifact: artifact.clone(),
+        local_mutation: Arc::new(Mutex::new(())),
+        _artifact_lock: store.hold_artifact_for_launch(&agent(), &artifact).unwrap(),
+    };
+
+    let failure = match authority.admit_with(|_, _, _, phase, _| {
+        assert_eq!(phase, "expected");
+        Err(StoreFailure::Unwritable(
+            "injected expected-record write failure".into(),
+        ))
+    }) {
+        Ok(_) => panic!("expected-record failure must refuse spawn admission"),
+        Err(failure) => failure,
+    };
+    assert!(failure
+        .detail()
+        .contains("injected expected-record write failure"));
+    let (_, generation) = failure.into_parts();
+    let mut generation = generation.expect("created generation retains its cleanup owner");
+    assert_eq!(active_uses(root.path()), 0);
+
+    generation.release().unwrap();
+    assert_eq!(active_uses(root.path()), 0);
+    drop(generation);
+
+    let reopened = ManagedRuntimes::new(root.path());
+    let launch = reopened
+        .managed_launch(&agent(), &release)
+        .unwrap()
+        .unwrap();
+    let mut later = launch.admit().unwrap();
+    assert_eq!(active_uses(root.path()), 1);
+    later.release().unwrap();
+    assert_eq!(active_uses(root.path()), 0);
+}
+
+#[test]
+fn admitted_record_sync_uncertainty_keeps_retryable_pre_spawn_ownership() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&release);
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    let authority = DurableManagedExecutableUse {
+        root: root.path().to_owned(),
+        marker_directory: marker_directory.clone(),
+        agent: agent(),
+        artifact: artifact.clone(),
+        local_mutation: Arc::new(Mutex::new(())),
+        _artifact_lock: store.hold_artifact_for_launch(&agent(), &artifact).unwrap(),
+    };
+
+    let failure = match authority.admit_with(|store, directory, generation, phase, record| {
+        if phase == "admitted" {
+            store.retain_use_generation_with(directory, generation, phase, record, |_| {
+                Err(std::io::Error::other(
+                    "injected admitted directory sync failure",
+                ))
+            })
+        } else {
+            store.retain_use_generation(directory, generation, phase, record)
+        }
+    }) {
+        Ok(_) => panic!("uncertain admitted record must refuse spawn admission"),
+        Err(failure) => failure,
+    };
+    assert!(failure
+        .detail()
+        .contains("injected admitted directory sync failure"));
+    assert_eq!(active_uses(root.path()), 1);
+    let (_, generation) = failure.into_parts();
+    let mut generation = generation.expect("uncertain admission retains exact generation owner");
+
+    generation.release().unwrap();
+    assert_eq!(active_uses(root.path()), 0);
+    drop(generation);
+
+    let reopened = ManagedRuntimes::new(root.path());
+    assert!(!reopened.active_use_remains(&agent(), &artifact).unwrap());
+}
+
+#[test]
 fn fresh_reclamation_refuses_a_substituted_release_record() {
     let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());

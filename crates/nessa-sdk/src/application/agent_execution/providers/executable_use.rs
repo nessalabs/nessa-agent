@@ -33,6 +33,68 @@ impl fmt::Display for ExecutableUseError {
 
 impl std::error::Error for ExecutableUseError {}
 
+/// A failed executable-use admission and any exact pre-spawn generation it created.
+///
+/// [`Self::into_parts`] returns a guard only when admission created a generation
+/// identity before failing. Its durable evidence may be partial or have an
+/// uncertain acknowledgement. The guard owns that known-never-spawned
+/// generation and may finish its release without process cleanup. A failure
+/// without a guard occurred before any generation existed.
+pub struct ExecutableUseAdmissionFailure {
+    error: ExecutableUseError,
+    guard: Option<Box<dyn ExecutableUseGuard>>,
+}
+
+impl ExecutableUseAdmissionFailure {
+    /// Creates a failure that occurred before a process generation was created.
+    pub fn before_generation(error: ExecutableUseError) -> Self {
+        Self { error, guard: None }
+    }
+
+    /// Creates a failure that still owns an exact, known-never-spawned generation.
+    ///
+    /// The caller must preserve `guard` until its explicit release succeeds.
+    /// Dropping it leaves the durable admission unresolved.
+    pub fn with_generation(error: ExecutableUseError, guard: Box<dyn ExecutableUseGuard>) -> Self {
+        Self {
+            error,
+            guard: Some(guard),
+        }
+    }
+
+    /// Returns the diagnostic failure without consuming retry ownership.
+    pub fn error(&self) -> &ExecutableUseError {
+        &self.error
+    }
+
+    /// Separates the diagnostic from an exact pre-spawn generation owner.
+    ///
+    /// A returned guard may be released immediately because no spawn was
+    /// attempted after this admission failure. If release fails, the same guard
+    /// retains retry ownership.
+    pub fn into_parts(self) -> (ExecutableUseError, Option<Box<dyn ExecutableUseGuard>>) {
+        (self.error, self.guard)
+    }
+}
+
+impl fmt::Debug for ExecutableUseAdmissionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutableUseAdmissionFailure")
+            .field("error", &self.error)
+            .field("owns_generation", &self.guard.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Display for ExecutableUseAdmissionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for ExecutableUseAdmissionFailure {}
+
 /// Installation-independent authority that admits use of one executable.
 ///
 /// Implementations may durably record each process generation. A successful
@@ -44,7 +106,7 @@ pub trait ExecutableUse: Send + Sync {
     fn executable(&self) -> &Path;
 
     /// Durably admits one process generation before its spawn is attempted.
-    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError>;
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure>;
 }
 
 /// One admitted executable-use generation.
@@ -117,7 +179,7 @@ impl ExecutableUseSnapshot {
     }
 
     /// Durably admits one process generation before spawn.
-    pub fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError> {
+    pub fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
         self.authority.admit()
     }
 }
@@ -131,7 +193,7 @@ impl ExecutableUse for UnmanagedExecutableUse {
         &self.executable
     }
 
-    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError> {
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
         Ok(Box::new(UnmanagedExecutableUseGuard))
     }
 }

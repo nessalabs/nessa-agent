@@ -145,11 +145,24 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities::default());
-        let mut executable_use = self.config.executable.admit().map_err(|error| {
-            ProviderOpenError::no_resources(AgentError::Configuration(format!(
-                "executable use admission failed: {error}"
-            )))
-        })?;
+        let mut executable_use = match self.config.executable.admit() {
+            Ok(guard) => guard,
+            Err(failure) => {
+                let (error, generation) = failure.into_parts();
+                let cause =
+                    AgentError::Configuration(format!("executable use admission failed: {error}"));
+                return Err(match generation {
+                    Some(generation) => ProviderOpenError::with_cleanup(
+                        cause,
+                        Arc::new(ProcessCleanup::retaining_use(
+                            self.config.clone(),
+                            generation,
+                        )),
+                    ),
+                    None => ProviderOpenError::no_resources(cause),
+                });
+            }
+        };
         let scope = match (self.process)() {
             Ok(scope) => scope,
             Err(failure) => {

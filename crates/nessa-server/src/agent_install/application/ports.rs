@@ -895,8 +895,69 @@ pub trait ManagedExecutableUseGuard: Send {
     fn release(&mut self) -> Result<(), ManagedExecutableUseFailure>;
 }
 
+pub struct ManagedExecutableUseAdmissionFailure {
+    failure: ManagedExecutableUseFailure,
+    guard: Option<Box<dyn ManagedExecutableUseGuard>>,
+}
+
+impl ManagedExecutableUseAdmissionFailure {
+    pub fn before_generation(failure: ManagedExecutableUseFailure) -> Self {
+        Self {
+            failure,
+            guard: None,
+        }
+    }
+
+    pub fn with_generation(
+        failure: ManagedExecutableUseFailure,
+        guard: Box<dyn ManagedExecutableUseGuard>,
+    ) -> Self {
+        Self {
+            failure,
+            guard: Some(guard),
+        }
+    }
+
+    pub fn failure(&self) -> &ManagedExecutableUseFailure {
+        &self.failure
+    }
+
+    pub fn detail(&self) -> &str {
+        self.failure.detail()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ManagedExecutableUseFailure,
+        Option<Box<dyn ManagedExecutableUseGuard>>,
+    ) {
+        (self.failure, self.guard)
+    }
+}
+
+impl fmt::Debug for ManagedExecutableUseAdmissionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManagedExecutableUseAdmissionFailure")
+            .field("failure", &self.failure)
+            .field("owns_generation", &self.guard.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Display for ManagedExecutableUseAdmissionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.failure.fmt(formatter)
+    }
+}
+
+impl std::error::Error for ManagedExecutableUseAdmissionFailure {}
+
 pub trait ManagedExecutableUse: Send + Sync {
-    fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure>;
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure>;
 }
 
 #[derive(Clone)]
@@ -917,7 +978,9 @@ impl ManagedLaunchSnapshot {
         &self.executable
     }
 
-    pub fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+    pub fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
         self.authority.admit()
     }
 
@@ -932,7 +995,9 @@ struct TestUnmanagedExecutableUse;
 
 #[cfg(test)]
 impl ManagedExecutableUse for TestUnmanagedExecutableUse {
-    fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
         Ok(Box::new(TestUnmanagedExecutableUseGuard))
     }
 }

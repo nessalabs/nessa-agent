@@ -1,11 +1,18 @@
 //! Installed launch resolution over a substitute runtime store.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use super::*;
 use crate::agent_install::application::{
-    ManagedLaunchSnapshot, Publication, PublicationLease, PublishFailure, RuntimeStore,
-    StagedArchive, StoreFailure,
+    ManagedExecutableUse, ManagedExecutableUseAdmissionFailure, ManagedExecutableUseFailure,
+    ManagedExecutableUseGuard, ManagedLaunchSnapshot, Publication, PublicationLease,
+    PublishFailure, RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, HostPlatform, PinnedRelease, ReleasePlatform,
@@ -16,6 +23,30 @@ use crate::composition::desktop::bundled_launch;
 struct Answers {
     installed: Result<Option<PathBuf>, StoreFailure>,
     asked: Mutex<Vec<(String, String)>>,
+}
+
+struct FailedAdmission {
+    releases: Arc<AtomicUsize>,
+}
+
+impl ManagedExecutableUse for FailedAdmission {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        Err(ManagedExecutableUseAdmissionFailure::with_generation(
+            ManagedExecutableUseFailure::new("admission durability is uncertain"),
+            Box::new(ReleaseOwner(self.releases.clone())),
+        ))
+    }
+}
+
+struct ReleaseOwner(Arc<AtomicUsize>);
+
+impl ManagedExecutableUseGuard for ReleaseOwner {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 impl Answers {
@@ -176,4 +207,29 @@ fn installed_arguments_are_agent_specific() {
     assert_eq!(installed_arguments(AgentId::Opencode), ["acp"]);
     assert!(installed_arguments(AgentId::Claude).is_empty());
     assert!(installed_arguments(AgentId::Codex).is_empty());
+}
+
+#[test]
+fn composition_preserves_a_failed_pre_spawn_generations_release_owner() {
+    let releases = Arc::new(AtomicUsize::new(0));
+    let managed = ManagedLaunchSnapshot::new(
+        PathBuf::from("/managed/opencode"),
+        Arc::new(FailedAdmission {
+            releases: releases.clone(),
+        }),
+    );
+    let sdk = managed_launch(managed).unwrap();
+
+    let failure = match sdk.admit() {
+        Ok(_) => panic!("managed admission failure must cross composition"),
+        Err(failure) => failure,
+    };
+    assert_eq!(
+        failure.error(),
+        &ExecutableUseError::new("admission durability is uncertain")
+    );
+    let (_, guard) = failure.into_parts();
+    let mut guard = guard.expect("composition must carry the exact managed generation owner");
+    guard.release().unwrap();
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
 }

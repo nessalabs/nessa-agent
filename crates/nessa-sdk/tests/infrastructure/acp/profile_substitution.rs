@@ -8,14 +8,13 @@ use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, ExecutionUpdate,
 };
-use crate::application::agent_execution::providers::ExecutableUseSnapshot;
-
 use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    ProviderOpenControl, ProviderOpenRequest, ProviderSessionState, ResourceCleanup,
-    SessionCloseRequest,
+    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
+    ExecutableUseSnapshot, ProviderOpenControl, ProviderOpenRequest, ProviderSessionState,
+    ResourceCleanup, SessionCloseRequest,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -59,6 +58,54 @@ fn no_startup_control() -> ProviderOpenControl {
 struct RecordingAudit {
     records: Mutex<Vec<ExecutionAuditRecord>>,
     reject: bool,
+}
+
+struct FailedPreSpawnAdmission {
+    executable: PathBuf,
+    releases: Arc<AtomicUsize>,
+}
+
+struct FailedBeforeGeneration {
+    executable: PathBuf,
+}
+
+impl ExecutableUse for FailedBeforeGeneration {
+    fn executable(&self) -> &std::path::Path {
+        &self.executable
+    }
+
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
+        Err(ExecutableUseAdmissionFailure::before_generation(
+            ExecutableUseError::new("inventory validation failed before generation creation"),
+        ))
+    }
+}
+
+impl ExecutableUse for FailedPreSpawnAdmission {
+    fn executable(&self) -> &std::path::Path {
+        &self.executable
+    }
+
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
+        Err(ExecutableUseAdmissionFailure::with_generation(
+            ExecutableUseError::new("admitted record directory sync is uncertain"),
+            Box::new(RetryablePreSpawnRelease(self.releases.clone())),
+        ))
+    }
+}
+
+struct RetryablePreSpawnRelease(Arc<AtomicUsize>);
+
+impl ExecutableUseGuard for RetryablePreSpawnRelease {
+    fn release(&mut self) -> Result<(), ExecutableUseError> {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(ExecutableUseError::new(
+                "injected release acknowledgement failure",
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 impl ExecutionAudit for RecordingAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -357,6 +404,99 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
     };
     config.validate().unwrap();
     (root, config, capabilities)
+}
+
+#[tokio::test]
+async fn failed_pre_spawn_admission_transfers_exact_release_retry_ownership() {
+    let (_root, mut config, capabilities) = profile_setup();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let executable = config.executable.executable().to_owned();
+    config.executable = ExecutableUseSnapshot::new(
+        executable.clone(),
+        Arc::new(FailedPreSpawnAdmission {
+            executable,
+            releases: releases.clone(),
+        }),
+    )
+    .unwrap();
+    let process_calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = process_calls.clone();
+    let process = Arc::new(move || {
+        observed_calls.fetch_add(1, Ordering::SeqCst);
+        panic!("spawn must not follow failed executable-use admission")
+    });
+
+    let failure = match binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+        no_startup_control(),
+    )
+    .await
+    {
+        Ok(_) => panic!("failed use admission must refuse provider startup"),
+        Err(failure) => failure,
+    };
+
+    assert!(matches!(failure.cause(), AgentError::Configuration(_)));
+    assert_eq!(process_calls.load(Ordering::SeqCst), 0);
+    let cleanup = failure
+        .cleanup()
+        .expect("pre-spawn generation ownership must remain retryable");
+    assert!(matches!(
+        cleanup.retry_cleanup().await.resources(),
+        ResourceCleanup::ReleasePending { .. }
+    ));
+    assert!(matches!(
+        cleanup.retry_cleanup().await.resources(),
+        ResourceCleanup::Confirmed(_)
+    ));
+    assert_eq!(releases.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn pre_generation_admission_failure_never_fabricates_cleanup_ownership() {
+    let (_root, mut config, capabilities) = profile_setup();
+    let executable = config.executable.executable().to_owned();
+    config.executable = ExecutableUseSnapshot::new(
+        executable.clone(),
+        Arc::new(FailedBeforeGeneration { executable }),
+    )
+    .unwrap();
+    let process_calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = process_calls.clone();
+    let process = Arc::new(move || {
+        observed_calls.fetch_add(1, Ordering::SeqCst);
+        panic!("spawn must not follow failed executable-use admission")
+    });
+
+    let failure = match binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+        no_startup_control(),
+    )
+    .await
+    {
+        Ok(_) => panic!("failed use admission must refuse provider startup"),
+        Err(failure) => failure,
+    };
+
+    assert!(matches!(failure.cause(), AgentError::Configuration(_)));
+    assert_eq!(process_calls.load(Ordering::SeqCst), 0);
+    assert!(failure.cleanup().is_none());
 }
 
 #[tokio::test]

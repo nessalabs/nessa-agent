@@ -23,7 +23,8 @@ use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform};
 use crate::agent_install::infrastructure::{releases_for, PinFileError};
 use crate::agents::domain::AgentId;
 use nessa_sdk::application::agent_execution::providers::{
-    ExecutableUse, ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot,
+    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
+    ExecutableUseSnapshot,
 };
 
 const OPENCODE_ACP_SUBCOMMAND: &str = "acp";
@@ -102,13 +103,21 @@ impl ExecutableUse for SdkExecutableUseBridge {
         self.snapshot.executable()
     }
 
-    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseError> {
-        self.snapshot
-            .admit()
-            .map(|guard| {
-                Box::new(SdkExecutableUseGuardBridge(guard)) as Box<dyn ExecutableUseGuard>
-            })
-            .map_err(|error| ExecutableUseError::new(error.to_string()))
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
+        match self.snapshot.admit() {
+            Ok(guard) => Ok(Box::new(SdkExecutableUseGuardBridge(guard))),
+            Err(failure) => {
+                let (error, guard) = failure.into_parts();
+                let error = ExecutableUseError::new(error.to_string());
+                Err(match guard {
+                    Some(guard) => ExecutableUseAdmissionFailure::with_generation(
+                        error,
+                        Box::new(SdkExecutableUseGuardBridge(guard)),
+                    ),
+                    None => ExecutableUseAdmissionFailure::before_generation(error),
+                })
+            }
+        }
     }
 }
 

@@ -184,7 +184,25 @@ fn replacing_the_retained_records_directory_refuses_lookup_and_append() {
     let (_temporary, root) = audit_root();
     let audit = DurableReclamationAudit::new(&root).unwrap();
     let removed = event(ReclamationPhysicalOutcome::Removed);
-    std::fs::rename(root.join(RECORDS), root.join("displaced-records")).unwrap();
+    if let Err(error) = std::fs::rename(root.join(RECORDS), root.join("displaced-records")) {
+        #[cfg(windows)]
+        {
+            assert!(
+                matches!(error.raw_os_error(), Some(5) | Some(32)),
+                "Windows must refuse substitution through access or sharing denial: {error}"
+            );
+            assert!(!root.join("displaced-records").exists());
+            assert!(root.join(RECORDS).is_dir());
+            audit.record(&removed).unwrap();
+            assert_eq!(
+                audit.event_for(removed.admission().operation_id()).unwrap(),
+                Some(removed)
+            );
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("records directory substitution failed unexpectedly: {error}");
+    }
     create_directory(&root.join(RECORDS)).unwrap();
 
     let lookup = audit

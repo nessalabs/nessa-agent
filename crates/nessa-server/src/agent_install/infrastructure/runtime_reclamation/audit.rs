@@ -89,7 +89,7 @@ impl DurableReclamationAudit {
         let destination = Self::operation_name(event.admission().operation_id());
         match self
             .records_authority
-            .open_file(OsStr::new(&destination), OpenMode::ReadNonblocking)
+            .open_file(OsStr::new(&destination), OpenMode::ReadWrite)
         {
             Ok(mut file) => {
                 let restored: StoredEvent = read_bounded_event(&mut file)?;
@@ -98,8 +98,10 @@ impl DurableReclamationAudit {
                         "reclamation operation identity has conflicting audit facts".into(),
                     ));
                 }
+                self.verify_record(&destination, &file)?;
                 replay_file_durable(&file).map_err(audit_error)?;
                 directory_durable().map_err(audit_error)?;
+                self.verify_record(&destination, &file)?;
                 self.verify_lock(&lock)?;
                 self.verify_authority()
             }
@@ -122,7 +124,7 @@ impl DurableReclamationAudit {
                     {
                         let mut file = self
                             .records_authority
-                            .open_file(OsStr::new(&destination), OpenMode::ReadNonblocking)
+                            .open_file(OsStr::new(&destination), OpenMode::ReadWrite)
                             .map_err(audit_error)?;
                         let restored = read_bounded_event(&mut file)?
                             .restore()
@@ -132,7 +134,9 @@ impl DurableReclamationAudit {
                                 "reclamation operation identity has conflicting audit facts".into(),
                             ));
                         }
+                        self.verify_record(&destination, &file)?;
                         replay_file_durable(&file).map_err(audit_error)?;
+                        self.verify_record(&destination, &file)?;
                     }
                     Err(error) => {
                         return Err(ReclamationAuditFailure::new(error.to_string()));
@@ -168,7 +172,7 @@ impl ReclamationAudit for DurableReclamationAudit {
         let name = Self::operation_name(operation_id);
         let mut file = match self
             .records_authority
-            .open_file(OsStr::new(&name), OpenMode::ReadNonblocking)
+            .open_file(OsStr::new(&name), OpenMode::ReadWrite)
         {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -185,7 +189,9 @@ impl ReclamationAudit for DurableReclamationAudit {
                 "reclamation audit path contains another operation identity".into(),
             ));
         }
+        self.verify_record(&name, &file)?;
         file.sync_all().map_err(audit_error)?;
+        self.verify_record(&name, &file)?;
         self.verify_lock(&lock)?;
         self.verify_authority()?;
         Ok(Some(event))
@@ -207,6 +213,24 @@ impl DurableReclamationAudit {
         } else {
             Err(ReclamationAuditFailure::new(
                 "reclamation audit lock was replaced after acquisition".into(),
+            ))
+        }
+    }
+
+    fn verify_record(
+        &self,
+        name: &str,
+        record: &std::fs::File,
+    ) -> Result<(), ReclamationAuditFailure> {
+        if self
+            .records_authority
+            .named_file_is(OsStr::new(name), record)
+            .map_err(audit_error)?
+        {
+            Ok(())
+        } else {
+            Err(ReclamationAuditFailure::new(
+                "reclamation audit record was replaced during acknowledgement".into(),
             ))
         }
     }

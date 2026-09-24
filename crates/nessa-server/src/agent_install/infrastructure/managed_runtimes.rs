@@ -23,10 +23,11 @@ use tar::{Archive, EntryType};
 use uuid::Uuid;
 
 use crate::agent_install::application::{
-    ManagedExecutableUse, ManagedExecutableUseFailure, ManagedExecutableUseGuard,
-    ManagedLaunchSnapshot, Publication, PublicationChange, PublicationCleanupFailure,
-    PublicationLease, PublishFailure, ReclamationPersistenceFailure, ReclamationPersistenceStage,
-    RollbackChange, RuntimeReclamationEffect, RuntimeStore, StagedArchive, StoreFailure,
+    ManagedExecutableUse, ManagedExecutableUseAdmissionFailure, ManagedExecutableUseFailure,
+    ManagedExecutableUseGuard, ManagedLaunchSnapshot, Publication, PublicationChange,
+    PublicationCleanupFailure, PublicationLease, PublishFailure, ReclamationPersistenceFailure,
+    ReclamationPersistenceStage, RollbackChange, RuntimeReclamationEffect, RuntimeStore,
+    StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, FileRole, ManagedInstallation, PinnedRelease,
@@ -278,7 +279,7 @@ struct ExecutableUseInventory {
     digest: String,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct ExecutableUseGeneration {
     agent: String,
     version: String,
@@ -301,14 +302,40 @@ struct DurableManagedExecutableUse {
 }
 
 impl ManagedExecutableUse for DurableManagedExecutableUse {
-    fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        self.admit_with(|store, directory, generation, phase, record| {
+            store.retain_use_generation(directory, generation, phase, record)
+        })
+    }
+}
+
+impl DurableManagedExecutableUse {
+    fn admit_with(
+        &self,
+        mut retain: impl FnMut(
+            &ManagedRuntimes,
+            &Path,
+            &str,
+            &str,
+            &ExecutableUseGeneration,
+        ) -> Result<(), StoreFailure>,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        let before_generation = |error: StoreFailure| {
+            ManagedExecutableUseAdmissionFailure::before_generation(
+                ManagedExecutableUseFailure::new(error.to_string()),
+            )
+        };
         let _local_mutation = self.local_mutation.lock().map_err(|_| {
-            ManagedExecutableUseFailure::new("executable-use admission mutex was poisoned")
+            ManagedExecutableUseAdmissionFailure::before_generation(
+                ManagedExecutableUseFailure::new("executable-use admission mutex was poisoned"),
+            )
         })?;
         let store = ManagedRuntimes::new(self.root.clone());
         let mutation = store
             .hold_use_mutation(&self.marker_directory)
-            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            .map_err(before_generation)?;
         let inventory = ExecutableUseInventory {
             agent: self.agent.as_str().to_owned(),
             version: self.artifact.version().as_str().to_owned(),
@@ -316,17 +343,19 @@ impl ManagedExecutableUse for DurableManagedExecutableUse {
         };
         store
             .validate_use_inventory(&self.marker_directory, &inventory)
-            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            .map_err(before_generation)?;
         store
             .active_use_remains(&self.agent, &self.artifact)
-            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            .map_err(before_generation)?;
         if store
             .use_generation_count(&self.marker_directory)
-            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?
+            .map_err(before_generation)?
             >= MAXIMUM_USE_GENERATIONS
         {
-            return Err(ManagedExecutableUseFailure::new(
-                "executable-use inventory reached its generation capacity",
+            return Err(ManagedExecutableUseAdmissionFailure::before_generation(
+                ManagedExecutableUseFailure::new(
+                    "executable-use inventory reached its generation capacity",
+                ),
             ));
         }
         let generation = Uuid::new_v4().to_string();
@@ -336,27 +365,43 @@ impl ManagedExecutableUse for DurableManagedExecutableUse {
             digest: self.artifact.digest().as_str().to_owned(),
             generation: generation.clone(),
         };
-        store
-            .retain_use_generation(&self.marker_directory, &generation, "expected", &record)
-            .and_then(|()| {
-                store.retain_use_generation(
-                    &self.marker_directory,
-                    &generation,
-                    "admitted",
-                    &record,
-                )
-            })
-            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
-        mutation
-            .verify()
-            .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
-        Ok(Box::new(DurableManagedExecutableUseGuard {
-            root: self.root.clone(),
-            marker_directory: self.marker_directory.clone(),
-            record,
-            released: false,
-            local_mutation: Arc::clone(&self.local_mutation),
-        }))
+        let generation_guard = || {
+            Box::new(DurableManagedExecutableUseGuard {
+                root: self.root.clone(),
+                marker_directory: self.marker_directory.clone(),
+                record: record.clone(),
+                released: false,
+                local_mutation: Arc::clone(&self.local_mutation),
+            }) as Box<dyn ManagedExecutableUseGuard>
+        };
+        if let Err(error) = retain(
+            &store,
+            &self.marker_directory,
+            &generation,
+            "expected",
+            &record,
+        )
+        .and_then(|()| {
+            retain(
+                &store,
+                &self.marker_directory,
+                &generation,
+                "admitted",
+                &record,
+            )
+        }) {
+            return Err(ManagedExecutableUseAdmissionFailure::with_generation(
+                ManagedExecutableUseFailure::new(error.to_string()),
+                generation_guard(),
+            ));
+        }
+        if let Err(error) = mutation.verify() {
+            return Err(ManagedExecutableUseAdmissionFailure::with_generation(
+                ManagedExecutableUseFailure::new(error.to_string()),
+                generation_guard(),
+            ));
+        }
+        Ok(generation_guard())
     }
 }
 
@@ -458,13 +503,25 @@ impl ManagedExecutableUseGuard for DurableManagedExecutableUseGuard {
                 .hold_use_mutation(&self.marker_directory)
                 .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
             store
-                .retain_use_generation(
+                .validate_use_inventory(
                     &self.marker_directory,
-                    &self.record.generation,
-                    "released",
-                    &self.record,
+                    &ExecutableUseInventory {
+                        agent: self.record.agent.clone(),
+                        version: self.record.version.clone(),
+                        digest: self.record.digest.clone(),
+                    },
                 )
                 .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            for phase in ["expected", "admitted", "released"] {
+                store
+                    .retain_use_generation(
+                        &self.marker_directory,
+                        &self.record.generation,
+                        phase,
+                        &self.record,
+                    )
+                    .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
+            }
             mutation
                 .verify()
                 .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
@@ -863,10 +920,9 @@ impl ManagedRuntimes {
         directory: &PrivateDirectory,
         directory_path: &Path,
         name: &OsStr,
+        mode: OpenMode,
     ) -> Result<(T, File), StoreFailure> {
-        let mut file = directory
-            .open_file(name, OpenMode::ReadNonblocking)
-            .map_err(unreadable)?;
+        let mut file = directory.open_file(name, mode).map_err(unreadable)?;
         let path = directory_path.join(name);
         let value = self.read_bounded_json_file(&mut file, &path)?;
         if !directory.named_file_is(name, &file).map_err(unreadable)? {
@@ -1009,6 +1065,7 @@ impl ManagedRuntimes {
             &retained,
             &directory,
             OsStr::new("inventory.json"),
+            OpenMode::ReadNonblocking,
         )?;
         if inventory != expected_inventory {
             return Err(StoreFailure::Unreadable(
@@ -1058,6 +1115,11 @@ impl ManagedRuntimes {
                 &retained,
                 &directory,
                 entry.name(),
+                if phase == "released" {
+                    OpenMode::ReadWrite
+                } else {
+                    OpenMode::ReadNonblocking
+                },
             )?;
             if record.agent != agent.as_str()
                 || record.version != artifact.version().as_str()
