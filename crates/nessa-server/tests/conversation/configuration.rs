@@ -350,12 +350,14 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
     assert!(!built.providers.contains_key(&AgentId::Opencode));
 }
 
-/// And Opencode is a provider composition can actually build, which nothing
-/// asserted before: every other test on this path stops at the configuration.
+/// Fixed composition builds every configured bundled provider.
+///
+/// OpenCode is deliberately absent here: its static profile and fresh launch
+/// evidence are joined by `CurrentAgentResolver` inside a supervised cold slot.
 // `providers` is Unix-only; on other platforms it refuses outright.
 #[cfg(unix)]
 #[test]
-fn every_configured_agent_that_can_be_built_is() {
+fn every_configured_bundled_agent_that_can_be_built_is() {
     let root = tempfile::tempdir().unwrap();
     // No agent left out, so nothing is missing: `AgentId::Claude` names an
     // agent that is configured here, which is what makes this the both-built
@@ -373,28 +375,18 @@ fn every_configured_agent_that_can_be_built_is() {
         &HashSet::new(),
     )
     .unwrap();
-    assert_eq!(built.providers.len(), 2);
-    assert!(built.providers.contains_key(&AgentId::Opencode));
+    assert_eq!(built.providers.len(), 1);
+    assert!(built.providers.contains_key(&AgentId::Claude));
+    assert!(!built.providers.contains_key(&AgentId::Opencode));
 }
 
-/// Opencode can be started against the catalog Nessa actually ships.
-///
-/// Every other test on this path writes its own catalog, so none of them could
-/// tell "composition builds an Opencode provider" from "composition builds one
-/// when handed a catalog invented for the test". This one hands it the shipped
-/// file and the model the desktop starts Opencode on, which is the pair a real
-/// installation has.
-// `providers` is Unix-only; on other platforms it refuses outright.
+/// The packaged OpenCode policy validates against the catalog Nessa ships.
 #[cfg(unix)]
 #[test]
-fn opencode_builds_against_the_catalog_nessa_ships() {
+fn packaged_opencode_policy_validates_against_the_catalog_nessa_ships() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
-    nessa_local_storage::create_directory(&workspace).unwrap();
     let command = root.path().join("opencode");
-    std::fs::write(&command, "fixture").unwrap();
-    let conversations = root.path().join("conversations");
-    nessa_local_storage::create_directory(&conversations).unwrap();
 
     let config: AgentsConfig = serde_json::from_value(serde_json::json!({
         "catalog": concat!(env!("CARGO_MANIFEST_DIR"), "/../nessa-sdk/data/models.json"),
@@ -403,26 +395,15 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
         "runtimes": {"opencode": {
             "command": command,
             "args": ["acp"],
-            // What `composition::desktop::default_model` starts Opencode on.
-            "model": "opencode/big-pickle",
+            "model": "opencode/minimax-m3",
             "toolsEnabled": true,
         }},
     }))
     .unwrap();
 
-    // Selected, so a refusal would be fatal rather than logged: this asserts
-    // the provider was built, not that the failure was survivable.
-    let built = providers(
-        &config,
-        &conversations,
-        Arc::new(SystemClock),
-        Arc::new(NoImages),
-        no_credentials(),
-        &HashSet::new(),
-    )
-    .unwrap();
-    assert!(built.providers.contains_key(&AgentId::Opencode));
-    assert!(built.unavailable.is_empty());
+    let runtime = config.runtime(AgentId::Opencode).unwrap();
+    let validated = validate_opencode_policy(&config, runtime).unwrap();
+    assert_eq!(validated.model().key().model_id(), "opencode/minimax-m3");
 }
 
 /// No Opencode model Nessa ships can be sent an image, and the whole gateway
@@ -473,7 +454,11 @@ fn no_opencode_model_nessa_ships_can_be_sent_an_image() {
         .unwrap();
 
         assert_eq!(
-            image_limits(&config, &[]).unwrap(),
+            image_limits(
+                &config,
+                Some(&model_by_id(AgentId::Opencode, &config, model).unwrap()),
+            )
+            .unwrap(),
             None,
             "{model} records image limits; the binding's docstring says none does"
         );
@@ -497,27 +482,23 @@ fn a_deferred_managed_model_still_bounds_the_shared_image_store() {
     }))
     .unwrap();
 
-    assert!(image_limits(&config, &[]).unwrap().is_some());
+    assert!(image_limits(&config, None).unwrap().is_some());
+    let current = model_by_id(AgentId::Opencode, &config, "opencode/minimax-m3").unwrap();
     assert_eq!(
-        image_limits(&config, &[(AgentId::Opencode, "opencode/minimax-m3")]).unwrap(),
+        image_limits(&config, Some(&current)).unwrap(),
         None,
         "a cold-resolved model still shares the same attachment store"
     );
 }
 
-/// The two ways an agent can be left out are told apart, because readiness
-/// needs them apart.
+/// Fixed provider composition does not project OpenCode availability.
 ///
-/// An agent whose command is not on the machine yet is one an install fixes, so
-/// the probe has to go on stating it and answering `not-installed`. An agent
-/// whose command is right there and which still could not be built failed on
-/// something installing does not re-ask — here, a catalog that serves no model
-/// under its vendor — and reporting that one `ready` offers a conversation that
-/// cannot be opened.
+/// Readiness distinguishes missing runtime evidence from invalid static policy
+/// in `CurrentAgentResolver`, where the two facts are observed coherently.
 // `providers` is Unix-only; on other platforms it refuses outright.
 #[cfg(unix)]
 #[test]
-fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
+fn fixed_provider_composition_defers_opencode_without_marking_it_unavailable() {
     let root = tempfile::tempdir().unwrap();
     let (config, conversations) = two_agents(root.path(), "claude", AgentId::Opencode);
     nessa_local_storage::create_directory(&conversations).unwrap();
@@ -535,37 +516,6 @@ fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
     assert!(
         built.unavailable.is_empty(),
         "an agent that is merely not installed is not unstartable; it is not installed"
-    );
-
-    // The same pair, with Opencode's command in place and a catalog that names
-    // no model under its vendor. Nothing anyone installs changes that answer.
-    let root = tempfile::tempdir().unwrap();
-    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Claude);
-    std::fs::write(root.path().join(AgentId::Claude.name()), "fixture").unwrap();
-    std::fs::write(
-        root.path().join("catalog.json"),
-        serde_json::json!({
-            "verifiedOn": "2026-09-11",
-            "models": [catalog_entry("anthropic", "configured-model")],
-        })
-        .to_string(),
-    )
-    .unwrap();
-    nessa_local_storage::create_directory(&conversations).unwrap();
-
-    let built = providers(
-        &config,
-        &conversations,
-        Arc::new(SystemClock),
-        Arc::new(NoImages),
-        no_credentials(),
-        &HashSet::new(),
-    )
-    .unwrap();
-    assert!(!built.providers.contains_key(&AgentId::Opencode));
-    assert_eq!(
-        built.unavailable,
-        std::collections::HashSet::from([AgentId::Opencode])
     );
 }
 

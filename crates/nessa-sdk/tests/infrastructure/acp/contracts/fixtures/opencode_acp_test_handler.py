@@ -86,11 +86,12 @@ assert os.environ["OPENCODE_PURE"] == "1"
 assert os.environ["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
 assert os.environ["OPENCODE_DISABLE_AUTOUPDATE"] == "1"
 assert "CODEX_CONFIG" not in os.environ
-assert os.environ["XDG_DATA_HOME"] == os.environ["NESSA_EXPECTED_OPENCODE_DATA_HOME"]
+assert os.environ["XDG_DATA_HOME"] != os.environ["NESSA_REFUSED_OPENCODE_DATA_HOME"]
 assert os.environ["HOME"] != os.environ["NESSA_REFUSED_OPENCODE_HOME"]
 assert pathlib.Path(os.environ["XDG_CONFIG_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
 assert pathlib.Path(os.environ["XDG_CACHE_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
 assert pathlib.Path(os.environ["XDG_STATE_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
+assert pathlib.Path(os.environ["XDG_DATA_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
 for alternate in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"):
     assert alternate not in os.environ
 
@@ -120,7 +121,9 @@ def text(value):
 
 
 def configs():
-    # OpenCode Zen's free models, as the real `session/new` listed them.
+    # Protocol-shape choices for exact option matching. Their names do not
+    # assert current production eligibility, authentication, or service
+    # acceptance; this fixture never contacts OpenCode Zen.
     offered = ["opencode/big-pickle"] if mode == "model-not-offered" else [
         "opencode/big-pickle",
         "opencode/nemotron-3-ultra-free",
@@ -155,8 +158,8 @@ for line in sys.stdin:
                 "promptCapabilities": {"embeddedContext": True, "image": True},
                 "sessionCapabilities": {"close": {}, "fork": {}, "list": {}, "resume": {}},
             },
-            # Opencode offers a sign-in and does not require one: the free
-            # models this binding is for are reached without it.
+            # Protocol shape observed from the pinned ACP. This fixture does
+            # not infer whether a production call requires or accepts a key.
             "authMethods": [{"id": "opencode-login", "name": "Login with opencode",
                              "description": "Run `opencode auth login` in the terminal"}],
         })

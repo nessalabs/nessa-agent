@@ -3,6 +3,8 @@ use super::agent::AgentsConfig;
 #[cfg(unix)]
 use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 #[cfg(unix)]
+use super::opencode_profile::EffectiveOpenCodeProfile;
+#[cfg(unix)]
 use super::warm_up::PreparedRuntime;
 use crate::{
     agent_warm_up::application::AgentWarmUp,
@@ -278,6 +280,18 @@ fn conversations(
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let host = crate::agent_install::infrastructure::host_platform();
+    let opencode = EffectiveOpenCodeProfile::decide(
+        agents,
+        managed_opencode,
+        &host,
+        (!managed_opencode)
+            .then(|| std::env::var_os("OPENCODE_API_KEY"))
+            .flatten(),
+    );
+    if let Some(reason) = opencode.invalid_reason() {
+        tracing::error!(%reason, "configured OpenCode policy is invalid");
+    }
     // Ownership records come first. A binding needs somewhere to read image
     // bytes, reading them needs the attachment store, and beginning an
     // upload needs to ask who owns a conversation: so the repository is
@@ -286,8 +300,9 @@ fn conversations(
         LocalConversationRepository::new(root.join("metadata"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
-    let deferred_models = (managed_opencode && agents.runtime(AgentId::Opencode).is_none())
-        .then_some((AgentId::Opencode, "opencode/minimax-m3"));
+    let current_opencode_model = opencode
+        .configured()
+        .map(|profile| profile.validated().model());
     let attachments = super::attachments::attachments(
         &directory
             .parent()
@@ -302,14 +317,14 @@ fn conversations(
         // image library does not read itself.
         Arc::new(
             ModelImageNormalizer::new(
-                super::agent::image_limits(agents, deferred_models.as_slice())?.as_ref(),
+                super::agent::image_limits(agents, current_opencode_model)?.as_ref(),
                 nessa_images::platform_decoder(),
             )
             .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
         ),
         clock.clone(),
     )?;
-    let deferred = if managed_opencode || agents.runtime(AgentId::Opencode).is_some() {
+    let deferred = if opencode.configured().is_some() {
         HashSet::from([AgentId::Opencode])
     } else {
         HashSet::new()
@@ -390,14 +405,14 @@ fn conversations(
         fixed: built.providers,
         fixed_probe,
         config: agents.clone(),
-        managed_opencode,
+        opencode,
         store: Arc::new(crate::agent_install::infrastructure::ManagedRuntimes::new(
             directory
                 .parent()
                 .expect("conversation root already validated")
                 .join("agents"),
         )),
-        host: crate::agent_install::infrastructure::host_platform(),
+        host,
         credentials,
         provider_directory: root.clone(),
         clock: clock.clone(),

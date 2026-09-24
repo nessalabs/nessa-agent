@@ -43,8 +43,14 @@ use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::providers::{ExecutableUseSnapshot, UserImageSource},
-    domain::model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
-    infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
+    domain::{
+        common::value_objects::TokenLimits,
+        model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
+    },
+    infrastructure::{
+        acp::sessions::StdioMcpServer, model_metadata_json::load_catalog,
+        opencode_acp::sessions::OpencodeAcpProvider,
+    },
 };
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -356,11 +362,10 @@ fn inherited_environment(
 /// The sign-in this agent is started with, read from this server's own
 /// environment. Named per agent so none is handed another's key.
 ///
-/// Opencode names none. It reaches the models this binding runs it on without
-/// an account at all, and a key for its gateway is something a person gives
-/// Opencode itself, under `HOME` — so there is no variable here that would
-/// start a signed-in Opencode, and inventing one would put somebody else's key
-/// into its environment.
+/// OpenCode names none here. Its one static profile chooses either the injected
+/// packaged credential source or the standalone `OPENCODE_API_KEY` captured by
+/// composition. Keeping that choice out of this fixed-provider helper prevents
+/// ambient credentials from widening packaged policy.
 fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let keys: &[&str] = match agent {
         AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
@@ -436,6 +441,30 @@ fn model_by_id(
     .map_err(|e| RunError::Agent(e.to_string()))
 }
 
+/// Validate the static OpenCode model, budgets, and tool policy without effects.
+pub(super) struct ValidatedOpenCodePolicy {
+    model: ModelMetadata,
+    limits: TokenLimits,
+}
+
+impl ValidatedOpenCodePolicy {
+    pub(super) fn model(&self) -> &ModelMetadata {
+        &self.model
+    }
+}
+
+pub(super) fn validate_opencode_policy(
+    config: &AgentsConfig,
+    runtime: &AgentRuntime,
+) -> Result<ValidatedOpenCodePolicy, RunError> {
+    let model = model(AgentId::Opencode, config, runtime)?;
+    let limits = TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    OpencodeAcpProvider::validate_policy(&model, limits, runtime.tools_enabled, true)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    Ok(ValidatedOpenCodePolicy { model, limits })
+}
+
 /// The image limits every configured agent can meet.
 ///
 /// Uploads are kept once and shared: one attachment store, holding images for
@@ -450,15 +479,19 @@ fn model_by_id(
 /// both cases there is no image this gateway could store and then send.
 pub(super) fn image_limits(
     config: &AgentsConfig,
-    deferred_models: &[(AgentId, &str)],
+    current_opencode: Option<&ModelMetadata>,
 ) -> Result<Option<ImageInputLimits>, RunError> {
     let mut strictest: Option<ImageInputLimits> = None;
     let configured = config
         .agents()
         .into_iter()
+        .filter(|(agent, _)| *agent != AgentId::Opencode)
         .map(|(agent, runtime)| (agent, runtime.model.as_str()));
-    for (agent, model_id) in configured.chain(deferred_models.iter().copied()) {
-        let Some(limits) = model_by_id(agent, config, model_id)?.image_input().cloned() else {
+    let configured = configured
+        .map(|(agent, model_id)| model_by_id(agent, config, model_id))
+        .chain(current_opencode.cloned().map(Ok));
+    for model in configured {
+        let Some(limits) = model?.image_input().cloned() else {
             // A model that takes no images cannot be met by any image at all.
             return Ok(None);
         };
@@ -550,6 +583,7 @@ pub(super) fn providers(
     let configured: HashSet<_> = config
         .agents()
         .into_iter()
+        .filter(|(agent, _)| *agent != AgentId::Opencode)
         .map(|(agent, _)| agent)
         .chain(deferred.iter().copied())
         .collect();
@@ -564,7 +598,7 @@ pub(super) fn providers(
         credentials,
     };
     for (agent, runtime) in config.agents() {
-        if deferred.contains(&agent) {
+        if agent == AgentId::Opencode {
             continue;
         }
         // Every agent is given the source, not only the one whose profile is
@@ -580,6 +614,7 @@ pub(super) fn providers(
             runtime,
             &dependencies,
             credential_environment(agent),
+            None,
         ) {
             Ok(provider) => provider,
             Err(failure) if agent == selected => return Err(failure),
@@ -630,11 +665,19 @@ pub(super) fn provider_for(
     runtime: &AgentRuntime,
     dependencies: &ProviderDependencies,
     credential_environment: BTreeMap<OsString, OsString>,
+    policy: &ValidatedOpenCodePolicy,
 ) -> Result<ConversationAgent, RunError> {
     let build::ProviderComposition {
         provider,
         execution_audit,
-    } = build::provider(agent, config, runtime, dependencies, credential_environment)?;
+    } = build::provider(
+        agent,
+        config,
+        runtime,
+        dependencies,
+        credential_environment,
+        Some(policy),
+    )?;
     Ok(ConversationAgent {
         provider,
         execution_audit,
@@ -654,6 +697,7 @@ pub(super) fn providers(
     let configured: HashSet<_> = config
         .agents()
         .into_iter()
+        .filter(|(agent, _)| *agent != AgentId::Opencode)
         .map(|(agent, _)| agent)
         .chain(deferred.iter().copied())
         .collect();
@@ -701,7 +745,7 @@ mod build {
     use super::super::agent_budgets as budgets;
     use super::{
         AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider, ProviderDependencies,
-        RunError,
+        RunError, ValidatedOpenCodePolicy,
     };
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_sdk::{
@@ -836,9 +880,18 @@ mod build {
         runtime: &AgentRuntime,
         dependencies: &ProviderDependencies,
         credential_environment: BTreeMap<OsString, OsString>,
+        validated_opencode: Option<&ValidatedOpenCodePolicy>,
     ) -> Result<ProviderComposition, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
-        let model = super::model(agent, config, runtime)?;
+        let model = match validated_opencode {
+            Some(policy) if agent == AgentId::Opencode => policy.model.clone(),
+            Some(_) => {
+                return Err(RunError::Agent(
+                    "OpenCode policy was supplied to another agent".into(),
+                ));
+            }
+            None => super::model(agent, config, runtime)?,
+        };
         let workspace = config
             .workspace
             .canonicalize()
@@ -849,8 +902,11 @@ mod build {
                 agent.name()
             )));
         }
-        let limits = TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
-            .map_err(|e| RunError::Agent(e.to_string()))?;
+        let limits = match validated_opencode {
+            Some(policy) => policy.limits,
+            None => TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
+                .map_err(|e| RunError::Agent(e.to_string()))?,
+        };
         let audit = Arc::new(
             DurableExecutionAudit::new(
                 dependencies.directory.join("audit"),

@@ -1,14 +1,17 @@
 //! Current agent observations for readiness and cold conversation opening.
 //!
-//! Composition owns the relationship between the managed runtime store,
-//! stage-scoped credentials, and provider construction. Readiness and a cold
-//! slot each take a fresh observation; a live conversation keeps the provider
-//! generation it already owns.
+//! Composition owns the relationship between static OpenCode policy, launch
+//! evidence, credentials, and provider construction. Readiness and a cold slot
+//! each take a fresh observation; packaged observations read the managed store
+//! and stage-scoped credential source, while standalone observations retain the
+//! explicit launch and environment credential captured when composition began.
+//! A live conversation keeps the provider generation it already owns.
 //!
 //! ```text
 //! readiness ─┐
-//!            ├─▶ CurrentAgentResolver ─▶ runtime store + credential source
-//! cold slot ─┘                         └▶ owned provider generation
+//!            ├─▶ CurrentAgentResolver ─▶ effective OpenCode profile
+//! cold slot ─┘                         ├─▶ fresh managed evidence, when packaged
+//!                                      └─▶ owned provider generation
 //! ```
 //!
 //! Arrows are calls. OpenCode's blocking observation has one bounded lane. The
@@ -30,8 +33,11 @@ use tokio::sync::Semaphore;
 
 use super::{
     agent::{self, AgentRuntime, AgentsConfig, ProviderDependencies},
-    desktop,
     installed_launch::{installed_launch, InstalledLaunch},
+    opencode_profile::{
+        captured_credential_environment, EffectiveOpenCodeProfile, OpenCodeCredentialMode,
+        OpenCodeProfile,
+    },
 };
 use crate::{
     agent_install::{application::RuntimeStore, domain::HostPlatform},
@@ -56,7 +62,7 @@ pub(super) struct CurrentAgentResolver {
     fixed: HashMap<AgentId, ConversationAgent>,
     fixed_probe: Arc<LocalAgentProbe>,
     config: AgentsConfig,
-    managed_opencode: bool,
+    opencode: Arc<EffectiveOpenCodeProfile>,
     store: Arc<dyn RuntimeStore>,
     host: HostPlatform,
     credentials: Arc<dyn AgentCredentialSource>,
@@ -68,7 +74,7 @@ pub(super) struct CurrentAgentResolverInput {
     pub(super) fixed: HashMap<AgentId, ConversationAgent>,
     pub(super) fixed_probe: LocalAgentProbe,
     pub(super) config: AgentsConfig,
-    pub(super) managed_opencode: bool,
+    pub(super) opencode: EffectiveOpenCodeProfile,
     pub(super) store: Arc<dyn RuntimeStore>,
     pub(super) host: HostPlatform,
     pub(super) credentials: Arc<dyn AgentCredentialSource>,
@@ -89,7 +95,7 @@ impl CurrentAgentResolver {
             fixed: input.fixed,
             fixed_probe: Arc::new(input.fixed_probe),
             config: input.config,
-            managed_opencode: input.managed_opencode,
+            opencode: Arc::new(input.opencode),
             store: input.store,
             host: input.host,
             credentials: input.credentials.clone(),
@@ -105,7 +111,7 @@ impl CurrentAgentResolver {
 
     pub(super) fn configured(&self) -> HashSet<AgentId> {
         let mut configured: HashSet<_> = self.fixed.keys().copied().collect();
-        if self.managed_opencode || self.config.runtime(AgentId::Opencode).is_some() {
+        if self.opencode.configured().is_some() {
             configured.insert(AgentId::Opencode);
         }
         configured
@@ -116,17 +122,21 @@ impl CurrentAgentResolver {
     }
 
     fn observe_opencode(&self) -> Observation {
-        let launch = self.opencode_runtime();
-        let credential = self.credentials.read(AgentId::Opencode);
+        let profile = self
+            .opencode
+            .configured()
+            .expect("unconfigured profiles return before observation");
+        let launch = self.opencode_runtime(profile);
+        let credential = self.opencode_credential(profile);
         let installed = match &launch {
             Ok(Some(_)) => Ok(true),
             Ok(None) => Ok(false),
             Err(failure) => Err(*failure),
         };
         let authenticated = match &credential {
-            Ok(Some(value)) if value.kind() == AgentCredentialKind::ApiKey => Ok(true),
+            Ok(Some(_)) => Ok(true),
             Ok(None) => Ok(false),
-            Ok(Some(_)) | Err(_) => Err(ProbeFailure::Unanswered),
+            Err(_) => Err(ProbeFailure::Unanswered),
         };
         let evidence = AgentProbeEvidence {
             installed,
@@ -134,19 +144,16 @@ impl CurrentAgentResolver {
         };
         let mut configured = true;
         let provider = match (launch, credential) {
-            (Ok(Some(runtime)), Ok(Some(credential)))
-                if credential.kind() == AgentCredentialKind::ApiKey =>
-            {
-                let environment = BTreeMap::from([(
-                    OsString::from("OPENCODE_API_KEY"),
-                    OsString::from(credential.expose()),
-                )]);
+            (Ok(Some(runtime)), Ok(Some(credential))) => {
+                let environment =
+                    BTreeMap::from([(OsString::from("OPENCODE_API_KEY"), credential)]);
                 match agent::provider_for(
                     AgentId::Opencode,
                     &self.config,
                     &runtime,
                     &self.provider,
                     environment,
+                    profile.validated(),
                 ) {
                     Ok(provider) => Ok(Some(provider)),
                     Err(error) => {
@@ -157,7 +164,7 @@ impl CurrentAgentResolver {
                 }
             }
             (Ok(None), _) | (_, Ok(None)) => Ok(None),
-            (Err(_), _) | (_, Err(_)) | (_, Ok(Some(_))) => {
+            (Err(_), _) | (_, Err(_)) => {
                 Err(crate::conversation::application::ConversationError::Unavailable)
             }
         };
@@ -167,13 +174,18 @@ impl CurrentAgentResolver {
         }
     }
 
-    fn opencode_runtime(&self) -> Result<Option<AgentRuntime>, ProbeFailure> {
-        if self.managed_opencode {
+    fn opencode_runtime(
+        &self,
+        profile: &OpenCodeProfile,
+    ) -> Result<Option<AgentRuntime>, ProbeFailure> {
+        if profile.managed() {
             return match installed_launch(AgentId::Opencode, &self.host, self.store.as_ref()) {
-                Ok(InstalledLaunch::Ready(command)) => {
-                    Ok(Some(desktop::managed_runtime(AgentId::Opencode, command)))
+                Ok(InstalledLaunch::Ready(command)) => Ok(profile.managed_runtime(command)),
+                Ok(InstalledLaunch::Missing) => Ok(None),
+                Ok(InstalledLaunch::UnsupportedHost) => {
+                    tracing::error!("configured managed OpenCode host became unsupported");
+                    Err(ProbeFailure::Unanswered)
                 }
-                Ok(InstalledLaunch::Missing | InstalledLaunch::UnsupportedHost) => Ok(None),
                 Ok(InstalledLaunch::Unknown(failure)) => {
                     tracing::warn!(%failure, "managed OpenCode installation state is unknown");
                     Err(ProbeFailure::Unanswered)
@@ -184,9 +196,9 @@ impl CurrentAgentResolver {
                 }
             };
         }
-        let Some(runtime) = self.config.runtime(AgentId::Opencode).cloned() else {
-            return Ok(None);
-        };
+        let runtime = profile
+            .explicit_runtime()
+            .expect("standalone profile has an explicit launch");
         if !path_is_file(runtime.command.executable())? {
             return Ok(None);
         }
@@ -197,6 +209,28 @@ impl CurrentAgentResolver {
         }
         Ok(Some(runtime))
     }
+
+    fn opencode_credential(
+        &self,
+        profile: &OpenCodeProfile,
+    ) -> Result<Option<OsString>, ProbeFailure> {
+        match profile.credential() {
+            OpenCodeCredentialMode::ScopedStore => self
+                .credentials
+                .read(AgentId::Opencode)
+                .map_err(|_| ProbeFailure::Unanswered)
+                .and_then(|credential| match credential {
+                    Some(value) if value.kind() == AgentCredentialKind::ApiKey => {
+                        Ok(Some(OsString::from(value.expose())))
+                    }
+                    Some(_) => Err(ProbeFailure::Unanswered),
+                    None => Ok(None),
+                }),
+            OpenCodeCredentialMode::CapturedEnvironment(credential) => {
+                captured_credential_environment(credential)
+            }
+        }
+    }
 }
 
 impl AgentProbe for CurrentAgentResolver {
@@ -204,9 +238,7 @@ impl AgentProbe for CurrentAgentResolver {
         if agent != AgentId::Opencode {
             return self.fixed_probe.evidence(agent);
         }
-        if !self.configured().contains(&agent) {
-            return None;
-        }
+        self.opencode.configured()?;
         let Ok(permit) = self.slots.clone().try_acquire_owned() else {
             return Some(AgentProbeEvidence {
                 installed: Err(ProbeFailure::Unanswered),
@@ -224,6 +256,9 @@ impl ConversationAgentSource for CurrentAgentResolver {
         if agent != AgentId::Opencode {
             let configured = self.fixed.get(&agent).cloned();
             return Box::pin(async move { Ok(configured) });
+        }
+        if self.opencode.configured().is_none() {
+            return Box::pin(async { Ok(None) });
         }
         let source = self.clone();
         Box::pin(async move {

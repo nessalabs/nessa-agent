@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -19,7 +20,10 @@ use crate::{
             Publication, PublicationLease, PublishFailure, RuntimeStore, StagedArchive,
             StoreFailure,
         },
-        domain::{preferred_release, AgentName, ArchiveDigest, PinnedRelease},
+        domain::{
+            preferred_release, AgentName, ArchiveDigest, HostPlatform, PinnedRelease,
+            ReleasePlatform,
+        },
         infrastructure::{host_platform, releases_for},
     },
     agents::{
@@ -42,7 +46,9 @@ use crate::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
-    application::agent_execution::providers::{UserImageFuture, UserImageSource},
+    application::agent_execution::providers::{
+        ExecutableUseSnapshot, UserImageFuture, UserImageSource,
+    },
     domain::agent_execution::prompts::ImageReference,
     infrastructure::session_storage::InMemoryStorage,
 };
@@ -235,7 +241,7 @@ fn config(root: &Path, selected: AgentId) -> AgentsConfig {
             "claude": {
                 "command": root.join("claude"),
                 "args": [],
-                "model": "claude-sonnet-4-5-20250929",
+                "model": "claude-sonnet-5",
                 "toolsEnabled": false
             }
         }
@@ -249,13 +255,50 @@ fn resolver(
     credentials: Arc<dyn AgentCredentialSource>,
     fixed: HashMap<AgentId, ConversationAgent>,
 ) -> CurrentAgentResolver {
+    let config = config(root, AgentId::Opencode);
+    let host = host_platform();
+    resolver_from(
+        root,
+        ResolverTestInput {
+            config,
+            packaged: true,
+            host,
+            captured_environment: None,
+            store,
+            credentials,
+            fixed,
+        },
+    )
+}
+
+struct ResolverTestInput {
+    config: AgentsConfig,
+    packaged: bool,
+    host: HostPlatform,
+    captured_environment: Option<OsString>,
+    store: Arc<dyn RuntimeStore>,
+    credentials: Arc<dyn AgentCredentialSource>,
+    fixed: HashMap<AgentId, ConversationAgent>,
+}
+
+fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver {
+    let ResolverTestInput {
+        config,
+        packaged,
+        host,
+        captured_environment,
+        store,
+        credentials,
+        fixed,
+    } = input;
+    let opencode = EffectiveOpenCodeProfile::decide(&config, packaged, &host, captured_environment);
     CurrentAgentResolver::new(CurrentAgentResolverInput {
         fixed,
         fixed_probe: LocalAgentProbe::from_environment(HashMap::new(), credentials.clone()),
-        config: config(root, AgentId::Opencode),
-        managed_opencode: true,
+        opencode,
+        config,
         store,
-        host: host_platform(),
+        host,
         credentials,
         provider_directory: root.join("providers"),
         clock: Arc::new(SystemClock),
@@ -267,6 +310,263 @@ fn executable(root: &Path) -> ManagedLaunchSnapshot {
     let executable = root.join("opencode");
     std::fs::write(&executable, "fixture").unwrap();
     ManagedLaunchSnapshot::unmanaged(executable)
+}
+
+fn explicit_opencode(
+    config: &mut AgentsConfig,
+    command: PathBuf,
+    args: Vec<String>,
+    model: &str,
+    tools_enabled: bool,
+    context_tokens: u32,
+    output_tokens: u32,
+) {
+    config.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        AgentRuntime {
+            command: nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot::unmanaged(command),
+            args,
+            model: model.into(),
+            tools_enabled,
+            context_tokens,
+            output_tokens,
+        },
+    );
+}
+
+#[tokio::test]
+async fn packaged_explicit_policy_preserves_every_static_field_but_not_its_command() {
+    let root = tempfile::tempdir().unwrap();
+    let configured_path = root.path().join("configured-path-is-not-authority");
+    let managed_path = root.path().join("managed-opencode");
+    std::fs::write(&managed_path, "managed").unwrap();
+    let mut config = config(root.path(), AgentId::Opencode);
+    explicit_opencode(
+        &mut config,
+        configured_path.clone(),
+        vec!["acp".into()],
+        "opencode/big-pickle",
+        true,
+        72_000,
+        3072,
+    );
+    let store = Arc::new(Store::new(StoreAnswer::Ready(
+        ManagedLaunchSnapshot::unmanaged(managed_path.clone()),
+    )));
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::ApiKey("secret".into())));
+    let resolver = resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config: config.clone(),
+            packaged: true,
+            host: host_platform(),
+            captured_environment: None,
+            store,
+            credentials,
+            fixed: HashMap::new(),
+        },
+    );
+
+    assert_eq!(resolver.configured(), HashSet::from([AgentId::Opencode]));
+    assert_eq!(resolver.default_agent().unwrap(), AgentId::Opencode);
+    let profile = resolver.opencode.configured().unwrap();
+    let launch = profile
+        .managed_runtime(ExecutableUseSnapshot::unmanaged(managed_path.clone()))
+        .unwrap();
+    assert_eq!(launch.command.executable(), managed_path);
+    assert_eq!(launch.args, ["acp"]);
+    assert_eq!(
+        agent::image_limits(&config, Some(profile.validated().model())).unwrap(),
+        None
+    );
+    let resolved = resolver.resolve(AgentId::Opencode).await.unwrap().unwrap();
+    assert_eq!(
+        resolved.provider.identity().model_id(),
+        "opencode/big-pickle"
+    );
+    assert!(resolved.provider.capabilities().features().tool_use());
+    assert_eq!(
+        resolved
+            .provider
+            .capabilities()
+            .limits()
+            .max_context_window(),
+        72_000
+    );
+    assert_eq!(resolved.provider.capabilities().limits().max_output(), 3072);
+    assert_eq!(resolved.reserved_output_tokens, 3072);
+    assert_eq!(
+        config
+            .runtime(AgentId::Opencode)
+            .unwrap()
+            .command
+            .executable(),
+        configured_path
+    );
+    assert_ne!(configured_path, managed_path);
+}
+
+#[tokio::test]
+async fn invalid_packaged_policy_is_unconfigured_without_runtime_or_credential_effects() {
+    let cases = [
+        ("missing-model", true, 72_000, 3072, vec!["acp"]),
+        ("opencode/big-pickle", true, 1024, 2048, vec!["acp"]),
+        ("opencode/big-pickle", false, 72_000, 3072, vec!["acp"]),
+        ("opencode/big-pickle", true, 72_000, 3072, vec!["serve"]),
+    ];
+    for (model, tools, context, output, args) in cases {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = config(root.path(), AgentId::Opencode);
+        explicit_opencode(
+            &mut config,
+            root.path().join("ignored"),
+            args.into_iter().map(str::to_owned).collect(),
+            model,
+            tools,
+            context,
+            output,
+        );
+        let store = Arc::new(Store::new(StoreAnswer::Missing));
+        let credentials = Arc::new(Credentials::new(CredentialAnswer::ApiKey("secret".into())));
+        let resolver = resolver_from(
+            root.path(),
+            ResolverTestInput {
+                config,
+                packaged: true,
+                host: host_platform(),
+                captured_environment: None,
+                store: store.clone(),
+                credentials: credentials.clone(),
+                fixed: HashMap::new(),
+            },
+        );
+
+        assert!(resolver.evidence(AgentId::Opencode).is_none());
+        assert!(resolver.resolve(AgentId::Opencode).await.unwrap().is_none());
+        assert!(resolver.default_agent().is_err());
+        assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+        assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn unsupported_packaged_host_is_unconfigured_without_effects_while_supported_missing_is_not_installed(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::Missing));
+    let unsupported = resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config: config(root.path(), AgentId::Opencode),
+            packaged: true,
+            host: HostPlatform::new(
+                ReleasePlatform::new("plan9", "sparc64").unwrap(),
+                None,
+                false,
+            ),
+            captured_environment: None,
+            store: store.clone(),
+            credentials: credentials.clone(),
+            fixed: HashMap::new(),
+        },
+    );
+    assert!(unsupported.evidence(AgentId::Opencode).is_none());
+    assert!(unsupported
+        .resolve(AgentId::Opencode)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+
+    let supported = resolver(
+        root.path(),
+        store.clone(),
+        credentials.clone(),
+        HashMap::new(),
+    );
+    assert_eq!(
+        ReadAgentReadiness { probe: &supported }.execute(AgentId::Opencode),
+        Readiness::NotInstalled
+    );
+    assert_eq!(store.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(credentials.reads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn credential_authority_is_scoped_store_when_packaged_and_captured_environment_when_standalone() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Ready(executable(root.path()))));
+    let missing = Arc::new(Credentials::new(CredentialAnswer::Missing));
+    let packaged = resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config: config(root.path(), AgentId::Opencode),
+            packaged: true,
+            host: host_platform(),
+            captured_environment: Some(OsString::from("ambient-must-be-ignored")),
+            store: store.clone(),
+            credentials: missing.clone(),
+            fixed: HashMap::new(),
+        },
+    );
+    assert_eq!(
+        ReadAgentReadiness { probe: &packaged }.execute(AgentId::Opencode),
+        Readiness::NeedsAuthentication
+    );
+    assert_eq!(missing.reads.load(Ordering::SeqCst), 1);
+
+    let explicit = root.path().join("standalone");
+    std::fs::write(&explicit, "standalone").unwrap();
+    let mut config = config(root.path(), AgentId::Opencode);
+    explicit_opencode(
+        &mut config,
+        explicit,
+        vec!["acp".into()],
+        "opencode/big-pickle",
+        true,
+        72_000,
+        3072,
+    );
+    let keychain = Arc::new(Credentials::new(CredentialAnswer::ApiKey(
+        "must-not-fallback".into(),
+    )));
+    let standalone = resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config: config.clone(),
+            packaged: false,
+            host: host_platform(),
+            captured_environment: None,
+            store: store.clone(),
+            credentials: keychain.clone(),
+            fixed: HashMap::new(),
+        },
+    );
+    assert_eq!(
+        ReadAgentReadiness { probe: &standalone }.execute(AgentId::Opencode),
+        Readiness::NeedsAuthentication
+    );
+    assert_eq!(keychain.reads.load(Ordering::SeqCst), 0);
+
+    let invalid = resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config,
+            packaged: false,
+            host: host_platform(),
+            captured_environment: Some(OsString::from("  \t")),
+            store,
+            credentials: keychain.clone(),
+            fixed: HashMap::new(),
+        },
+    );
+    assert_eq!(
+        ReadAgentReadiness { probe: &invalid }.execute(AgentId::Opencode),
+        Readiness::AuthenticationUnknown
+    );
+    assert_eq!(keychain.reads.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -339,7 +639,7 @@ async fn cold_resolution_reobserves_after_readiness_in_both_directions() {
 }
 
 #[tokio::test]
-async fn cold_resolution_refuses_pin_credential_and_model_contradictions() {
+async fn cold_resolution_refuses_pin_and_credential_contradictions_without_redeciding_policy() {
     let root = tempfile::tempdir().unwrap();
     let store = Arc::new(Store::new(StoreAnswer::Missing));
     let credentials = Arc::new(Credentials::new(CredentialAnswer::ApiKey("secret".into())));
@@ -369,8 +669,8 @@ async fn cold_resolution_refuses_pin_credential_and_model_contradictions() {
     )
     .unwrap();
     resolver.config.catalog = catalog;
-    assert!(resolver.evidence(AgentId::Opencode).is_none());
-    assert!(resolver.resolve(AgentId::Opencode).await.is_err());
+    assert!(resolver.evidence(AgentId::Opencode).is_some());
+    assert!(resolver.resolve(AgentId::Opencode).await.unwrap().is_some());
 }
 
 struct BlockingCredentials {
@@ -499,7 +799,7 @@ fn current_release() -> PinnedRelease {
         .expect("test host has a current OpenCode pin")
 }
 
-fn fixture_wrapper(root: &Path, name: &str) -> PathBuf {
+fn fixture_wrapper(root: &Path, name: &str, expected_model: &str) -> PathBuf {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
         "../nessa-sdk/tests/infrastructure/acp/contracts/fixtures/opencode_acp_test_handler.py",
     );
@@ -517,13 +817,14 @@ pending_launch.write_text(json.dumps({{
     "credentialPresent": bool(os.environ.get("OPENCODE_API_KEY")),
 }}))
 os.replace(pending_launch, launch)
-os.environ["NESSA_EXPECTED_OPENCODE_DATA_HOME"] = os.environ["XDG_DATA_HOME"]
+os.environ["NESSA_REFUSED_OPENCODE_DATA_HOME"] = str(root / "refused-data")
 os.environ["NESSA_REFUSED_OPENCODE_HOME"] = str(root / "refused-home")
-os.environ["NESSA_EXPECTED_OPENCODE_MODEL"] = "opencode/minimax-m3"
+os.environ["NESSA_EXPECTED_OPENCODE_MODEL"] = {expected_model:?}
 os.execv(sys.executable, [sys.executable, {fixture:?}, "default"])
 "#,
         name = name,
         fixture = fixture,
+        expected_model = expected_model,
     );
     std::fs::write(&wrapper, source).unwrap();
     let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
@@ -611,12 +912,28 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
 
     let release = current_release();
     let first_authority = Arc::new(UseAuthority::default());
-    let first_path = fixture_wrapper(root.path(), "opencode-first");
+    let first_path = fixture_wrapper(root.path(), "opencode-first", "opencode/minimax-m3");
     store.publish_current(
         &release,
         ManagedLaunchSnapshot::new(first_path.clone(), first_authority.clone()),
     );
     assert_eq!(readiness.execute(AgentId::Opencode), Readiness::Ready);
+    let packaged = resolver.resolve(AgentId::Opencode).await.unwrap().unwrap();
+    assert_eq!(
+        packaged.provider.identity().model_id(),
+        "opencode/minimax-m3"
+    );
+    assert!(packaged.provider.capabilities().features().tool_use());
+    assert_eq!(
+        packaged
+            .provider
+            .capabilities()
+            .limits()
+            .max_context_window(),
+        100_000
+    );
+    assert_eq!(packaged.provider.capabilities().limits().max_output(), 4096);
+    assert_eq!(packaged.reserved_output_tokens, 4096);
 
     let service = service(root.path(), resolver);
 
@@ -654,7 +971,7 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
     assert_eq!(first_authority.admissions.load(Ordering::SeqCst), 1);
 
     let second_authority = Arc::new(UseAuthority::default());
-    let second_path = fixture_wrapper(root.path(), "opencode-second");
+    let second_path = fixture_wrapper(root.path(), "opencode-second", "opencode/minimax-m3");
     store.publish_current(
         &release,
         ManagedLaunchSnapshot::new(second_path.clone(), second_authority.clone()),
@@ -709,11 +1026,115 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
 }
 
 #[tokio::test]
+async fn standalone_explicit_profile_launches_with_captured_environment_and_no_managed_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let wrapper = fixture_wrapper(root.path(), "opencode-standalone", "opencode/big-pickle");
+    let mut config = config(root.path(), AgentId::Opencode);
+    explicit_opencode(
+        &mut config,
+        wrapper.clone(),
+        vec!["acp".into(), "--explicit-profile".into()],
+        "opencode/big-pickle",
+        true,
+        72_000,
+        3072,
+    );
+    let store = Arc::new(Store::new(StoreAnswer::Failed(StoreFailure::Unreadable(
+        "must not be read".into(),
+    ))));
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::Failed(
+        AgentCredentialFailure::Unavailable,
+    )));
+    let resolver = Arc::new(resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config,
+            packaged: false,
+            host: host_platform(),
+            captured_environment: Some(OsString::from("captured-private-value")),
+            store: store.clone(),
+            credentials: credentials.clone(),
+            fixed: HashMap::new(),
+        },
+    ));
+    assert_eq!(
+        ReadAgentReadiness {
+            probe: resolver.as_ref()
+        }
+        .execute(AgentId::Opencode),
+        Readiness::Ready
+    );
+    let resolved = resolver.resolve(AgentId::Opencode).await.unwrap().unwrap();
+    assert_eq!(
+        resolved.provider.identity().model_id(),
+        "opencode/big-pickle"
+    );
+    assert!(resolved.provider.capabilities().features().tool_use());
+    assert_eq!(
+        resolved
+            .provider
+            .capabilities()
+            .limits()
+            .max_context_window(),
+        72_000
+    );
+    assert_eq!(resolved.provider.capabilities().limits().max_output(), 3072);
+    assert_eq!(resolved.reserved_output_tokens, 3072);
+    assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+
+    let service = service(root.path(), resolver);
+    let conversation = conversation_id();
+    service
+        .create(conversation.clone(), caller("create-standalone"), None)
+        .await
+        .unwrap();
+    service
+        .submit(
+            conversation.clone(),
+            caller("submit-standalone"),
+            "standalone-execution".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let launch = launched(
+        &root
+            .path()
+            .join("workspace/launch-opencode-standalone.json"),
+    )
+    .await;
+    assert_eq!(
+        launch["executable"],
+        wrapper.canonicalize().unwrap().to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        launch["arguments"],
+        serde_json::json!(["acp", "--explicit-profile"])
+    );
+    assert_eq!(launch["credentialPresent"], true);
+    assert!(!launch.to_string().contains("captured-private-value"));
+    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
+    assert_process(pid, true);
+    service
+        .close(conversation, caller("close-standalone"))
+        .await
+        .unwrap();
+    assert_process(pid, false);
+    assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(credentials.reads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn stopping_during_native_resolution_prevents_provider_launch_and_preserves_work_ownership() {
     let root = tempfile::tempdir().unwrap();
     let authority = Arc::new(UseAuthority::default());
     let store = Arc::new(Store::new(StoreAnswer::Ready(ManagedLaunchSnapshot::new(
-        fixture_wrapper(root.path(), "opencode-stopped"),
+        fixture_wrapper(root.path(), "opencode-stopped", "opencode/minimax-m3"),
         authority.clone(),
     ))));
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();

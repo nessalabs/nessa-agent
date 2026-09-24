@@ -3,7 +3,6 @@
 //! The credentials this app needs are created by
 //! [`super::provisioning::ensure_local_credentials`], which the developer loop
 //! asks for by the same name; nothing here provisions separately.
-use super::installed_launch::installed_arguments;
 use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
@@ -58,18 +57,7 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
-        AgentId::Opencode => "opencode/minimax-m3",
-    }
-}
-
-pub(super) fn managed_runtime(agent: AgentId, command: ExecutableUseSnapshot) -> AgentRuntime {
-    AgentRuntime {
-        command,
-        args: installed_arguments(agent),
-        model: default_model(agent).into(),
-        tools_enabled: true,
-        context_tokens: 100_000,
-        output_tokens: 4096,
+        AgentId::Opencode => unreachable!("OpenCode is not a bundled runtime"),
     }
 }
 
@@ -85,9 +73,9 @@ pub(super) fn configure(
     let mcp = bundle.join("nessa-mcp");
     // Only the agents this desktop ships. A bundle checked for files it was
     // never meant to contain would refuse to start, so an agent with no bundled
-    // launch is skipped here rather than looked for. The installed-runtime
-    // store below independently decides whether that agent has a verified
-    // launch on this host.
+    // launch is skipped here rather than looked for. Current-agent composition
+    // independently decides whether that agent has a verified launch on this
+    // host.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
         .filter_map(|agent| {

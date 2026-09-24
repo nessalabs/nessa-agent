@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
-//!                                   -> fixed providers + current-agent resolver
+//!                                   -> fixed providers + OpenCode static profile
+//!                                   -> current-agent resolver
 //!                                   -> storage / audit
 //!                                   -> attachments (one store, shared)
 //!                                   -> AgentWarmUp -> readiness port
@@ -23,6 +24,8 @@ mod current_agent;
 mod install_command;
 mod installed_launch;
 mod local_auth;
+#[cfg(unix)]
+mod opencode_profile;
 
 mod runtime_config;
 

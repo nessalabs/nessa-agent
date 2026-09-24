@@ -8,10 +8,8 @@
 //! Arrows show construction and validation. Process startup, resume, and the
 //! launch-input fingerprint that identifies a restorable context remain shared
 //! ACP responsibilities, not provider-specific lifecycle implementations. The
-//! private process root isolates code-loading configuration while the caller's
-//! data root remains available for Opencode account lookup.
+//! private process root isolates code-loading configuration and account data;
+//! composition supplies the one credential admitted for the process.
 mod binding;
-mod data_home;
 mod profile;
 pub use binding::OpencodeAcpProvider;
-pub use data_home::effective_data_home;

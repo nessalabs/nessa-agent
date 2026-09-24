@@ -349,11 +349,18 @@ numbers are the caller's: the gateway takes them from the selected model's
 metadata/audit adapters (infrastructure). A conversation records the agent it was
 created on and is reopened on that same agent for the rest of its life, so
 `composition/agent.rs` builds fixed providers for configured bundled agents.
-`composition/current_agent.rs` owns the coherent managed OpenCode observation:
-the exact pinned launch, stage-scoped API key and provider generation are resolved
-again for each cold slot, while an existing live slot retains the generation and
-executable-use authority it already owns. `ConversationAgentSource` is the
-application port between those decisions and the service. Yesterday's
+`composition/opencode_profile.rs` owns one static OpenCode decision shared by
+configured/default selection, image limits, readiness, and provider creation.
+Packaged composition either selects the exact current pin with a stage-scoped
+API key or refuses the policy; standalone composition preserves its explicit
+command, arguments, model, tools and budgets and captures `OPENCODE_API_KEY`
+once when composition starts. `composition/current_agent.rs` joins that static
+decision to a fresh launch and credential observation for each readiness call
+and cold slot. Managed observations resolve the exact pinned launch and current
+stage-scoped API key; standalone observations retain the captured environment
+credential. An existing live slot keeps the generation and executable-use
+authority it already owns. `ConversationAgentSource` is the application port
+between those decisions and the service. Yesterday's
 conversations still reopen on their recorded agent even when it is not today's
 default. `product/conversation.rs` maps the canonical product wire contract;
 composition supplies the agents, storage and audit.
@@ -715,13 +722,14 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
 
-Managed OpenCode readiness and cold opening instead share
-`composition/current_agent.rs`. Each call reads one exact managed launch and one
-credential snapshot; readiness maps that evidence without carrying the secret,
-and a cold slot builds an owned provider from a fresh observation. The blocking
-effects have one bounded lane whose native task retains its permit after caller
-timeout or cancellation. The actual executable-use admission remains in the SDK
-immediately before process spawn.
+OpenCode readiness and cold opening instead share `composition/current_agent.rs`.
+Each managed call reads one exact managed launch and one scoped credential
+snapshot; a standalone call combines its explicit launch with the environment
+credential captured at composition time. Readiness maps that evidence without
+carrying the secret, and a cold slot builds an owned provider from a fresh
+observation. The blocking effects have one bounded lane whose native task retains
+its permit after caller timeout or cancellation. The actual executable-use
+admission remains in the SDK immediately before process spawn.
 
 The same context defines `AgentCredentialSource`; one local adapter reads
 standalone Claude environment credentials before the Nessa login-keychain item,
@@ -733,8 +741,10 @@ and account namespace come from
 infrastructure mapping for the Security.framework service and the Claude and
 OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
 reads the same injected source as readiness on a blocking worker for each process
-open. The OpenCode current-agent resolver reads the source once per observation
-and accepts only an API key, which it supplies to that owned process generation.
+open. Packaged OpenCode reads the source once per observation and accepts only
+an API key, which it supplies to that owned process generation. Standalone
+OpenCode never reads that source; it uses only the environment value captured
+by its static profile.
 Neither adapter puts the source value in settings, plist, arguments, audit records,
 or logs.
 

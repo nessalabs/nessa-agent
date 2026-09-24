@@ -399,7 +399,9 @@ environment mapping stays in the gateway adapter. Desktop composition writes
 validated API keys to the matching login-keychain item through a host-owned port
 and records correlated, secret-free intent and outcome evidence. Gateway
 composition injects one credential source into readiness, Claude process launch,
-and the current OpenCode cold-open resolver. See the
+and packaged OpenCode cold-open resolution. A standalone explicit OpenCode
+runtime instead uses only `OPENCODE_API_KEY` captured when composition starts;
+it does not read the stage-scoped store or promise live environment refresh. See the
 [crate guide](../crates/nessa-agent-credentials/README.md).
 
 ## Gateway authorization
