@@ -1,13 +1,18 @@
 //! Confirmed physical cleanup and durable use release remain separate facts.
 use super::*;
 use crate::application::agent_execution::providers::{
-    ExecutableUseError, ExecutableUseGuard, ResourceCleanup,
+    ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot, ResourceCleanup,
 };
+use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 struct RetryRelease {
@@ -41,10 +46,34 @@ impl ExecutableUseGuard for RetryRelease {
     }
 }
 
+fn cleanup_config() -> (tempfile::TempDir, AcpConfig) {
+    let root = tempfile::tempdir().unwrap();
+    let config = AcpConfig {
+        executable: ExecutableUseSnapshot::unmanaged(root.path().join("unused-test-runtime")),
+        arguments: Vec::new(),
+        environment: BTreeMap::new(),
+        credential_environment: BTreeMap::new(),
+        workspace: root.path().to_owned(),
+        tools_enabled: false,
+        mcp_servers: Vec::new(),
+        permissions: PermissionOfferPolicy::once_only(),
+        launch_timeout: Duration::from_secs(1),
+        startup_timeout: Duration::from_secs(1),
+        execution_timeout: None,
+        shutdown_grace: Duration::from_millis(10),
+        kill_timeout: Duration::from_secs(1),
+        event_capacity: 1,
+        max_frame_bytes: 1024,
+        max_incoming_frame_bytes: 1024,
+        images: None,
+    };
+    config.validate().unwrap();
+    (root, config)
+}
+
 #[tokio::test]
 async fn release_acknowledgement_retries_without_repeating_confirmed_physical_cleanup() {
-    let (_root, config, _) =
-        crate::infrastructure::acp::tests::profile_substitution::profile_setup();
+    let (_root, config) = cleanup_config();
     let attempts = Arc::new(AtomicUsize::new(0));
     let cleanup = ProcessCleanup::retaining_use(
         config,
@@ -81,8 +110,7 @@ async fn release_acknowledgement_retries_without_repeating_confirmed_physical_cl
 
 #[tokio::test]
 async fn missing_spawn_transfer_never_acknowledges_executable_use_release() {
-    let (_root, config, _) =
-        crate::infrastructure::acp::tests::profile_substitution::profile_setup();
+    let (_root, config) = cleanup_config();
     let attempts = Arc::new(AtomicUsize::new(0));
     let cleanup = ProcessCleanup::new(
         config,
@@ -125,8 +153,7 @@ fn cancelling_the_final_cleanup_supervisor_does_not_release_durable_use_evidence
         .unwrap();
 
     runtime.block_on(async {
-        let (_root, config, _) =
-            crate::infrastructure::acp::tests::profile_substitution::profile_setup();
+        let (_root, config) = cleanup_config();
         let mut failure = match ProcessScope::spawn_with_private_directory(|_| {
             tokio::process::Command::new("/nessa-test/no-such-runtime")
         }) {
