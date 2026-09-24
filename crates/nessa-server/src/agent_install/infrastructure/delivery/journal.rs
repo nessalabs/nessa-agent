@@ -79,13 +79,11 @@ impl DurableInstallationDelivery {
             InstallDeliveryFailureStage::ReadState,
         )
     }
-}
 
-impl InstallationDelivery for DurableInstallationDelivery {
-    fn session(
+    fn open_session(
         &self,
         account_id: &str,
-    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+    ) -> Result<DeliverySession<'_>, InstallDeliveryFailure> {
         let current_lock = self
             .directory
             .open_file(OsStr::new(LOCK_NAME), OpenMode::ReadWrite)
@@ -94,11 +92,20 @@ impl InstallationDelivery for DurableInstallationDelivery {
             .lock()
             .map_err(|error| failure(InstallDeliveryFailureStage::AcquireLock, error))?;
         self.verify(&current_lock)?;
-        Ok(Box::new(DeliverySession {
+        Ok(DeliverySession {
             delivery: self,
             account_id: account_id.to_owned(),
             current_lock,
-        }))
+        })
+    }
+}
+
+impl InstallationDelivery for DurableInstallationDelivery {
+    fn session(
+        &self,
+        account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        Ok(Box::new(self.open_session(account_id)?))
     }
 }
 
@@ -119,6 +126,111 @@ impl InstallationDeliverySession for DeliverySession<'_> {
     fn prepare(
         &mut self,
         preparation: PublicationPreparation,
+    ) -> Result<PreparedInstallation, InstallDeliveryFailure> {
+        self.prepare_with_acknowledger(preparation, || Ok(()))
+    }
+
+    fn retain_outcome(
+        &mut self,
+        prepared: &PreparedInstallation,
+        outcome: &PublicationOutcome,
+    ) -> Result<(), InstallDeliveryFailure> {
+        if prepared.preparation().verified().request().account_id() != self.account_id {
+            return Err(failure(
+                InstallDeliveryFailureStage::RetainOutcome,
+                "prepared publication belongs to another account",
+            ));
+        }
+        if &outcome.preparation() != prepared.preparation() {
+            return Err(failure(
+                InstallDeliveryFailureStage::RetainOutcome,
+                "publication outcome disagrees with its preparation",
+            ));
+        }
+        match scan(&self.delivery.directory, &self.account_id)? {
+            Some(PendingInstallationDelivery::Prepared(current)) if current == *prepared => {}
+            Some(_) => {
+                return Err(failure(
+                    InstallDeliveryFailureStage::RetainOutcome,
+                    "publication outcome does not follow the durable preparation",
+                ));
+            }
+            None => {
+                return Err(failure(
+                    InstallDeliveryFailureStage::RetainOutcome,
+                    "publication outcome has no durable preparation",
+                ));
+            }
+        }
+        let stored = StoredOutcome::new(
+            prepared.record_id().to_owned(),
+            self.delivery.clock.unix_milliseconds(),
+            outcome,
+        );
+        publish(
+            &self.delivery.directory,
+            &format!("{}.outcome.json", prepared.record_id()),
+            &stored,
+            InstallDeliveryFailureStage::RetainOutcome,
+        )?;
+        self.delivery.verify(&self.current_lock)
+    }
+
+    fn settle(
+        &mut self,
+        prepared: &PreparedInstallation,
+        settlement: &PublicationSettlement,
+    ) -> Result<(), InstallDeliveryFailure> {
+        if prepared.preparation().verified().request().account_id() != self.account_id {
+            return Err(failure(
+                InstallDeliveryFailureStage::Settle,
+                "prepared publication belongs to another account",
+            ));
+        }
+        if settlement.outcome().preparation() != *prepared.preparation() {
+            return Err(failure(
+                InstallDeliveryFailureStage::Settle,
+                "publication settlement disagrees with its preparation",
+            ));
+        }
+        match scan(&self.delivery.directory, &self.account_id)? {
+            Some(PendingInstallationDelivery::Outcome {
+                prepared: current,
+                outcome,
+            }) if current == *prepared && &outcome == settlement.outcome() => {}
+            Some(_) => {
+                return Err(failure(
+                    InstallDeliveryFailureStage::Settle,
+                    "publication settlement does not follow the retained outcome",
+                ));
+            }
+            None => {
+                return Err(failure(
+                    InstallDeliveryFailureStage::Settle,
+                    "publication settlement has no retained outcome",
+                ));
+            }
+        }
+        let stored = StoredSettlement::new(
+            prepared.record_id().to_owned(),
+            self.delivery.clock.unix_milliseconds(),
+            settlement,
+        );
+        publish(
+            &self.delivery.directory,
+            &format!("{}.settled.json", prepared.record_id()),
+            &stored,
+            InstallDeliveryFailureStage::Settle,
+        )?;
+        self.delivery.verify(&self.current_lock)
+    }
+}
+
+impl DeliverySession<'_> {
+    fn prepare_with_acknowledger(
+        &mut self,
+        preparation: PublicationPreparation,
+        acknowledge: impl FnOnce() -> Result<(), InstallDeliveryFailure>,
     ) -> Result<PreparedInstallation, InstallDeliveryFailure> {
         if preparation.verified().request().account_id() != self.account_id {
             return Err(failure(
@@ -144,58 +256,9 @@ impl InstallationDeliverySession for DeliverySession<'_> {
             &stored,
             InstallDeliveryFailureStage::Prepare,
         )?;
+        acknowledge()?;
         self.delivery.verify(&self.current_lock)?;
         Ok(PreparedInstallation::new(record_id, preparation))
-    }
-
-    fn retain_outcome(
-        &mut self,
-        prepared: &PreparedInstallation,
-        outcome: &PublicationOutcome,
-    ) -> Result<(), InstallDeliveryFailure> {
-        if &outcome.preparation() != prepared.preparation() {
-            return Err(failure(
-                InstallDeliveryFailureStage::RetainOutcome,
-                "publication outcome disagrees with its preparation",
-            ));
-        }
-        let stored = StoredOutcome::new(
-            prepared.record_id().to_owned(),
-            self.delivery.clock.unix_milliseconds(),
-            outcome,
-        );
-        publish(
-            &self.delivery.directory,
-            &format!("{}.outcome.json", prepared.record_id()),
-            &stored,
-            InstallDeliveryFailureStage::RetainOutcome,
-        )?;
-        self.delivery.verify(&self.current_lock)
-    }
-
-    fn settle(
-        &mut self,
-        prepared: &PreparedInstallation,
-        settlement: &PublicationSettlement,
-    ) -> Result<(), InstallDeliveryFailure> {
-        if settlement.outcome().preparation() != *prepared.preparation() {
-            return Err(failure(
-                InstallDeliveryFailureStage::Settle,
-                "publication settlement disagrees with its preparation",
-            ));
-        }
-        let stored = StoredSettlement::new(
-            prepared.record_id().to_owned(),
-            self.delivery.clock.unix_milliseconds(),
-            settlement,
-        );
-        publish(
-            &self.delivery.directory,
-            &format!("{}.settled.json", prepared.record_id()),
-            &stored,
-            InstallDeliveryFailureStage::Settle,
-        )?;
-        self.delivery.verify(&self.current_lock)
     }
 }
 

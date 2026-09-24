@@ -1,6 +1,8 @@
 use super::*;
 use crate::agent_install::{
-    application::{AuditAcknowledgement, AuditFailureStage, AuditRecordEvidence},
+    application::{
+        AuditAcknowledgement, AuditFailureStage, AuditRecordEvidence, PublishedAuditRecord,
+    },
     domain::{
         ArchiveDigest, ArchivePath, FileRole, InstallAttempt, InstallAttemptError,
         InstallEventIdentity, InstallEventSlot, InstallFailureEvidence, InstallFailureKind,
@@ -54,6 +56,21 @@ fn json_records(directory: &Path) -> Vec<PathBuf> {
     records
 }
 
+fn record_metadata(path: &Path) -> (String, u64, String) {
+    let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    (
+        stored["recordId"].as_str().unwrap().to_owned(),
+        stored["sequence"].as_u64().unwrap(),
+        path.file_name().unwrap().to_str().unwrap().to_owned(),
+    )
+}
+
+fn assert_metadata(record: &PublishedAuditRecord, expected: &(String, u64, String)) {
+    assert_eq!(record.record_id(), expected.0.as_str());
+    assert_eq!(record.sequence(), expected.1);
+    assert_eq!(record.destination(), expected.2.as_str());
+}
+
 #[cfg(unix)]
 fn native_file_inventory(directory: &Path) -> Vec<(OsString, Vec<u8>)> {
     let mut entries = std::fs::read_dir(directory)
@@ -104,6 +121,7 @@ fn exact_replay_after_later_evidence_resyncs_the_original_record_without_append(
     audit.record(started.clone()).unwrap();
     audit.record(attempt.verified().unwrap()).unwrap();
     let original = std::fs::read(directory.join("00000000000000000001.json")).unwrap();
+    let metadata = record_metadata(&directory.join("00000000000000000001.json"));
 
     assert_eq!(
         audit.record(started).unwrap(),
@@ -115,6 +133,55 @@ fn exact_replay_after_later_evidence_resyncs_the_original_record_without_append(
         std::fs::read(directory.join("00000000000000000001.json")).unwrap(),
         original
     );
+    assert_eq!(
+        record_metadata(&directory.join("00000000000000000001.json")),
+        metadata
+    );
+}
+
+#[test]
+fn every_existing_replay_acknowledgement_failure_retains_original_metadata_without_append() {
+    for checkpoint in [
+        ReplayAcknowledgementCheckpoint::Reopen,
+        ReplayAcknowledgementCheckpoint::ValidateOpenedName,
+        ReplayAcknowledgementCheckpoint::Read,
+        ReplayAcknowledgementCheckpoint::Restore,
+        ReplayAcknowledgementCheckpoint::SyncFile,
+        ReplayAcknowledgementCheckpoint::SyncDirectory,
+        ReplayAcknowledgementCheckpoint::VerifyAuthority,
+        ReplayAcknowledgementCheckpoint::ValidateFinalName,
+    ] {
+        let root = temporary_root();
+        let directory = root.path().join("audit");
+        let audit = audit_at(root.path());
+        let (_, started) = InstallAttempt::start(agent(), target(), request());
+        audit.record(started.clone()).unwrap();
+        let path = directory.join("00000000000000000001.json");
+        let original = std::fs::read(&path).unwrap();
+        let metadata = record_metadata(&path);
+
+        let failure = audit
+            .record_with_acknowledgers(started, acknowledge_published, |current| {
+                if current == checkpoint {
+                    Err(std::io::Error::other(format!(
+                        "injected {checkpoint:?} replay failure"
+                    )))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(failure.stage(), AuditFailureStage::AcknowledgeRecord);
+        let Some(AuditRecordEvidence::ExistingReplay(record)) = failure.record() else {
+            panic!("{checkpoint:?} must retain existing replay evidence");
+        };
+        assert_metadata(record, &metadata);
+        assert!(failure.detail().contains(&format!("{checkpoint:?}")));
+        assert_eq!(json_records(&directory), vec![path.clone()]);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(record_metadata(&path), metadata);
+    }
 }
 
 #[test]
@@ -194,10 +261,13 @@ fn post_publish_ack_failure_retries_to_one_physical_record() {
         })
         .unwrap_err();
     assert_eq!(failure.stage(), AuditFailureStage::AcknowledgeRecord);
-    assert!(matches!(
-        failure.record(),
-        Some(AuditRecordEvidence::IncomingPublished(_))
-    ));
+    let Some(AuditRecordEvidence::IncomingPublished(incoming)) = failure.record() else {
+        panic!("post-rename acknowledgement failure must retain incoming publication");
+    };
+    assert_metadata(
+        incoming,
+        &record_metadata(&directory.join("00000000000000000001.json")),
+    );
 
     assert_eq!(
         audit.record(started).unwrap(),
@@ -397,11 +467,14 @@ fn contradictory_facts_in_one_domain_slot_are_rejected_without_claiming_incoming
         failure.semantic_conflict_kind(),
         Some(InstallAttemptError::ConflictingEvent)
     );
-    assert!(matches!(
-        failure.record(),
-        Some(AuditRecordEvidence::ExistingConflict(record))
-            if record.event().slot() == InstallEventSlot::VerificationOutcome
-    ));
+    let Some(AuditRecordEvidence::ExistingConflict(record)) = failure.record() else {
+        panic!("the original verification record must own the conflict");
+    };
+    assert_eq!(record.event().slot(), InstallEventSlot::VerificationOutcome);
+    assert_metadata(
+        record,
+        &record_metadata(&root.path().join("audit/00000000000000000002.json")),
+    );
 }
 
 #[cfg(windows)]

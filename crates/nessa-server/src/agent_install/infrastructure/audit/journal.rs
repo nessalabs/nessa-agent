@@ -153,6 +153,19 @@ impl DurableInstallAudit {
             &PublishedAuditRecord,
         ) -> Result<(), AuditFailure>,
     ) -> Result<AuditAcknowledgement, AuditFailure> {
+        self.record_with_acknowledgers(transition, acknowledge, |_| Ok(()))
+    }
+
+    fn record_with_acknowledgers(
+        &self,
+        transition: InstallTransition,
+        acknowledge: impl FnOnce(
+            &PrivateDirectory,
+            &PublishedPrivateFile,
+            &PublishedAuditRecord,
+        ) -> Result<(), AuditFailure>,
+        replay_checkpoint: impl FnMut(ReplayAcknowledgementCheckpoint) -> io::Result<()>,
+    ) -> Result<AuditAcknowledgement, AuditFailure> {
         let current_lock = self
             .directory
             .open_file(OsStr::new(LOCK_NAME), OpenMode::ReadWrite)
@@ -183,9 +196,13 @@ impl DurableInstallAudit {
                     conflict,
                 ));
             }
-            reacknowledge_existing(&self.directory, existing, &current_lock, |lock| {
-                self.verify_authority(lock)
-            })?;
+            reacknowledge_existing(
+                &self.directory,
+                existing,
+                &current_lock,
+                |lock| self.verify_authority(lock),
+                replay_checkpoint,
+            )?;
             return Ok(AuditAcknowledgement::Replayed);
         }
 
@@ -241,6 +258,18 @@ impl DurableInstallAudit {
             .map_err(|error| published_failure(logical_record, error))?;
         Ok(AuditAcknowledgement::Recorded)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayAcknowledgementCheckpoint {
+    Reopen,
+    ValidateOpenedName,
+    Read,
+    Restore,
+    SyncFile,
+    SyncDirectory,
+    VerifyAuthority,
+    ValidateFinalName,
 }
 
 impl InstallAudit for DurableInstallAudit {
@@ -398,9 +427,14 @@ fn reacknowledge_existing(
     existing: &ScannedRecord,
     current_lock: &File,
     verify_authority: impl Fn(&File) -> Result<(), AuditFailure>,
+    mut checkpoint: impl FnMut(ReplayAcknowledgementCheckpoint) -> io::Result<()>,
 ) -> Result<(), AuditFailure> {
+    checkpoint(ReplayAcknowledgementCheckpoint::Reopen)
+        .map_err(|error| existing_failure(existing, error))?;
     let mut file = directory
         .open_file(&existing.name, OpenMode::ReadWrite)
+        .map_err(|error| existing_failure(existing, error))?;
+    checkpoint(ReplayAcknowledgementCheckpoint::ValidateOpenedName)
         .map_err(|error| existing_failure(existing, error))?;
     ensure_named_file(
         directory,
@@ -409,7 +443,11 @@ fn reacknowledge_existing(
         AuditFailureStage::AcknowledgeRecord,
     )
     .map_err(|error| existing_failure(existing, error))?;
+    checkpoint(ReplayAcknowledgementCheckpoint::Read)
+        .map_err(|error| existing_failure(existing, error))?;
     let stored = read_stored(&mut file, &existing.name, existing.published.sequence())
+        .map_err(|error| existing_failure(existing, error))?;
+    checkpoint(ReplayAcknowledgementCheckpoint::Restore)
         .map_err(|error| existing_failure(existing, error))?;
     let restored = stored
         .restore_transition()
@@ -420,12 +458,20 @@ fn reacknowledge_existing(
             "the audit record changed while it was being re-acknowledged",
         ));
     }
+    checkpoint(ReplayAcknowledgementCheckpoint::SyncFile)
+        .map_err(|error| existing_failure(existing, error))?;
     file.sync_all()
+        .map_err(|error| existing_failure(existing, error))?;
+    checkpoint(ReplayAcknowledgementCheckpoint::SyncDirectory)
         .map_err(|error| existing_failure(existing, error))?;
     directory
         .sync()
         .map_err(|error| existing_failure(existing, error))?;
+    checkpoint(ReplayAcknowledgementCheckpoint::VerifyAuthority)
+        .map_err(|error| existing_failure(existing, error))?;
     verify_authority(current_lock).map_err(|error| existing_failure(existing, error))?;
+    checkpoint(ReplayAcknowledgementCheckpoint::ValidateFinalName)
+        .map_err(|error| existing_failure(existing, error))?;
     ensure_named_file(
         directory,
         &existing.name,

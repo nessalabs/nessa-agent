@@ -127,6 +127,7 @@ struct ScriptedDeliveryState {
     pending: Option<PendingInstallationDelivery>,
     calls: Vec<DeliveryCall>,
     prepare_failures: usize,
+    prepare_acknowledgement_failures: usize,
     retain_failures: usize,
     settle_failures: usize,
 }
@@ -149,6 +150,7 @@ impl ScriptedDelivery {
                 pending: None,
                 calls: Vec::new(),
                 prepare_failures,
+                prepare_acknowledgement_failures: 0,
                 retain_failures,
                 settle_failures,
             }),
@@ -159,6 +161,14 @@ impl ScriptedDelivery {
 
     fn calls(&self) -> Vec<DeliveryCall> {
         self.state.lock().unwrap().calls.clone()
+    }
+
+    fn failing_preparation_acknowledgement(mut self) -> Self {
+        self.state
+            .get_mut()
+            .unwrap()
+            .prepare_acknowledgement_failures = 1;
+        self
     }
 
     fn pending(&self) -> Option<PendingInstallationDelivery> {
@@ -225,6 +235,13 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
             preparation,
         );
         state.pending = Some(PendingInstallationDelivery::Prepared(prepared.clone()));
+        if state.prepare_acknowledgement_failures > 0 {
+            state.prepare_acknowledgement_failures -= 1;
+            return Err(InstallDeliveryFailure::new(
+                InstallDeliveryFailureStage::Prepare,
+                "injected preparation acknowledgement failure".into(),
+            ));
+        }
         Ok(prepared)
     }
 
@@ -792,6 +809,47 @@ fn preparation_failure_discards_staging_without_publishing() {
     assert!(store.published().is_empty());
     assert_eq!(store.discarded().len(), 1);
     assert!(delivery.pending().is_none());
+}
+
+#[test]
+fn preparation_acknowledgement_failure_persists_and_blocks_before_more_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let delivery = ScriptedDelivery::new(0, 0, 0, None).failing_preparation_acknowledgement();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let install = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+    };
+
+    let first = install
+        .execute(&agent(), &pinned, &host(), &request())
+        .unwrap_err();
+    assert!(matches!(
+        first,
+        InstallFailure::Delivery(ref evidence)
+            if evidence.delivery().unwrap().stage() == InstallDeliveryFailureStage::Prepare
+                && evidence.delivery().unwrap().detail()
+                    == "injected preparation acknowledgement failure"
+    ));
+    assert!(store.published().is_empty());
+    assert_eq!(store.discarded().len(), 1);
+    assert!(matches!(
+        delivery.pending(),
+        Some(PendingInstallationDelivery::Prepared(_))
+    ));
+
+    let next_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
+    let second = install
+        .execute(&agent(), &pinned, &host(), &next_request)
+        .unwrap_err();
+    assert!(matches!(second, InstallFailure::UnresolvedPublication(_)));
+    assert_eq!(source.requested().len(), 1);
+    assert!(store.published().is_empty());
+    assert_eq!(store.discarded().len(), 1);
 }
 
 #[test]
