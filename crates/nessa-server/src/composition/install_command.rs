@@ -3,17 +3,17 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::agent_install::application::{
     InstallAgentRuntime, InstallFailure, InstalledRuntime, RuntimeStateEvidence, SourceFailure,
     StoreFailure,
 };
 use crate::agent_install::domain::{
-    AgentName, HostPlatform, InstallRequest, PinnedRelease, preferred_release,
+    preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease,
 };
 use crate::agent_install::infrastructure::{
-    DurableInstallAudit, HttpsArchives, ManagedRuntimes, host_platform, releases_for,
+    host_platform, releases_for, DurableInstallAudit, HttpsArchives, ManagedRuntimes,
 };
 use crate::core::RunError;
 use crate::env::Environment;

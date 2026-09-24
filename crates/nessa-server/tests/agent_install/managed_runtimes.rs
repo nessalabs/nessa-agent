@@ -2514,10 +2514,7 @@ mod packages {
             })
             .expect_err("an install that cannot be made durable");
 
-        assert!(matches!(
-            failure.failure(),
-            StoreFailure::Unwritable(_)
-        ));
+        assert!(matches!(failure.failure(), StoreFailure::Unwritable(_)));
         for (path, _) in package_entries() {
             assert!(
                 !package_path(root.path(), path).exists(),
