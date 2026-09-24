@@ -204,8 +204,8 @@ fn replacing_lock_or_records_authority_after_acquisition_refuses_acknowledgement
     let audit = DurableReclamationAudit::new(&root).unwrap();
     let removed = event(ReclamationPhysicalOutcome::Removed);
     audit.record(&removed).unwrap();
-    let record_path = root.join(record_path(&removed));
-    let original = std::fs::read(&record_path).unwrap();
+    let stored_record_path = root.join(record_path(&removed));
+    let original = std::fs::read(&stored_record_path).unwrap();
 
     let lock_path = root.join(RECORDS).join(LOCK);
     let lock_failure = audit
@@ -215,7 +215,7 @@ fn replacing_lock_or_records_authority_after_acquisition_refuses_acknowledgement
         })
         .unwrap_err();
     assert!(lock_failure.detail().contains("replaced"));
-    assert_eq!(std::fs::read(&record_path).unwrap(), original);
+    assert_eq!(std::fs::read(&stored_record_path).unwrap(), original);
 
     let (_temporary, root) = audit_root();
     let audit = DurableReclamationAudit::new(&root).unwrap();
