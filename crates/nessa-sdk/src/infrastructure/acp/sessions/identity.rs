@@ -27,7 +27,14 @@ pub(crate) fn fingerprint(
     prompt: Option<&SystemPrompt>,
 ) -> String {
     let mut hash = Sha256::new();
-    field(&mut hash, config.executable.as_os_str().as_encoded_bytes());
+    field(
+        &mut hash,
+        config
+            .executable
+            .executable()
+            .as_os_str()
+            .as_encoded_bytes(),
+    );
     hash.update((config.arguments.len() as u64).to_be_bytes());
     for argument in &config.arguments {
         field(&mut hash, argument.as_encoded_bytes());

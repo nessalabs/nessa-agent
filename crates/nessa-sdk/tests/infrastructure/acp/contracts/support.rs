@@ -10,7 +10,7 @@ pub(super) use crate::domain::agent_execution::{
 };
 pub(super) use crate::domain::common::value_objects::TokenLimits;
 pub(super) use crate::domain::model_metadata::entities::ModelMetadata;
-pub(super) use crate::infrastructure::acp::sessions::AcpConfig;
+pub(super) use crate::infrastructure::acp::sessions::{AcpConfig, ExecutableUseSnapshot};
 pub(super) use crate::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 pub(super) use crate::infrastructure::codex_acp::sessions::CodexAcpProvider;
 pub(super) use crate::infrastructure::opencode_acp::sessions::OpencodeAcpProvider;
@@ -156,7 +156,7 @@ pub(super) fn test_acp_configuration(
     })
     .unwrap();
     let config = AcpConfig {
-        executable: PathBuf::from("/usr/bin/python3"),
+        executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3")),
         arguments: vec![
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/infrastructure/acp/contracts/fixtures/claude_acp_test_handler.py")

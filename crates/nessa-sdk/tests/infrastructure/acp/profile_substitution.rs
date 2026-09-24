@@ -1,7 +1,7 @@
 use super::super::{
     fields,
     profile::AcpProfile,
-    sessions::{binding, AcpConfig},
+    sessions::{binding, AcpConfig, ExecutableUseSnapshot},
     tools::wire,
 };
 use crate::application::agent_execution::agents::{AgentError, AgentFuture};
@@ -188,7 +188,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
     let (_root, config, capabilities) = profile_setup();
     let process_config = config.clone();
     let process = Arc::new(move || {
-        let mut command = tokio::process::Command::new(&process_config.executable);
+        let mut command = tokio::process::Command::new(process_config.executable.executable());
         command
             .args(&process_config.arguments)
             .env_clear()
@@ -334,7 +334,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
     )
     .unwrap();
     let config = AcpConfig {
-        executable: PathBuf::from("/usr/bin/python3"),
+        executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3")),
         arguments: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/test_acp_handler.py")
             .into_os_string()],
@@ -452,7 +452,7 @@ impl ExecutionAudit for RejectAudit {
 fn cleanup_fault_process(config: &AcpConfig) -> binding::ProcessFactory {
     let config = config.clone();
     Arc::new(move || {
-        let mut command = tokio::process::Command::new(&config.executable);
+        let mut command = tokio::process::Command::new(config.executable.executable());
         command
             .args(&config.arguments)
             .env_clear()
@@ -498,7 +498,7 @@ fn one_failed_restoration(
             }
             return Err(failure);
         }
-        let mut command = tokio::process::Command::new(&config.executable);
+        let mut command = tokio::process::Command::new(config.executable.executable());
         command
             .args(&config.arguments)
             .env_clear()
@@ -810,7 +810,7 @@ fn read_process_id(root: &tempfile::TempDir) -> i32 {
 #[tokio::test]
 async fn confirmed_process_scope_cleanup_is_idempotent_before_any_more_effects() {
     let (root, config, _) = profile_setup();
-    let mut command = tokio::process::Command::new(&config.executable);
+    let mut command = tokio::process::Command::new(config.executable.executable());
     command
         .args(&config.arguments)
         .env_clear()
@@ -1014,7 +1014,8 @@ async fn losing_open_wait_before_readiness_preserves_handle_loss_cause_and_clean
             let (confirmed, confirmation) = oneshot::channel();
             let confirmed = Arc::new(Mutex::new(Some(confirmed)));
             let process = Arc::new(move || {
-                let mut command = tokio::process::Command::new(&process_config.executable);
+                let mut command =
+                    tokio::process::Command::new(process_config.executable.executable());
                 command
                     .args(&process_config.arguments)
                     .env_clear()
@@ -1164,7 +1165,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
     let (_root, config, capabilities) = profile_setup();
     let process_config = config.clone();
     let process = Arc::new(move || {
-        let mut command = tokio::process::Command::new(&process_config.executable);
+        let mut command = tokio::process::Command::new(process_config.executable.executable());
         command
             .args(&process_config.arguments)
             .env_clear()

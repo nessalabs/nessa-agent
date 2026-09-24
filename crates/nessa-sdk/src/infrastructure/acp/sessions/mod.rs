@@ -19,5 +19,9 @@ pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
 pub(crate) mod configuration;
+mod executable_use;
 pub(crate) mod identity;
 pub use config::{AcpConfig, StdioMcpServer};
+pub use executable_use::{
+    ExecutableUse, ExecutableUseError, ExecutableUseGuard, ExecutableUseSnapshot,
+};

@@ -145,6 +145,11 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities::default());
+        let mut executable_use = self.config.executable.admit().map_err(|error| {
+            ProviderOpenError::no_resources(AgentError::Configuration(format!(
+                "executable use admission failed: {error}"
+            )))
+        })?;
         let scope = match (self.process)() {
             Ok(scope) => scope,
             Err(failure) => {
@@ -155,9 +160,19 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                         Arc::new(ProcessCleanup::retaining_directory(
                             self.config.clone(),
                             directory,
+                            executable_use,
                         )),
                     ),
-                    None => ProviderOpenError::no_resources(cause),
+                    None => match executable_use.release() {
+                        Ok(()) => ProviderOpenError::no_resources(cause),
+                        Err(_) => ProviderOpenError::with_cleanup(
+                            cause,
+                            Arc::new(ProcessCleanup::retaining_use(
+                                self.config.clone(),
+                                executable_use,
+                            )),
+                        ),
+                    },
                 });
             }
         };
@@ -167,7 +182,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let (events, event_receiver) = self.event_budget.channel(self.config.event_capacity);
         let (ready, startup) = oneshot::channel();
         let observations = Arc::new(ControlMutex::new(GenerationObservations::default()));
-        let recovery = Arc::new(ProcessCleanup::new(self.config.clone()));
+        let recovery = Arc::new(ProcessCleanup::new(self.config.clone(), executable_use));
         tokio::spawn(worker::run(
             scope,
             self.profile.clone(),

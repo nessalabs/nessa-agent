@@ -220,7 +220,7 @@ async fn compiled_binding_opens_and_restores_with_the_pinned_binary() {
             .expect("set NESSA_PINNED_OPENCODE_BINARY to an audited 1.18.31 executable"),
     );
     let (_root, mut config, _) = opencode_configuration("unused-by-live-binary", 16);
-    config.executable = binary;
+    config.executable = ExecutableUseSnapshot::unmanaged(binary);
     config.arguments = vec!["acp".into()];
     config.launch_timeout = Duration::from_secs(30);
     config.startup_timeout = Duration::from_secs(15);

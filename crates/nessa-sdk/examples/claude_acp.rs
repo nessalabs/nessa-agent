@@ -19,7 +19,7 @@ use nessa_sdk::domain::agent_execution::prompts::{
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
-use nessa_sdk::infrastructure::acp::sessions::AcpConfig;
+use nessa_sdk::infrastructure::acp::sessions::{AcpConfig, ExecutableUseSnapshot};
 use nessa_sdk::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 use nessa_sdk::infrastructure::model_metadata_json::load_catalog;
 use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
@@ -172,7 +172,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let audit: Arc<dyn ExecutionAudit> = Arc::new(TracingExecutionAudit);
     let binding = ClaudeAcpProvider::new(
         AcpConfig {
-            executable: PathBuf::from(&args[1]),
+            executable: ExecutableUseSnapshot::unmanaged(PathBuf::from(&args[1])),
             arguments: vec![args[2].clone()],
             environment,
             credential_environment,

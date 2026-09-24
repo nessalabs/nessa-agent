@@ -42,7 +42,10 @@ use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::providers::UserImageSource,
     domain::model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
-    infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
+    infrastructure::{
+        acp::sessions::{ExecutableUseSnapshot, StdioMcpServer},
+        model_metadata_json::load_catalog,
+    },
 };
 use serde::Deserialize;
 use std::{
@@ -713,7 +716,7 @@ mod build {
         images: Option<Arc<dyn UserImageSource>>,
     ) -> AcpConfig {
         AcpConfig {
-            executable: runtime.command.clone(),
+            executable: ExecutableUseSnapshot::unmanaged(runtime.command.clone()),
             arguments: runtime.args.iter().map(Into::into).collect(),
             environment,
             credential_environment,
