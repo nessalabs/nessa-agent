@@ -14,6 +14,9 @@ export function nativeSmokeFixture({
   workspace,
   providerPath,
   command,
+  dataRoot,
+  instance,
+  port,
 }) {
   const model = sourceCatalog.models.find(
     (candidate) =>
@@ -28,6 +31,10 @@ export function nativeSmokeFixture({
   )
 
   return {
+    settings: {
+      onboarding: { completed: true },
+      service: { dataRoot, instance, port },
+    },
     catalog: {
       verifiedOn: sourceCatalog.verifiedOn,
       models: [model],
