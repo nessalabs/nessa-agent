@@ -696,11 +696,16 @@ fn oversized_reclamation_state_is_rejected_before_decode() {
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "bin/opencode");
     publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
-    std::fs::write(
-        store.reclamation_path(&agent()),
-        vec![b'x'; MAXIMUM_RECLAMATION_STATE_BYTES as usize + 1],
+    let mut oversized = open_beneath(
+        root.path(),
+        &store.reclamation_path(&agent()),
+        OpenMode::CreateNew,
     )
     .unwrap();
+    oversized
+        .write_all(&vec![b'x'; MAXIMUM_RECLAMATION_STATE_BYTES as usize + 1])
+        .unwrap();
+    drop(oversized);
 
     let mut lease = store.reclamation_lease(&agent()).unwrap();
     let failure = match lease.load_reclamation() {

@@ -8,7 +8,7 @@ use std::{
     fs::File,
     io::{self, Read, Seek, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use flate2::read::MultiGzDecoder;
@@ -291,11 +291,15 @@ struct DurableManagedExecutableUse {
     marker_directory: PathBuf,
     agent: AgentName,
     artifact: RuntimeArtifact,
+    local_mutation: Arc<Mutex<()>>,
     _artifact_lock: File,
 }
 
 impl ManagedExecutableUse for DurableManagedExecutableUse {
     fn admit(&self) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseFailure> {
+        let _local_mutation = self.local_mutation.lock().map_err(|_| {
+            ManagedExecutableUseFailure::new("executable-use admission mutex was poisoned")
+        })?;
         let store = ManagedRuntimes::new(self.root.clone());
         let mutation = store
             .hold_use_mutation(&self.marker_directory)
@@ -346,6 +350,7 @@ impl ManagedExecutableUse for DurableManagedExecutableUse {
             marker_directory: self.marker_directory.clone(),
             record,
             released: false,
+            local_mutation: Arc::clone(&self.local_mutation),
         }))
     }
 }
@@ -355,6 +360,7 @@ struct DurableManagedExecutableUseGuard {
     marker_directory: PathBuf,
     record: ExecutableUseGeneration,
     released: bool,
+    local_mutation: Arc<Mutex<()>>,
 }
 
 struct UseMutation {
@@ -439,6 +445,9 @@ impl PublicationLease for ManagedPublicationLease {
 impl ManagedExecutableUseGuard for DurableManagedExecutableUseGuard {
     fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
         if !self.released {
+            let _local_mutation = self.local_mutation.lock().map_err(|_| {
+                ManagedExecutableUseFailure::new("executable-use admission mutex was poisoned")
+            })?;
             let store = ManagedRuntimes::new(self.root.clone());
             let mutation = store
                 .hold_use_mutation(&self.marker_directory)
@@ -2040,6 +2049,7 @@ impl RuntimeStore for ManagedRuntimes {
             marker_directory,
             agent: agent.clone(),
             artifact,
+            local_mutation: Arc::new(Mutex::new(())),
             _artifact_lock: artifact_lock,
         });
         Ok(Some(ManagedLaunchSnapshot::new(executable, authority)))

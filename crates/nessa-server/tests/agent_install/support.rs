@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     mpsc::Sender,
-    Mutex,
+    Arc, Mutex,
 };
 
 use crate::agent_install::application::{
@@ -410,6 +410,7 @@ pub(crate) struct FakeStore {
     publish: Result<PublicationChange, StoreFailure>,
     recovery: PublicationRecovery,
     lease_drop: Option<Sender<()>>,
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
     /// How many archives this store has staged, so each gets its own name.
     staged: std::sync::atomic::AtomicUsize,
     calls: Mutex<StoreCalls>,
@@ -426,6 +427,7 @@ impl FakeStore {
             publish: Ok(PublicationChange::Installed),
             recovery: PublicationRecovery::NotRequired,
             lease_drop: None,
+            reclamation: Arc::new(Mutex::new(None)),
             staged: std::sync::atomic::AtomicUsize::new(0),
             calls: Mutex::new(StoreCalls::default()),
         }
@@ -565,7 +567,9 @@ impl RuntimeStore for FakeStore {
         &self,
         _agent: &AgentName,
     ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
-        Ok(Box::new(FakeReclamationLease))
+        Ok(Box::new(FakeReclamationLease {
+            reclamation: Arc::clone(&self.reclamation),
+        }))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
@@ -618,22 +622,25 @@ impl RuntimeStore for FakeStore {
                 Publication::new(
                     self.root.join("opencode"),
                     change,
-                    lease(self.lease_drop.clone()),
+                    lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
                 )
             })
             .map_err(|failure| match self.recovery.clone() {
-                PublicationRecovery::NotRequired => {
-                    PublishFailure::unchanged(failure, lease(self.lease_drop.clone()))
-                }
-                PublicationRecovery::RolledBack(rollback) => {
-                    PublishFailure::rolled_back(failure, rollback, lease(self.lease_drop.clone()))
-                }
+                PublicationRecovery::NotRequired => PublishFailure::unchanged(
+                    failure,
+                    lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
+                ),
+                PublicationRecovery::RolledBack(rollback) => PublishFailure::rolled_back(
+                    failure,
+                    rollback,
+                    lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
+                ),
                 PublicationRecovery::Incomplete { rollback, cleanup } => {
                     PublishFailure::incomplete(
                         failure,
                         rollback,
                         cleanup,
-                        lease(self.lease_drop.clone()),
+                        lease(self.lease_drop.clone(), Arc::clone(&self.reclamation)),
                     )
                 }
             })
@@ -648,27 +655,50 @@ impl RuntimeStore for FakeStore {
     }
 }
 
-struct DropSignal(Sender<()>);
+struct DropSignal {
+    sender: Sender<()>,
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
+}
 
-struct FakeReclamationLease;
+struct FakeReclamationLease {
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
+}
 
 fn lease(
     sender: Option<Sender<()>>,
+    reclamation: Arc<Mutex<Option<ManagedInstallation>>>,
 ) -> Box<dyn crate::agent_install::application::PublicationLease> {
-    sender.map_or_else(
-        || Box::new(FakeReclamationLease) as Box<dyn PublicationLease>,
-        |sender| Box::new(DropSignal(sender)),
-    )
+    match sender {
+        Some(sender) => Box::new(DropSignal {
+            sender,
+            reclamation,
+        }),
+        None => Box::new(FakeReclamationLease { reclamation }) as Box<dyn PublicationLease>,
+    }
 }
 
-fn load_no_reclamation() -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
-    Ok(None)
+fn clone_installation(installation: &ManagedInstallation) -> ManagedInstallation {
+    ManagedInstallation::restore(
+        installation.agent().clone(),
+        installation.current().clone(),
+        installation.pending().to_vec(),
+        installation.replacement_receipt().cloned(),
+    )
+    .expect("test reclamation state remains valid")
+}
+
+fn load_test_reclamation(
+    reclamation: &Mutex<Option<ManagedInstallation>>,
+) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+    Ok(reclamation.lock().unwrap().as_ref().map(clone_installation))
 }
 
 fn retain_test_reclamation(
-    _installation: &ManagedInstallation,
+    reclamation: &Mutex<Option<ManagedInstallation>>,
+    installation: &ManagedInstallation,
     _stage: ReclamationPersistenceStage,
 ) -> Result<(), ReclamationPersistenceFailure> {
+    *reclamation.lock().unwrap() = Some(clone_installation(installation));
     Ok(())
 }
 
@@ -681,12 +711,12 @@ fn remove_test_superseded(
 }
 
 macro_rules! impl_test_reclamation_lease {
-    ($lease:ty) => {
+    ($lease:ty, $state:ident) => {
         impl PublicationLease for $lease {
             fn load_reclamation(
                 &mut self,
             ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
-                load_no_reclamation()
+                load_test_reclamation(&self.$state)
             }
 
             fn retain_reclamation(
@@ -694,7 +724,7 @@ macro_rules! impl_test_reclamation_lease {
                 installation: &ManagedInstallation,
                 stage: ReclamationPersistenceStage,
             ) -> Result<(), ReclamationPersistenceFailure> {
-                retain_test_reclamation(installation, stage)
+                retain_test_reclamation(&self.$state, installation, stage)
             }
 
             fn remove_superseded(
@@ -718,11 +748,11 @@ macro_rules! impl_test_reclamation_lease {
     };
 }
 
-impl_test_reclamation_lease!(FakeReclamationLease);
-impl_test_reclamation_lease!(DropSignal);
+impl_test_reclamation_lease!(FakeReclamationLease, reclamation);
+impl_test_reclamation_lease!(DropSignal, reclamation);
 
 impl Drop for DropSignal {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        let _ = self.sender.send(());
     }
 }

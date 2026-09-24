@@ -77,20 +77,49 @@ impl InstallAudit for RefuseTerminalBeforeCommitOnceAudit {
     }
 }
 
-struct SignallingLease(mpsc::Sender<()>);
+struct SignallingLease {
+    sender: mpsc::Sender<()>,
+    retained: Option<ManagedInstallation>,
+}
+
+impl SignallingLease {
+    fn new(sender: mpsc::Sender<()>) -> Self {
+        Self {
+            sender,
+            retained: None,
+        }
+    }
+}
 
 impl PublicationLease for SignallingLease {
     fn load_reclamation(
         &mut self,
     ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
-        Ok(None)
+        Ok(self.retained.as_ref().map(|installation| {
+            ManagedInstallation::restore(
+                installation.agent().clone(),
+                installation.current().clone(),
+                installation.pending().to_vec(),
+                installation.replacement_receipt().cloned(),
+            )
+            .unwrap()
+        }))
     }
 
     fn retain_reclamation(
         &mut self,
-        _installation: &ManagedInstallation,
+        installation: &ManagedInstallation,
         _stage: ReclamationPersistenceStage,
     ) -> Result<(), ReclamationPersistenceFailure> {
+        self.retained = Some(
+            ManagedInstallation::restore(
+                installation.agent().clone(),
+                installation.current().clone(),
+                installation.pending().to_vec(),
+                installation.replacement_receipt().cloned(),
+            )
+            .unwrap(),
+        );
         Ok(())
     }
 
@@ -115,7 +144,7 @@ impl PublicationLease for SignallingLease {
 
 impl Drop for SignallingLease {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        let _ = self.sender.send(());
     }
 }
 
@@ -671,7 +700,7 @@ fn terminal_store(
             failure: Mutex::new(Some(PublishFailure::rolled_back(
                 StoreFailure::Unwritable("publication failed".into()),
                 RollbackChange::NoInstalledRuntime,
-                Box::new(SignallingLease(lease_dropped)),
+                Box::new(SignallingLease::new(lease_dropped)),
             ))),
         }),
         TerminalPublicationCase::RecoveryIncomplete => {
@@ -689,7 +718,7 @@ fn terminal_store(
                     StoreFailure::Unwritable("publication failed".into()),
                     None,
                     cleanup,
-                    Box::new(SignallingLease(lease_dropped)),
+                    Box::new(SignallingLease::new(lease_dropped)),
                 ))),
             })
         }
@@ -2685,7 +2714,7 @@ fn incomplete_publication_moves_full_diagnostics_and_bounds_only_audit_evidence(
                 publication,
                 None,
                 cleanup,
-                Box::new(SignallingLease(lease_dropped)),
+                Box::new(SignallingLease::new(lease_dropped)),
             ))),
         };
         let audit = LeaseCheckingAudit {
@@ -2761,7 +2790,7 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
             inner: FakeStore::empty(root.path()),
             failure: Mutex::new(Some(PublishFailure::unchanged(
                 operation,
-                Box::new(SignallingLease(lease_dropped)),
+                Box::new(SignallingLease::new(lease_dropped)),
             ))),
         };
         let audit = RecordingAudit::default();
@@ -2809,7 +2838,7 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
             failure: Mutex::new(Some(PublishFailure::rolled_back(
                 operation,
                 RollbackChange::NoInstalledRuntime,
-                Box::new(SignallingLease(lease_dropped)),
+                Box::new(SignallingLease::new(lease_dropped)),
             ))),
         };
         let audit = LeaseCheckingAudit {
@@ -2881,7 +2910,7 @@ fn publication_lease_survives_until_evidence_validation_returns() {
         failure: Mutex::new(Some(PublishFailure::rolled_back(
             StoreFailure::Unwritable("publication".into()),
             RollbackChange::Restored(RuntimeArtifact::for_release(&pinned)),
-            Box::new(SignallingLease(lease_dropped)),
+            Box::new(SignallingLease::new(lease_dropped)),
         ))),
     };
 

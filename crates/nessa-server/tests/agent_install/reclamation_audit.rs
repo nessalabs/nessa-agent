@@ -185,15 +185,18 @@ fn replacing_the_retained_records_directory_refuses_lookup_and_append() {
     let audit = DurableReclamationAudit::new(&root).unwrap();
     let removed = event(ReclamationPhysicalOutcome::Removed);
     std::fs::rename(root.join(RECORDS), root.join("displaced-records")).unwrap();
-    std::fs::create_dir(root.join(RECORDS)).unwrap();
+    create_directory(&root.join(RECORDS)).unwrap();
 
     let lookup = audit
         .event_for(removed.admission().operation_id())
         .unwrap_err();
     let append = audit.record(&removed).unwrap_err();
 
-    assert!(lookup.detail().contains("changed") || lookup.detail().contains("binding"));
-    assert!(append.detail().contains("changed") || append.detail().contains("binding"));
+    assert_eq!(
+        lookup.detail(),
+        "local storage must be private and owned by the current OS user"
+    );
+    assert_eq!(append.detail(), lookup.detail());
     assert!(!root.join(record_path(&removed)).exists());
 }
 
@@ -223,12 +226,12 @@ fn replacing_lock_or_records_authority_after_acquisition_refuses_acknowledgement
     let authority_failure = audit
         .record_with(&removed, std::fs::File::sync_all, || {
             std::fs::rename(root.join(RECORDS), root.join("displaced-records"))?;
-            std::fs::create_dir(root.join(RECORDS))
+            create_directory(&root.join(RECORDS))
         })
         .unwrap_err();
-    assert!(
-        authority_failure.detail().contains("changed")
-            || authority_failure.detail().contains("binding")
+    assert_eq!(
+        authority_failure.detail(),
+        "local storage must be private and owned by the current OS user"
     );
     assert!(!root.join(record_path(&removed)).exists());
 }

@@ -39,7 +39,15 @@ impl PublicationLease for ScriptedLease {
     fn load_reclamation(
         &mut self,
     ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
-        Ok(self.retained.take())
+        Ok(self.retained.as_ref().map(|installation| {
+            ManagedInstallation::restore(
+                installation.agent().clone(),
+                installation.current().clone(),
+                installation.pending().to_vec(),
+                installation.replacement_receipt().cloned(),
+            )
+            .expect("retained test state remains valid")
+        }))
     }
 
     fn retain_reclamation(

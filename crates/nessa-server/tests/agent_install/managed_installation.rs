@@ -347,8 +347,9 @@ fn returning_to_a_fences_its_obligation_and_later_reactivation_preserves_origin(
     );
     assert_eq!(installation.pending().len(), 2);
 
+    let replace_c = request("a-to-c");
     let update = installation
-        .record_replacement(artifact('c'), request("a-to-c"))
+        .record_replacement(artifact('c'), replace_c.clone())
         .unwrap();
     let ReclamationUpdate::Reactivated {
         obligation,
@@ -362,7 +363,11 @@ fn returning_to_a_fences_its_obligation_and_later_reactivation_preserves_origin(
     assert_eq!(activation.request().request_id(), "a-to-c");
     assert_eq!(activation.replacement(), &artifact('c'));
     assert_eq!(obligation.activation(), &activation);
-    assert_eq!(installation.work(&replace_a), Ok(ReclamationWork::Ready));
+    assert_eq!(
+        installation.work(&replace_a),
+        Err(ManagedInstallationError::UnknownObligation)
+    );
+    assert_eq!(installation.work(&replace_c), Ok(ReclamationWork::Ready));
 }
 
 #[test]
