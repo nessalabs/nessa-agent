@@ -90,6 +90,7 @@ pub(super) enum StartupWarmUp {
 impl StartupWarmUp {
     pub(super) fn start(&self) {
         match self {
+            #[cfg(unix)]
             Self::Fixed(warm_up) => warm_up.start(),
             #[cfg(unix)]
             Self::Current(resolver) => resolver.start_warm_up(),
