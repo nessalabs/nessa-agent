@@ -8,8 +8,10 @@
 //! Arrows show construction and validation. Process startup, resume, and the
 //! launch-input fingerprint that identifies a restorable context remain shared
 //! ACP responsibilities, not provider-specific lifecycle implementations. The
-//! private process root isolates code-loading configuration and account data;
-//! composition supplies the one credential admitted for the process.
+//! private process root isolates code-loading configuration and account data.
+//! Credentials can enter only through the caller-supplied
+//! [`crate::infrastructure::acp::sessions::AcpConfig`]
+//! credential environment; this module does not discover an account itself.
 mod binding;
 mod profile;
 pub use binding::OpencodeAcpProvider;

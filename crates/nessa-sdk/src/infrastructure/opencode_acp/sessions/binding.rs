@@ -81,8 +81,8 @@ use tokio::process::Command;
 /// `agent.plan.permission` block can also outrank this policy. The same private
 /// config boundary closes both paths: there is no global config to contribute
 /// an MCP entry or a later permission rule. The private data root also excludes
-/// the caller's `auth.json`; composition supplies the one admitted API key in
-/// the process environment.
+/// the caller's `auth.json`; any admitted credential must arrive through the
+/// caller-supplied process environment in [`AcpConfig`].
 ///
 /// **A launch writes to the machine before any tool runs.** Two effects sit
 /// outside permission evaluation entirely, so no policy reaches them and

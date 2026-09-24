@@ -288,15 +288,14 @@ fn output_tokens() -> u32 {
 /// shorter and would also hand each agent a pointer into the others'
 /// configuration.
 ///
-/// Opencode's are the XDG ones, because that is what it resolves its own
-/// directories from — config, data, cache and state, and with them its
-/// providers, its plugins and whatever account the person signed in on. Under
-/// `env_clear` an unnamed `XDG_CONFIG_HOME` does not mean "unset", it means
-/// Opencode falls back to `$HOME/.config` and reads a different installation
-/// than the one the readiness probe answered about. They are general-purpose
-/// variables rather than Opencode's own, but they are the person's own paths
-/// and every agent here is already given `HOME`, so nothing is handed over that
-/// was not already reachable.
+/// OpenCode's XDG variables are collected at this shared boundary, then treated
+/// as untrusted launch input by its SDK adapter. That adapter removes `HOME`, all
+/// four XDG roots, and alternate config inputs before retaining the provider
+/// configuration. At process spawn it assigns fresh private HOME, config, data,
+/// cache, and state roots, disables project config and external plugins, and
+/// therefore exposes none of the caller's plugins, provider configuration, or
+/// `auth.json` account data. Credentials enter through the separately selected
+/// credential environment alone.
 ///
 /// Nothing here tells an agent *how* to sign in. Codex's adapter will take a
 /// `DEFAULT_AUTH_REQUEST` and sign itself in from the environment key at

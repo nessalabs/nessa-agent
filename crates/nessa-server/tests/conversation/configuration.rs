@@ -207,11 +207,11 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
     };
 
     let opencode = inherited(AgentId::Opencode);
-    // Opencode resolves config, data, cache and state from the XDG variables,
-    // and with them its providers, its plugins and the account a person signed
-    // in on. Under `env_clear` leaving one out is not "unset": Opencode falls
-    // back to a path under `HOME` and reads a different installation than the
-    // readiness probe answered about.
+    // Shared composition gathers the XDG variables OpenCode would otherwise
+    // resolve config, data, cache and state from. The OpenCode SDK adapter treats
+    // these values as untrusted launch input and replaces all four with private
+    // roots before process spawn; this test covers only the shared collection
+    // boundary.
     for key in [
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
@@ -232,9 +232,9 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
     );
     let codex = inherited(AgentId::Codex);
     assert!(codex.contains(&"CODEX_HOME".to_owned()), "{codex:?}");
-    // The XDG variables are general-purpose, so they are Opencode's only by
-    // virtue of being what Opencode reads. An agent with a directory variable
-    // of its own has no business being given them as well.
+    // The XDG variables are general-purpose, so shared composition collects them
+    // only for OpenCode. An agent with a directory variable of its own has no
+    // reason to receive them at this boundary.
     for other in [claude, codex] {
         assert!(!other.contains(&"XDG_CONFIG_HOME".to_owned()), "{other:?}");
     }
