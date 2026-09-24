@@ -122,7 +122,7 @@ async fn read_credential_environment(
     .map_err(credential_open_failure)
 }
 
-fn credential_environment(
+pub(super) fn credential_environment(
     mut environment: BTreeMap<OsString, OsString>,
     source: &dyn AgentCredentialSource,
 ) -> Result<BTreeMap<OsString, OsString>, AgentCredentialFailure> {

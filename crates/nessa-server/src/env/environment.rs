@@ -17,6 +17,8 @@ pub struct Environment {
     /// Private product auth directory, resolved from typed startup configuration.
     /// None is valid for isolated config tests; serving requires a data root.
     pub auth_directory: Option<PathBuf>,
+    /// Validated service instance used by every service-owned store.
+    instance: Option<String>,
     endpoint_storage: Option<(PathBuf, PathBuf)>,
 }
 
@@ -50,8 +52,9 @@ impl Environment {
             read_optional(source, key::UPTIME_BACKEND)?.as_deref(),
             read_optional(source, key::UPTIME_FIXED_MS)?.as_deref(),
         )?;
-        let auth_directory = load_auth_directory(source, stage)?;
-        let endpoint_storage = load_endpoint_storage(source, stage)?;
+        let instance = read_optional(source, key::INSTANCE)?;
+        let auth_directory = load_auth_directory(source, stage, instance.as_deref())?;
+        let endpoint_storage = load_endpoint_storage(source, stage, instance.as_deref())?;
 
         Ok(Self {
             stage,
@@ -60,6 +63,7 @@ impl Environment {
             version: config::VERSION,
             uptime_backend,
             auth_directory,
+            instance,
             endpoint_storage,
         })
     }
@@ -67,7 +71,9 @@ impl Environment {
     /// Resolve offline administration paths for the selected stage and instance.
     pub fn auth_directory_from_system() -> Result<PathBuf, EnvironmentError> {
         let source = super::source::SystemEnv;
-        load_auth_directory(&source, load_stage(&source)?)?.ok_or(EnvironmentError::Backend(
+        let stage = load_stage(&source)?;
+        let instance = read_optional(&source, key::INSTANCE)?;
+        load_auth_directory(&source, stage, instance.as_deref())?.ok_or(EnvironmentError::Backend(
             "set NESSA_DATA_DIR or the OS home directory (USERPROFILE on Windows, HOME on Unix) for local credentials",
         ))
     }
@@ -119,29 +125,36 @@ impl Environment {
     pub(crate) fn gateway_endpoint_storage(&self) -> Option<(PathBuf, PathBuf)> {
         self.endpoint_storage.clone()
     }
+
+    /// The already-resolved instance shared by service-owned adapters.
+    pub(crate) fn instance(&self) -> Option<&str> {
+        self.instance.as_deref()
+    }
 }
 
 fn load_endpoint_storage(
     source: &impl EnvSource,
     stage: Stage,
+    instance: Option<&str>,
 ) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
     super::paths::endpoint_storage(
         read_optional(source, key::DATA_DIR)?.as_deref(),
         read_optional(source, home_variable())?.as_deref(),
         stage.as_str(),
-        read_optional(source, key::INSTANCE)?.as_deref(),
+        instance,
     )
 }
 
 fn load_auth_directory(
     source: &impl EnvSource,
     stage: Stage,
+    instance: Option<&str>,
 ) -> Result<Option<PathBuf>, EnvironmentError> {
     super::paths::auth_directory(
         read_optional(source, key::DATA_DIR)?.as_deref(),
         read_optional(source, home_variable())?.as_deref(),
         stage.as_str(),
-        read_optional(source, key::INSTANCE)?.as_deref(),
+        instance,
     )
 }
 

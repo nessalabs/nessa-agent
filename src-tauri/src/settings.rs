@@ -24,11 +24,30 @@ use serde::{Deserialize, Serialize};
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub panel: Panel,
+    /// Durable service identity and provider configuration.
+    pub service: Service,
     /// Keep background agents running after quitting the desktop by default.
     pub stop_agents_on_quit: bool,
     /// How far first-run setup got. A file written before this key existed
     /// loads as "not done", which is the same answer a first launch gives.
     pub onboarding: Onboarding,
+}
+
+/// Inputs that may intentionally change the packaged gateway registration.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Service {
+    pub data_root: Option<PathBuf>,
+    pub instance: Option<String>,
+    pub port: Option<u16>,
+    pub claude: ClaudeService,
+}
+
+/// Durable Claude settings shared by readiness and process launch.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeService {
+    pub configuration_directory: Option<PathBuf>,
 }
 
 /// What first-run setup has settled.
@@ -87,10 +106,18 @@ impl Default for Panel {
 /// decisions that read and write settings — the first-run flag, the quit
 /// policy — be exercised without a disk or a running app.
 pub trait SettingsStore: Send + Sync {
-    /// The startup read: the defaults stand in for anything missing or
-    /// unreadable, because a launch that cannot read its settings still has to
-    /// open a panel. See [`load_from`].
+    /// The panel-preference read: defaults stand in for anything missing or
+    /// unreadable, because a launch that cannot read those preferences still
+    /// has to open a panel. See [`load_from`].
     fn load(&self) -> Settings;
+
+    /// Read the durable inputs that own the packaged service and credential
+    /// namespace.
+    ///
+    /// An absent file is a first launch and therefore has the default service
+    /// inputs. A file that exists but cannot be read or parsed is an error: its
+    /// service identity is unknown, so defaults cannot safely stand in for it.
+    fn load_service(&self) -> io::Result<Service>;
 
     /// Read, apply `change`, write the result back, and answer with what was
     /// written. See [`update_in`] for what an unusable file does here.
@@ -129,6 +156,17 @@ impl SettingsStore for SettingsFile {
         match &self.path {
             Some(path) => load_from(path, &*self.storage),
             None => Settings::default(),
+        }
+    }
+
+    fn load_service(&self) -> io::Result<Service> {
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "settings directory unavailable")
+        })?;
+        match read_from(path, &*self.storage) {
+            Found::Settings(settings) => Ok(settings.service),
+            Found::Absent => Ok(Service::default()),
+            Found::Unusable(error) => Err(error),
         }
     }
 
@@ -385,6 +423,62 @@ mod tests {
     }
 
     #[test]
+    fn service_identity_defaults_only_when_settings_are_absent() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let settings = SettingsFile {
+            path: Some(path.clone()),
+            storage: Arc::new(store),
+        };
+
+        assert_eq!(settings.load_service().unwrap().port, None);
+
+        settings
+            .storage
+            .write(&path, br#"{"service":{"instance":"one","port":7443}}"#)
+            .unwrap();
+        let service = settings.load_service().unwrap();
+        assert_eq!(service.instance.as_deref(), Some("one"));
+        assert_eq!(service.port, Some(7443));
+    }
+
+    #[test]
+    fn unreadable_or_malformed_settings_cannot_authorize_a_service_identity() {
+        let path = PathBuf::from("settings.json");
+        let malformed = Arc::new(FakeStorage::default());
+        malformed.put(&path, b"{");
+        let settings = SettingsFile {
+            path: Some(path.clone()),
+            storage: malformed.clone(),
+        };
+        assert_eq!(
+            settings
+                .load_service()
+                .expect_err("malformed authority must stop service composition")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(malformed.get(&path).as_deref(), Some(b"{".as_slice()));
+
+        let unreadable = Arc::new(FakeStorage::default());
+        let original = br#"{"service":{"instance":"one"}}"#;
+        unreadable.put(&path, original);
+        *unreadable.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+        let settings = SettingsFile {
+            path: Some(path.clone()),
+            storage: unreadable.clone(),
+        };
+        assert_eq!(
+            settings
+                .load_service()
+                .expect_err("unreadable authority must stop service composition")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(unreadable.get(&path).as_deref(), Some(original.as_slice()));
+    }
+
+    #[test]
     fn missing_settings_initialize_but_failed_replacement_preserves_prior_file() {
         let path = PathBuf::from("settings.json");
         let store = FakeStorage::default();
@@ -462,6 +556,7 @@ mod tests {
                     height: Some(800.0),
                     min_width: 500.0,
                 },
+                service: Service::default(),
                 stop_agents_on_quit: true,
                 onboarding: Onboarding::default(),
             },
@@ -557,13 +652,21 @@ mod tests {
         assert!(settings.store.load().stop_agents_on_quit);
     }
 
-    /// No config root is not an empty settings file: there is nothing to read
-    /// and nowhere to write, and a launch still has to open a panel.
+    /// No config root is not an empty settings file: the panel can use its
+    /// defaults, but there is no authority for service identity and nowhere to
+    /// write.
     #[test]
     fn a_launch_with_no_config_root_gets_the_defaults_and_refuses_to_write() {
         let store = SettingsFile::at(None);
 
         assert_eq!(store.load().panel.width, Panel::default().width);
+        assert_eq!(
+            store
+                .load_service()
+                .expect_err("there is no durable service authority")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(
             store
                 .update(&mut |chosen| chosen.onboarding.completed = true)

@@ -58,9 +58,13 @@ impl ReconciliationEvidence {
                 ReconciliationCause::Startup,
                 ReconciliationInitiator::DesktopHost
             ) | (
-                ReconciliationCause::CredentialLoad
-                    | ReconciliationCause::ExplicitRetry
-                    | ReconciliationCause::ClaudeConfigurationChanged,
+                ReconciliationCause::ClaudeConfigurationChanged,
+                ReconciliationInitiator::DesktopHost
+            ) | (
+                ReconciliationCause::CredentialLoad | ReconciliationCause::ExplicitRetry,
+                ReconciliationInitiator::BundledSurface(_),
+            ) | (
+                ReconciliationCause::ClaudeConfigurationChanged,
                 ReconciliationInitiator::BundledSurface(_),
             )
         );
@@ -913,7 +917,6 @@ mod tests {
         for cause in [
             ReconciliationCause::CredentialLoad,
             ReconciliationCause::ExplicitRetry,
-            ReconciliationCause::ClaudeConfigurationChanged,
         ] {
             assert_eq!(
                 ReconciliationEvidence::new(cause, ReconciliationInitiator::DesktopHost),
@@ -925,6 +928,16 @@ mod tests {
             )
             .is_ok());
         }
+        assert!(ReconciliationEvidence::new(
+            ReconciliationCause::ClaudeConfigurationChanged,
+            ReconciliationInitiator::DesktopHost
+        )
+        .is_ok());
+        assert!(ReconciliationEvidence::new(
+            ReconciliationCause::ClaudeConfigurationChanged,
+            ReconciliationInitiator::BundledSurface(BundledSurface::Main)
+        )
+        .is_ok());
         assert!(ReconciliationEvidence::new(
             ReconciliationCause::Startup,
             ReconciliationInitiator::DesktopHost

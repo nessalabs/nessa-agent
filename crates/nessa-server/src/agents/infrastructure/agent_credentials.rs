@@ -155,7 +155,11 @@ fn platform_keychain() -> Box<dyn KeychainReader> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use security_framework::passwords::{delete_generic_password, set_generic_password};
     use std::sync::Mutex;
+    #[cfg(target_os = "macos")]
+    use std::{process, time::SystemTime};
 
     struct Keychain {
         answer: Mutex<Result<Option<Vec<u8>>, AgentCredentialFailure>>,
@@ -203,5 +207,33 @@ mod tests {
             source(Ok(Some(Vec::new()))).read(AgentId::Claude).err(),
             Some(AgentCredentialFailure::Invalid)
         );
+    }
+
+    /// This exercises the packaged source's exact canonical account in the
+    /// real login keychain. The unique instance is deleted before assertions.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "writes a disposable item to the current macOS login keychain"]
+    fn packaged_source_reads_its_canonical_disposable_api_key() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let instance = format!("boundary-{}-{nonce}", process::id());
+        let namespace = CredentialNamespace::new("ci".into(), Some(instance)).unwrap();
+        let account = namespace.account(&ITEMS.accounts.claude).unwrap();
+        set_generic_password(&ITEMS.service, &account, b"disposable-key").unwrap();
+        let source = LocalAgentCredentials {
+            environment: HashMap::new(),
+            keychain: Box::new(LoginKeychain),
+            namespace,
+        };
+
+        let answer = source.read(AgentId::Claude);
+        delete_generic_password(&ITEMS.service, &account).unwrap();
+
+        let credential = answer.unwrap().unwrap();
+        assert_eq!(credential.kind(), AgentCredentialKind::ApiKey);
+        assert_eq!(credential.expose(), "disposable-key");
     }
 }

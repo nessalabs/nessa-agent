@@ -35,7 +35,9 @@
 //! That is reported where it is asked about — setup says the agent is not set
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
-use crate::agents::domain::AgentId;
+#[cfg(unix)]
+use crate::agents::infrastructure::CredentialedClaudeProvider;
+use crate::agents::{application::AgentCredentialSource, domain::AgentId};
 use crate::conversation::application::ConversationAgent;
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
@@ -516,6 +518,7 @@ pub(super) fn providers(
     directory: &Path,
     clock: Arc<dyn Clock>,
     images: Arc<dyn UserImageSource>,
+    credentials: Arc<dyn AgentCredentialSource>,
 ) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     let selected = config.selected()?;
@@ -536,6 +539,7 @@ pub(super) fn providers(
             directory,
             clock.clone(),
             images.clone(),
+            credentials.clone(),
         ) {
             Ok(provider) => provider,
             Err(failure) if agent == selected => return Err(failure),
@@ -583,6 +587,7 @@ pub(super) fn providers(
     _: &Path,
     _: Arc<dyn Clock>,
     _: Arc<dyn UserImageSource>,
+    _: Arc<dyn AgentCredentialSource>,
 ) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     Err(RunError::Agent(
@@ -617,7 +622,10 @@ pub(super) struct ConfiguredAgents {
 #[cfg(unix)]
 mod build {
     use super::super::agent_budgets as budgets;
-    use super::{AgentId, AgentRuntime, AgentsConfig, RunError};
+    use super::{
+        AgentCredentialSource, AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider,
+        RunError,
+    };
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
@@ -636,8 +644,8 @@ mod build {
             common::value_objects::TokenLimits,
         },
         infrastructure::{
-            acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
-            codex_acp::sessions::CodexAcpProvider, opencode_acp::sessions::OpencodeAcpProvider,
+            acp::sessions::AcpConfig, codex_acp::sessions::CodexAcpProvider,
+            opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
     use std::{
@@ -758,6 +766,7 @@ mod build {
         directory: &Path,
         clock: Arc<dyn Clock>,
         images: Arc<dyn UserImageSource>,
+        credentials: Arc<dyn AgentCredentialSource>,
     ) -> Result<ProviderComposition, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
         let model = super::model(agent, config, runtime)?;
@@ -787,9 +796,15 @@ mod build {
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         let provider: Arc<dyn AgentProvider> = match agent {
             AgentId::Claude => Arc::new(
-                ClaudeAcpProvider::new(acp, &model, limits, audit.clone())
-                    .map_err(failed)?
-                    .with_system_prompt(prompt),
+                CredentialedClaudeProvider::new(
+                    acp,
+                    model,
+                    limits,
+                    audit.clone(),
+                    prompt,
+                    credentials,
+                )
+                .map_err(failed)?,
             ),
             AgentId::Codex => Arc::new(
                 CodexAcpProvider::new(acp, &model, limits, audit.clone())

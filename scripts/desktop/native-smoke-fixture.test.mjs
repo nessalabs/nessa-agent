@@ -19,6 +19,9 @@ test("the native smoke fixture keeps its selected binding and catalog model alig
     workspace: "/fixture/workspace",
     providerPath: "/fixture/provider.mjs",
     command: "/fixture/node",
+    dataRoot: "/fixture/data",
+    instance: "native-smoke-fixture",
+    port: 17420,
   })
   const sourceModel = sourceCatalog.models.find(
     (model) => model.provider === provider && model.modelId === modelId,
@@ -32,6 +35,14 @@ test("the native smoke fixture keeps its selected binding and catalog model alig
   assert.equal(fixture.catalog.models[0].provider, provider)
   assert.equal(fixture.catalog.models[0].input.image, true)
   assert.ok(fixture.catalog.models[0].imageInput.mediaTypes.includes("image/png"))
+  assert.deepEqual(fixture.settings, {
+    onboarding: { completed: true },
+    service: {
+      dataRoot: "/fixture/data",
+      instance: "native-smoke-fixture",
+      port: 17420,
+    },
+  })
 })
 
 test("the native smoke fixture refuses a catalog without its image-capable model", () => {
@@ -43,6 +54,9 @@ test("the native smoke fixture refuses a catalog without its image-capable model
         workspace: "/fixture/workspace",
         providerPath: "/fixture/provider.mjs",
         command: "/fixture/node",
+        dataRoot: "/fixture/data",
+        instance: "native-smoke-fixture",
+        port: 17420,
       }),
     /native smoke model must remain in the bundled catalog/,
   )

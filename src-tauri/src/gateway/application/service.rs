@@ -466,11 +466,11 @@ impl Gateway {
     }
 
     pub async fn start(&self) -> Result<(), GatewayError> {
-        self.reconcile(evidence(
-            ReconciliationCause::Startup,
-            ReconciliationInitiator::DesktopHost,
-        )?)
-        .await
+        let cause = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause())).map_err(|_| {
+            GatewayError::Registration("gateway host startup classification panicked".into())
+        })?;
+        self.reconcile(evidence(cause, ReconciliationInitiator::DesktopHost)?)
+            .await
     }
 
     pub async fn wait_ready(&self, surface: BundledSurface) -> Result<(), GatewayError> {

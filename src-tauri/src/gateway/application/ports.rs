@@ -1,10 +1,11 @@
 use crate::gateway::domain::value_objects::{
-    ReconciliationAttemptRecord, ReconciliationCleanupDecision, ReconciliationCorrelation,
-    ReconciliationEffectTimingRecord, ReconciliationEvidence, ReconciliationHistory,
-    ReconciliationHistoryFact, ReconciliationIncarnation, ReconciliationIntentDeliveryRecord,
-    ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
-    ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
-    ReconciliationTarget, ReconciliationValidationFacts, SearchPath, SearchPathError,
+    ReconciliationAttemptRecord, ReconciliationCause, ReconciliationCleanupDecision,
+    ReconciliationCorrelation, ReconciliationEffectTimingRecord, ReconciliationEvidence,
+    ReconciliationHistory, ReconciliationHistoryFact, ReconciliationIncarnation,
+    ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
+    ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
+    ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget,
+    ReconciliationValidationFacts, SearchPath, SearchPathError,
 };
 use std::{error::Error, fmt, path::Path};
 
@@ -576,6 +577,11 @@ pub trait LoginShellPath: Send + Sync {
 /// Reconciliation returns the exact native runtime incarnation only after matching readiness. A stop
 /// acknowledges request delivery, not the eventual physical cleanup of each agent.
 pub trait GatewayHost: Send + Sync {
+    /// Classify the durable definition change that caused host startup work.
+    fn startup_cause(&self) -> ReconciliationCause {
+        ReconciliationCause::Startup
+    }
+
     /// Registers the service for `stage`, running the staged `runtime`.
     ///
     /// `agent_path` is the search path resolved for the agent this launch, or

@@ -11,9 +11,34 @@
 //! unanswered source does to the whole answer.
 
 use super::*;
+use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentCredentialKind};
+#[cfg(unix)]
+use crate::agents::infrastructure::credentialed_claude::credential_environment;
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::path::Path;
 use tempfile::TempDir;
+
+struct Credentials(Result<Option<(AgentId, String)>, AgentCredentialFailure>);
+
+impl AgentCredentialSource for Credentials {
+    fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+        let Some((expected, secret)) = self.0.as_ref().map_err(|failure| *failure)? else {
+            return Ok(None);
+        };
+        if *expected != agent {
+            return Ok(None);
+        }
+        AgentCredential::new(AgentCredentialKind::ApiKey, secret.as_bytes().to_vec())
+            .map(Some)
+            .map_err(|_| AgentCredentialFailure::Invalid)
+    }
+}
+
+fn no_credentials() -> Arc<dyn AgentCredentialSource> {
+    Arc::new(Credentials(Ok(None)))
+}
 
 /// A probe told exactly what composition resolved and nothing more.
 ///
@@ -31,10 +56,12 @@ fn agent_probe(
             .into_iter()
             .map(|files| (agent, files))
             .collect(),
+        credentials: Arc::new(Credentials(Ok(
+            credential.map(|secret| (agent, secret.to_owned()))
+        ))),
         sign_in: HashMap::from([(
             agent,
             SignIn {
-                environment: credential.map(str::to_owned),
                 credentials: credentials.map(Path::to_path_buf),
                 vendor_store,
             },
@@ -302,7 +329,7 @@ fn the_probe_this_server_really_builds_asks_codex_about_its_own_store() {
     // probe resolves paths from this process's environment and stats nothing;
     // the store is then asked about a launch that does not exist, which it
     // answers without starting anything.
-    let probe = LocalAgentProbe::from_environment(HashMap::new());
+    let probe = LocalAgentProbe::from_environment(HashMap::new(), no_credentials());
     let store = probe
         .sign_in
         .get(&AgentId::Codex)
@@ -311,34 +338,6 @@ fn the_probe_this_server_really_builds_asks_codex_about_its_own_store() {
     let root = TempDir::new().unwrap();
     let files = launch_files(root.path()).unwrap();
     assert_eq!(store(Some(&files)), Err(ProbeFailure::NothingToAsk));
-}
-
-#[test]
-fn the_probe_this_server_really_builds_offers_codex_no_environment_sign_in() {
-    // Readiness has to describe the machine the launch would produce. Codex's
-    // app-server builds its authentication with the environment key switched
-    // off, so a key sitting in this server's environment signs nothing in —
-    // `codex login status` answers "not logged in" on a machine where one is
-    // the only thing set. Counting it made setup report ready and the launch
-    // then refuse.
-    //
-    // So the source is not merely unset here, it does not exist: composition
-    // resolves Codex's sign-in from its own file and its own store, and from
-    // nothing this process was started with. Nothing is read to check that —
-    // building the probe stats nothing and reads no credential.
-    let probe = LocalAgentProbe::from_environment(HashMap::new());
-    let codex = probe
-        .sign_in
-        .get(&AgentId::Codex)
-        .expect("this server is configured for Codex");
-    assert!(
-        codex.environment.is_none(),
-        "an environment key is a Codex sign-in the launch cannot reproduce"
-    );
-    // And the two sources that do answer for Codex are both still there, so
-    // this is a source removed rather than an agent left with nowhere to look.
-    assert!(codex.credentials.is_some() || std::env::var_os("HOME").is_none());
-    assert!(codex.vendor_store.is_some());
 }
 
 #[test]
@@ -365,6 +364,48 @@ fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
         probe(None, Some(config.path()), None).authenticated(AgentId::Claude),
         Ok(true)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn readiness_and_launch_agree_on_every_canonical_source_state() {
+    for (answer, readiness, launch) in [
+        (
+            Ok(Some((AgentId::Claude, "present".into()))),
+            Ok(true),
+            Ok(true),
+        ),
+        (Ok(None), Ok(true), Ok(false)),
+        (
+            Err(AgentCredentialFailure::Unavailable),
+            Err(ProbeFailure::Unanswered),
+            Err(AgentCredentialFailure::Unavailable),
+        ),
+        (
+            Err(AgentCredentialFailure::Invalid),
+            Err(ProbeFailure::Unanswered),
+            Err(AgentCredentialFailure::Invalid),
+        ),
+    ] {
+        let source = Credentials(answer.clone());
+        let probe = LocalAgentProbe {
+            launch_files: HashMap::new(),
+            credentials: Arc::new(Credentials(answer)),
+            sign_in: HashMap::from([(
+                AgentId::Claude,
+                SignIn {
+                    credentials: None,
+                    vendor_store: Some(signed_in),
+                },
+            )]),
+        };
+        assert_eq!(probe.authenticated(AgentId::Claude), readiness);
+        assert_eq!(
+            credential_environment(BTreeMap::new(), &source)
+                .map(|environment| environment.contains_key(OsStr::new("ANTHROPIC_API_KEY"))),
+            launch
+        );
+    }
 }
 
 #[test]

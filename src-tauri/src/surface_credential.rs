@@ -97,21 +97,6 @@ pub(crate) struct ServiceNamespace {
     pub(crate) relative: PathBuf,
 }
 
-/// Resolve the service namespace once for composition to inject into endpoint
-/// and credential readers. Environment reads stay at this composition edge.
-pub(crate) fn service_namespace_from_environment(stage: &str) -> Option<ServiceNamespace> {
-    let instance = std::env::var("NESSA_INSTANCE").ok();
-    let base = std::env::var("NESSA_DATA_DIR")
-        .map(PathBuf::from)
-        .ok()
-        .or_else(|| {
-            std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                .ok()
-                .map(|home| PathBuf::from(home).join(".nessa"))
-        });
-    service_namespace(base, stage, instance.as_deref())
-}
-
 /// Whether a name may be one path segment of a namespace.
 ///
 /// Conservative on purpose: these come from the environment and are joined into
@@ -137,7 +122,7 @@ fn segment(value: &str) -> bool {
 ///
 /// Mirrors `crates/nessa-server/src/env/paths.rs`, which is what actually
 /// writes the file.
-fn service_namespace(
+pub(crate) fn service_namespace(
     base: Option<PathBuf>,
     stage: &str,
     instance: Option<&str>,

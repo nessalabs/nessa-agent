@@ -26,6 +26,7 @@ export {
   gatewayStartup,
   retrySetupRecord,
   retryGatewayStartup,
+  saveAgentApiKey,
   hasNativeHost,
   installUpdate,
   type ChosenAgent,
