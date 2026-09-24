@@ -129,6 +129,19 @@ fn audit_factory_reuses_the_exact_existing_private_namespace() {
 }
 
 #[test]
+fn delivery_factory_creates_its_separate_private_namespace() {
+    let temporary = tempfile::tempdir().unwrap();
+    let data_root = temporary.path().join("data/ci/instances/install-e2e");
+
+    let _delivery = install_delivery(&data_root).expect("delivery state initializes");
+
+    assert!(data_root
+        .join("installation-delivery/agent-install/delivery.lock")
+        .is_file());
+    assert!(!data_root.join("audit/agent-install").exists());
+}
+
+#[test]
 fn audit_factory_rejects_a_file_as_the_selected_namespace_without_runtime_effects() {
     let temporary = tempfile::tempdir().unwrap();
     let data_root = temporary.path().join("selected");

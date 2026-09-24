@@ -25,7 +25,10 @@ use crate::agent_install::{
         AuditAcknowledgement, AuditFailure, AuditFailureStage, AuditRecordEvidence, InstallAudit,
         PublishedAuditRecord,
     },
-    domain::{InstallAttempt, InstallAttemptError, InstallEventAdmission, InstallTransition},
+    domain::{
+        InstallAttempt, InstallAttemptError, InstallEventAdmission, InstallTransition,
+        PublicationPreparation,
+    },
 };
 
 const LOCK_NAME: &str = "audit.lock";
@@ -244,6 +247,28 @@ impl InstallAudit for DurableInstallAudit {
     fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
         self.record_with_acknowledger(transition, acknowledge_published)
     }
+
+    fn completion_for(
+        &self,
+        preparation: &PublicationPreparation,
+    ) -> Result<Option<InstallTransition>, AuditFailure> {
+        let current_lock = self
+            .directory
+            .open_file(OsStr::new(LOCK_NAME), OpenMode::ReadWrite)
+            .map_err(|error| audit_failure(AuditFailureStage::AcquireLock, error))?;
+        current_lock
+            .lock()
+            .map_err(|error| audit_failure(AuditFailureStage::AcquireLock, error))?;
+        self.verify_authority(&current_lock)?;
+        let journal = scan_journal(&self.directory, preparation.verified())?;
+        self.verify_authority(&current_lock)?;
+        Ok(journal
+            .attempts
+            .iter()
+            .find(|attempt| attempt.request() == preparation.verified().request())
+            .and_then(InstallAttempt::completion)
+            .cloned())
+    }
 }
 
 #[derive(Debug)]
@@ -384,8 +409,12 @@ fn reacknowledge_existing(
         AuditFailureStage::AcknowledgeRecord,
     )
     .map_err(|error| existing_failure(existing, error))?;
-    let stored = read_stored(&mut file, &existing.name, existing.published.sequence())?;
-    if stored != existing.stored || stored.restore_transition()? != existing.transition {
+    let stored = read_stored(&mut file, &existing.name, existing.published.sequence())
+        .map_err(|error| existing_failure(existing, error))?;
+    let restored = stored
+        .restore_transition()
+        .map_err(|error| existing_failure(existing, error))?;
+    if stored != existing.stored || restored != existing.transition {
         return Err(existing_failure(
             existing,
             "the audit record changed while it was being re-acknowledged",
@@ -576,7 +605,7 @@ fn existing_failure(existing: &ScannedRecord, error: impl std::fmt::Display) -> 
     AuditFailure::new(
         AuditFailureStage::AcknowledgeRecord,
         error.to_string(),
-        Some(AuditRecordEvidence::IncomingPublished(
+        Some(AuditRecordEvidence::ExistingReplay(
             existing.published.clone(),
         )),
         None,

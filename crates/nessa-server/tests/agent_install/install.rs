@@ -5,13 +5,13 @@ use crate::agent_install::application::{
 };
 use crate::agent_install::domain::{
     ArchiveDigest, InstallFailureEvidence, InstallFailureKind, InstallRequest,
-    InstallTransitionError, InstallTransitionKind, Libc, RecoveryState, ReleasePlatform,
-    ReleaseRequirements, RollbackState, RuntimeArtifact,
+    InstallTransitionError, InstallTransitionKind, Libc, PublicationPreparation, RecoveryState,
+    ReleasePlatform, ReleaseRequirements, RollbackState, RuntimeArtifact,
 };
-use crate::agent_install::infrastructure::DurableInstallAudit;
+use crate::agent_install::infrastructure::{DurableInstallAudit, DurableInstallationDelivery};
 use crate::agent_install_test_support::{
-    agent, audit, host, host_of, platform, release, release_needing, request, temporary_root,
-    FakeSource, FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
+    agent, audit, delivery, host, host_of, platform, release, release_needing, request,
+    temporary_root, FakeSource, FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
 use nessa_auth::application::ports::Clock;
 use std::{
@@ -61,6 +61,13 @@ impl InstallAudit for RefuseTerminalBeforeCommitOnceAudit {
         }
         drop(failed);
         self.durable.record(transition)
+    }
+
+    fn completion_for(
+        &self,
+        preparation: &PublicationPreparation,
+    ) -> Result<Option<InstallTransition>, AuditFailure> {
+        self.durable.completion_for(preparation)
     }
 }
 
@@ -220,6 +227,13 @@ impl InstallAudit for CommitTerminalThenFailOnceAudit {
         }
         Ok(acknowledgement)
     }
+
+    fn completion_for(
+        &self,
+        preparation: &PublicationPreparation,
+    ) -> Result<Option<InstallTransition>, AuditFailure> {
+        self.durable.completion_for(preparation)
+    }
 }
 
 impl InstallAudit for FailOnceAudit {
@@ -269,6 +283,7 @@ fn a_matching_archive_is_published() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(&agent(), &release, &host, &request())
     .expect("a matching archive installs");
@@ -294,6 +309,7 @@ fn a_mismatched_archive_is_never_unpacked() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -330,6 +346,7 @@ fn a_rejected_archive_is_discarded() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -353,6 +370,7 @@ fn a_successful_install_discards_its_archive_too() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -377,6 +395,7 @@ fn installing_what_is_already_installed_downloads_nothing() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -409,6 +428,7 @@ fn a_release_the_store_does_not_hold_is_downloaded() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -438,6 +458,7 @@ fn what_is_measured_is_what_is_unpacked() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -466,6 +487,7 @@ fn a_store_that_cannot_stage_a_download_fails_before_fetching() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -498,6 +520,7 @@ fn a_release_for_another_platform_is_refused_before_anything_is_fetched() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -523,6 +546,7 @@ fn a_download_failure_is_reported_as_one() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -555,6 +579,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -583,6 +608,7 @@ fn a_store_that_cannot_say_what_is_installed_does_not_download() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -609,6 +635,7 @@ fn the_pinned_url_is_what_gets_fetched() {
         source: &source,
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(&agent(), &release, &host, &request())
     .expect("a matching archive installs");
@@ -681,6 +708,7 @@ fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
             source: &source,
             store: &store,
             audit: audit(),
+            delivery: delivery(),
         }
         .execute(
             &agent(),
@@ -708,6 +736,7 @@ fn a_new_install_records_one_correlated_legal_sequence() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -745,6 +774,7 @@ fn replacement_evidence_uses_the_artifact_seen_under_the_publication_lock() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -770,6 +800,7 @@ fn digest_rejection_is_audited_and_the_archive_is_discarded() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -799,6 +830,7 @@ fn store_rollback_is_audited_without_hiding_the_store_failure() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -826,6 +858,7 @@ fn audit_failure_after_verification_is_visible_and_prevents_publication() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -855,6 +888,7 @@ fn audit_failure_at_started_prevents_install_effects() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -884,6 +918,7 @@ fn replayed_start_refuses_request_reexecution_before_any_install_effect() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -908,6 +943,7 @@ fn retained_pending_transition_can_be_redelivered_without_repeating_install_effe
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     };
     let failure = install
         .execute(
@@ -964,6 +1000,7 @@ fn incomplete_publication_moves_full_diagnostics_and_bounds_only_audit_evidence(
             source: &FakeSource::serving(b"archive bytes"),
             store: &store,
             audit: &audit,
+            delivery: delivery(),
         }
         .execute(
             &agent(),
@@ -1024,6 +1061,7 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
             source: &FakeSource::serving(b"archive bytes"),
             store: &store,
             audit: &audit,
+            delivery: delivery(),
         }
         .execute(
             &agent(),
@@ -1074,6 +1112,7 @@ fn publication_failures_move_original_store_error_and_hold_each_lease_scope() {
             source: &FakeSource::serving(b"archive bytes"),
             store: &store,
             audit: &audit,
+            delivery: delivery(),
         }
         .execute(
             &agent(),
@@ -1130,6 +1169,7 @@ fn publication_lease_survives_until_evidence_validation_returns() {
         source: &FakeSource::serving(b"archive bytes"),
         store: &store,
         audit: audit(),
+        delivery: delivery(),
     }
     .execute(&agent(), &pinned, &host(), &request())
     .unwrap_err();
@@ -1158,10 +1198,17 @@ fn postcommit_terminal_failure_replays_without_changing_later_journal_order() {
         .unwrap(),
         failed: Mutex::new(false),
     };
+    let delivery = DurableInstallationDelivery::new(
+        audit_root.path(),
+        Path::new("delivery"),
+        Arc::new(FixedClock),
+    )
+    .unwrap();
     let install = InstallAgentRuntime {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: &delivery,
     };
     let pinned = release("1.18.31", PINNED_DIGEST, &platform());
     let earlier = InstallRequest::new("unix:501", "earlier").unwrap();
@@ -1170,10 +1217,7 @@ fn postcommit_terminal_failure_replays_without_changing_later_journal_order() {
         .unwrap_err();
     let later = InstallRequest::new("unix:501", "later").unwrap();
     install.execute(&agent(), &pinned, &host(), &later).unwrap();
-    assert_eq!(
-        install.retry_audit(&failure),
-        Ok(AuditAcknowledgement::Replayed)
-    );
+    assert!(matches!(failure, InstallFailure::Delivery(_)));
 
     assert_eq!(
         journal_identities(audit_root.path()),
@@ -1189,7 +1233,7 @@ fn postcommit_terminal_failure_replays_without_changing_later_journal_order() {
 }
 
 #[test]
-fn precommit_terminal_failure_is_first_published_after_a_later_install() {
+fn precommit_terminal_failure_is_recovered_before_a_later_install() {
     let store_root = tempfile::tempdir().unwrap();
     let audit_root = temporary_root();
     let source = FakeSource::serving(b"archive bytes");
@@ -1203,10 +1247,17 @@ fn precommit_terminal_failure_is_first_published_after_a_later_install() {
         .unwrap(),
         failed: Mutex::new(false),
     };
+    let delivery = DurableInstallationDelivery::new(
+        audit_root.path(),
+        Path::new("delivery"),
+        Arc::new(FixedClock),
+    )
+    .unwrap();
     let install = InstallAgentRuntime {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: &delivery,
     };
     let pinned = release("1.18.31", PINNED_DIGEST, &platform());
     let earlier = InstallRequest::new("unix:501", "earlier").unwrap();
@@ -1223,33 +1274,14 @@ fn precommit_terminal_failure_is_first_published_after_a_later_install() {
         vec![
             (1, "earlier".into(), "started".into()),
             (2, "earlier".into(), "verification_outcome".into()),
-            (3, "later".into(), "started".into()),
-            (4, "later".into(), "verification_outcome".into()),
-            (5, "later".into(), "completion_outcome".into()),
+            (3, "earlier".into(), "completion_outcome".into()),
+            (4, "later".into(), "started".into()),
+            (5, "later".into(), "verification_outcome".into()),
+            (6, "later".into(), "completion_outcome".into()),
         ]
     );
-
-    assert_eq!(
-        install.retry_audit(&failure),
-        Ok(AuditAcknowledgement::Recorded)
-    );
-    let after_retry = journal_identities(audit_root.path());
-    assert_eq!(
-        after_retry,
-        vec![
-            (1, "earlier".into(), "started".into()),
-            (2, "earlier".into(), "verification_outcome".into()),
-            (3, "later".into(), "started".into()),
-            (4, "later".into(), "verification_outcome".into()),
-            (5, "later".into(), "completion_outcome".into()),
-            (6, "earlier".into(), "completion_outcome".into()),
-        ]
-    );
-    assert_eq!(
-        install.retry_audit(&failure),
-        Ok(AuditAcknowledgement::Replayed)
-    );
-    assert_eq!(journal_identities(audit_root.path()), after_retry);
+    assert!(matches!(failure, InstallFailure::Delivery(_)));
+    assert_eq!(store.published().len(), 2);
 }
 
 #[test]
@@ -1264,6 +1296,7 @@ fn audit_failure_at_replaced_reports_the_new_runtime_and_prior_evidence() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1294,6 +1327,7 @@ fn audit_failure_at_rollback_preserves_the_publication_failure() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1330,6 +1364,7 @@ fn cleanup_failure_is_visible_without_replacing_the_publication_failure() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1384,6 +1419,7 @@ fn incomplete_recovery_retains_the_confirmed_prior_artifact() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1433,6 +1469,7 @@ fn unconfirmed_recovery_and_audit_failure_retain_every_failure() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1479,6 +1516,7 @@ fn audit_failure_after_publication_reports_the_runtime_as_installed() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1507,6 +1545,7 @@ fn audit_failure_preserves_digest_rejection_and_cleanup() {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: delivery(),
     }
     .execute(
         &agent(),
@@ -1547,6 +1586,7 @@ fn successful_publication_lease_spans_a_failing_audit_and_then_releases() {
                 source: &source,
                 store: &store,
                 audit: &audit,
+                delivery: delivery(),
             }
             .execute(
                 &agent(),
@@ -1593,6 +1633,7 @@ fn rollback_lease_spans_successful_audit_and_then_releases() {
                 source: &source,
                 store: &store,
                 audit: &audit,
+                delivery: delivery(),
             }
             .execute(
                 &agent(),
@@ -1645,6 +1686,7 @@ fn uncertain_recovery_lease_spans_failing_audit_and_then_releases() {
                 source: &source,
                 store: &store,
                 audit: &audit,
+                delivery: delivery(),
             }
             .execute(
                 &agent(),

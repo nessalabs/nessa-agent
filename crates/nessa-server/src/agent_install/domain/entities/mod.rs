@@ -11,5 +11,9 @@
 //! replay, and rejects a different fact in an occupied slot. Effects remain in
 //! application and infrastructure.
 mod install_attempt;
+mod publication_delivery;
 
 pub use install_attempt::{InstallAttempt, InstallAttemptError, InstallEventAdmission};
+pub use publication_delivery::{
+    PublicationDeliveryError, PublicationOutcome, PublicationPreparation, PublicationSettlement,
+};

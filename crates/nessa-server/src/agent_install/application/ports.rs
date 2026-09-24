@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, InstallAttemptError, InstallEventIdentity, InstallTransition,
-    PinnedRelease, RuntimeArtifact,
+    PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
+    RuntimeArtifact,
 };
 
 /// Why an archive could not be fetched.
@@ -173,6 +174,8 @@ pub enum AuditAcknowledgement {
 pub enum AuditRecordEvidence {
     /// This call renamed the incoming event's record into place.
     IncomingPublished(PublishedAuditRecord),
+    /// An existing identical record failed while being re-opened or re-synced.
+    ExistingReplay(PublishedAuditRecord),
     /// A different durable record occupied the same logical event identity.
     ExistingConflict(PublishedAuditRecord),
 }
@@ -490,6 +493,116 @@ impl fmt::Debug for PublishFailure {
 pub trait InstallAudit: Send + Sync {
     /// Commit one immutable transition before the install reports its outcome.
     fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure>;
+
+    /// Find the exact completion already retained for a prepared attempt.
+    fn completion_for(
+        &self,
+        _preparation: &PublicationPreparation,
+    ) -> Result<Option<InstallTransition>, AuditFailure> {
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallDeliveryFailureStage {
+    Initialize,
+    AcquireLock,
+    ReadState,
+    Prepare,
+    RetainOutcome,
+    Settle,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallDeliveryFailure {
+    stage: InstallDeliveryFailureStage,
+    detail: String,
+}
+
+impl InstallDeliveryFailure {
+    pub fn new(stage: InstallDeliveryFailureStage, detail: String) -> Self {
+        Self { stage, detail }
+    }
+
+    pub fn stage(&self) -> InstallDeliveryFailureStage {
+        self.stage
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl fmt::Display for InstallDeliveryFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "installation delivery failed at {:?}: {}",
+            self.stage, self.detail
+        )
+    }
+}
+
+impl std::error::Error for InstallDeliveryFailure {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedInstallation {
+    record_id: String,
+    preparation: PublicationPreparation,
+}
+
+impl PreparedInstallation {
+    pub fn new(record_id: String, preparation: PublicationPreparation) -> Self {
+        Self {
+            record_id,
+            preparation,
+        }
+    }
+
+    pub fn record_id(&self) -> &str {
+        &self.record_id
+    }
+
+    pub fn preparation(&self) -> &PublicationPreparation {
+        &self.preparation
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingInstallationDelivery {
+    Prepared(PreparedInstallation),
+    Outcome {
+        prepared: PreparedInstallation,
+        outcome: PublicationOutcome,
+    },
+}
+
+pub trait InstallationDeliverySession {
+    fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure>;
+
+    fn prepare(
+        &mut self,
+        preparation: PublicationPreparation,
+    ) -> Result<PreparedInstallation, InstallDeliveryFailure>;
+
+    fn retain_outcome(
+        &mut self,
+        prepared: &PreparedInstallation,
+        outcome: &PublicationOutcome,
+    ) -> Result<(), InstallDeliveryFailure>;
+
+    fn settle(
+        &mut self,
+        prepared: &PreparedInstallation,
+        settlement: &PublicationSettlement,
+    ) -> Result<(), InstallDeliveryFailure>;
+}
+
+pub trait InstallationDelivery: Send + Sync {
+    fn session(
+        &self,
+        account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure>;
 }
 
 /// The private file one install downloads its archive into.

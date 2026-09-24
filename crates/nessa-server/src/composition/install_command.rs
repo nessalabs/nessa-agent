@@ -14,7 +14,8 @@ use crate::agent_install::domain::{
     preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease,
 };
 use crate::agent_install::infrastructure::{
-    host_platform, releases_for, DurableInstallAudit, HttpsArchives, ManagedRuntimes,
+    host_platform, releases_for, DurableInstallAudit, DurableInstallationDelivery, HttpsArchives,
+    ManagedRuntimes,
 };
 use crate::core::RunError;
 use crate::env::Environment;
@@ -65,12 +66,14 @@ fn install(
         .parent()
         .ok_or_else(|| RunError::Agent("invalid agent runtime directory".into()))?;
     let audit = install_audit(data_root)?;
+    let delivery = install_delivery(data_root)?;
     let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
     let store = ManagedRuntimes::new(root);
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
         audit: &audit,
+        delivery: &delivery,
     }
     // Flattening the typed failure into prose is this surface's limitation,
     // not the design. `explain` already knows which failures are worth trying
@@ -103,6 +106,16 @@ fn install_audit(data_root: &Path) -> Result<DurableInstallAudit, RunError> {
     DurableInstallAudit::new(
         data_root,
         Path::new("audit/agent-install"),
+        Arc::new(super::local_auth::SystemClock),
+    )
+    .map_err(|error| RunError::Agent(error.to_string()))
+}
+
+fn install_delivery(data_root: &Path) -> Result<DurableInstallationDelivery, RunError> {
+    create_directory(data_root).map_err(|error| RunError::Agent(error.to_string()))?;
+    DurableInstallationDelivery::new(
+        data_root,
+        Path::new("installation-delivery/agent-install"),
         Arc::new(super::local_auth::SystemClock),
     )
     .map_err(|error| RunError::Agent(error.to_string()))

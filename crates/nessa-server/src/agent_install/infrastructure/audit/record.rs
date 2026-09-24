@@ -44,7 +44,7 @@ enum StoredSlot {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StoredTransition {
+pub(in crate::agent_install::infrastructure) struct StoredTransition {
     agent: String,
     target: StoredArtifact,
     request: StoredRequest,
@@ -216,7 +216,9 @@ impl From<&InstallTransition> for StoredTransition {
 }
 
 impl StoredTransition {
-    fn restore(&self) -> Result<InstallTransition, AuditFailure> {
+    pub(in crate::agent_install::infrastructure) fn restore(
+        &self,
+    ) -> Result<InstallTransition, AuditFailure> {
         InstallTransition::restore(
             AgentName::parse(&self.agent).map_err(record_failure)?,
             self.target.restore()?,

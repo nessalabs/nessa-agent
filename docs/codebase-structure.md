@@ -935,10 +935,17 @@ record's random UUID, sequence, and observation time describe its physical
 publication and do not change that semantic identity.
 
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
-does installed-already, then download, hash, accept, publish, and never unpacks
+first recovers an admitted publication for the account, then does
+installed-already, download, hash, accept, publish, and never unpacks
 an archive that was not accepted. Its ports are `ArchiveSource` (the network),
-`RuntimeStore` (this machine's disk), and `InstallAudit` (durable transition
-evidence). `StagedArchive` carries an open file rather than a path, so the bytes
+`RuntimeStore` (this machine's disk), `InstallAudit` (durable transition
+evidence), and `InstallationDelivery` (publication admission and recovery). The
+delivery session holds one lock from recovery through settlement. It durably
+prepares after verification and before publication, retains the exact terminal
+independently of audit acknowledgement, and settles only a matching outcome. A
+prepared publication with neither a retained terminal nor an exact journal
+terminal blocks new effects; runtime state never supplies the missing fact.
+`StagedArchive` carries an open file rather than a path, so the bytes
 that are measured are the bytes that are unpacked. Publication captures the
 prior valid artifact while holding the store's per-agent lock and returns that
 authority as a lease. The use case keeps the lease through the immediate audit
@@ -1002,6 +1009,14 @@ publication can follow a later install; stable event identity and the domain
 history remain authoritative. Directory sync is unavailable on Windows, so its
 power-loss guarantee remains limited to the storage primitive's documented file
 behavior there.
+`delivery/journal.rs` separately retains immutable preparation, outcome and
+settlement records beneath `installation-delivery/agent-install`. Its stable
+lock spans recovery, admission, the runtime effect, both terminal delivery
+attempts and settlement. `delivery/record.rs` maps private JSON through the same
+domain constructors used by the live path. Records are bounded before
+publication and while read; settlement without its exact predecessor and
+multiple unresolved attempts are refused. Records remain until separate
+reclamation is designed.
 The stable lock excludes every cooperating writer. On Unix it does not protect
 the check/effect interval inside the journal leaf from a malicious process
 running as the same user and deliberately ignoring that advisory lock; detected
@@ -1012,8 +1027,9 @@ picks the build for this machine — the most demanding of the pinned releases
 that run on it — supplies a fresh correlation identity and the effective local
 account whose private data receives the runtime, and reports one line of JSON on
 stdout. After pin and platform admission, composition creates or verifies the
-selected private data namespace before it constructs the audit beneath that
-root; an unsafe namespace stops the command before download or publication.
+selected private data namespace before it constructs the audit and publication
+delivery journal beneath that root; an unsafe namespace stops the command
+before download or publication.
 `scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
 and hashing every platform's archives. Composition reads the store at every
 start through `composition/installed_launch.rs`, which answers with a launch or

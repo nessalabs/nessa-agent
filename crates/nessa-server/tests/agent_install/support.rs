@@ -8,12 +8,15 @@ use std::sync::{mpsc::Sender, Mutex};
 
 use crate::agent_install::application::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
-    Publication, PublicationChange, PublicationCleanupFailure, PublicationRecovery, PublishFailure,
-    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    InstallDeliveryFailure, InstallationDelivery, InstallationDeliverySession,
+    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
+    PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
+    SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
-    InstallRequest, InstallTransition, InstallTransitionKind, Libc, PinnedRelease, ReleaseContents,
+    InstallRequest, InstallTransition, InstallTransitionKind, Libc, PinnedRelease,
+    PublicationOutcome, PublicationPreparation, PublicationSettlement, ReleaseContents,
     ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
 };
 
@@ -84,6 +87,62 @@ impl InstallAudit for AcceptingAudit {
 pub(crate) fn audit() -> &'static AcceptingAudit {
     static AUDIT: AcceptingAudit = AcceptingAudit;
     &AUDIT
+}
+
+pub(crate) struct AcceptingDelivery;
+
+struct AcceptingDeliverySession {
+    pending: Option<PendingInstallationDelivery>,
+}
+
+impl InstallationDelivery for AcceptingDelivery {
+    fn session(
+        &self,
+        _account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        Ok(Box::new(AcceptingDeliverySession { pending: None }))
+    }
+}
+
+impl InstallationDeliverySession for AcceptingDeliverySession {
+    fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
+        Ok(self.pending.clone())
+    }
+
+    fn prepare(
+        &mut self,
+        preparation: PublicationPreparation,
+    ) -> Result<PreparedInstallation, InstallDeliveryFailure> {
+        let prepared = PreparedInstallation::new("test-publication".to_owned(), preparation);
+        self.pending = Some(PendingInstallationDelivery::Prepared(prepared.clone()));
+        Ok(prepared)
+    }
+
+    fn retain_outcome(
+        &mut self,
+        prepared: &PreparedInstallation,
+        outcome: &PublicationOutcome,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.pending = Some(PendingInstallationDelivery::Outcome {
+            prepared: prepared.clone(),
+            outcome: outcome.clone(),
+        });
+        Ok(())
+    }
+
+    fn settle(
+        &mut self,
+        _prepared: &PreparedInstallation,
+        _settlement: &PublicationSettlement,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.pending = None;
+        Ok(())
+    }
+}
+
+pub(crate) fn delivery() -> &'static AcceptingDelivery {
+    static DELIVERY: AcceptingDelivery = AcceptingDelivery;
+    &DELIVERY
 }
 
 #[derive(Default)]

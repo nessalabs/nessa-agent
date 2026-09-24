@@ -44,9 +44,11 @@
 //!             -> application::InstallAgentRuntime -> application::ArchiveSource
 //!                                                 -> application::RuntimeStore
 //!                                                 -> application::InstallAudit
+//!                                                 -> application::InstallationDelivery
 //! infrastructure::HttpsArchives ------------------> ArchiveSource
 //! infrastructure::ManagedRuntimes ----------------> RuntimeStore
 //! infrastructure::DurableInstallAudit ------------> InstallAudit
+//! infrastructure::DurableInstallationDelivery ----> InstallationDelivery
 //! domain::PinnedRelease --------------------------> what is allowed to be installed
 //!          └─ domain::ReleaseContents ------------> which files, and what each is for
 //! ```

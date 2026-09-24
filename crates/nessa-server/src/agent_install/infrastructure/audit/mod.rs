@@ -10,6 +10,6 @@
 //! reclaim their disk usage.
 
 mod journal;
-mod record;
+pub(super) mod record;
 
 pub use journal::DurableInstallAudit;

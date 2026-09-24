@@ -16,7 +16,10 @@
 pub mod entities;
 mod release_selection;
 pub mod value_objects;
-pub use entities::{InstallAttempt, InstallAttemptError, InstallEventAdmission};
+pub use entities::{
+    InstallAttempt, InstallAttemptError, InstallEventAdmission, PublicationDeliveryError,
+    PublicationOutcome, PublicationPreparation, PublicationSettlement,
+};
 pub use release_selection::preferred_release;
 pub use value_objects::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveSize, ArchiveUrl, FileRole,

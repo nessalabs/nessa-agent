@@ -30,6 +30,11 @@ impl InstallAttempt {
         &self.request
     }
 
+    /// Return the admitted completion event, when this attempt has one.
+    pub fn completion(&self) -> Option<&InstallTransition> {
+        self.events[slot_index(InstallEventSlot::CompletionOutcome)].as_ref()
+    }
+
     /// Begin one attempt and return its required started evidence.
     pub fn start(
         agent: AgentName,

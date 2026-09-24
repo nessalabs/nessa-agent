@@ -2,14 +2,17 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::ports::{
-    ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, PublicationChange,
-    PublicationCleanupFailure, PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure,
-    StagedArchive, StoreFailure,
+    ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, InstallDeliveryFailure,
+    InstallationDelivery, InstallationDeliverySession, PendingInstallationDelivery,
+    PreparedInstallation, PublicationChange, PublicationCleanupFailure, PublicationRecovery,
+    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError,
-    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallTransition, PinnedRelease,
-    RecoveryFailureEvidence, RecoveryState, ReleaseVersion, RollbackState, RuntimeArtifact,
+    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallTransition,
+    InstallTransitionFacts, PinnedRelease, PublicationOutcome, PublicationPreparation,
+    PublicationSettlement, RecoveryFailureEvidence, RecoveryState, ReleaseVersion, RollbackState,
+    RuntimeArtifact,
 };
 
 /// An agent runtime that is on this machine and ready to launch.
@@ -68,6 +71,41 @@ pub enum InstallFailure {
         operation: StoreFailure,
         cleanup: Box<PublicationCleanupFailure>,
     },
+    /// Durable publication delivery could not be completed or reconciled.
+    Delivery(Box<PublicationDeliveryFailure>),
+    /// A prepared publication has no retained terminal in either durable route.
+    UnresolvedPublication(PublicationPreparation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationDeliveryFailure {
+    operation: Option<Box<InstallFailure>>,
+    runtime_state: RuntimeStateEvidence,
+    terminal: Option<InstallTransition>,
+    delivery: Option<InstallDeliveryFailure>,
+    audit: Option<AuditFailure>,
+}
+
+impl PublicationDeliveryFailure {
+    pub fn operation(&self) -> Option<&InstallFailure> {
+        self.operation.as_deref()
+    }
+
+    pub fn runtime_state(&self) -> &RuntimeStateEvidence {
+        &self.runtime_state
+    }
+
+    pub fn terminal(&self) -> Option<&InstallTransition> {
+        self.terminal.as_ref()
+    }
+
+    pub fn delivery(&self) -> Option<&InstallDeliveryFailure> {
+        self.delivery.as_ref()
+    }
+
+    pub fn audit(&self) -> Option<&AuditFailure> {
+        self.audit.as_ref()
+    }
 }
 
 /// Typed install and runtime facts retained when audit delivery fails.
@@ -151,6 +189,17 @@ impl fmt::Display for InstallFailure {
             Self::Recovery { operation, cleanup } => {
                 write!(f, "{operation}; publication cleanup also failed: {cleanup}")
             }
+            Self::Delivery(failure) => {
+                if let Some(operation) = &failure.operation {
+                    write!(f, "{operation}; ")?;
+                }
+                formatter_delivery_failure(f, failure)
+            }
+            Self::UnresolvedPublication(preparation) => write!(
+                f,
+                "install request {} has an unresolved prepared publication",
+                preparation.verified().request().request_id()
+            ),
         }
     }
 }
@@ -185,6 +234,7 @@ pub struct InstallAgentRuntime<'a> {
     pub source: &'a dyn ArchiveSource,
     pub store: &'a dyn RuntimeStore,
     pub audit: &'a dyn InstallAudit,
+    pub delivery: &'a dyn InstallationDelivery,
 }
 
 impl InstallAgentRuntime<'_> {
@@ -211,6 +261,11 @@ impl InstallAgentRuntime<'_> {
             return Err(InstallFailure::UnsupportedPlatform(host.clone()));
         }
         let target = RuntimeArtifact::for_release(release);
+        let mut delivery = self
+            .delivery
+            .session(request.account_id())
+            .map_err(delivery_failure)?;
+        self.recover(delivery.as_mut())?;
         let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
         if self.audit(started)? == AuditAcknowledgement::Replayed {
             return Err(InstallFailure::AttemptReused(request.clone()));
@@ -219,7 +274,8 @@ impl InstallAgentRuntime<'_> {
             return Ok(runtime);
         }
         let mut staged = self.store.stage(agent).map_err(InstallFailure::Store)?;
-        let outcome = self.fetch_and_publish(agent, release, &mut attempt, &mut staged);
+        let outcome =
+            self.fetch_and_publish(agent, release, &mut attempt, &mut staged, delivery.as_mut());
         // The archive has served its purpose either way, and it is the largest
         // thing this operation writes. Discarding it on the failure path too is
         // what keeps a run of refused downloads from filling the disk.
@@ -260,6 +316,7 @@ impl InstallAgentRuntime<'_> {
         release: &PinnedRelease,
         attempt: &mut InstallAttempt,
         staged: &mut StagedArchive,
+        delivery: &mut dyn InstallationDeliverySession,
     ) -> Result<PathBuf, InstallFailure> {
         self.source
             .download(
@@ -282,12 +339,26 @@ impl InstallAgentRuntime<'_> {
                 )),
             };
         }
-        let _ = self.audit(attempt.verified().map_err(InstallFailure::Evidence)?)?;
+        let verified = attempt.verified().map_err(InstallFailure::Evidence)?;
+        let _ = self.audit(verified.clone())?;
+        let preparation = PublicationPreparation::new(verified)
+            .map_err(|error| delivery_domain_failure(error.to_string()))?;
+        let prepared = delivery
+            .prepare(preparation.clone())
+            .map_err(delivery_failure)?;
         match self.store.publish(agent, release, staged) {
             Ok(publication) => {
                 let transition = match publication.change() {
                     PublicationChange::Reused => {
                         attempt.reused().map_err(InstallFailure::Evidence)?;
+                        let outcome = PublicationOutcome::no_publication_effect(preparation);
+                        let _ = self.finish_no_effect(
+                            delivery,
+                            &prepared,
+                            outcome,
+                            RuntimeStateEvidence::TargetInstalled,
+                            None,
+                        )?;
                         return Ok(publication.executable().to_owned());
                     }
                     PublicationChange::Installed => {
@@ -297,22 +368,35 @@ impl InstallAgentRuntime<'_> {
                         .replaced(previous.clone())
                         .map_err(InstallFailure::Evidence)?,
                 };
-                self.audit.record(transition.clone()).map_err(|failure| {
-                    InstallFailure::Audit(Box::new(AuditDeliveryFailure {
-                        operation: None,
-                        runtime_state: RuntimeStateEvidence::TargetInstalled,
-                        pending: transition,
-                        failure,
-                    }))
-                })?;
+                let outcome = PublicationOutcome::terminal(&preparation, transition.clone())
+                    .map_err(|error| delivery_domain_failure(error.to_string()))?;
+                let _ = self.finish_terminal(
+                    delivery,
+                    &prepared,
+                    outcome,
+                    transition,
+                    RuntimeStateEvidence::TargetInstalled,
+                    None,
+                )?;
                 Ok(publication.executable().to_owned())
             }
             Err(publish) => {
                 let (failure, recovery, publication_lease) = publish.into_parts();
                 let (transition, runtime_state, outcome) = match recovery {
                     PublicationRecovery::NotRequired => {
+                        let retained = PublicationOutcome::no_publication_effect(preparation);
+                        let operation = InstallFailure::Store(failure);
+                        let operation = self
+                            .finish_no_effect(
+                                delivery,
+                                &prepared,
+                                retained,
+                                RuntimeStateEvidence::Unchanged,
+                                Some(operation),
+                            )?
+                            .expect("the no-effect failure is returned after settlement");
                         drop(publication_lease);
-                        return Err(InstallFailure::Store(failure));
+                        return Err(operation);
                     }
                     PublicationRecovery::RolledBack(rollback) => {
                         let restored = rollback_state(&rollback);
@@ -343,19 +427,146 @@ impl InstallAgentRuntime<'_> {
                         (transition, runtime_state, outcome)
                     }
                 };
-                let result = match self.audit.record(transition.clone()) {
-                    Ok(_) => Err(outcome),
-                    Err(failure) => Err(with_audit_failure(
-                        outcome,
-                        runtime_state,
-                        transition,
-                        failure,
-                    )),
-                };
+                let retained = PublicationOutcome::terminal(&preparation, transition.clone())
+                    .map_err(|error| delivery_domain_failure(error.to_string()))?;
+                let result = self.finish_terminal(
+                    delivery,
+                    &prepared,
+                    retained,
+                    transition,
+                    runtime_state,
+                    Some(outcome),
+                );
                 drop(publication_lease);
-                result
+                Err(result?.expect("the publication failure is returned after settlement"))
             }
         }
+    }
+
+    fn recover(
+        &self,
+        delivery: &mut dyn InstallationDeliverySession,
+    ) -> Result<(), InstallFailure> {
+        let Some(pending) = delivery.pending().map_err(delivery_failure)? else {
+            return Ok(());
+        };
+        let (prepared, outcome, retained) = match pending {
+            PendingInstallationDelivery::Outcome { prepared, outcome } => (prepared, outcome, None),
+            PendingInstallationDelivery::Prepared(prepared) => {
+                let Some(terminal) =
+                    self.audit
+                        .completion_for(prepared.preparation())
+                        .map_err(|audit| {
+                            publication_delivery_failure(
+                                None,
+                                RuntimeStateEvidence::Unconfirmed,
+                                None,
+                                None,
+                                Some(audit),
+                            )
+                        })?
+                else {
+                    return Err(InstallFailure::UnresolvedPublication(
+                        prepared.preparation().clone(),
+                    ));
+                };
+                let outcome =
+                    PublicationOutcome::terminal(prepared.preparation(), terminal.clone())
+                        .map_err(|error| delivery_domain_failure(error.to_string()))?;
+                let retained = delivery.retain_outcome(&prepared, &outcome).err();
+                (prepared, outcome, retained)
+            }
+        };
+        if let Some(terminal) = outcome.terminal_transition() {
+            let audited = self.audit.record(terminal.clone()).err();
+            if retained.is_some() || audited.is_some() {
+                return Err(publication_delivery_failure(
+                    None,
+                    runtime_state_for_transition(terminal),
+                    Some(terminal.clone()),
+                    retained,
+                    audited,
+                ));
+            }
+        } else if let Some(delivery) = retained {
+            return Err(publication_delivery_failure(
+                None,
+                RuntimeStateEvidence::Unchanged,
+                None,
+                Some(delivery),
+                None,
+            ));
+        }
+        let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
+            .map_err(|error| delivery_domain_failure(error.to_string()))?;
+        delivery
+            .settle(&prepared, &settlement)
+            .map_err(delivery_failure)
+    }
+
+    fn finish_no_effect(
+        &self,
+        delivery: &mut dyn InstallationDeliverySession,
+        prepared: &PreparedInstallation,
+        outcome: PublicationOutcome,
+        runtime_state: RuntimeStateEvidence,
+        operation: Option<InstallFailure>,
+    ) -> Result<Option<InstallFailure>, InstallFailure> {
+        if let Err(error) = delivery.retain_outcome(prepared, &outcome) {
+            return Err(publication_delivery_failure(
+                operation,
+                runtime_state,
+                None,
+                Some(error),
+                None,
+            ));
+        }
+        let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
+            .map_err(|error| delivery_domain_failure(error.to_string()))?;
+        if let Err(error) = delivery.settle(prepared, &settlement) {
+            return Err(publication_delivery_failure(
+                operation,
+                runtime_state,
+                None,
+                Some(error),
+                None,
+            ));
+        }
+        Ok(operation)
+    }
+
+    fn finish_terminal(
+        &self,
+        delivery: &mut dyn InstallationDeliverySession,
+        prepared: &PreparedInstallation,
+        outcome: PublicationOutcome,
+        terminal: InstallTransition,
+        runtime_state: RuntimeStateEvidence,
+        operation: Option<InstallFailure>,
+    ) -> Result<Option<InstallFailure>, InstallFailure> {
+        let retained = delivery.retain_outcome(prepared, &outcome).err();
+        let audited = self.audit.record(terminal.clone()).err();
+        if retained.is_some() || audited.is_some() {
+            return Err(publication_delivery_failure(
+                operation,
+                runtime_state,
+                Some(terminal),
+                retained,
+                audited,
+            ));
+        }
+        let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
+            .map_err(|error| delivery_domain_failure(error.to_string()))?;
+        if let Err(error) = delivery.settle(prepared, &settlement) {
+            return Err(publication_delivery_failure(
+                operation,
+                runtime_state,
+                Some(terminal),
+                Some(error),
+                None,
+            ));
+        }
+        Ok(operation)
     }
 
     fn audit(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, InstallFailure> {
@@ -454,6 +665,76 @@ fn with_audit_failure(
         pending,
         failure,
     }))
+}
+
+fn delivery_failure(failure: InstallDeliveryFailure) -> InstallFailure {
+    publication_delivery_failure(
+        None,
+        RuntimeStateEvidence::Unchanged,
+        None,
+        Some(failure),
+        None,
+    )
+}
+
+fn delivery_domain_failure(detail: String) -> InstallFailure {
+    delivery_failure(InstallDeliveryFailure::new(
+        super::ports::InstallDeliveryFailureStage::ReadState,
+        detail,
+    ))
+}
+
+fn publication_delivery_failure(
+    operation: Option<InstallFailure>,
+    runtime_state: RuntimeStateEvidence,
+    terminal: Option<InstallTransition>,
+    delivery: Option<InstallDeliveryFailure>,
+    audit: Option<AuditFailure>,
+) -> InstallFailure {
+    InstallFailure::Delivery(Box::new(PublicationDeliveryFailure {
+        operation: operation.map(Box::new),
+        runtime_state,
+        terminal,
+        delivery,
+        audit,
+    }))
+}
+
+fn formatter_delivery_failure(
+    formatter: &mut fmt::Formatter<'_>,
+    failure: &PublicationDeliveryFailure,
+) -> fmt::Result {
+    match (&failure.delivery, &failure.audit) {
+        (Some(delivery), Some(audit)) => write!(
+            formatter,
+            "publication evidence is unresolved: {delivery}; audit also failed: {audit}"
+        ),
+        (Some(delivery), None) => delivery.fmt(formatter),
+        (None, Some(audit)) => write!(formatter, "publication audit failed: {audit}"),
+        (None, None) => formatter.write_str("publication evidence is unresolved"),
+    }
+}
+
+fn runtime_state_for_transition(transition: &InstallTransition) -> RuntimeStateEvidence {
+    match transition.facts() {
+        InstallTransitionFacts::Installed | InstallTransitionFacts::Replaced { .. } => {
+            RuntimeStateEvidence::TargetInstalled
+        }
+        InstallTransitionFacts::RolledBack { state } => match state {
+            RollbackState::Restored(artifact) => RuntimeStateEvidence::Restored(artifact.clone()),
+            RollbackState::NoInstalledRuntime => RuntimeStateEvidence::NoInstalledRuntime,
+        },
+        InstallTransitionFacts::RecoveryIncomplete { state, .. } => match state {
+            RecoveryState::Confirmed(RollbackState::Restored(artifact)) => {
+                RuntimeStateEvidence::Restored(artifact.clone())
+            }
+            RecoveryState::Confirmed(RollbackState::NoInstalledRuntime) => {
+                RuntimeStateEvidence::NoInstalledRuntime
+            }
+            RecoveryState::Unconfirmed => RuntimeStateEvidence::Unconfirmed,
+        },
+        _ => RuntimeStateEvidence::Unconfirmed,
+    }
 }
 
 #[cfg(test)]
