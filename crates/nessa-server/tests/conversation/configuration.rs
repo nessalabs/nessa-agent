@@ -5,7 +5,9 @@ use super::*;
 use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentCredentialSource};
 #[cfg(unix)]
 use crate::composition::local_auth::SystemClock;
+#[cfg(unix)]
 use nessa_sdk::domain::common::value_objects::ImageMediaType;
+#[cfg(unix)]
 use std::ffi::OsStr;
 
 #[cfg(unix)]
@@ -53,6 +55,7 @@ fn agent_configuration_is_explicit_and_rejects_unknown_provider_switches() {
     assert!(serde_json::from_str::<AgentsConfig>(r#"{"model":"configured-model"}"#).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn an_agent_is_started_by_a_command_and_its_arguments() {
     // Not a runtime and an entry script: an agent that speaks the protocol
@@ -79,6 +82,7 @@ fn an_agent_is_started_by_a_command_and_its_arguments() {
 /// question, and `/harness/index.js` is not absolute on Windows — it names no
 /// drive. Written as a Unix path, this test asserted that a relative argument
 /// was found, which is the opposite of what it is for.
+#[cfg(unix)]
 fn absolute(name: &str) -> String {
     if cfg!(windows) {
         format!("C:\\{name}")
@@ -87,6 +91,7 @@ fn absolute(name: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn only_the_arguments_that_are_paths_are_this_machines_to_find() {
     let entry = absolute("harness/index.js");
@@ -107,12 +112,14 @@ fn only_the_arguments_that_are_paths_are_this_machines_to_find() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn the_only_configured_agent_needs_no_choosing() {
     let config: AgentsConfig = serde_json::from_str(one_agent()).unwrap();
     assert_eq!(config.selected().unwrap(), AgentId::Claude);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_second_agent_makes_the_choice_between_them_a_thing_to_state() {
     // Answering this by picking the first one would put a person's next
@@ -127,6 +134,7 @@ fn a_second_agent_makes_the_choice_between_them_a_thing_to_state() {
     assert_eq!(config.selected().unwrap(), AgentId::Codex);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_selection_is_never_honoured_past_what_is_configured() {
     for selected in ["codex", "gemini", ""] {
@@ -137,6 +145,7 @@ fn a_selection_is_never_honoured_past_what_is_configured() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn an_agent_name_with_no_adapter_is_reported_rather_than_skipped() {
     // Skipping it would leave that agent missing from setup, which reads as an
@@ -149,6 +158,7 @@ fn an_agent_name_with_no_adapter_is_reported_rather_than_skipped() {
     assert!(refused.contains("gemini"), "{refused}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_configuration_naming_no_agent_starts_nothing() {
     let value = r#"{"catalog":"/catalog.json","workspace":"/workspace"}"#;
@@ -170,6 +180,7 @@ fn whether_an_agent_runs_its_own_tools_is_asked_of_that_agent_alone() {
     assert!(config.runtime(AgentId::Codex).unwrap().tools_enabled);
 }
 
+#[cfg(unix)]
 #[test]
 fn no_agent_is_told_how_to_sign_itself_in() {
     // Codex's adapter will sign itself in from an environment key if the launch
@@ -194,6 +205,7 @@ fn no_agent_is_told_how_to_sign_itself_in() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration_from() {
     // Every name asked for is answered, so what the assertions see is the key
@@ -547,6 +559,7 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
 /// The packaged case: the host resolved a path at registration, and that is the
 /// one the agent gets — not the service's own, which has none of the user's
 /// tools on it.
+#[cfg(unix)]
 #[test]
 fn the_agent_takes_the_hosts_resolved_path_over_the_services_own() {
     assert_eq!(
@@ -560,6 +573,7 @@ fn the_agent_takes_the_hosts_resolved_path_over_the_services_own() {
 
 /// The developer loop: `just server` is started from a terminal, there is no
 /// host to resolve anything, and that terminal's path is already the right one.
+#[cfg(unix)]
 #[test]
 fn without_a_resolved_path_the_process_keeps_its_own() {
     assert_eq!(
@@ -570,6 +584,7 @@ fn without_a_resolved_path_the_process_keeps_its_own() {
 
 /// An empty variable is not a path. Treating it as one gives the agent an empty
 /// `PATH`, which searches the working directory it writes to.
+#[cfg(unix)]
 #[test]
 fn an_empty_variable_is_not_a_path() {
     assert_eq!(
@@ -583,6 +598,7 @@ fn an_empty_variable_is_not_a_path() {
 /// The rule above decides nothing unless the launched environment uses it. The
 /// two were wired together separately, and a merge that kept one and dropped
 /// the other would still compile and still pass every test above.
+#[cfg(unix)]
 #[test]
 fn the_agent_is_launched_with_the_path_that_rule_chose() {
     let launched = inherited_environment(
@@ -608,6 +624,7 @@ fn the_agent_is_launched_with_the_path_that_rule_chose() {
 /// Fitting to one model and sending to another is a refusal at the moment of
 /// sending, which is the one point where there is nothing left to do about it:
 /// the bytes are already kept, the message is already written.
+#[cfg(unix)]
 #[test]
 fn an_image_is_fitted_to_what_every_configured_agent_would_take() {
     let limits = |types: Vec<ImageMediaType>, encoded, max_edge, many, native| {

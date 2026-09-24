@@ -11,7 +11,7 @@ use crate::{
     agents::{
         application::{AgentCredentialSource, AgentProbe},
         domain::AgentId,
-        infrastructure::{AgentLaunchFiles, LocalAgentCredentials, LocalAgentProbe},
+        infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
     attachments::application::AttachmentService,
@@ -27,6 +27,7 @@ use crate::{
         domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
+    agents::infrastructure::AgentLaunchFiles,
     attachments::infrastructure::ModelImageNormalizer,
     conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
     conversation::infrastructure::{
@@ -49,8 +50,10 @@ use nessa_auth::{
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
+#[cfg(unix)]
+use std::collections::HashSet;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -213,6 +216,7 @@ pub(super) fn product_state(
 /// so the probe has nothing to stat and readiness reports the agent as not set
 /// up on this installation rather than offering a conversation that would be
 /// refused. See [`super::agent::ConfiguredAgents::unavailable`].
+#[cfg(unix)]
 fn launch_files(
     agents: Option<&AgentsConfig>,
     unavailable: &HashSet<AgentId>,

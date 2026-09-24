@@ -36,28 +36,39 @@
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
 #[cfg(unix)]
+use crate::agents::application::AgentCredentialSource;
+use crate::agents::domain::AgentId;
+#[cfg(unix)]
 use crate::agents::infrastructure::CredentialedClaudeProvider;
-use crate::agents::{application::AgentCredentialSource, domain::AgentId};
+#[cfg(unix)]
 use crate::conversation::application::ConversationAgent;
+#[cfg(unix)]
 use crate::core::RunError;
+#[cfg(unix)]
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
-    application::agent_execution::providers::{ExecutableUseSnapshot, UserImageSource},
+    application::agent_execution::providers::ExecutableUseSnapshot,
+    infrastructure::acp::sessions::StdioMcpServer,
+};
+#[cfg(unix)]
+use nessa_sdk::{
+    application::agent_execution::providers::UserImageSource,
     domain::{
         common::value_objects::TokenLimits,
         model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
     },
     infrastructure::{
-        acp::sessions::StdioMcpServer, model_metadata_json::load_catalog,
-        opencode_acp::sessions::OpencodeAcpProvider,
+        model_metadata_json::load_catalog, opencode_acp::sessions::OpencodeAcpProvider,
     },
 };
 use serde::{Deserialize, Deserializer};
+use std::{collections::HashMap, path::PathBuf};
+#[cfg(unix)]
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     ffi::OsString,
     fs::File,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
@@ -95,10 +106,23 @@ pub(super) struct AgentRuntime {
     /// agent that speaks ACP itself takes its own subcommand.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Kept portable as configuration data even where no provider can consume it.
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub model: String,
     #[serde(default = "context_tokens")]
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub context_tokens: u32,
     #[serde(default = "output_tokens")]
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub output_tokens: u32,
     /// Whether this agent runs its own tools.
     ///
@@ -119,10 +143,14 @@ pub(super) struct AgentRuntime {
     /// builds none there is no one to tell. It is still parsed and still
     /// required there, because a configuration is either well-formed or it is
     /// not, and that does not vary by host.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub tools_enabled: bool,
 }
 
+#[cfg(unix)]
 impl AgentRuntime {
     /// Every absolute path this server would hand the command.
     ///
@@ -189,7 +217,7 @@ impl AgentsConfig {
     /// Returns [`RunError::Agent`] for a name no adapter exists for, a name with
     /// no configuration under it, no agents at all, or several agents with no
     /// choice stated between them.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn selected(&self) -> Result<AgentId, RunError> {
         self.selected_from(&self.agents().into_iter().map(|(agent, _)| agent).collect())
     }
@@ -198,6 +226,7 @@ impl AgentsConfig {
     ///
     /// Deferred agents have no startup runtime entry, but are still concrete
     /// configured choices because their launch is resolved at cold open.
+    #[cfg(unix)]
     pub fn selected_from(&self, configured: &HashSet<AgentId>) -> Result<AgentId, RunError> {
         if let Some(name) = self.unknown() {
             return Err(RunError::Agent(format!(
@@ -226,6 +255,7 @@ impl AgentsConfig {
         }
     }
 
+    #[cfg(unix)]
     fn validate_for(&self, configured: &HashSet<AgentId>) -> Result<(), RunError> {
         self.selected_from(configured)?;
         if [&self.catalog, &self.workspace]
@@ -266,6 +296,7 @@ impl AgentsConfig {
 ///
 /// A developer loop has no host and no such variable, and there the process
 /// `PATH` *is* the developer's own shell path, which is the right answer.
+#[cfg(unix)]
 fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
     resolved
         .filter(|path| !path.is_empty())
@@ -306,6 +337,7 @@ fn output_tokens() -> u32 {
 /// user's disk, so it is not asked for. Setting
 /// `cli_auth_credentials_store = "ephemeral"` does not avoid the write, which
 /// was checked against the pinned adapter rather than assumed.
+#[cfg(unix)]
 fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     // `PATH` is the one entry that is not simply inherited: under launchd this
     // process's own `PATH` is launchd's, not the user's, and an agent given it
@@ -329,6 +361,7 @@ fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
 /// readable back without a test writing to the environment every other test is
 /// reading. `path` is the entry `agent_search_path` already settled; `lookup`
 /// is every other key.
+#[cfg(unix)]
 fn inherited_environment(
     agent: AgentId,
     path: Option<OsString>,
@@ -365,6 +398,7 @@ fn inherited_environment(
 /// packaged credential source or the standalone `OPENCODE_API_KEY` captured by
 /// composition. Keeping that choice out of this fixed-provider helper prevents
 /// ambient credentials from widening packaged policy.
+#[cfg(unix)]
 fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let keys: &[&str] = match agent {
         AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
@@ -391,6 +425,7 @@ fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
 /// session-bus variables decide whether a keyring can be opened at all.
 /// Inheriting this server's whole environment would let the probe find a
 /// sign-in the launch then cannot use.
+#[cfg(unix)]
 pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let mut environment = process_environment(agent);
     environment.extend(credential_environment(agent));
@@ -402,6 +437,7 @@ pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString>
 /// Not a preference: each harness speaks to one vendor's API and is signed in
 /// to it, so a catalog entry from another vendor is a model that agent cannot
 /// reach, and saying so at startup beats a provider refusing every prompt.
+#[cfg(unix)]
 fn catalog_provider(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "anthropic",
@@ -415,6 +451,7 @@ fn catalog_provider(agent: AgentId) -> &'static str {
 /// Read here rather than inside the provider because two things need it: the
 /// provider is built for it, and uploaded images are fitted to the image
 /// limits it publishes.
+#[cfg(unix)]
 pub(super) fn model(
     agent: AgentId,
     config: &AgentsConfig,
@@ -423,6 +460,7 @@ pub(super) fn model(
     model_by_id(agent, config, &runtime.model)
 }
 
+#[cfg(unix)]
 fn model_by_id(
     agent: AgentId,
     config: &AgentsConfig,
@@ -441,17 +479,20 @@ fn model_by_id(
 }
 
 /// Validate the static OpenCode model, budgets, and tool policy without effects.
+#[cfg(unix)]
 pub(super) struct ValidatedOpenCodePolicy {
     model: ModelMetadata,
     limits: TokenLimits,
 }
 
+#[cfg(unix)]
 impl ValidatedOpenCodePolicy {
     pub(super) fn model(&self) -> &ModelMetadata {
         &self.model
     }
 }
 
+#[cfg(unix)]
 pub(super) fn validate_opencode_policy(
     config: &AgentsConfig,
     runtime: &AgentRuntime,
@@ -476,6 +517,7 @@ pub(super) fn validate_opencode_policy(
 /// `None` is a gateway that keeps no images: either no configured model
 /// publishes image input, or the models between them share no encoding, and in
 /// both cases there is no image this gateway could store and then send.
+#[cfg(unix)]
 pub(super) fn image_limits(
     config: &AgentsConfig,
     current_opencode: Option<&ModelMetadata>,
@@ -514,6 +556,7 @@ pub(super) fn image_limits(
 /// edge exceeds the maximum: each model already satisfies it, so the smallest
 /// maximum is at least its own model's smaller edges, and so at least the
 /// smallest of them.
+#[cfg(unix)]
 fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageInputLimits> {
     let media_types: Vec<_> = held
         .media_types()
@@ -684,29 +727,8 @@ pub(super) fn provider_for(
         readiness: None,
     })
 }
-#[cfg(not(unix))]
-pub(super) fn providers(
-    config: &AgentsConfig,
-    _: &Path,
-    _: Arc<dyn Clock>,
-    _: Arc<dyn UserImageSource>,
-    _: Arc<dyn AgentCredentialSource>,
-    deferred: &HashSet<AgentId>,
-) -> Result<ConfiguredAgents, RunError> {
-    let configured: HashSet<_> = config
-        .agents()
-        .into_iter()
-        .filter(|(agent, _)| *agent != AgentId::Opencode)
-        .map(|(agent, _)| agent)
-        .chain(deferred.iter().copied())
-        .collect();
-    config.validate_for(&configured)?;
-    Err(RunError::Agent(
-        "ACP agents require Unix process supervision".into(),
-    ))
-}
-
 /// What building every configured agent settled.
+#[cfg(unix)]
 pub(super) struct ConfiguredAgents {
     /// Every agent a conversation can be created on or reopened on this run.
     pub providers: HashMap<AgentId, ConversationAgent>,
@@ -733,6 +755,7 @@ pub(super) struct ConfiguredAgents {
 
 /// Effects shared by every provider generation built for one conversation root.
 #[derive(Clone)]
+#[cfg(unix)]
 pub(super) struct ProviderDependencies {
     pub(super) directory: PathBuf,
     pub(super) clock: Arc<dyn Clock>,
