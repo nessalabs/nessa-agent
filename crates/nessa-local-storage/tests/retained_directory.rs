@@ -1,6 +1,6 @@
 use nessa_local_storage::{
-    create_directory, create_private_directory_tree_beneath, OpenMode, PrivateDirectory,
-    PrivateFileType, PrivatePublicationStage,
+    create_directory, create_private_directory_tree_beneath, is_private_temporary_name, OpenMode,
+    PrivateDirectory, PrivateFileType, PrivatePublicationStage,
 };
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
@@ -38,6 +38,30 @@ fn names(directory: &PrivateDirectory) -> Vec<(OsString, PrivateFileType)> {
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
+}
+
+#[test]
+fn private_temporary_classifier_matches_real_reservations_and_only_exact_syntax() {
+    let (_temporary, _root, directory) = fixture();
+    let reservation = directory.reserve_temp().unwrap();
+
+    assert!(is_private_temporary_name(reservation.name()));
+    for near_miss in [
+        ".nessa-0123456789abcdef0123456789abcdef",
+        ".nessa-0123456789abcdef0123456789abcde.tmp",
+        ".nessa-0123456789abcdef0123456789abcdef0.tmp",
+        ".nessa-0123456789abcdef0123456789abcdeg.tmp",
+        ".nessa-0123456789ABCDEF0123456789ABCDEF.tmp",
+        "nessa-0123456789abcdef0123456789abcdef.tmp",
+    ] {
+        assert!(!is_private_temporary_name(OsStr::new(near_miss)));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let native = OsString::from_vec(vec![b'.', b'n', 0x80]);
+        assert!(!is_private_temporary_name(&native));
+    }
 }
 
 #[test]

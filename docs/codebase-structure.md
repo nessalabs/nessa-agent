@@ -917,15 +917,65 @@ same bytes as their siblings at 1.18.31, so what they need is unsettled and an
 x86-64 machine without AVX2 is offered nothing rather than a build nobody has
 run on one.
 
-`application/` owns the order and none of the effects: `InstallAgentRuntime`
-does installed-already, then download, hash, accept, publish, and never unpacks
-an archive that was not accepted. Its two ports are `ArchiveSource` (the
-network) and `RuntimeStore` (this machine's disk), whose `StagedArchive` carries
-an open file rather than a path, so the bytes that are measured are the bytes
-that are unpacked.
+Install evidence is domain state too. `install_transition.rs` owns the validated
+request identity, target artifact, and immutable transition facts; its private
+representation prevents a rejected digest from equalling the target, a runtime
+from replacing itself, or a rollback from claiming the failed target was
+restored. Incomplete recovery retains the original publication failure, each
+cleanup stage that failed, and either the remaining state the store confirmed
+or an explicit unconfirmed state. `value_objects/publication_delivery.rs` owns
+immutable preparation, outcome, and settlement values; its private outcome
+representation requires every terminal to pass through the install-attempt
+sequence validation. `entities/install_attempt.rs` is the sequence
+owner: started may become verified or rejected, and only verified may become
+installed, replaced, rolled back, or incomplete recovery. Application and
+infrastructure cannot construct contradictory before/after evidence around that
+owner. The request's account and invocation identity plus the domain-owned
+started, verification-outcome, or completion-outcome slot identify one logical
+event. The same owner admits live and restored facts, accepts an exact replay
+even after a later event, and rejects different facts in the same slot. A
+record's random UUID, sequence, and observation time describe its physical
+publication and do not change that semantic identity.
 
-`infrastructure/` holds the three outside things — the pins, the network and
-the disk, one module each. `pinned_releases.rs` reads
+`application/` owns the order and none of the effects: `InstallAgentRuntime`
+first recovers an admitted publication for the account, then does
+installed-already, download, hash, accept, publish, and never unpacks
+an archive that was not accepted. Its ports are `ArchiveSource` (the network),
+`RuntimeStore` (this machine's disk), `InstallAudit` (durable transition
+evidence), and `InstallationDelivery` (publication admission and recovery). The
+delivery session holds one lock from recovery through settlement. It durably
+prepares after verification and before publication, retains the exact terminal
+independently of audit acknowledgement, and settles only a matching outcome. A
+prepared publication with neither a retained terminal nor an exact journal
+terminal blocks new effects; runtime state never supplies the missing fact.
+`StagedArchive` carries an open file rather than a path, so the bytes
+that are measured are the bytes that are unpacked. Publication captures the
+prior valid artifact while holding the store's per-agent lock and returns that
+authority as a lease. The use case keeps the lease through both immediate durable delivery attempts
+and drops it when `execute` returns. A later invocation must recover and
+acknowledge the retained terminal before it admits another install effect.
+Journal sequence and observation time remain observation order; domain event
+identity and before/after facts retain causal meaning.
+Audit failure stays visible and carries typed state evidence: unchanged, the
+target installed, the prior artifact restored, no runtime installed, or
+unconfirmed. It therefore does not turn an uncertain cleanup into a claim that
+nothing is installed. It also retains the exact transition whose
+acknowledgement failed. The original upstream store diagnostics are moved once
+into the returned failure and remain full-sized; only their audit projection is
+bounded. This does not cap allocations already made by a provider or store.
+`retry_audit` redelivers only that transition and never
+repeats download or publication. A normal `execute` reports a typed reused
+request when its initial started event was replayed, before any install effect;
+a genuinely new invocation uses a new request identity.
+If publication durability fails, the store removes only the target it computed
+from the accepted pin, restores only a prior record whose validated artifact
+still had every private nonempty file named by its `ReleaseContents`, and
+re-reads installed state under the same lease. The original failure, every
+cleanup failure, and the confirmed or explicitly unconfirmed remaining state
+travel as separate typed facts through the audit attempt and back to the caller
+when the sink also fails.
+
+`infrastructure/` holds the four outside things: `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
 what is beside the binary, and is also the one boundary that reads *the
 machine* — `host_platform()` builds a `HostPlatform` from the compiler's own
@@ -941,24 +991,53 @@ crate's `*_beneath` primitives, which walk down one verified component at a
 time; the root itself, which composition owns, is the single path resolved the
 ordinary way. So no symbolic link between the root and a runtime can send a
 read, a write or a removal outside the store, and the installed executable is
-private to its owner like everything else there.
+private to its owner like everything else there. `audit/journal.rs` retains one
+opened directory authority and the original lock-file identity, then takes a
+fresh handle to that same lock for each record so CLI processes serialize one
+monotonically sequenced journal. `audit/record.rs` owns its private JSON mapping
+and reconstructs semantic facts through domain constructors. Exact replay
+reopens and re-syncs the original immutable record under the same authority;
+conflicting facts are rejected without claiming the incoming event was
+published. The adapter syncs each record and the journal directory before
+acknowledging it, and refuses corrupt, non-regular, non-canonical, or
+discontinuous entries rather than appending past them. Regular files with the
+storage primitive's exact private-reservation syntax are preserved and ignored:
+the syntax is not provenance, and the journal neither promotes nor deletes an
+abandoned reservation, so those files can consume disk until separate cleanup
+is designed. Sequence and observation time describe journal observation order,
+not domain causality. An error drops the runtime publication lease after both immediate delivery
+attempts. The account-scoped delivery lock makes a later invocation recover the
+earlier terminal before it can admit another install. Directory sync is unavailable on Windows, so its
+power-loss guarantee remains limited to the storage primitive's documented file
+behavior there.
+`delivery/journal.rs` separately retains immutable preparation, outcome and
+settlement records beneath `installation-delivery/agent-install`. Its stable
+lock spans recovery, admission, the runtime effect, both terminal delivery
+attempts and settlement. `delivery/record.rs` maps private JSON through the same
+domain constructors used by the live path. Records are bounded before
+publication and while read; settlement without its exact predecessor and
+multiple unresolved attempts are refused. Records remain until separate
+reclamation is designed.
+The stable lock excludes every cooperating writer. On Unix it does not protect
+the check/effect interval inside the journal leaf from a malicious process
+running as the same user and deliberately ignoring that advisory lock; detected
+directory, lock, or record replacement is still refused.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases
-The domain says what a release *is*: `pinned_release.rs` holds the pin, and
-`release_contents.rs` holds the set of files it installs — each one an
-`ArchivePath` with a `FileRole` of `Launch`, `Helper` or `Document`, exactly one
-of them the launch. That set is why one install path serves an agent that ships
-a single binary and one that ships four programs plus the tools they call.
-`ArchiveSize` bounds the download against the size the pin measured. Composition
-reads the store at every start through `composition/installed_launch.rs`, which
-answers with a launch or with nothing, and never with a path it wrote down
-earlier.
-
-that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-agents.mjs` regenerates
-the pin file by downloading and hashing every platform's archive. Tests under
-`tests/agent_install/` split the domain's rules, the ordering, the two adapters
-and the command's output.
+that run on it — supplies a fresh correlation identity and the effective local
+account whose private data receives the runtime, and reports one line of JSON on
+stdout. After pin and platform admission, composition creates or verifies the
+selected private data namespace before it constructs the audit and publication
+delivery journal beneath that root; an unsafe namespace stops the command
+before download or publication.
+`scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
+and hashing every platform's archives. Composition reads the store at every
+start through `composition/installed_launch.rs`, which answers with a launch or
+with nothing and never with a path it wrote down earlier. Tests under
+`tests/agent_install/` split the domain's rules, application ordering and
+failure reporting, the three adapters, concurrent publication authority, and
+the command's output.
 
 ## Command-line surface
 

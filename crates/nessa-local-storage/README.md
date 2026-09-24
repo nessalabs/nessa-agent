@@ -16,7 +16,7 @@ write-through moves after file flush; Unix callers sync the containing directory
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | Crate documentation, module declarations, and the existing path-based private-storage API. |
+| `src/lib.rs` | Crate documentation, module declarations, path-based private-storage API, and the exact reservation-name syntax classifier. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
 | `src/unix/retained_directory.rs` | Retained directory descriptors, independent `openat(".")` enumeration cursors, identity checks, exclusive rename, cleanup, and directory sync. |
 | `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` publication, and handle disposition cleanup. |
@@ -37,6 +37,10 @@ fact and handle so the consumer can reconcile it. Cleanup is disarmed immediatel
 after rename; published files are never deleted as temporary reservations. Before
 rename, cleanup is origin-bound and any cleanup error is reported separately.
 `Drop` is best-effort and makes no successful-cleanup claim.
+`is_private_temporary_name` recognizes only the exact native name grammar used
+for reservations. A match is syntax, not provenance or authority; consumers may
+preserve such abandoned regular files but must not infer that they can open,
+publish, or remove them.
 
 Binding checks are acknowledgement checkpoints, not continuous attachment. Unix
 directory descriptors prevent ancestor redirection, while a caller's stable lock

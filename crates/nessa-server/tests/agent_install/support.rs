@@ -4,15 +4,20 @@
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{mpsc::Sender, Mutex};
 
 use crate::agent_install::application::{
-    ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    ArchiveSource, AuditAcknowledgement, AuditFailure, AuditFailureStage, InstallAudit,
+    InstallDeliveryFailure, InstallationDelivery, InstallationDeliverySession,
+    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
+    PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
+    SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform, Libc,
-    PinnedRelease, ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
-    ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
+    InstallRequest, InstallTransition, InstallTransitionKind, Libc, PinnedRelease,
+    PublicationOutcome, PublicationPreparation, PublicationSettlement, ReleaseContents,
+    ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
 };
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
@@ -65,6 +70,132 @@ pub(crate) fn temporary_root() -> TemporaryRoot {
 /// The agent these tests install.
 pub(crate) fn agent() -> AgentName {
     AgentName::parse("opencode").expect("test agent name is plain")
+}
+
+pub(crate) fn request() -> InstallRequest {
+    InstallRequest::new("unix:501", "install-request-1").expect("test request is valid")
+}
+
+pub(crate) struct AcceptingAudit;
+
+impl InstallAudit for AcceptingAudit {
+    fn record(&self, _transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        Ok(AuditAcknowledgement::Recorded)
+    }
+}
+
+pub(crate) fn audit() -> &'static AcceptingAudit {
+    static AUDIT: AcceptingAudit = AcceptingAudit;
+    &AUDIT
+}
+
+pub(crate) struct AcceptingDelivery;
+
+struct AcceptingDeliverySession {
+    pending: Option<PendingInstallationDelivery>,
+}
+
+impl InstallationDelivery for AcceptingDelivery {
+    fn session(
+        &self,
+        _account_id: &str,
+    ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        Ok(Box::new(AcceptingDeliverySession { pending: None }))
+    }
+}
+
+impl InstallationDeliverySession for AcceptingDeliverySession {
+    fn pending(&mut self) -> Result<Option<PendingInstallationDelivery>, InstallDeliveryFailure> {
+        Ok(self.pending.clone())
+    }
+
+    fn prepare(
+        &mut self,
+        preparation: PublicationPreparation,
+    ) -> Result<PreparedInstallation, InstallDeliveryFailure> {
+        let prepared = PreparedInstallation::new("test-publication".to_owned(), preparation);
+        self.pending = Some(PendingInstallationDelivery::Prepared(prepared.clone()));
+        Ok(prepared)
+    }
+
+    fn retain_outcome(
+        &mut self,
+        prepared: &PreparedInstallation,
+        outcome: &PublicationOutcome,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.pending = Some(PendingInstallationDelivery::Outcome {
+            prepared: prepared.clone(),
+            outcome: Box::new(outcome.clone()),
+        });
+        Ok(())
+    }
+
+    fn settle(
+        &mut self,
+        _prepared: &PreparedInstallation,
+        _settlement: &PublicationSettlement,
+    ) -> Result<(), InstallDeliveryFailure> {
+        self.pending = None;
+        Ok(())
+    }
+}
+
+pub(crate) fn delivery() -> &'static AcceptingDelivery {
+    static DELIVERY: AcceptingDelivery = AcceptingDelivery;
+    &DELIVERY
+}
+
+#[derive(Default)]
+pub(crate) struct RecordingAudit {
+    records: Mutex<Vec<InstallTransition>>,
+    failure: Option<(Option<InstallTransitionKind>, AuditFailure)>,
+    replay: bool,
+}
+
+impl RecordingAudit {
+    pub(crate) fn failing_on(kind: InstallTransitionKind, detail: &str) -> Self {
+        Self {
+            records: Mutex::new(Vec::new()),
+            failure: Some((
+                Some(kind),
+                AuditFailure::new(
+                    AuditFailureStage::AcknowledgeRecord,
+                    detail.to_owned(),
+                    None,
+                    None,
+                ),
+            )),
+            replay: false,
+        }
+    }
+
+    pub(crate) fn replaying() -> Self {
+        Self {
+            replay: true,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn records(&self) -> Vec<InstallTransition> {
+        self.records.lock().expect("audit records lock").clone()
+    }
+}
+
+impl InstallAudit for RecordingAudit {
+    fn record(&self, transition: InstallTransition) -> Result<AuditAcknowledgement, AuditFailure> {
+        let kind = transition.kind();
+        self.records
+            .lock()
+            .expect("audit records lock")
+            .push(transition);
+        match &self.failure {
+            Some((expected, failure)) if expected.is_none() || *expected == Some(kind) => {
+                Err(failure.clone())
+            }
+            _ if self.replay => Ok(AuditAcknowledgement::Replayed),
+            _ => Ok(AuditAcknowledgement::Recorded),
+        }
+    }
 }
 
 /// A release pinned for the platform the test says it is running on, asking
@@ -211,7 +342,9 @@ pub(crate) struct FakeStore {
     installed: Result<Option<PathBuf>, StoreFailure>,
     stage: Option<StoreFailure>,
     digest: Result<ArchiveDigest, StoreFailure>,
-    publish: Result<PathBuf, StoreFailure>,
+    publish: Result<PublicationChange, StoreFailure>,
+    recovery: PublicationRecovery,
+    lease_drop: Option<Sender<()>>,
     /// How many archives this store has staged, so each gets its own name.
     staged: std::sync::atomic::AtomicUsize,
     calls: Mutex<StoreCalls>,
@@ -225,7 +358,9 @@ impl FakeStore {
             installed: Ok(None),
             stage: None,
             digest: Ok(ArchiveDigest::parse(PINNED_DIGEST).expect("test digest is usable")),
-            publish: Ok(root.join("opencode")),
+            publish: Ok(PublicationChange::Installed),
+            recovery: PublicationRecovery::NotRequired,
+            lease_drop: None,
             staged: std::sync::atomic::AtomicUsize::new(0),
             calls: Mutex::new(StoreCalls::default()),
         }
@@ -251,6 +386,45 @@ impl FakeStore {
     /// The same store, but publishing fails.
     pub(crate) fn failing_to_publish(mut self, failure: StoreFailure) -> Self {
         self.publish = Err(failure);
+        self
+    }
+
+    pub(crate) fn failing_after_rollback(
+        mut self,
+        failure: StoreFailure,
+        rollback: RollbackChange,
+    ) -> Self {
+        self.publish = Err(failure);
+        self.recovery = PublicationRecovery::RolledBack(rollback);
+        self
+    }
+
+    pub(crate) fn failing_after_incomplete_cleanup(
+        mut self,
+        failure: StoreFailure,
+        rollback: Option<RollbackChange>,
+        cleanup: PublicationCleanupFailure,
+    ) -> Self {
+        self.publish = Err(failure);
+        self.recovery = PublicationRecovery::Incomplete { rollback, cleanup };
+        self
+    }
+
+    pub(crate) fn replacing(
+        mut self,
+        previous: crate::agent_install::domain::RuntimeArtifact,
+    ) -> Self {
+        self.publish = Ok(PublicationChange::Replaced(previous));
+        self
+    }
+
+    pub(crate) fn reusing(mut self) -> Self {
+        self.publish = Ok(PublicationChange::Reused);
+        self
+    }
+
+    pub(crate) fn signalling_lease_drop(mut self, sender: Sender<()>) -> Self {
+        self.lease_drop = Some(sender);
         self
     }
 
@@ -350,13 +524,43 @@ impl RuntimeStore for FakeStore {
         agent: &AgentName,
         _release: &PinnedRelease,
         staged: &mut StagedArchive,
-    ) -> Result<PathBuf, StoreFailure> {
+    ) -> Result<Publication, PublishFailure> {
         let bytes = self.read(staged);
         let mut calls = self.calls.lock().expect("fake store lock");
         calls.published.push(agent.to_string());
         calls.unpacked.push(bytes);
         drop(calls);
-        self.publish.clone()
+        self.publish
+            .clone()
+            .map(|change| {
+                Publication::new(
+                    self.root.join("opencode"),
+                    change,
+                    self.lease_drop.clone().map_or_else(
+                        || {
+                            Box::new(())
+                                as Box<dyn crate::agent_install::application::PublicationLease>
+                        },
+                        |sender| Box::new(DropSignal(sender)),
+                    ),
+                )
+            })
+            .map_err(|failure| match self.recovery.clone() {
+                PublicationRecovery::NotRequired => {
+                    PublishFailure::unchanged(failure, lease(self.lease_drop.clone()))
+                }
+                PublicationRecovery::RolledBack(rollback) => {
+                    PublishFailure::rolled_back(failure, rollback, lease(self.lease_drop.clone()))
+                }
+                PublicationRecovery::Incomplete { rollback, cleanup } => {
+                    PublishFailure::incomplete(
+                        failure,
+                        rollback,
+                        cleanup,
+                        lease(self.lease_drop.clone()),
+                    )
+                }
+            })
     }
 
     fn discard(&self, staged: StagedArchive) {
@@ -365,5 +569,22 @@ impl RuntimeStore for FakeStore {
             .expect("fake store lock")
             .discarded
             .push(staged.path().to_owned());
+    }
+}
+
+struct DropSignal(Sender<()>);
+
+fn lease(
+    sender: Option<Sender<()>>,
+) -> Box<dyn crate::agent_install::application::PublicationLease> {
+    sender.map_or_else(
+        || Box::new(()) as Box<dyn crate::agent_install::application::PublicationLease>,
+        |sender| Box::new(DropSignal(sender)),
+    )
+}
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
     }
 }

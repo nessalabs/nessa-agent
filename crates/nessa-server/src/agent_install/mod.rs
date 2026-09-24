@@ -43,14 +43,18 @@
 //! composition -> infrastructure::releases_for    (which release, if any)
 //!             -> application::InstallAgentRuntime -> application::ArchiveSource
 //!                                                 -> application::RuntimeStore
+//!                                                 -> application::InstallAudit
+//!                                                 -> application::InstallationDelivery
 //! infrastructure::HttpsArchives ------------------> ArchiveSource
 //! infrastructure::ManagedRuntimes ----------------> RuntimeStore
+//! infrastructure::DurableInstallAudit ------------> InstallAudit
+//! infrastructure::DurableInstallationDelivery ----> InstallationDelivery
 //! domain::PinnedRelease --------------------------> what is allowed to be installed
 //!          └─ domain::ReleaseContents ------------> which files, and what each is for
 //! ```
 //! Arrows mean construction, calls, or "is made of". Dependencies point inward:
 //! the domain knows nothing about the network or the disk, and the application
-//! knows only the two ports.
+//! owns the effect ports.
 pub mod application;
 pub mod domain;
 pub mod infrastructure;
