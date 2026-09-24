@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -319,14 +320,13 @@ test("the downloader enforces transfer and process time ceilings", () => {
         execute(command, arguments_, options) {
           executed = true
           assert.equal(command, "curl")
-          assert.deepEqual(arguments_.slice(0, 6), [
-            "--fail",
-            "--location",
-            "--max-filesize",
-            String(MAX_NODE_ARCHIVE_BYTES),
-            "--max-time",
-            "120",
-          ])
+          assert.equal(arguments_.includes("--max-filesize"), true)
+          assert.equal(arguments_.includes(String(MAX_NODE_ARCHIVE_BYTES)), true)
+          assert.equal(arguments_.includes("--max-time"), true)
+          assert.equal(arguments_.includes("120"), true)
+          assert.equal(arguments_.includes("--output"), false)
+          assert.equal(options.maxBuffer, MAX_NODE_ARCHIVE_BYTES)
+          assert.deepEqual(options.stdio, ["ignore", "pipe", "inherit"])
           assert.equal(options.timeout, 125_000)
           throw new Error("download timed out")
         },
@@ -334,6 +334,45 @@ test("the downloader enforces transfer and process time ceilings", () => {
     /timed out/,
   )
   assert.equal(executed, true)
+})
+
+test("an unknown-length transfer overflow writes no destination", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-node-transfer-overflow-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const destination = join(root, "node-fixture.tar.gz")
+  assert.throws(
+    () =>
+      downloadNodeArchive({
+        destination,
+        url: "https://example.invalid/chunked",
+        execute(command, arguments_, options) {
+          assert.equal(command, "curl")
+          assert.equal(arguments_.includes("--output"), false)
+          assert.equal(options.maxBuffer, MAX_NODE_ARCHIVE_BYTES)
+          const error = new Error("stdout maxBuffer length exceeded")
+          error.code = "ENOBUFS"
+          throw error
+        },
+      }),
+    (error) => error.code === "ENOBUFS",
+  )
+  assert.equal(existsSync(destination), false)
+})
+
+test("a bounded successful transfer writes the exact returned bytes", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-node-transfer-success-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const destination = join(root, "node-fixture.tar.gz")
+  const expected = Buffer.from([0, 1, 2, 255])
+  downloadNodeArchive({
+    destination,
+    url: "https://example.invalid/node.tar.gz",
+    execute(_command, _arguments, options) {
+      assert.equal(options.maxBuffer, MAX_NODE_ARCHIVE_BYTES)
+      return expected
+    },
+  })
+  assert.deepEqual(readFileSync(destination), expected)
 })
 
 test("a timed-out download leaves no cache or staging entry", (t) => {

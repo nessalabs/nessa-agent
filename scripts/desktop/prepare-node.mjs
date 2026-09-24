@@ -215,7 +215,7 @@ export function downloadNodeArchive({
   maxBytes = MAX_NODE_ARCHIVE_BYTES,
   execute = execFileSync,
 }) {
-  execute(
+  const bytes = execute(
     "curl",
     [
       "--fail",
@@ -224,12 +224,19 @@ export function downloadNodeArchive({
       String(maxBytes),
       "--max-time",
       String(NODE_DOWNLOAD_TIMEOUT_SECONDS),
-      "--output",
-      destination,
+      "--silent",
+      "--show-error",
       url,
     ],
-    { stdio: "inherit", timeout: NODE_DOWNLOAD_PROCESS_TIMEOUT_MS },
+    {
+      maxBuffer: maxBytes,
+      stdio: ["ignore", "pipe", "inherit"],
+      timeout: NODE_DOWNLOAD_PROCESS_TIMEOUT_MS,
+    },
   )
+  if (!Buffer.isBuffer(bytes) || bytes.length > maxBytes)
+    throw new Error("Node download exceeded its allowed size")
+  writeFileSync(destination, bytes)
 }
 
 function inspectArchive(path, expectedSha256) {
