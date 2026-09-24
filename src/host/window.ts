@@ -6,7 +6,17 @@
  * declared here and again in `src-tauri/src/host.rs`; a Rust test fails if a
  * name on that side is missing from this file.
  */
-import type { GatewayStartup } from "../onboarding/application/ports"
+import type {
+  AgentApiKeySave,
+  ApiKeyAgent,
+  GatewayStartup,
+} from "../onboarding/application/ports"
+import {
+  AgentApiKeySaveRejected,
+  AgentApiKeySaveUncertain,
+  type AgentApiKeyAuditStatus,
+  type AgentApiKeySaveRejectionReason,
+} from "../onboarding/application/ports"
 export type { GatewayStartup } from "../onboarding/application/ports"
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
@@ -69,6 +79,82 @@ export async function retryGatewayStartup(): Promise<void> {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("retry_gateway_startup")
+}
+
+/** Saves one supported agent API key in the native secure credential store. */
+export async function saveAgentApiKey(
+  agent: ApiKeyAgent,
+  key: string,
+): Promise<AgentApiKeySave> {
+  if (!inTauri) throw new Error("native credential store unavailable")
+  const { invoke } = await import("@tauri-apps/api/core")
+  let response: unknown
+  try {
+    response = await invoke<unknown>("save_agent_api_key", { agent, key })
+  } catch (failure) {
+    throw decodeAgentApiKeySaveFailure(failure)
+  }
+  return decodeAgentApiKeySave(response)
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+function exactKeys(value: Record<string, unknown>, keys: string[]) {
+  const present = Object.keys(value).sort()
+  return (
+    present.length === keys.length && present.every((key, index) => key === keys[index])
+  )
+}
+
+function auditStatus(value: unknown): AgentApiKeyAuditStatus | undefined {
+  return value === "recorded" || value === "failed" || value === "unknown"
+    ? value
+    : undefined
+}
+
+export function decodeAgentApiKeySave(value: unknown): AgentApiKeySave {
+  const payload = record(value)
+  if (
+    payload &&
+    exactKeys(payload, ["status"]) &&
+    (payload.status === "saved" || payload.status === "saved-audit-failed")
+  ) {
+    return { status: payload.status }
+  }
+  throw new AgentApiKeySaveUncertain("unknown")
+}
+
+export function decodeAgentApiKeySaveFailure(failure: unknown): Error {
+  const payload = record(failure)
+  if (!payload || typeof payload.status !== "string") {
+    return new AgentApiKeySaveUncertain("unknown")
+  }
+  if (
+    [
+      "untrusted-caller",
+      "invalid-credential",
+      "store-unavailable",
+      "audit-unavailable",
+    ].includes(payload.status) &&
+    exactKeys(payload, ["status"])
+  ) {
+    return new AgentApiKeySaveRejected({
+      reason: payload.status as Exclude<AgentApiKeySaveRejectionReason, "refused">,
+    })
+  }
+  const audit = auditStatus(payload.auditStatus)
+  if (!audit || !exactKeys(payload, ["auditStatus", "status"])) {
+    return new AgentApiKeySaveUncertain("unknown")
+  }
+  if (payload.status === "refused" && audit !== "unknown") {
+    return new AgentApiKeySaveRejected({ reason: "refused", auditStatus: audit })
+  }
+  if (payload.status === "save-uncertain") return new AgentApiKeySaveUncertain(audit)
+  return new AgentApiKeySaveUncertain("unknown")
 }
 
 /**

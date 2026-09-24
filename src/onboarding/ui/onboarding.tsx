@@ -1,4 +1,10 @@
 import * as React from "react"
+import {
+  AgentApiKeySaveUncertain,
+  type AgentApiKeySink,
+  type ApiKeyAgent,
+} from "../application/ports"
+import { AgentApiKeyForm } from "./agent-api-key-form"
 import { Check } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
@@ -286,6 +292,7 @@ function AgentOption({
  */
 export function Onboarding({
   state,
+  apiKeys,
   gatewayStartup,
   accelerator,
   onBegin,
@@ -298,6 +305,8 @@ export function Onboarding({
   platform,
 }: {
   state: OnboardingState
+  /** Secure-store effect injected by native setup composition. */
+  apiKeys?: AgentApiKeySink
   gatewayStartup: GatewayStartupStatus
   accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
@@ -315,6 +324,26 @@ export function Onboarding({
    * button that looks inert invites being pressed again. */
   checking?: boolean
 }) {
+  const [credentialAuditFailure, setCredentialAuditFailure] = React.useState<
+    "saved" | "uncertain"
+  >()
+
+  async function saveAgentApiKey(agent: ApiKeyAgent, key: string) {
+    if (!apiKeys) throw new Error("agent API-key storage is unavailable")
+    try {
+      const saved = await apiKeys.save(agent, key)
+      if (saved.status === "saved-audit-failed") setCredentialAuditFailure("saved")
+      return saved
+    } catch (failure) {
+      if (
+        failure instanceof AgentApiKeySaveUncertain &&
+        failure.auditStatus === "failed"
+      ) {
+        setCredentialAuditFailure("uncertain")
+      }
+      throw failure
+    }
+  }
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
   const held = useHeldKeys(state.step === "summon")
@@ -429,19 +458,43 @@ export function Onboarding({
           Choose an agent
         </h1>
         <div role="group" aria-label="Agent" className="flex flex-col gap-2">
-          {AGENT_CHOICES.map((choice) => (
-            <AgentOption
-              key={choice.id}
-              id={choice.id}
-              name={choice.name}
-              readiness={agentReadiness(state, choice.id)}
-              failure={state.readinessFailure}
-              startup={gatewayStartup}
-              selected={state.agent === choice.id}
-              onSelect={onChoose}
-            />
-          ))}
+          {AGENT_CHOICES.map((choice) => {
+            const readiness = agentReadiness(state, choice.id)
+            const canSaveClaudeKey =
+              choice.id === "claude" &&
+              readiness === "needs-authentication" &&
+              apiKeys !== undefined &&
+              (gatewayStartup.state === "ready" || gatewayStartup.state === "unmanaged")
+            return (
+              <React.Fragment key={choice.id}>
+                <AgentOption
+                  id={choice.id}
+                  name={choice.name}
+                  readiness={readiness}
+                  failure={state.readinessFailure}
+                  startup={gatewayStartup}
+                  selected={state.agent === choice.id}
+                  onSelect={onChoose}
+                />
+                {canSaveClaudeKey ? (
+                  <AgentApiKeyForm
+                    agent="claude"
+                    agentName="Claude"
+                    onSave={saveAgentApiKey}
+                    onSaved={onRecheck}
+                  />
+                ) : null}
+              </React.Fragment>
+            )
+          })}
         </div>
+        {credentialAuditFailure ? (
+          <p role="alert" className="nessa-text-2 text-destructive">
+            {credentialAuditFailure === "saved"
+              ? "The key was saved, but Nessa could not record its security audit record."
+              : "Nessa could not confirm the key save or record its security audit outcome."}
+          </p>
+        ) : null}
         {stuck ? (
           // Said once, under the list, rather than repeated on every agent: the
           // per-agent note says what each one is waiting on, and this says what

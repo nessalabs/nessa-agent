@@ -24,11 +24,30 @@ use serde::{Deserialize, Serialize};
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub panel: Panel,
+    /// Durable service identity and provider configuration.
+    pub service: Service,
     /// Keep background agents running after quitting the desktop by default.
     pub stop_agents_on_quit: bool,
     /// How far first-run setup got. A file written before this key existed
     /// loads as "not done", which is the same answer a first launch gives.
     pub onboarding: Onboarding,
+}
+
+/// Inputs that may intentionally change the packaged gateway registration.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Service {
+    pub data_root: Option<PathBuf>,
+    pub instance: Option<String>,
+    pub port: Option<u16>,
+    pub claude: ClaudeService,
+}
+
+/// Durable Claude settings shared by readiness and process launch.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeService {
+    pub configuration_directory: Option<PathBuf>,
 }
 
 /// What first-run setup has settled.
@@ -462,6 +481,7 @@ mod tests {
                     height: Some(800.0),
                     min_width: 500.0,
                 },
+                service: Service::default(),
                 stop_agents_on_quit: true,
                 onboarding: Onboarding::default(),
             },

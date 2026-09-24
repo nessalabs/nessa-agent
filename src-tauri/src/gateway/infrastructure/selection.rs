@@ -6,16 +6,22 @@ use super::macos::{FileReconciliationAudit, LaunchctlDisabledServiceStatus, Laun
 #[cfg(not(target_os = "macos"))]
 use super::unsupported::{Unsupported, UnsupportedAudit};
 use super::{login_shell::LoginShell, reconciliation_ids::RandomReconciliationIds};
+use crate::gateway::domain::value_objects::ServiceConfiguration;
 use std::{path::PathBuf, sync::Arc};
 
 /// Selects the native gateway adapter for the current build target.
-pub fn current() -> Arc<dyn GatewayHost> {
+pub fn current(configuration: ServiceConfiguration, home: PathBuf) -> Arc<dyn GatewayHost> {
     #[cfg(target_os = "macos")]
     {
-        Arc::new(Launchd::new(Arc::new(LaunchctlDisabledServiceStatus)))
+        Arc::new(Launchd::new(
+            Arc::new(LaunchctlDisabledServiceStatus),
+            configuration,
+            home,
+        ))
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = (configuration, home);
         Arc::new(Unsupported)
     }
 }

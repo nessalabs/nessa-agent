@@ -14,7 +14,6 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const ENV_STAGE: &str = "NESSA_STAGE";
-const ENV_INSTANCE: &str = "NESSA_INSTANCE";
 const BUNDLE_STAGE: &str = env!("NESSA_BUNDLE_STAGE");
 
 /// A runtime override that disagrees with the stage recorded in this bundle.
@@ -39,7 +38,7 @@ impl Error for StageMismatch {}
 /// Directory under which `settings.json`, `shortcuts.json`, and later stores live.
 pub fn config_root(app: &AppHandle, stage: &str) -> Option<PathBuf> {
     let base = app.path().app_config_dir().ok()?;
-    match namespace_segment(stage, process_instance().as_deref()) {
+    match namespace_segment(stage, None) {
         None => Some(base),
         Some(segment) => Some(base.join(segment)),
     }
@@ -53,17 +52,6 @@ pub fn process_stage() -> Result<String, StageMismatch> {
             .unwrap_or_else(|value| value.to_string_lossy().into_owned())
     });
     resolve_stage(BUNDLE_STAGE, runtime.as_deref())
-}
-
-fn process_instance() -> Option<String> {
-    std::env::var(ENV_INSTANCE).ok().and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 fn resolve_stage(bundle: &str, runtime: Option<&str>) -> Result<String, StageMismatch> {

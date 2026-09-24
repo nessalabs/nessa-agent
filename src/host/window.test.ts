@@ -70,6 +70,77 @@ describe("gateway startup", () => {
   })
 })
 
+describe("native agent credential saves", () => {
+  it.each(["saved", "saved-audit-failed"] as const)(
+    "accepts the exact %s acknowledgement",
+    async (status) => {
+      invoke.mockResolvedValue({ status })
+      const { saveAgentApiKey } = await import("./window")
+
+      await expect(saveAgentApiKey("claude", "private")).resolves.toEqual({ status })
+      expect(invoke).toHaveBeenCalledWith("save_agent_api_key", {
+        agent: "claude",
+        key: "private",
+      })
+    },
+  )
+
+  it.each([undefined, "saved", { status: "saved", extra: true }, { status: "future" }])(
+    "treats a malformed acknowledgement as uncertain",
+    async (acknowledgement) => {
+      invoke.mockResolvedValue(acknowledgement)
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveUncertain",
+          auditStatus: "unknown",
+        }),
+      )
+    },
+  )
+
+  it("preserves a validated pre-effect refusal", async () => {
+    invoke.mockRejectedValue({ status: "audit-unavailable" })
+    const { saveAgentApiKey } = await import("./window")
+    await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+      expect.objectContaining({
+        name: "AgentApiKeySaveRejected",
+        reason: "audit-unavailable",
+      }),
+    )
+  })
+
+  it.each(["recorded", "failed", "unknown"] as const)(
+    "preserves an uncertain effect with %s audit delivery",
+    async (auditStatus) => {
+      invoke.mockRejectedValue({ status: "save-uncertain", auditStatus })
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("opencode", "private")).rejects.toEqual(
+        expect.objectContaining({ name: "AgentApiKeySaveUncertain", auditStatus }),
+      )
+    },
+  )
+
+  it.each([
+    new Error("transport lost private"),
+    { status: "save-uncertain", auditStatus: "future" },
+    { status: "refused", auditStatus: "unknown" },
+    { status: "invalid-credential", extra: true },
+  ])(
+    "does not turn an unrecognized rejection into a definite refusal",
+    async (failure) => {
+      invoke.mockRejectedValue(failure)
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveUncertain",
+          auditStatus: "unknown",
+        }),
+      )
+    },
+  )
+})
+
 describe("native surface credential failures", () => {
   it("returns the native host's verified endpoint", async () => {
     const { loadAssignedGatewayEndpoint } = await import("./window")

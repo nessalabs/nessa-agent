@@ -1,6 +1,7 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_credentials;
 mod attachments;
 mod composition;
 mod diagnostics;
@@ -20,7 +21,6 @@ mod shortcuts;
 // gets, and no other platform registers one yet. Gated to match that adapter
 // rather than carried everywhere and unused, which `-D warnings` calls dead on
 // the platforms that never reach it.
-#[cfg(target_os = "macos")]
 mod stage_port;
 mod surface_credential;
 mod tray;
@@ -67,6 +67,7 @@ fn main() {
             panel::retry_setup_record,
             panel::chosen_agent,
             panel::reveal_setup_window,
+            agent_credentials::infrastructure::save_agent_api_key,
             gateway::infrastructure::gateway_startup,
             gateway::infrastructure::retry_gateway_startup,
             surface_credential::load_surface_credential,

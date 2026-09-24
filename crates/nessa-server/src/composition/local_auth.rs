@@ -7,8 +7,9 @@ use crate::{
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
     agents::{
+        application::AgentCredentialSource,
         domain::AgentId,
-        infrastructure::{AgentLaunchFiles, LocalAgentProbe},
+        infrastructure::{AgentLaunchFiles, LocalAgentCredentials, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
     attachments::{application::AttachmentService, infrastructure::ModelImageNormalizer},
@@ -26,6 +27,7 @@ use crate::{
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
 };
+use nessa_agent_credentials::CredentialNamespace;
 use nessa_auth::{
     adapters::{cedar::CedarPolicyEvaluator, local::LocalCredentialStore},
     application::{
@@ -109,13 +111,21 @@ pub(super) fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
+    let credential_namespace = CredentialNamespace::new(
+        config.stage.as_str().to_owned(),
+        config.instance().map(str::to_owned),
+    )
+    .map_err(setup_error)?;
+    let agent_credentials: Arc<dyn AgentCredentialSource> = Arc::new(
+        LocalAgentCredentials::from_environment(credential_namespace),
+    );
     // Built here, before the launch files below, because building it is how
     // this server finds out which configured agents cannot be started at all,
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
     let (conversations, unavailable, warm_ups) = match &settings.agents {
         Some(agents) => {
-            let built = conversations(agents, directory)?;
+            let built = conversations(agents, directory, agent_credentials.clone())?;
             (
                 Some((built.service, built.attachments)),
                 built.unavailable,
@@ -139,7 +149,10 @@ pub(super) fn product_state(
             clock: Arc::new(SystemClock),
             policy,
             uptime_clock: uptime,
-            agent_probe: Arc::new(LocalAgentProbe::from_environment(agent_launch_files)),
+            agent_probe: Arc::new(LocalAgentProbe::from_environment(
+                agent_launch_files,
+                agent_credentials,
+            )),
         },
     )
     .with_admin(admin)
@@ -223,7 +236,11 @@ struct BuiltConversations {
     warm_ups: Vec<AgentWarmUp>,
 }
 
-fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConversations, RunError> {
+fn conversations(
+    agents: &AgentsConfig,
+    directory: &Path,
+    credentials: Arc<dyn AgentCredentialSource>,
+) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     let root = directory
         .parent()
@@ -262,8 +279,13 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         ),
         clock.clone(),
     )?;
-    let mut built =
-        super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+    let mut built = super::agent::providers(
+        agents,
+        &root,
+        clock.clone(),
+        attachments.images.clone(),
+        credentials,
+    )?;
     // One warm-up per configured agent, because each runs its own runtime
     // and the operating system scans each of them separately on its first
     // execution. One for the server would leave whichever agent it did not

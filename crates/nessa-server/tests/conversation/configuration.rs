@@ -2,9 +2,26 @@ use super::*;
 // `providers` exists on Unix only, and so does everything that needs a clock
 // to call it.
 #[cfg(unix)]
+use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentCredentialSource};
+#[cfg(unix)]
 use crate::composition::local_auth::SystemClock;
 use nessa_sdk::domain::common::value_objects::ImageMediaType;
 use std::ffi::OsStr;
+
+#[cfg(unix)]
+struct NoCredentials;
+
+#[cfg(unix)]
+impl AgentCredentialSource for NoCredentials {
+    fn read(&self, _: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+        Ok(None)
+    }
+}
+
+#[cfg(unix)]
+fn no_credentials() -> Arc<dyn AgentCredentialSource> {
+    Arc::new(NoCredentials)
+}
 
 /// The shared part of the configuration, with one agent under it.
 fn one_agent() -> &'static str {
@@ -322,6 +339,7 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
+        no_credentials(),
     )
     .unwrap();
     // Absent rather than present-and-broken: the conversation service answers a
@@ -350,6 +368,7 @@ fn every_configured_agent_that_can_be_built_is() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
+        no_credentials(),
     )
     .unwrap();
     assert_eq!(built.providers.len(), 2);
@@ -396,6 +415,7 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
+        no_credentials(),
     )
     .unwrap();
     assert!(built.providers.contains_key(&AgentId::Opencode));
@@ -478,6 +498,7 @@ fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
+        no_credentials(),
     )
     .unwrap();
     assert!(!built.providers.contains_key(&AgentId::Opencode));
@@ -507,6 +528,7 @@ fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
+        no_credentials(),
     )
     .unwrap();
     assert!(!built.providers.contains_key(&AgentId::Opencode));
@@ -534,7 +556,8 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
         &config,
         &conversations,
         Arc::new(SystemClock),
-        Arc::new(NoImages)
+        Arc::new(NoImages),
+        no_credentials()
     )
     .is_err());
 }

@@ -1,14 +1,13 @@
 //! How Claude Code itself reports being signed in.
 //!
 //! Claude Code writes its sign-in in places Anthropic chose, not places Nessa
-//! chose: an environment variable the launcher passes through, a credentials
-//! file under `CLAUDE_CONFIG_DIR`, and the login keychain on macOS. That is
+//! chose: a credentials file under `CLAUDE_CONFIG_DIR` and the login keychain
+//! on macOS. That is
 //! Claude's own knowledge, so it lives in one named place rather than spread
 //! through the generic host adapter. `local.rs` orchestrates — it decides the
 //! order sources are asked in and what an unanswered source means — and calls
 //! in here for every fact that is true of Claude specifically. What makes a
-//! variable a credential and a file a sign-in is the same for every agent and
-//! lives in `credentials.rs`.
+//! file a sign-in lives in `credentials.rs`.
 //!
 //! Nothing here reads a secret. Every question is whether a credential exists.
 
@@ -32,18 +31,6 @@ const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// What Claude Code names its credentials file inside its config directory.
 const CREDENTIALS_FILE: &str = ".credentials.json";
-
-/// The environment variables the launcher passes through to the agent as a
-/// sign-in. Either one on its own starts Claude Code, so either one on its own
-/// is an answered yes here; anything this probe did not check is a machine
-/// reported as needing a sign-in it already has.
-const CREDENTIAL_VARIABLES: [&str; 2] = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
-
-/// A non-empty credential in this process's environment, which is what a
-/// machine account signs in with. Returned only to know that it is there.
-pub(super) fn environment_credential() -> Option<String> {
-    credentials::environment_credential(&CREDENTIAL_VARIABLES)
-}
 
 /// Where Claude Code would write its credentials file on this machine.
 ///
@@ -115,7 +102,3 @@ pub(super) fn keychain_sign_in() -> Result<bool, ProbeFailure> {
 pub(super) fn keychain_sign_in() -> Result<bool, ProbeFailure> {
     Ok(false)
 }
-
-#[cfg(test)]
-#[path = "../../../tests/agents/claude.rs"]
-mod tests;

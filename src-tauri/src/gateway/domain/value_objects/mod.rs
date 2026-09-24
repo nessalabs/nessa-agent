@@ -13,3 +13,5 @@ pub use reconciliation_evidence::{
 };
 mod search_path;
 pub use search_path::{SearchPath, SearchPathError};
+mod service_configuration;
+pub use service_configuration::ServiceConfiguration;

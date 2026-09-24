@@ -17,6 +17,7 @@ serde_json = "1"
 [dependencies]
 nessa-local-storage = { path = "../crates/nessa-local-storage" }
 nessa-gateway-endpoint = { path = "../crates/nessa-gateway-endpoint" }
+nessa-agent-credentials = { path = "../crates/nessa-agent-credentials" }
 # `macos-private-api` is what makes the transparent, undecorated window legal
 # on macOS; `tray-icon` and `image-png` back the menu bar item.
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
@@ -51,6 +52,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 window-vibrancy = "0.6"
 # Already in the tree as window-vibrancy's own dependencies, and named here
 # only so `platform/macos` can observe AppKit's live resize notifications and
@@ -96,6 +98,7 @@ webkit2gtk = "2.0"
 # reason: the configured key and Tauri's signatures are both base64-wrapped, and
 # a hand-rolled decoder beside a cryptographic check is not worth the risk.
 [dev-dependencies]
+tempfile = "3"
 minisign-verify = "0.2"
 base64 = "0.22"
 json-patch = "3"
