@@ -397,32 +397,29 @@ impl AgentWarmUp {
                 Ok(authorization) => authorization,
                 Err(error) => {
                     let close = agent.close(actor.clone()).await.err();
-                    return failed_agent_attempt(agent, error, close);
+                    return failed_agent_attempt(agent, None, error, close);
                 }
             };
         let attachment = match agent.start_attachment(authorization) {
             Ok(attachment) => attachment,
             Err(error) => {
                 let close = agent.close(actor.clone()).await.err();
-                return failed_agent_attempt(agent, error, close);
+                return failed_agent_attempt(agent, None, error, close);
             }
         };
         if let Err(error) = attachment.wait().await {
+            let session_id = recorded_session_id(&agent).await;
             let close = agent.close(actor.clone()).await.err();
-            return failed_agent_attempt(agent, error, close);
+            return failed_agent_attempt(agent, session_id, error, close);
         }
-        let session_id = agent
-            .session_manager()
-            .snapshot()
-            .await
-            .and_then(|snapshot| {
-                snapshot
-                    .provider_context
-                    .recorded()
-                    .map(|id| id.as_str().to_owned())
-            });
+        let session_id = recorded_session_id(&agent).await;
         if let Err(error) = agent.close(actor.clone()).await {
-            return failed_agent_attempt(agent, error, None);
+            let retry = if agent.attachment_cleanup_pending() {
+                agent.close(actor.clone()).await.err()
+            } else {
+                None
+            };
+            return failed_agent_attempt(agent, session_id, error, retry);
         }
         PreparationAttempt {
             session_id,
@@ -432,14 +429,28 @@ impl AgentWarmUp {
     }
 }
 
+async fn recorded_session_id(agent: &Agent) -> Option<String> {
+    agent
+        .session_manager()
+        .snapshot()
+        .await
+        .and_then(|snapshot| {
+            snapshot
+                .provider_context
+                .recorded()
+                .map(|id| id.as_str().to_owned())
+        })
+}
+
 fn failed_agent_attempt(
     agent: Agent,
+    session_id: Option<String>,
     failure: AgentError,
     cleanup_failure: Option<AgentError>,
 ) -> PreparationAttempt {
     let pending = agent.attachment_cleanup_pending();
     PreparationAttempt {
-        session_id: None,
+        session_id,
         failure: Some(ProviderFailure {
             error: combine(failure, cleanup_failure),
             cleanup_unconfirmed: pending,

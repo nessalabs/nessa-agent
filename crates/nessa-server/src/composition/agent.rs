@@ -108,19 +108,19 @@ pub(super) struct AgentRuntime {
     pub args: Vec<String>,
     /// Kept portable as configuration data even where no provider can consume it.
     #[cfg_attr(
-        not(unix),
+        all(not(unix), not(test)),
         expect(dead_code, reason = "non-Unix parses but cannot launch providers")
     )]
     pub model: String,
     #[serde(default = "context_tokens")]
     #[cfg_attr(
-        not(unix),
+        all(not(unix), not(test)),
         expect(dead_code, reason = "non-Unix parses but cannot launch providers")
     )]
     pub context_tokens: u32,
     #[serde(default = "output_tokens")]
     #[cfg_attr(
-        not(unix),
+        all(not(unix), not(test)),
         expect(dead_code, reason = "non-Unix parses but cannot launch providers")
     )]
     pub output_tokens: u32,
@@ -144,7 +144,7 @@ pub(super) struct AgentRuntime {
     /// required there, because a configuration is either well-formed or it is
     /// not, and that does not vary by host.
     #[cfg_attr(
-        not(unix),
+        all(not(unix), not(test)),
         expect(dead_code, reason = "non-Unix parses but cannot launch providers")
     )]
     pub tools_enabled: bool,

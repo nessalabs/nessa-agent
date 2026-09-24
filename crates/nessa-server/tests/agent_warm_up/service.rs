@@ -347,6 +347,7 @@ async fn confirmed_physical_cleanup_stays_distinct_from_attachment_audit_failure
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
     assert!(fixture.records.completed.lock().unwrap().is_empty());
     let records = fixture.audit.records.lock().unwrap();
+    assert!(records[0].session_id.is_some());
     let failure = records[0].failure.as_ref().unwrap();
     assert_eq!(failure.error, AgentError::AuditFailure);
     assert!(!failure.cleanup_unconfirmed);
@@ -367,6 +368,7 @@ async fn publication_failure_cleans_physical_resources_without_claiming_completi
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
     assert!(fixture.records.completed.lock().unwrap().is_empty());
     let records = fixture.audit.records.lock().unwrap();
+    assert!(records[0].session_id.is_none());
     let failure = records[0].failure.as_ref().unwrap();
     assert!(matches!(
         &failure.error,
@@ -407,6 +409,7 @@ async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
     );
     assert!(records.completed.lock().unwrap().is_empty());
     let audit = audit.records.lock().unwrap();
+    assert!(audit[0].session_id.is_none());
     let failure = audit[0].failure.as_ref().unwrap();
     assert_eq!(
         failure.error,
@@ -441,6 +444,7 @@ async fn provider_open_failure_without_resources_reports_confirmed_absence() {
     assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
     assert!(records.completed.lock().unwrap().is_empty());
     let audit = audit.records.lock().unwrap();
+    assert!(audit[0].session_id.is_none());
     let failure = audit[0].failure.as_ref().unwrap();
     assert_eq!(
         failure.error,
@@ -487,6 +491,7 @@ async fn publication_failures_report_physical_cleanup_at_capture_time() {
         );
         assert!(fixture.records.completed.lock().unwrap().is_empty());
         let audit = fixture.audit.records.lock().unwrap();
+        assert_eq!(audit[0].session_id.is_some(), audit_failure);
         let failure = audit[0].failure.as_ref().unwrap();
         if audit_failure {
             assert!(!failure.cleanup_unconfirmed);
@@ -531,10 +536,12 @@ async fn a_failed_launch_is_audited_as_still_cold_and_not_recorded_complete() {
     ));
     *fixture.provider.close_failure.lock().unwrap() = Some(deadline.clone());
     fixture.warm_up.wait_until_settled().await;
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 2);
     let records = fixture.audit.records.lock().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].before, WarmUpState::Cold);
     assert_eq!(records[0].after, WarmUpState::Cold, "nothing was warmed");
+    assert!(records[0].session_id.is_some());
     assert_eq!(
         records[0].failure,
         Some(ProviderFailure {
@@ -544,6 +551,38 @@ async fn a_failed_launch_is_audited_as_still_cold_and_not_recorded_complete() {
         "physical resource ownership survives independently of the provider diagnostic"
     );
     assert!(fixture.records.completed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn confirmed_close_retry_and_rejected_warm_up_audit_keep_the_named_session() {
+    let fixture = fixture();
+    fixture.provider.close_reports.lock().unwrap().extend([
+        CleanupReport::unconfirmed(AgentError::Transport("first close uncertain".into())),
+        CleanupReport::confirmed(CloseOutcome { forced: false }),
+    ]);
+    *fixture.audit.failure.lock().unwrap() = Some("sink rejected".into());
+
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(terminal.effect(), WarmUpEffect::Failed);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Rejected);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::NotAttempted
+    );
+    assert!(fixture.records.completed.lock().unwrap().is_empty());
+    let audit = fixture.audit.records.lock().unwrap();
+    assert!(audit[0].session_id.is_some());
+    assert_eq!(
+        audit[0].failure,
+        Some(ProviderFailure {
+            error: AgentError::Transport("first close uncertain".into()),
+            cleanup_unconfirmed: false,
+        })
+    );
+    assert_eq!(audit[0].correlation_id, audit[0].initiator.request_id());
 }
 
 #[tokio::test]
