@@ -7,7 +7,8 @@
 //!                                   -> current-agent resolver
 //!                                   -> storage / audit
 //!                                   -> attachments (one store, shared)
-//!                                   -> AgentWarmUp -> readiness port
+//!                                   -> fixed AgentWarmUp + current OpenCode lane
+//!                                                      -> readiness port
 //! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
 //! Arrows show construction and injection. Conversations share the service across

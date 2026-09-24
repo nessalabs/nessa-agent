@@ -1,8 +1,14 @@
-use super::ports::{ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpRecords};
+use super::{
+    ports::{ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpRecords},
+    terminal::{
+        WarmUpAuditDelivery, WarmUpCompletionRecordDelivery, WarmUpEffect, WarmUpLaunchOwnership,
+        WarmUpTerminal,
+    },
+};
 use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::{
-    agents::{Agent, AgentError, AttachmentRequest},
+    agents::{Agent, AgentError, AgentInitializationError, AttachmentRequest},
     executions::ExecutionAudit,
     permissions::ActionContext,
     providers::AgentProvider,
@@ -44,7 +50,25 @@ struct Inner {
     clock: Arc<dyn Clock>,
     runtime: RuntimeFingerprint,
     started: AtomicBool,
-    settled: watch::Sender<bool>,
+    settled: watch::Sender<Option<Arc<PublishedTerminal>>>,
+}
+
+struct PublishedTerminal {
+    projection: Arc<WarmUpTerminal>,
+    _retained: Option<RetainedWarmUpOwnership>,
+    diagnostic: Option<WarmUpError>,
+}
+
+enum RetainedWarmUpOwnership {
+    Initialization { _owner: AgentInitializationError },
+    Attachment { _owner: Agent },
+    Unknown,
+}
+
+struct PreparationAttempt {
+    session_id: Option<String>,
+    failure: Option<ProviderFailure>,
+    retained: Option<RetainedWarmUpOwnership>,
 }
 
 impl AgentWarmUp {
@@ -69,7 +93,7 @@ impl AgentWarmUp {
                 clock,
                 runtime,
                 started: AtomicBool::new(false),
-                settled: watch::channel(false).0,
+                settled: watch::channel(None).0,
             }),
         }
     }
@@ -96,33 +120,35 @@ impl AgentWarmUp {
                 let warm_up = warm_up.clone();
                 async move { warm_up.run().await }
             });
-            let outcome = running.await.unwrap_or_else(|_| {
-                Err(WarmUpError::Provider(ProviderFailure {
-                    error: AgentError::Protocol("warm-up task did not finish".into()),
-                    cleanup_unconfirmed: true,
-                }))
-            });
-            warm_up.report(&outcome);
-            warm_up.inner.settled.send_replace(true);
+            let terminal = running.await.unwrap_or_else(|_| warm_up.lost_worker());
+            warm_up.report(&terminal);
+            warm_up.inner.settled.send_replace(Some(Arc::new(terminal)));
         });
     }
 
-    fn report(&self, outcome: &Result<Outcome, WarmUpError>) {
-        match outcome {
-            Ok(Outcome::AlreadyWarm) => tracing::debug!(
-                model = self.inner.runtime.model(),
+    fn report(&self, terminal: &PublishedTerminal) {
+        match terminal.projection.effect() {
+            WarmUpEffect::AlreadyPrepared => tracing::debug!(
+                model = terminal.projection.runtime().model(),
+                audit_delivery = ?terminal.projection.audit_delivery(),
+                completion_record_delivery = ?terminal.projection.completion_record_delivery(),
                 "runtime already warmed; skipping"
             ),
-            Ok(Outcome::Warmed) => tracing::info!(
-                model = self.inner.runtime.model(),
+            WarmUpEffect::Prepared => tracing::info!(
+                model = terminal.projection.runtime().model(),
+                audit_delivery = ?terminal.projection.audit_delivery(),
+                completion_record_delivery = ?terminal.projection.completion_record_delivery(),
                 "runtime warmed off the request path"
             ),
-            // A failed warm-up is survivable: the next request opens its own
-            // provider and reports its own outcome. It is not recorded as
-            // complete, so the next start tries again.
-            Err(error) => tracing::warn!(
-                model = self.inner.runtime.model(),
-                %error,
+            WarmUpEffect::Failed | WarmUpEffect::Unknown => tracing::warn!(
+                model = terminal.projection.runtime().model(),
+                error = terminal.diagnostic.as_ref().map(ToString::to_string),
+                cleanup_retained = matches!(
+                    terminal.projection.launch_ownership(),
+                    WarmUpLaunchOwnership::Retained
+                ),
+                audit_delivery = ?terminal.projection.audit_delivery(),
+                completion_record_delivery = ?terminal.projection.completion_record_delivery(),
                 "runtime warm-up did not complete"
             ),
         }
@@ -135,110 +161,256 @@ impl AgentWarmUp {
     /// the run has settled, successfully or not. Cancelling this wait abandons
     /// only the wait — the run keeps going and the next caller joins it.
     pub async fn wait_until_settled(&self) {
+        let _ = self.wait_for_terminal().await;
+    }
+
+    /// Wait for this run's immutable terminal projection.
+    ///
+    /// The projection keeps preparation, launch ownership, audit delivery and
+    /// completion-record delivery separate. A retained launch owner is kept by
+    /// this warm-up for the process lifetime; callers must not infer release
+    /// from the fact that the run settled.
+    pub(crate) async fn wait_for_terminal(&self) -> Arc<WarmUpTerminal> {
         self.begin();
         let mut settled = self.inner.settled.subscribe();
         // The sender lives in the shared `Inner` this clone holds, so the
         // channel cannot close while anyone is still waiting on it.
-        while !*settled.borrow_and_update() {
+        loop {
+            if let Some(terminal) = settled.borrow_and_update().as_ref() {
+                return terminal.projection.clone();
+            }
             if settled.changed().await.is_err() {
-                return;
+                unreachable!("warm-up owns its terminal sender")
             }
         }
     }
 
-    async fn run(&self) -> Result<Outcome, WarmUpError> {
-        if self.inner.records.completed(&self.inner.runtime).await? {
-            return Ok(Outcome::AlreadyWarm);
+    fn terminal(
+        &self,
+        effect: WarmUpEffect,
+        launch_ownership: WarmUpLaunchOwnership,
+        audit_delivery: WarmUpAuditDelivery,
+        completion_record_delivery: WarmUpCompletionRecordDelivery,
+        retained: Option<RetainedWarmUpOwnership>,
+        diagnostic: Option<WarmUpError>,
+    ) -> PublishedTerminal {
+        PublishedTerminal {
+            projection: Arc::new(WarmUpTerminal::new(
+                self.inner.runtime.clone(),
+                effect,
+                launch_ownership,
+                audit_delivery,
+                completion_record_delivery,
+            )),
+            _retained: retained,
+            diagnostic,
+        }
+    }
+
+    fn lost_worker(&self) -> PublishedTerminal {
+        self.terminal(
+            WarmUpEffect::Unknown,
+            WarmUpLaunchOwnership::Retained,
+            WarmUpAuditDelivery::Unknown,
+            WarmUpCompletionRecordDelivery::Unknown,
+            Some(RetainedWarmUpOwnership::Unknown),
+            Some(WarmUpError::Provider(ProviderFailure {
+                error: AgentError::Protocol("warm-up task did not finish".into()),
+                cleanup_unconfirmed: true,
+            })),
+        )
+    }
+
+    async fn run(&self) -> PublishedTerminal {
+        match self.inner.records.completed(&self.inner.runtime).await {
+            Ok(true) => {
+                return self.terminal(
+                    WarmUpEffect::AlreadyPrepared,
+                    WarmUpLaunchOwnership::Released,
+                    WarmUpAuditDelivery::NotAttempted,
+                    WarmUpCompletionRecordDelivery::Existing,
+                    None,
+                    None,
+                )
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return self.terminal(
+                    WarmUpEffect::Failed,
+                    WarmUpLaunchOwnership::Released,
+                    WarmUpAuditDelivery::NotAttempted,
+                    WarmUpCompletionRecordDelivery::ReadRejected,
+                    None,
+                    Some(error),
+                )
+            }
         }
         let requested_at_ms = self.inner.clock.unix_milliseconds();
         let correlation_id = Uuid::new_v4().to_string();
-        let actor = ActionContext::new(GATEWAY_PRINCIPAL, WARM_UP_SURFACE, &correlation_id)
-            .map_err(|error| {
-                WarmUpError::Provider(ProviderFailure {
-                    error: AgentError::InvalidInput(error.to_string()),
-                    cleanup_unconfirmed: false,
-                })
-            })?;
-        let (session_id, failure) = match self.open_and_close(&actor).await {
-            Ok(id) => (id, None),
-            Err(failure) => (None, Some(failure)),
+        let actor = match ActionContext::new(GATEWAY_PRINCIPAL, WARM_UP_SURFACE, &correlation_id) {
+            Ok(actor) => actor,
+            Err(error) => {
+                return self.terminal(
+                    WarmUpEffect::Failed,
+                    WarmUpLaunchOwnership::Released,
+                    WarmUpAuditDelivery::NotAttempted,
+                    WarmUpCompletionRecordDelivery::NotAttempted,
+                    None,
+                    Some(WarmUpError::Provider(ProviderFailure {
+                        error: AgentError::InvalidInput(error.to_string()),
+                        cleanup_unconfirmed: false,
+                    })),
+                )
+            }
         };
-        // Evidence before the completion record: a warm-up whose audit was
-        // rejected must not leave behind a record saying it succeeded.
-        self.inner
+        let attempt = self.open_and_close(&actor).await;
+        let ownership = if attempt.retained.is_some() {
+            WarmUpLaunchOwnership::Retained
+        } else {
+            WarmUpLaunchOwnership::Released
+        };
+        let effect = if attempt.failure.is_some() {
+            WarmUpEffect::Failed
+        } else {
+            WarmUpEffect::Prepared
+        };
+        let diagnostic = attempt.failure.clone().map(WarmUpError::Provider);
+        let audit = self
+            .inner
             .audit
             .record(WarmUpAuditRecord {
                 runtime: self.inner.runtime.clone(),
                 before: WarmUpState::Cold,
-                after: if failure.is_some() {
+                after: if attempt.failure.is_some() {
                     WarmUpState::Cold
                 } else {
                     WarmUpState::Warmed
                 },
                 cause: WarmUpCause::AutomaticPreparation,
-                initiator: actor.clone(),
-                session_id: session_id.clone(),
-                failure: failure.clone(),
+                initiator: actor,
+                session_id: attempt.session_id,
+                failure: attempt.failure.clone(),
                 correlation_id,
                 requested_at_ms,
                 observed_at_ms: self.inner.clock.unix_milliseconds(),
             })
-            .await?;
-        if let Some(failure) = failure {
-            return Err(WarmUpError::Provider(failure));
+            .await;
+        if let Err(error) = audit {
+            tracing::error!(
+                %error,
+                provider_failure = attempt.failure.as_ref().map(ToString::to_string),
+                "runtime warm-up audit was rejected"
+            );
+            return self.terminal(
+                effect,
+                ownership,
+                WarmUpAuditDelivery::Rejected,
+                WarmUpCompletionRecordDelivery::NotAttempted,
+                attempt.retained,
+                diagnostic.or(Some(error)),
+            );
         }
-        self.inner
+        if attempt.failure.is_some() {
+            return self.terminal(
+                effect,
+                ownership,
+                WarmUpAuditDelivery::Acknowledged,
+                WarmUpCompletionRecordDelivery::NotAttempted,
+                attempt.retained,
+                diagnostic,
+            );
+        }
+        match self
+            .inner
             .records
             .record_completed(
                 self.inner.runtime.clone(),
                 self.inner.clock.unix_milliseconds(),
             )
-            .await?;
-        Ok(Outcome::Warmed)
+            .await
+        {
+            Ok(()) => self.terminal(
+                WarmUpEffect::Prepared,
+                WarmUpLaunchOwnership::Released,
+                WarmUpAuditDelivery::Acknowledged,
+                WarmUpCompletionRecordDelivery::Recorded,
+                None,
+                None,
+            ),
+            Err(error) => self.terminal(
+                WarmUpEffect::Prepared,
+                WarmUpLaunchOwnership::Released,
+                WarmUpAuditDelivery::Acknowledged,
+                WarmUpCompletionRecordDelivery::WriteRejected,
+                None,
+                Some(error),
+            ),
+        }
     }
 
     /// One real session: the provider is launched, asked to establish a
-    /// session, and closed again. The storage it is given is composition's
-    /// choice and is thrown away — this context must not leave a snapshot
-    /// behind, and must not take an exclusive lease on a conversation a user
-    /// owns.
-    async fn open_and_close(
-        &self,
-        actor: &ActionContext,
-    ) -> Result<Option<String>, ProviderFailure> {
-        let manager = SessionManager::open(None, self.inner.storage.clone())
-            .await
-            .map_err(|error| ProviderFailure {
-                error: AgentError::Storage(error),
-                cleanup_unconfirmed: false,
-            })?;
-        let agent = Agent::prepare(
+    /// session, and closed again. Resource-owning failures remain owned here
+    /// until the terminal projection has captured their release meaning.
+    async fn open_and_close(&self, actor: &ActionContext) -> PreparationAttempt {
+        let manager = match SessionManager::open(None, self.inner.storage.clone()).await {
+            Ok(manager) => manager,
+            Err(error) => {
+                return PreparationAttempt {
+                    session_id: None,
+                    failure: Some(ProviderFailure {
+                        error: AgentError::Storage(error),
+                        cleanup_unconfirmed: false,
+                    }),
+                    retained: None,
+                }
+            }
+        };
+        let agent = match Agent::prepare(
             self.inner.provider.clone(),
             manager,
             self.inner.execution_audit.clone(),
         )
         .await
-        .map_err(|error| ProviderFailure {
-            // Preparation can retain storage or audit cleanup ownership whose
-            // release the SDK has not confirmed. Provider startup begins only
-            // after the caller-attributed authorization below.
-            cleanup_unconfirmed: error.needs_cleanup(),
-            error: error.cause().clone(),
-        })?;
-        let authorization = agent
-            .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
-            .map_err(provider_failure)?;
-        let attachment = agent
-            .start_attachment(authorization)
-            .map_err(provider_failure)?;
+        {
+            Ok(agent) => agent,
+            Err(error) => {
+                let cause = error.cause().clone();
+                let retry = if error.needs_cleanup() {
+                    error.retry_cleanup().await.err()
+                } else {
+                    None
+                };
+                let pending = error.needs_cleanup();
+                return PreparationAttempt {
+                    session_id: None,
+                    failure: Some(ProviderFailure {
+                        error: combine(cause, retry),
+                        cleanup_unconfirmed: pending,
+                    }),
+                    retained: pending
+                        .then_some(RetainedWarmUpOwnership::Initialization { _owner: error }),
+                };
+            }
+        };
+        let authorization =
+            match agent.authorize_attachment(AttachmentRequest::CallerRequested(actor.clone())) {
+                Ok(authorization) => authorization,
+                Err(error) => {
+                    let close = agent.close(actor.clone()).await.err();
+                    return failed_agent_attempt(agent, error, close);
+                }
+            };
+        let attachment = match agent.start_attachment(authorization) {
+            Ok(attachment) => attachment,
+            Err(error) => {
+                let close = agent.close(actor.clone()).await.err();
+                return failed_agent_attempt(agent, error, close);
+            }
+        };
         if let Err(error) = attachment.wait().await {
-            return Err(ProviderFailure {
-                cleanup_unconfirmed: agent.attachment_cleanup_pending(),
-                error,
-            });
+            let close = agent.close(actor.clone()).await.err();
+            return failed_agent_attempt(agent, error, close);
         }
-        // None rather than an empty identity: the provider not naming a session
-        // is not the same fact as it naming the empty one.
         let session_id = agent
             .session_manager()
             .snapshot()
@@ -249,33 +421,44 @@ impl AgentWarmUp {
                     .recorded()
                     .map(|id| id.as_str().to_owned())
             });
-        // Closing is part of the warm-up, not cleanup after it: the provider's
-        // own closure evidence is what records that this session existed.
         if let Err(error) = agent.close(actor.clone()).await {
-            return Err(ProviderFailure {
-                cleanup_unconfirmed: agent.attachment_cleanup_pending(),
-                error,
-            });
+            return failed_agent_attempt(agent, error, None);
         }
-        Ok(session_id)
+        PreparationAttempt {
+            session_id,
+            failure: None,
+            retained: None,
+        }
     }
 }
 
-fn provider_failure(error: AgentError) -> ProviderFailure {
-    ProviderFailure {
-        cleanup_unconfirmed: matches!(
-            error,
-            AgentError::CleanupUncertain
-                | AgentError::AuditAndCleanupFailure
-                | AgentError::OperationAndCleanupFailure { .. }
-        ),
-        error,
+fn failed_agent_attempt(
+    agent: Agent,
+    failure: AgentError,
+    cleanup_failure: Option<AgentError>,
+) -> PreparationAttempt {
+    let pending = agent.attachment_cleanup_pending();
+    PreparationAttempt {
+        session_id: None,
+        failure: Some(ProviderFailure {
+            error: combine(failure, cleanup_failure),
+            cleanup_unconfirmed: pending,
+        }),
+        retained: pending.then_some(RetainedWarmUpOwnership::Attachment { _owner: agent }),
     }
 }
 
-enum Outcome {
-    AlreadyWarm,
-    Warmed,
+fn combine(first: AgentError, second: Option<AgentError>) -> AgentError {
+    second.map_or(first.clone(), |second| {
+        if first == second {
+            first
+        } else {
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(first),
+                subsequent_error: Box::new(second),
+            }
+        }
+    })
 }
 
 #[cfg(test)]

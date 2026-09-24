@@ -11,12 +11,15 @@
 //! readiness ─┐
 //!            ├─▶ CurrentAgentResolver ─▶ effective OpenCode profile
 //! cold slot ─┘                         ├─▶ fresh managed evidence, when packaged
-//!                                      └─▶ owned provider generation
+//!                                      ├─▶ owned provider generation
+//!                                      └─▶ automatic warm-up lane
 //! ```
 //!
 //! Arrows are calls. OpenCode's blocking observation has one bounded lane. The
 //! blocking task owns its permit through actual completion, even when its
-//! awaiting caller times out or is dropped.
+//! awaiting caller times out or is dropped. A different warm-up fingerprint
+//! waits without retaining that observation, then resolves every external fact
+//! again after the active run confirms physical release.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -38,6 +41,7 @@ use super::{
         captured_credential_environment, EffectiveOpenCodeProfile, OpenCodeCredentialMode,
         OpenCodeProfile,
     },
+    warm_up::{CurrentOpenCodeWarmUp, CurrentWarmUpAdmission},
 };
 use crate::{
     agent_install::{application::RuntimeStore, domain::HostPlatform},
@@ -67,6 +71,7 @@ pub(super) struct CurrentAgentResolver {
     host: HostPlatform,
     credentials: Arc<dyn AgentCredentialSource>,
     provider: ProviderDependencies,
+    warm_up: CurrentOpenCodeWarmUp,
     slots: Arc<Semaphore>,
 }
 
@@ -81,6 +86,7 @@ pub(super) struct CurrentAgentResolverInput {
     pub(super) provider_directory: PathBuf,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) images: Arc<dyn UserImageSource>,
+    pub(super) warm_up: CurrentOpenCodeWarmUp,
 }
 
 struct Observation {
@@ -105,6 +111,7 @@ impl CurrentAgentResolver {
                 images: input.images,
                 credentials: input.credentials,
             },
+            warm_up: input.warm_up,
             slots: Arc::new(Semaphore::new(1)),
         }
     }
@@ -231,6 +238,55 @@ impl CurrentAgentResolver {
             }
         }
     }
+
+    async fn resolve_opencode(
+        &self,
+    ) -> Result<Option<ConversationAgent>, crate::conversation::application::ConversationError>
+    {
+        loop {
+            let permit =
+                self.slots.clone().acquire_owned().await.map_err(|_| {
+                    crate::conversation::application::ConversationError::Unavailable
+                })?;
+            let source = self.clone();
+            let observation = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                source.observe_opencode().provider
+            })
+            .await
+            .map_err(|_| crate::conversation::application::ConversationError::Unavailable)??;
+            let Some(mut agent) = observation else {
+                return Ok(None);
+            };
+            match self.warm_up.admit(&agent)? {
+                CurrentWarmUpAdmission::Prepared(prepared) => {
+                    agent.readiness = Some(Arc::new(prepared));
+                    return Ok(Some(agent));
+                }
+                CurrentWarmUpAdmission::Reobserve(wait) => {
+                    // `agent` owns this observation's credential-bearing provider.
+                    // Drop it before waiting, then rebuild every external fact.
+                    drop(agent);
+                    wait.released().await;
+                }
+            }
+        }
+    }
+
+    /// Start proactive preparation after the listener is accepting requests.
+    /// Missing installation or credentials simply means there is nothing to
+    /// prepare; a later cold conversation observes again and can start it.
+    pub(super) fn start_warm_up(self: &Arc<Self>) {
+        let source = self.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(RESOLUTION_DEADLINE, source.resolve_opencode()).await;
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "OpenCode warm-up could not be resolved"),
+                Err(_) => tracing::warn!("OpenCode warm-up resolution timed out"),
+            }
+        });
+    }
 }
 
 impl AgentProbe for CurrentAgentResolver {
@@ -262,19 +318,9 @@ impl ConversationAgentSource for CurrentAgentResolver {
         }
         let source = self.clone();
         Box::pin(async move {
-            tokio::time::timeout(RESOLUTION_DEADLINE, async move {
-                let permit = source.slots.clone().acquire_owned().await.map_err(|_| {
-                    crate::conversation::application::ConversationError::Unavailable
-                })?;
-                tokio::task::spawn_blocking(move || {
-                    let _permit = permit;
-                    source.observe_opencode().provider
-                })
+            tokio::time::timeout(RESOLUTION_DEADLINE, source.resolve_opencode())
                 .await
                 .map_err(|_| crate::conversation::application::ConversationError::Unavailable)?
-            })
-            .await
-            .map_err(|_| crate::conversation::application::ConversationError::Unavailable)?
         })
     }
 }

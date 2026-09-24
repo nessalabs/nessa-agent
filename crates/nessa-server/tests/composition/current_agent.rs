@@ -26,6 +26,7 @@ use crate::{
         },
         infrastructure::{host_platform, releases_for},
     },
+    agent_warm_up::infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     agents::{
         application::{
             AgentCredential, AgentCredentialFailure, AgentCredentialKind, ReadAgentReadiness,
@@ -303,6 +304,11 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
         provider_directory: root.join("providers"),
         clock: Arc::new(SystemClock),
         images: Arc::new(NoImages),
+        warm_up: CurrentOpenCodeWarmUp::new(
+            Arc::new(FileWarmUpRecords::new(root.join("warm-up-records")).unwrap()),
+            Arc::new(DurableWarmUpAudit::new(root.join("warm-up-audit")).unwrap()),
+            Arc::new(SystemClock),
+        ),
     })
 }
 
@@ -809,14 +815,20 @@ fn fixture_wrapper(root: &Path, name: &str, expected_model: &str) -> PathBuf {
 import json, os, pathlib, sys
 root = pathlib.Path.cwd()
 launch = root / "launch-{name}.json"
+launch_history = root / f"launch-{name}-{{os.getpid()}}.json"
 pending_launch = root / f".launch-{name}-{{os.getpid()}}.json"
-pending_launch.write_text(json.dumps({{
+record = json.dumps({{
     "executable": str(pathlib.Path(sys.argv[0]).resolve()),
     "arguments": sys.argv[1:],
     "pid": os.getpid(),
     "credentialPresent": bool(os.environ.get("OPENCODE_API_KEY")),
-}}))
+}})
+expected_key = root / "expected-opencode-key"
+if expected_key.exists():
+    assert os.environ.get("OPENCODE_API_KEY") == expected_key.read_text()
+pending_launch.write_text(record)
 os.replace(pending_launch, launch)
+launch_history.write_text(record)
 os.environ["NESSA_REFUSED_OPENCODE_DATA_HOME"] = str(root / "refused-data")
 os.environ["NESSA_REFUSED_OPENCODE_HOME"] = str(root / "refused-home")
 os.environ["NESSA_EXPECTED_OPENCODE_MODEL"] = {expected_model:?}
@@ -850,16 +862,33 @@ fn assert_process(pid: i32, alive: bool) {
     assert_eq!(unsafe { libc::kill(pid, 0) } == 0, alive);
 }
 
-async fn launched(path: &Path) -> serde_json::Value {
+async fn launched(path: &Path, minimum_launches: usize) -> serde_json::Value {
+    let prefix = format!("{}-", path.file_stem().unwrap().to_string_lossy());
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            match std::fs::read(path) {
-                Ok(bytes) => break serde_json::from_slice(&bytes).unwrap(),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+            let launches = std::fs::read_dir(path.parent().unwrap())
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.file_name().to_string_lossy().starts_with(&prefix)
+                        && entry
+                            .path()
+                            .extension()
+                            .is_some_and(|value| value == "json")
+                })
+                .filter_map(|entry| std::fs::read(entry.path()).ok())
+                .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .collect::<Vec<_>>();
+            if launches.len() >= minimum_launches {
+                for launch in launches {
+                    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
+                    if unsafe { libc::kill(pid, 0) } == 0 {
+                        return launch;
+                    }
                 }
-                Err(error) => panic!("could not read launch marker: {error}"),
             }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -955,7 +984,7 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
         )
         .await
         .unwrap();
-    let first_launch = launched(&root.path().join("workspace/launch-opencode-first.json")).await;
+    let first_launch = launched(&root.path().join("workspace/launch-opencode-first.json"), 2).await;
     assert_eq!(
         first_launch["executable"],
         first_path
@@ -968,7 +997,7 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
     assert_eq!(first_launch["credentialPresent"], true);
     let first_pid = i32::try_from(first_launch["pid"].as_i64().unwrap()).unwrap();
     assert_process(first_pid, true);
-    assert_eq!(first_authority.admissions.load(Ordering::SeqCst), 1);
+    assert_eq!(first_authority.admissions.load(Ordering::SeqCst), 2);
 
     let second_authority = Arc::new(UseAuthority::default());
     let second_path = fixture_wrapper(root.path(), "opencode-second", "opencode/minimax-m3");
@@ -1002,7 +1031,11 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
         )
         .await
         .unwrap();
-    let second_launch = launched(&root.path().join("workspace/launch-opencode-second.json")).await;
+    let second_launch = launched(
+        &root.path().join("workspace/launch-opencode-second.json"),
+        2,
+    )
+    .await;
     assert_eq!(
         second_launch["executable"],
         second_path
@@ -1015,14 +1048,180 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
     assert_eq!(second_launch["credentialPresent"], true);
     let second_pid = i32::try_from(second_launch["pid"].as_i64().unwrap()).unwrap();
     assert_process(second_pid, true);
-    assert_eq!(second_authority.admissions.load(Ordering::SeqCst), 1);
+    assert_eq!(second_authority.admissions.load(Ordering::SeqCst), 2);
 
     service.close(first, caller("close-first")).await.unwrap();
     service.close(second, caller("close-second")).await.unwrap();
     assert_process(first_pid, false);
     assert_process(second_pid, false);
-    assert_eq!(first_authority.releases.load(Ordering::SeqCst), 1);
-    assert_eq!(second_authority.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(first_authority.releases.load(Ordering::SeqCst), 2);
+    assert_eq!(second_authority.releases.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = Arc::new(UseAuthority::default());
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let release = current_release();
+    let path = fixture_wrapper(root.path(), "opencode-startup", "opencode/minimax-m3");
+    store.publish_current(
+        &release,
+        ManagedLaunchSnapshot::new(path, authority.clone()),
+    );
+    let resolver = Arc::new(resolver(
+        root.path(),
+        store,
+        Arc::new(Credentials::new(CredentialAnswer::ApiKey(
+            "synthetic-non-secret".into(),
+        ))),
+        HashMap::new(),
+    ));
+
+    resolver.start_warm_up();
+    let launch = launched(
+        &root.path().join("workspace/launch-opencode-startup.json"),
+        1,
+    )
+    .await;
+    let pid = i32::try_from(launch["pid"].as_i64().unwrap()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while authority.releases.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("startup preparation closes its session and managed use");
+    assert_process(pid, false);
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 1);
+    // No ConversationService or submission exists in this test. The fixture's
+    // launch therefore covers initialize, session/new/configuration and close;
+    // there is no path that can send session/prompt.
+}
+
+#[tokio::test]
+async fn missing_key_skips_startup_warm_up_and_a_later_key_recovers_on_the_cold_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = Arc::new(UseAuthority::default());
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    store.publish_current(
+        &current_release(),
+        ManagedLaunchSnapshot::new(
+            fixture_wrapper(root.path(), "opencode-key-recovery", "opencode/minimax-m3"),
+            authority.clone(),
+        ),
+    );
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::Missing));
+    let resolver = Arc::new(resolver(
+        root.path(),
+        store,
+        credentials.clone(),
+        HashMap::new(),
+    ));
+    resolver.start_warm_up();
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 0);
+
+    credentials.answer(CredentialAnswer::ApiKey("saved-after-startup".into()));
+    let service = service(root.path(), resolver);
+    let conversation = conversation_id();
+    service
+        .create(conversation.clone(), caller("create-after-save"), None)
+        .await
+        .unwrap();
+    service
+        .submit(
+            conversation.clone(),
+            caller("submit-after-save"),
+            "hello".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let launch = launched(
+        &root
+            .path()
+            .join("workspace/launch-opencode-key-recovery.json"),
+        2,
+    )
+    .await;
+    assert_eq!(launch["credentialPresent"], true);
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 2);
+    service
+        .close(conversation, caller("close-after-save"))
+        .await
+        .unwrap();
+    assert_eq!(authority.releases.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn rotated_key_shares_runtime_preparation_but_the_conversation_uses_fresh_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = Arc::new(UseAuthority::default());
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    store.publish_current(
+        &current_release(),
+        ManagedLaunchSnapshot::new(
+            fixture_wrapper(root.path(), "opencode-key-rotation", "opencode/minimax-m3"),
+            authority.clone(),
+        ),
+    );
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::ApiKey(
+        "first-synthetic-key".into(),
+    )));
+    let resolver = Arc::new(resolver(
+        root.path(),
+        store,
+        credentials.clone(),
+        HashMap::new(),
+    ));
+    let expectation = root.path().join("workspace/expected-opencode-key");
+    std::fs::write(&expectation, "first-synthetic-key").unwrap();
+    let prepared = resolver.resolve(AgentId::Opencode).await.unwrap().unwrap();
+    prepared.readiness.unwrap().wait().await;
+
+    credentials.answer(CredentialAnswer::ApiKey("second-synthetic-key".into()));
+    std::fs::write(&expectation, "second-synthetic-key").unwrap();
+    let service = service(root.path(), resolver);
+    let conversation = conversation_id();
+    service
+        .create(conversation.clone(), caller("create-after-rotation"), None)
+        .await
+        .unwrap();
+    service
+        .submit(
+            conversation.clone(),
+            caller("submit-after-rotation"),
+            "rotation".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let launch = launched(
+        &root
+            .path()
+            .join("workspace/launch-opencode-key-rotation.json"),
+        2,
+    )
+    .await;
+    assert_eq!(launch["credentialPresent"], true);
+    assert!(!launch.to_string().contains("synthetic-key"));
+    assert_eq!(authority.admissions.load(Ordering::SeqCst), 2);
+    service
+        .close(conversation, caller("close-after-rotation"))
+        .await
+        .unwrap();
+    assert_eq!(authority.releases.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -1106,6 +1305,7 @@ async fn standalone_explicit_profile_launches_with_captured_environment_and_no_m
         &root
             .path()
             .join("workspace/launch-opencode-standalone.json"),
+        2,
     )
     .await;
     assert_eq!(

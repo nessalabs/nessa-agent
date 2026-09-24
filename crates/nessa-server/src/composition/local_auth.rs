@@ -5,7 +5,7 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 #[cfg(unix)]
 use super::opencode_profile::EffectiveOpenCodeProfile;
 #[cfg(unix)]
-use super::warm_up::PreparedRuntime;
+use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 use crate::{
     agent_warm_up::application::AgentWarmUp,
     agents::{
@@ -76,10 +76,25 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
-    /// One per configured agent, each preparing its own runtime. Empty when no
-    /// agent is configured, which is the same gateway that serves no
-    /// conversations.
-    pub(super) warm_ups: Vec<AgentWarmUp>,
+    /// Startup preparations for fixed providers plus the current OpenCode
+    /// resolver when configured. Empty when no agent is configured.
+    pub(super) warm_ups: Vec<StartupWarmUp>,
+}
+
+pub(super) enum StartupWarmUp {
+    Fixed(AgentWarmUp),
+    #[cfg(unix)]
+    Current(Arc<CurrentAgentResolver>),
+}
+
+impl StartupWarmUp {
+    pub(super) fn start(&self) {
+        match self {
+            Self::Fixed(warm_up) => warm_up.start(),
+            #[cfg(unix)]
+            Self::Current(resolver) => resolver.start_warm_up(),
+        }
+    }
 }
 
 /// Construct the guarded product route from a previously initialized local registry.
@@ -252,9 +267,9 @@ struct BuiltConversations {
     /// than the tail of [`product_state`]. See
     /// [`super::agent::ConfiguredAgents`].
     agent_probe: Arc<dyn AgentProbe>,
-    /// One per configured agent, each preparing its own runtime. Started by the
-    /// server lifecycle once the gateway is listening, not here.
-    warm_ups: Vec<AgentWarmUp>,
+    /// Fixed-provider preparations plus the current OpenCode resolver. Started
+    /// by the server lifecycle once the gateway is listening, not here.
+    warm_ups: Vec<StartupWarmUp>,
 }
 
 #[cfg(not(unix))]
@@ -384,7 +399,7 @@ fn conversations(
             runtime,
         );
         agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
-        warm_ups.push(prepared);
+        warm_ups.push(StartupWarmUp::Fixed(prepared));
     }
     let storage = Arc::new(
         LocalFileStorage::new(root.join("sessions"))
@@ -405,6 +420,7 @@ fn conversations(
             .collect(),
         credentials.clone(),
     );
+    let warm_current_opencode = opencode.configured().is_some();
     let resolver = Arc::new(CurrentAgentResolver::new(CurrentAgentResolverInput {
         fixed: built.providers,
         fixed_probe,
@@ -421,6 +437,7 @@ fn conversations(
         provider_directory: root.clone(),
         clock: clock.clone(),
         images: attachments.images.clone(),
+        warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
     let configured = resolver.configured();
     let selected = resolver.default_agent()?;
@@ -439,6 +456,9 @@ fn conversations(
         Some(agents.workspace.to_string_lossy().into_owned()),
     )
     .map_err(|error| RunError::Agent(error.to_string()))?;
+    if warm_current_opencode {
+        warm_ups.push(StartupWarmUp::Current(resolver.clone()));
+    }
     Ok(BuiltConversations {
         service,
         attachments: attachments.service,

@@ -72,7 +72,7 @@ describe("onboarding credential-save outcomes", () => {
 
     await React.act(async () => root.render(view({ revision: 1, state: "ready" })))
     expect(container.textContent).toContain(
-      "OpenCode uses the metered MiniMax M3 model through Zen.",
+      "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",
     )
     const input = container.querySelector("input") as HTMLInputElement
     const setter = Object.getOwnPropertyDescriptor(
@@ -93,7 +93,7 @@ describe("onboarding credential-save outcomes", () => {
     await React.act(async () => root.render(view({ revision: 2, state: "starting" })))
     expect(container.querySelector("input")).toBeNull()
     expect(container.textContent).toContain(
-      "OpenCode uses the metered MiniMax M3 model through Zen.",
+      "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",
     )
 
     await React.act(async () => root.render(view({ revision: 3, state: "unmanaged" })))

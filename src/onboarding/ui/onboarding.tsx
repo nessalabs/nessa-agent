@@ -480,8 +480,8 @@ export function Onboarding({
                 />
                 {choice.id === "opencode" ? (
                   <p className="nessa-text-2 text-muted-foreground">
-                    OpenCode uses the metered MiniMax M3 model through Zen. Your provider
-                    account may be charged when you send messages.
+                    OpenCode connects through Zen using your API key. Depending on the
+                    configured model, messages may be metered.
                   </p>
                 ) : null}
                 {canSaveApiKey ? (
