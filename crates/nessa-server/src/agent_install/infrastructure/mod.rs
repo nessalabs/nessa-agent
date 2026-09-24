@@ -16,6 +16,7 @@ mod delivery;
 mod https_archives;
 mod managed_runtimes;
 mod pinned_releases;
+mod runtime_reclamation;
 pub use audit::DurableInstallAudit;
 pub use delivery::DurableInstallationDelivery;
 pub use https_archives::{HttpsArchives, NoHttpsClient};

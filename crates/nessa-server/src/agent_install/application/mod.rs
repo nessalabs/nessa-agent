@@ -10,6 +10,7 @@
 //! [`install`] can be tested without a network or a real installation.
 mod install;
 mod ports;
+mod reclamation;
 pub use install::{
     AuditDeliveryFailure, AuditRetryError, InstallAgentRuntime, InstallFailure, InstalledRuntime,
     PublicationDeliveryFailure, RuntimeStateEvidence,
@@ -21,4 +22,8 @@ pub use ports::{
     PublicationChange, PublicationCleanupFailure, PublicationLease, PublicationRecovery,
     PublishFailure, PublishedAuditRecord, RollbackChange, RuntimeReclamationEffect, RuntimeStore,
     SourceFailure, StagedArchive, StoreFailure,
+};
+pub use reclamation::{
+    ReclamationAudit, ReclamationAuditFailure, ReclamationPersistenceFailure,
+    ReclamationPersistenceStage, ReclamationWarning,
 };

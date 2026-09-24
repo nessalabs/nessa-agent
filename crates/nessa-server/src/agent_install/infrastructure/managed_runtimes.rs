@@ -25,12 +25,14 @@ use nessa_sdk::application::agent_execution::providers::{
 
 use crate::agent_install::application::{
     Publication, PublicationChange, PublicationCleanupFailure, PublicationLease, PublishFailure,
-    RollbackChange, RuntimeReclamationEffect, RuntimeStore, StagedArchive, StoreFailure,
+    ReclamationPersistenceFailure, ReclamationPersistenceStage, RollbackChange,
+    RuntimeReclamationEffect, RuntimeStore, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, FileRole, PinnedRelease, ReleaseContents, ReleaseFile,
-    ReleaseVersion, RuntimeArtifact,
+    AgentName, ArchiveDigest, ArchivePath, FileRole, ManagedInstallation, PinnedRelease,
+    ReleaseContents, ReleaseFile, ReleaseVersion, RuntimeArtifact,
 };
+use crate::agent_install::infrastructure::runtime_reclamation::StoredManagedInstallation;
 
 /// How many times a staged download will try for a name of its own before
 /// giving up. The names are sixteen random bytes, so a single collision already
@@ -293,6 +295,26 @@ struct ManagedPublicationLease {
 }
 
 impl PublicationLease for ManagedPublicationLease {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        ManagedRuntimes::new(self.root.clone()).load_reclamation(&self.agent)
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        if installation.agent() != &self.agent {
+            return Err(ReclamationPersistenceFailure::new(
+                stage,
+                "reclamation state belongs to another agent".into(),
+            ));
+        }
+        ManagedRuntimes::new(self.root.clone()).retain_reclamation(installation, stage)
+    }
+
     fn remove_superseded(
         &mut self,
         agent: &AgentName,
@@ -467,6 +489,59 @@ impl ManagedRuntimes {
 
     fn lock_path(&self, agent: &AgentName) -> PathBuf {
         self.agent_root(agent).join("install.lock")
+    }
+
+    fn reclamation_path(&self, agent: &AgentName) -> PathBuf {
+        self.agent_root(agent).join("reclamation.json")
+    }
+
+    fn load_reclamation(
+        &self,
+        agent: &AgentName,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        let path = self.reclamation_path(agent);
+        let file = match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(ReclamationPersistenceFailure::new(
+                    ReclamationPersistenceStage::Read,
+                    error.to_string(),
+                ))
+            }
+        };
+        let stored: StoredManagedInstallation = serde_json::from_reader(file).map_err(|error| {
+            ReclamationPersistenceFailure::new(ReclamationPersistenceStage::Read, error.to_string())
+        })?;
+        stored.restore().map(Some).map_err(|error| {
+            ReclamationPersistenceFailure::new(ReclamationPersistenceStage::Read, error)
+        })
+    }
+
+    fn retain_reclamation(
+        &self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        self.private_directory(&self.agent_root(installation.agent()))
+            .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        let mut staging =
+            PrivateTempFile::new_beneath(&self.root, &self.agent_root(installation.agent()))
+                .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        serde_json::to_writer_pretty(
+            staging.as_file_mut(),
+            &StoredManagedInstallation::from_domain(installation),
+        )
+        .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        staging
+            .as_file()
+            .sync_all()
+            .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        staging
+            .persist_beneath(&self.reclamation_path(installation.agent()))
+            .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))?;
+        sync_directory_beneath(&self.root, &self.agent_root(installation.agent()))
+            .map_err(|error| ReclamationPersistenceFailure::new(stage, error.to_string()))
     }
 
     fn artifact_lock_directory(&self, agent: &AgentName, artifact: &RuntimeArtifact) -> PathBuf {

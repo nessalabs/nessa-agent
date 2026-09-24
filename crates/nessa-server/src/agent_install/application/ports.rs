@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
+use super::reclamation::{ReclamationPersistenceFailure, ReclamationPersistenceStage};
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, InstallAttemptError, InstallEventIdentity, InstallTransition,
-    PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
-    RuntimeArtifact,
+    ManagedInstallation, PinnedRelease, PublicationOutcome, PublicationPreparation,
+    PublicationSettlement, RuntimeArtifact,
 };
 
 /// Why an archive could not be fetched.
@@ -314,6 +315,16 @@ pub enum RuntimeReclamationEffect {
 /// can therefore be observed after another install. Implementations normally
 /// own the publication lock handle.
 pub trait PublicationLease: Send {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure>;
+
+    fn retain_reclamation(
+        &mut self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure>;
+
     /// Attempt one bounded removal while retaining the runtime publication lock.
     fn remove_superseded(
         &mut self,
@@ -324,6 +335,26 @@ pub trait PublicationLease: Send {
 }
 
 impl PublicationLease for () {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            ReclamationPersistenceStage::Read,
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        _installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            stage,
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
+
     fn remove_superseded(
         &mut self,
         _agent: &AgentName,
@@ -337,6 +368,25 @@ impl PublicationLease for () {
 }
 
 impl PublicationLease for File {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            ReclamationPersistenceStage::Read,
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        _installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        Err(ReclamationPersistenceFailure::new(
+            stage,
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
     fn remove_superseded(
         &mut self,
         _agent: &AgentName,
@@ -395,6 +445,20 @@ impl Publication {
         superseded: &RuntimeArtifact,
     ) -> RuntimeReclamationEffect {
         self._lease.remove_superseded(agent, current, superseded)
+    }
+
+    pub fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        self._lease.load_reclamation()
+    }
+
+    pub fn retain_reclamation(
+        &mut self,
+        installation: &ManagedInstallation,
+        stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        self._lease.retain_reclamation(installation, stage)
     }
 }
 

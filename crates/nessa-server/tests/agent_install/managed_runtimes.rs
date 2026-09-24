@@ -15,8 +15,9 @@ use tar::{EntryType, Header};
 
 use crate::agent_install::application::PublicationRecovery;
 use crate::agent_install::domain::{
-    AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, Libc, ReleaseContents, ReleaseFile,
-    ReleasePlatform, ReleaseRequirements,
+    AdmissionResult, AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, InstallRequest,
+    Libc, ManagedInstallation, ReclamationOperationId, ReclamationTrigger, ReclamationWork,
+    ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
 };
 use crate::agent_install_test_support::temporary_root;
 
@@ -346,6 +347,46 @@ fn unresolved_use_marker_blocks_reclamation_after_launch_authority_dies() {
         RuntimeReclamationEffect::DeferredInUse
     );
     assert!(artifact_path(root.path()).join("bin/opencode").exists());
+}
+
+#[test]
+fn interrupted_removal_admission_restores_as_observation_only_work() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = RuntimeArtifact::for_release(&release("1.18.31", "bin/opencode"));
+    let current = RuntimeArtifact::for_release(&artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    ));
+    let request = InstallRequest::new("unix:501", "replace-a-with-b").unwrap();
+    let mut installation = ManagedInstallation::new(agent(), previous);
+    installation
+        .record_replacement(current, request.clone())
+        .unwrap();
+    let admission = installation
+        .admit_reclamation(
+            &request,
+            ReclamationOperationId::new("remove-a-1").unwrap(),
+            ReclamationTrigger::ReplacementFollowUp,
+        )
+        .unwrap();
+    assert!(matches!(admission, AdmissionResult::Fresh { .. }));
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    lease
+        .retain_reclamation(&installation, ReclamationPersistenceStage::RetainAdmission)
+        .unwrap();
+    drop(lease);
+
+    let mut reopened = store.reclamation_lease(&agent()).unwrap();
+    let restored = reopened.load_reclamation().unwrap().unwrap();
+
+    assert!(matches!(
+        restored.work(&request).unwrap(),
+        ReclamationWork::Observe(_)
+    ));
 }
 
 /// The directories `unpack` expects to already exist, made the way `publish`
