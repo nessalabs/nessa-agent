@@ -347,7 +347,13 @@ function directoryIdentity(path) {
   return { dev: stat.dev, ino: stat.ino }
 }
 
-function cleanupDownloadStage({ downloaded, downloadedIdentity, stage, stageIdentity }) {
+function cleanupDownloadStage({
+  downloaded,
+  downloadedIdentity,
+  removeDownloaded,
+  stage,
+  stageIdentity,
+}) {
   let currentStage
   try {
     currentStage = directoryIdentity(stage)
@@ -370,7 +376,7 @@ function cleanupDownloadStage({ downloaded, downloadedIdentity, stage, stageIden
     if (currentDownload) {
       if (!sameIdentity(currentDownload, downloadedIdentity))
         throw new Error(`Node download path identity changed: ${downloaded}`)
-      unlinkSync(downloaded)
+      removeDownloaded(downloaded)
     }
   }
   if (readdirSync(stage).length !== 0)
@@ -390,6 +396,7 @@ export function acquireVerifiedNodeArchive({
   release,
   download = downloadNodeArchive,
   publish = linkSync,
+  removeDownloaded = unlinkSync,
 }) {
   mkdirSync(cache, { recursive: true })
   if (!lstatSync(cache).isDirectory())
@@ -445,6 +452,7 @@ export function acquireVerifiedNodeArchive({
     cleanupDownloadStage({
       downloaded,
       downloadedIdentity,
+      removeDownloaded,
       stage: downloadStage,
       stageIdentity,
     })
@@ -454,7 +462,7 @@ export function acquireVerifiedNodeArchive({
   if (failure && cleanupFailure)
     throw new AggregateError(
       [failure, cleanupFailure],
-      `Node acquisition and owned-stage cleanup both failed; foreign or changed stage content was left untouched at ${downloadStage}`,
+      `Node acquisition and owned-stage cleanup both failed at ${downloadStage}`,
     )
   if (failure)
     throw new Error(
@@ -463,7 +471,7 @@ export function acquireVerifiedNodeArchive({
     )
   if (cleanupFailure)
     throw new Error(
-      `Node acquisition succeeded but owned-stage cleanup failed; foreign or changed stage content was left untouched at ${downloadStage}`,
+      `Node acquisition succeeded but owned-stage cleanup failed at ${downloadStage}`,
       { cause: cleanupFailure },
     )
   return result

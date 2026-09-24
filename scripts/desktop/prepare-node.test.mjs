@@ -91,6 +91,10 @@ function captureError(run) {
   return captured
 }
 
+function assertNeutralCleanupMessage(error) {
+  assert.doesNotMatch(error.message, /foreign|changed|untouched/i)
+}
+
 test("the reviewed Node release table is exact and closed", () => {
   assert.deepEqual(nodeArchive("darwin", "arm64"), {
     archive: "node-v26.8.1-darwin-arm64.tar.gz",
@@ -712,6 +716,84 @@ test("a publisher reporting success with a valid different inode is refused", (t
   assert.deepEqual(readFileSync(archive), good)
 })
 
+test("verified publication retains an exact staged inode when unlink is denied", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-cleanup-after-publish-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  const archive = cacheObject(cache, release)
+  let stage
+  let stagedIdentity
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, good)
+      },
+      publish(source, destination) {
+        stage = dirname(source)
+        const stat = lstatSync(source)
+        stagedIdentity = [stat.dev, stat.ino]
+        linkSync(source, destination)
+      },
+      removeDownloaded(path) {
+        const stat = lstatSync(path)
+        assert.deepEqual([stat.dev, stat.ino], stagedIdentity)
+        const denied = new Error("permission denied while removing staged archive")
+        denied.code = "EACCES"
+        throw denied
+      },
+    }),
+  )
+  assert.match(error.message, /acquisition succeeded but owned-stage cleanup failed/)
+  assertNeutralCleanupMessage(error)
+  assert.equal(error.cause.code, "EACCES")
+  assert.match(error.cause.message, /permission denied while removing staged archive/)
+  const staged = join(stage, release.archive)
+  const after = lstatSync(staged)
+  assert.deepEqual([after.dev, after.ino], stagedIdentity)
+  assert.deepEqual(readdirSync(stage), [release.archive])
+  assert.deepEqual(readFileSync(staged), good)
+  assert.deepEqual(readFileSync(archive), good)
+  const published = lstatSync(archive)
+  assert.deepEqual([published.dev, published.ino], stagedIdentity)
+})
+
+test("acquisition and cleanup failures retain unchanged pre-identity stage evidence", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-cleanup-before-identity-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  const archive = cacheObject(cache, release)
+  let stage
+  let stageIdentity
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        stage = dirname(destination)
+        const stat = lstatSync(stage)
+        stageIdentity = [stat.dev, stat.ino]
+        writeFileSync(join(stage, "unowned-marker"), "preserve")
+        throw new Error("download failed before identity capture")
+      },
+    }),
+  )
+  assert.equal(error instanceof AggregateError, true)
+  assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assertNeutralCleanupMessage(error)
+  assert.equal(error.errors.length, 2)
+  assert.match(error.errors[0].message, /download failed before identity capture/)
+  assert.match(error.errors[1].message, /stage contains an unowned entry/)
+  const after = lstatSync(stage)
+  assert.deepEqual([after.dev, after.ino], stageIdentity)
+  assert.deepEqual(readdirSync(stage), ["unowned-marker"])
+  assert.equal(readFileSync(join(stage, "unowned-marker"), "utf8"), "preserve")
+  assert.equal(existsSync(archive), false)
+})
+
 test("a substituted download stage is preserved without following it", (t) => {
   const root = mkdtempSync(join(tmpdir(), "nessa-node-stage-substitution-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -739,6 +821,7 @@ test("a substituted download stage is preserved without following it", (t) => {
   )
   assert.equal(error instanceof AggregateError, true)
   assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assertNeutralCleanupMessage(error)
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /stage identity changed/)
   assert.match(error.errors[1].message, /stage identity changed/)
@@ -769,6 +852,7 @@ test("a substituted staged path is preserved without following it", (t) => {
   )
   assert.equal(error instanceof AggregateError, true)
   assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assertNeutralCleanupMessage(error)
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /symbolic link/)
   assert.match(error.errors[1].message, /stage contains an unowned entry/)
@@ -803,6 +887,7 @@ test("a source substituted during publication is preserved and never followed", 
   )
   assert.equal(error instanceof AggregateError, true)
   assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assertNeutralCleanupMessage(error)
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /path identity changed/)
   assert.match(error.errors[1].message, /download path identity changed/)
