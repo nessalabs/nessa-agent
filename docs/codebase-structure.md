@@ -948,12 +948,11 @@ terminal blocks new effects; runtime state never supplies the missing fact.
 `StagedArchive` carries an open file rather than a path, so the bytes
 that are measured are the bytes that are unpacked. Publication captures the
 prior valid artifact while holding the store's per-agent lock and returns that
-authority as a lease. The use case keeps the lease through the immediate audit
-attempt and drops it when `execute` returns, including an audit error. A later
-redelivery can therefore first publish an earlier transition after another
-install. Journal sequence and observation time describe that publication order,
-not physical effect order; domain event identity and before/after facts retain
-the causal meaning.
+authority as a lease. The use case keeps the lease through both immediate durable delivery attempts
+and drops it when `execute` returns. A later invocation must recover and
+acknowledge the retained terminal before it admits another install effect.
+Journal sequence and observation time remain observation order; domain event
+identity and before/after facts retain causal meaning.
 Audit failure stays visible and carries typed state evidence: unchanged, the
 target installed, the prior artifact restored, no runtime installed, or
 unconfirmed. It therefore does not turn an uncertain cleanup into a claim that
@@ -1003,10 +1002,9 @@ storage primitive's exact private-reservation syntax are preserved and ignored:
 the syntax is not provenance, and the journal neither promotes nor deletes an
 abandoned reservation, so those files can consume disk until separate cleanup
 is designed. Sequence and observation time describe journal observation order,
-not domain causality. An audit error drops the runtime publication lease after
-the immediate delivery attempt, so an earlier transition's first journal
-publication can follow a later install; stable event identity and the domain
-history remain authoritative. Directory sync is unavailable on Windows, so its
+not domain causality. An error drops the runtime publication lease after both immediate delivery
+attempts. The account-scoped delivery lock makes a later invocation recover the
+earlier terminal before it can admit another install. Directory sync is unavailable on Windows, so its
 power-loss guarantee remains limited to the storage primitive's documented file
 behavior there.
 `delivery/journal.rs` separately retains immutable preparation, outcome and

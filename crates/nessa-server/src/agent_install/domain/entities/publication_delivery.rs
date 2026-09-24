@@ -145,3 +145,7 @@ impl fmt::Display for PublicationDeliveryError {
 }
 
 impl std::error::Error for PublicationDeliveryError {}
+
+#[cfg(test)]
+#[path = "../../../../tests/agent_install/publication_delivery.rs"]
+mod tests;

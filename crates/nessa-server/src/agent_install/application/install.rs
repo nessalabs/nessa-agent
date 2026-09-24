@@ -246,10 +246,9 @@ impl InstallAgentRuntime<'_> {
     ///
     /// Every consequential transition is passed to [`InstallAudit`] before
     /// this call reports its outcome. Publication and rollback retain the
-    /// store's per-agent lease through that immediate audit attempt. An audit
-    /// error drops the lease on return; bounded redelivery can therefore first
-    /// publish that transition after a later install. Domain identity and
-    /// before/after facts remain authoritative across that journal order.
+    /// store's per-agent lease through that immediate audit attempt. The lease is dropped on return. A later invocation recovers the retained
+    /// terminal before admitting any new install effect, so the earlier terminal
+    /// is acknowledged before a later attempt can begin.
     pub fn execute(
         &self,
         agent: &AgentName,
