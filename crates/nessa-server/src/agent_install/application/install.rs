@@ -590,7 +590,7 @@ impl InstallAgentRuntime<'_> {
         let mut reclamation_lease = None;
         if let Some(terminal) = outcome
             .terminal_transition()
-            .filter(|event| event.previous().is_some())
+            .filter(|event| event.requires_reclamation())
         {
             let mut lease = self
                 .store
@@ -714,7 +714,7 @@ impl InstallAgentRuntime<'_> {
                 audited,
             ));
         }
-        let reclamation_warnings = if terminal.previous().is_some() {
+        let reclamation_warnings = if terminal.requires_reclamation() {
             let publication = publication
                 .as_mut()
                 .ok_or_else(|| InstallFailure::Reclamation {
@@ -741,7 +741,7 @@ impl InstallAgentRuntime<'_> {
         if reclamation_blocks_settlement(&reclamation_warnings) {
             return Err(InstallFailure::ReclamationRecovery(reclamation_warnings));
         }
-        if terminal.previous().is_some() {
+        if terminal.requires_reclamation() {
             let publication = publication
                 .as_mut()
                 .expect("replacement cleanup retained its publication authority");
@@ -766,7 +766,7 @@ impl InstallAgentRuntime<'_> {
                 None,
             ));
         }
-        if terminal.previous().is_some() {
+        if terminal.requires_reclamation() {
             let publication = publication
                 .as_mut()
                 .expect("replacement cleanup retained its publication authority");

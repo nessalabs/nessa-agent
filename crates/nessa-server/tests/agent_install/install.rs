@@ -8,11 +8,12 @@ use crate::agent_install::application::{
     RuntimeReclamationEffect,
 };
 use crate::agent_install::domain::{
-    ArchiveDigest, InstallEventSlot, InstallFailureEvidence, InstallFailureKind, InstallRequest,
-    InstallTransitionError, InstallTransitionFacts, InstallTransitionKind, Libc,
-    ManagedInstallation, PublicationOutcome, PublicationPreparation, PublicationSettlement,
-    ReclamationEvent, ReclamationOperationId, RecoveryState, ReleasePlatform, ReleaseRequirements,
-    RollbackState, RuntimeArtifact,
+    ArchiveDigest, ArchivePath, FileRole, InstallEventSlot, InstallFailureEvidence,
+    InstallFailureKind, InstallRequest, InstallTransitionError, InstallTransitionFacts,
+    InstallTransitionKind, Libc, ManagedInstallation, PublicationOutcome, PublicationPreparation,
+    PublicationSettlement, ReclamationEvent, ReclamationOperationId, RecoveryState,
+    ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements, RollbackState,
+    RuntimeArtifact,
 };
 use crate::agent_install::infrastructure::{DurableInstallAudit, DurableInstallationDelivery};
 use crate::agent_install_test_support::{
@@ -763,6 +764,18 @@ fn publication_preparation(
     PublicationPreparation::new(attempt.verified().unwrap()).unwrap()
 }
 
+fn same_physical_with_changed_contents(artifact: &RuntimeArtifact) -> RuntimeArtifact {
+    RuntimeArtifact::new(
+        artifact.version().clone(),
+        artifact.digest().clone(),
+        ReleaseContents::new(vec![ReleaseFile::new(
+            ArchivePath::parse("renamed/bin/opencode").unwrap(),
+            FileRole::Launch,
+        )])
+        .unwrap(),
+    )
+}
+
 fn installed_outcome(preparation: &PublicationPreparation) -> PublicationOutcome {
     let verified = preparation.verified();
     let terminal = InstallTransition::restore(
@@ -827,6 +840,52 @@ fn normal_replacement_acknowledges_the_exact_cleanup_obligation_before_settlemen
 }
 
 #[test]
+fn normal_metadata_only_replacement_settles_without_reclamation() {
+    let root = tempfile::tempdir().unwrap();
+    let pinned = crate::agent_install_test_support::release("2.0.0", PINNED_DIGEST, &platform());
+    let current = RuntimeArtifact::for_release(&pinned);
+    let expected = ExpectedReplacement {
+        agent: agent(),
+        previous: same_physical_with_changed_contents(&current),
+        current,
+        request: request(),
+    };
+    let sequence = Arc::new(Mutex::new(Vec::new()));
+    let store = OrderingStore {
+        inner: FakeStore::empty(root.path()),
+        sequence: sequence.clone(),
+        expected,
+    };
+    let delivery = OrderingDelivery {
+        sequence: sequence.clone(),
+        pending: Mutex::new(None),
+    };
+
+    let installed = InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+        reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
+    }
+    .execute(&agent(), &pinned, &host(), &request())
+    .unwrap();
+
+    assert!(installed.reclamation_warnings.is_empty());
+    let sequence = sequence.lock().unwrap();
+    assert!(sequence.contains(&"delivery-settle"));
+    assert!(!sequence.iter().any(|step| matches!(
+        *step,
+        "cleanup-obligation"
+            | "cleanup-effect"
+            | "cleanup-outcome"
+            | "cleanup-audit"
+            | "cleanup-ack"
+    )));
+}
+
+#[test]
 fn recovered_replacement_acknowledges_the_exact_cleanup_obligation_before_settlement() {
     let root = tempfile::tempdir().unwrap();
     let pinned = crate::agent_install_test_support::release("2.0.0", PINNED_DIGEST, &platform());
@@ -880,6 +939,64 @@ fn recovered_replacement_acknowledges_the_exact_cleanup_obligation_before_settle
     assert_sequence_before(&sequence, "cleanup-outcome", "cleanup-audit");
     assert_sequence_before(&sequence, "cleanup-audit", "cleanup-ack");
     assert_sequence_before(&sequence, "cleanup-ack", "delivery-settle");
+}
+
+#[test]
+fn recovered_metadata_only_replacement_settles_without_reclamation() {
+    let root = tempfile::tempdir().unwrap();
+    let pinned = crate::agent_install_test_support::release("2.0.0", PINNED_DIGEST, &platform());
+    let current = RuntimeArtifact::for_release(&pinned);
+    let expected = ExpectedReplacement {
+        agent: agent(),
+        previous: same_physical_with_changed_contents(&current),
+        current,
+        request: request(),
+    };
+    let preparation = publication_preparation(expected.current.clone(), request());
+    let terminal = InstallTransition::restore(
+        agent(),
+        expected.current.clone(),
+        request(),
+        InstallTransitionFacts::Replaced(expected.previous.clone()),
+    )
+    .unwrap();
+    let outcome = PublicationOutcome::terminal(&preparation, terminal).unwrap();
+    let prepared = PreparedInstallation::new("recovered-publication".into(), preparation);
+    let sequence = Arc::new(Mutex::new(Vec::new()));
+    let store = OrderingStore {
+        inner: FakeStore::holding(root.path()),
+        sequence: sequence.clone(),
+        expected,
+    };
+    let delivery = OrderingDelivery {
+        sequence: sequence.clone(),
+        pending: Mutex::new(Some(PendingInstallationDelivery::Outcome {
+            prepared,
+            outcome: Box::new(outcome),
+        })),
+    };
+
+    InstallAgentRuntime {
+        source: &FakeSource::serving(b"unused"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+        reclamation_audit: reclamation_audit(),
+        reclamation_operation_ids: crate::agent_install_test_support::reclamation_operation_ids(),
+    }
+    .execute(&agent(), &pinned, &host(), &request())
+    .unwrap();
+
+    let sequence = sequence.lock().unwrap();
+    assert!(sequence.contains(&"delivery-settle"));
+    assert!(!sequence.iter().any(|step| matches!(
+        *step,
+        "cleanup-obligation"
+            | "cleanup-effect"
+            | "cleanup-outcome"
+            | "cleanup-audit"
+            | "cleanup-ack"
+    )));
 }
 
 #[test]

@@ -415,6 +415,15 @@ impl InstallTransition {
         }
     }
 
+    /// Whether this completion superseded different physical runtime bytes.
+    ///
+    /// A changed retained description with the same version and digest does
+    /// not authorize removal of the directory that still holds the target.
+    pub fn requires_reclamation(&self) -> bool {
+        self.previous()
+            .is_some_and(|previous| previous.physical_identity() != self.target.physical_identity())
+    }
+
     pub fn rollback(&self) -> Option<&RollbackState> {
         match &self.facts {
             InstallTransitionFacts::RolledBack(value) => Some(value),
