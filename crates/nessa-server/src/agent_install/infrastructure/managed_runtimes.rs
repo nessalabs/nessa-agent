@@ -286,6 +286,11 @@ struct ExecutableUseGeneration {
     generation: String,
 }
 
+struct ArtifactInspection {
+    present_files: Vec<PathBuf>,
+    structure_remains: bool,
+}
+
 struct DurableManagedExecutableUse {
     root: PathBuf,
     marker_directory: PathBuf,
@@ -825,6 +830,14 @@ impl ManagedRuntimes {
     ) -> Result<T, StoreFailure> {
         let mut file =
             open_beneath(&self.root, path, OpenMode::ReadNonblocking).map_err(unreadable)?;
+        self.read_bounded_json_file(&mut file, path)
+    }
+
+    fn read_bounded_json_file<T: for<'de> Deserialize<'de>>(
+        &self,
+        file: &mut File,
+        path: &Path,
+    ) -> Result<T, StoreFailure> {
         if file.metadata().map_err(unreadable)?.len() > MAXIMUM_USE_RECORD_BYTES {
             return Err(StoreFailure::Unreadable(format!(
                 "{} exceeds its executable-use record bound",
@@ -832,7 +845,7 @@ impl ManagedRuntimes {
             )));
         }
         let mut bytes = Vec::new();
-        Read::by_ref(&mut file)
+        Read::by_ref(file)
             .take(MAXIMUM_USE_RECORD_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(unreadable)?;
@@ -843,6 +856,26 @@ impl ManagedRuntimes {
             )));
         }
         serde_json::from_slice(&bytes).map_err(|error| StoreFailure::Unreadable(error.to_string()))
+    }
+
+    fn read_retained_bounded_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        directory: &PrivateDirectory,
+        directory_path: &Path,
+        name: &OsStr,
+    ) -> Result<(T, File), StoreFailure> {
+        let mut file = directory
+            .open_file(name, OpenMode::ReadNonblocking)
+            .map_err(unreadable)?;
+        let path = directory_path.join(name);
+        let value = self.read_bounded_json_file(&mut file, &path)?;
+        if !directory.named_file_is(name, &file).map_err(unreadable)? {
+            return Err(StoreFailure::Unreadable(format!(
+                "{} was replaced while its executable-use record was read",
+                self.absolute(&path).display()
+            )));
+        }
+        Ok((value, file))
     }
 
     fn initialize_use_inventory(
@@ -954,6 +987,16 @@ impl ManagedRuntimes {
         agent: &AgentName,
         artifact: &RuntimeArtifact,
     ) -> Result<bool, StoreFailure> {
+        self.active_use_remains_with(agent, artifact, File::sync_all, PrivateDirectory::sync)
+    }
+
+    fn active_use_remains_with(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+        mut sync_file: impl FnMut(&File) -> io::Result<()>,
+        mut make_directory_durable: impl FnMut(&PrivateDirectory) -> io::Result<()>,
+    ) -> Result<bool, StoreFailure> {
         let directory = self.use_marker_directory(agent, artifact);
         let retained = match PrivateDirectory::open_beneath(&self.root, &directory) {
             Ok(directory) => directory,
@@ -962,8 +1005,18 @@ impl ManagedRuntimes {
         };
         retained.verify_binding().map_err(unreadable)?;
         let expected_inventory = self.use_inventory(agent, artifact);
-        self.validate_use_inventory(&directory, &expected_inventory)?;
+        let (inventory, _) = self.read_retained_bounded_json::<ExecutableUseInventory>(
+            &retained,
+            &directory,
+            OsStr::new("inventory.json"),
+        )?;
+        if inventory != expected_inventory {
+            return Err(StoreFailure::Unreadable(
+                "executable-use inventory belongs to another artifact".into(),
+            ));
+        }
         let mut generations: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut releases = BTreeMap::new();
         let mut entries = 0usize;
         for entry in retained.entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
@@ -1001,7 +1054,11 @@ impl ManagedRuntimes {
                     "executable-use inventory contains an unknown phase".into(),
                 ));
             }
-            let record: ExecutableUseGeneration = self.read_bounded_json(&directory.join(name))?;
+            let (record, file) = self.read_retained_bounded_json::<ExecutableUseGeneration>(
+                &retained,
+                &directory,
+                entry.name(),
+            )?;
             if record.agent != agent.as_str()
                 || record.version != artifact.version().as_str()
                 || record.digest != artifact.digest().as_str()
@@ -1015,6 +1072,9 @@ impl ManagedRuntimes {
                 .entry(generation.to_owned())
                 .or_default()
                 .insert(phase.to_owned());
+            if phase == "released" {
+                releases.insert(generation.to_owned(), (entry.name().to_owned(), file));
+            }
         }
         retained.verify_binding().map_err(unreadable)?;
         if generations.len() > MAXIMUM_USE_GENERATIONS {
@@ -1034,7 +1094,65 @@ impl ManagedRuntimes {
                 return Ok(true);
             }
         }
+        for (_, (name, file)) in releases {
+            sync_file(&file).map_err(unwritable)?;
+            if !retained.named_file_is(&name, &file).map_err(unreadable)? {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use release acknowledgement was replaced during recovery".into(),
+                ));
+            }
+            retained.verify_binding().map_err(unreadable)?;
+            make_directory_durable(&retained).map_err(unwritable)?;
+            retained.verify_binding().map_err(unreadable)?;
+            if !retained.named_file_is(&name, &file).map_err(unreadable)? {
+                return Err(StoreFailure::Unreadable(
+                    "executable-use release acknowledgement was replaced during recovery".into(),
+                ));
+            }
+        }
         Ok(false)
+    }
+
+    fn inspect_artifact(
+        &self,
+        agent: &AgentName,
+        artifact: &RuntimeArtifact,
+    ) -> Result<ArtifactInspection, StoreFailure> {
+        let mut present_files = Vec::new();
+        for file in artifact.contents().files() {
+            let path = self.recorded_file_path(agent, artifact, file.path());
+            match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
+                Ok(file) if file.metadata().is_ok_and(|metadata| metadata.len() != 0) => {
+                    present_files.push(path)
+                }
+                Ok(_) => {
+                    return Err(StoreFailure::Unreadable(format!(
+                        "{} is not a complete managed runtime file",
+                        self.absolute(&path).display()
+                    )))
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(unreadable(error)),
+            }
+        }
+
+        let mut structure_remains = false;
+        let mut directories = self.recorded_content_directories(agent, artifact);
+        directories.push(self.recorded_artifact_root(agent, artifact));
+        for path in directories {
+            match PrivateDirectory::open_beneath(&self.root, &path) {
+                Ok(directory) => {
+                    directory.verify_binding().map_err(unreadable)?;
+                    structure_remains = true;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(unreadable(error)),
+            }
+        }
+        Ok(ArtifactInspection {
+            present_files,
+            structure_remains,
+        })
     }
 
     fn remove_superseded_under_lock(
@@ -1091,26 +1209,16 @@ impl ManagedRuntimes {
             Err(error) => return RuntimeReclamationEffect::Failed(error),
         }
 
-        let mut present = Vec::new();
-        for file in superseded.contents().files() {
-            let path = self.recorded_file_path(agent, superseded, file.path());
-            match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
-                Ok(file) if file.metadata().is_ok_and(|metadata| metadata.len() != 0) => {
-                    present.push(path)
-                }
-                Ok(_) => {
-                    return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(format!(
-                        "{} is not a complete managed runtime file",
-                        self.absolute(&path).display()
-                    )))
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
-            }
+        let inspection = match self.inspect_artifact(agent, superseded) {
+            Ok(inspection) => inspection,
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        };
+        if inspection.present_files.is_empty() && !inspection.structure_remains {
+            return RuntimeReclamationEffect::AlreadyAbsent;
         }
-        let removed_files = !present.is_empty();
+        let removed_files = !inspection.present_files.is_empty();
         let mut failures = Vec::new();
-        for path in &present {
+        for path in &inspection.present_files {
             if let Err(error) = remove_file_beneath(&self.root, path) {
                 failures.push(format!("{}: {error}", self.absolute(path).display()));
             }
@@ -1122,19 +1230,6 @@ impl ManagedRuntimes {
             )));
         }
         let artifact_root = self.recorded_artifact_root(agent, superseded);
-        if !removed_files {
-            match PrivateDirectory::open_beneath(&self.root, &artifact_root) {
-                Ok(directory) => {
-                    if let Err(error) = directory.verify_binding() {
-                        return RuntimeReclamationEffect::Failed(unreadable(error));
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    return RuntimeReclamationEffect::AlreadyAbsent
-                }
-                Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
-            }
-        }
         if let Err(error) = sync_directory_beneath(&self.root, &artifact_root) {
             return RuntimeReclamationEffect::SyncUncertain(unwritable(error));
         }
@@ -1216,23 +1311,16 @@ impl ManagedRuntimes {
             Ok(false) => {}
             Err(error) => return RuntimeReclamationEffect::Failed(error),
         }
-        for file in superseded.contents().files() {
-            let path = self.recorded_file_path(agent, superseded, file.path());
-            match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
-                Ok(file) if file.metadata().is_ok_and(|metadata| metadata.len() != 0) => {
-                    return RuntimeReclamationEffect::StillPresent
-                }
-                Ok(_) => {
-                    return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(format!(
-                        "{} is not a complete managed runtime file",
-                        self.absolute(&path).display()
-                    )))
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
+        match self.inspect_artifact(agent, superseded) {
+            Ok(ArtifactInspection {
+                present_files,
+                structure_remains,
+            }) if present_files.is_empty() && !structure_remains => {
+                RuntimeReclamationEffect::AlreadyAbsent
             }
+            Ok(_) => RuntimeReclamationEffect::StillPresent,
+            Err(error) => RuntimeReclamationEffect::Failed(error),
         }
-        RuntimeReclamationEffect::AlreadyAbsent
     }
 
     fn hold_artifact_for_launch(

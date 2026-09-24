@@ -2,6 +2,7 @@
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::{
     cell::RefCell,
+    fs::File,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -23,8 +24,8 @@ use super::*;
 use crate::agent_install::application::PublicationRecovery;
 use crate::agent_install::domain::{
     AdmissionResult, AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, InstallRequest,
-    Libc, ManagedInstallation, ReclamationOperationId, ReclamationTrigger, ReclamationWork,
-    ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
+    Libc, ManagedInstallation, ReclamationObservation, ReclamationOperationId, ReclamationTrigger,
+    ReclamationWork, ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
 };
 use crate::agent_install_test_support::temporary_root;
 
@@ -589,9 +590,6 @@ fn release_record_survives_directory_sync_failure_and_is_reacknowledged_after_re
         .contains("injected release directory sync failure"));
 
     let reopened = ManagedRuntimes::new(root.path());
-    reopened
-        .retain_use_generation(&directory, generation, "released", &record)
-        .expect("exact replay re-syncs the immutable released record");
     let current = artifact(
         "1.19.0",
         "bin/opencode",
@@ -609,6 +607,106 @@ fn release_record_survives_directory_sync_failure_and_is_reacknowledged_after_re
         ),
         RuntimeReclamationEffect::Removed
     );
+    assert!(
+        !artifact_path(root.path()).exists(),
+        "the fresh remover itself re-acknowledges the exact release record"
+    );
+}
+
+#[test]
+fn fresh_reclamation_refuses_a_substituted_release_record() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let previous_artifact = RuntimeArtifact::for_release(&previous);
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let launch = store.managed_launch(&agent(), &previous).unwrap().unwrap();
+    let mut generation = launch.admit().unwrap();
+    generation.release().unwrap();
+    drop(generation);
+    drop(launch);
+    let marker_directory = store.use_marker_directory(&agent(), &previous_artifact);
+    let release_name = std::fs::read_dir(root.path().join(&marker_directory))
+        .unwrap()
+        .map(Result::unwrap)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".released.json")
+        })
+        .unwrap()
+        .file_name();
+    let release_path = marker_directory.join(&release_name);
+    std::fs::remove_file(root.path().join(&release_path)).unwrap();
+    let mut substitute = open_beneath(root.path(), &release_path, OpenMode::CreateNew).unwrap();
+    serde_json::to_writer(
+        &mut substitute,
+        &ExecutableUseGeneration {
+            agent: agent().as_str().to_owned(),
+            version: previous_artifact.version().as_str().to_owned(),
+            digest: previous_artifact.digest().as_str().to_owned(),
+            generation: "another-generation".into(),
+        },
+    )
+    .unwrap();
+    substitute.sync_all().unwrap();
+    drop(substitute);
+    let current = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(&store, &current, &archive("bin/opencode", b"current")).unwrap();
+
+    let reopened = ManagedRuntimes::new(root.path());
+    let mut lease = reopened.reclamation_lease(&agent()).unwrap();
+    let effect = lease.remove_superseded(
+        &agent(),
+        &RuntimeArtifact::for_release(&current),
+        &previous_artifact,
+    );
+
+    assert!(matches!(
+        effect,
+        RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(_))
+    ));
+    assert!(artifact_path(root.path()).join("bin/opencode").exists());
+}
+
+#[test]
+fn release_reacknowledgement_refuses_a_replaced_marker_directory() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "bin/opencode");
+    let previous_artifact = RuntimeArtifact::for_release(&previous);
+    publish(&store, &previous, &archive("bin/opencode", b"previous")).unwrap();
+    let launch = store.managed_launch(&agent(), &previous).unwrap().unwrap();
+    let mut generation = launch.admit().unwrap();
+    generation.release().unwrap();
+    drop(generation);
+    drop(launch);
+    let marker_directory = store.use_marker_directory(&agent(), &previous_artifact);
+    let displaced = Path::new("opencode").join("displaced-release-markers");
+    let replaced = RefCell::new(false);
+
+    let failure = store
+        .active_use_remains_with(&agent(), &previous_artifact, File::sync_all, |retained| {
+            if !replaced.replace(true) {
+                std::fs::rename(
+                    root.path().join(&marker_directory),
+                    root.path().join(&displaced),
+                )?;
+                nessa_local_storage::create_directory(&root.path().join(&marker_directory))?;
+            }
+            retained.sync()
+        })
+        .unwrap_err();
+
+    assert!(matches!(failure, StoreFailure::Unwritable(_)));
+    assert!(artifact_path(root.path()).join("bin/opencode").exists());
 }
 
 #[test]
@@ -1107,6 +1205,87 @@ fn interrupted_removal_admission_restores_as_observation_only_work() {
         restored.work(&request).unwrap(),
         ReclamationWork::Observe(_)
     ));
+}
+
+#[test]
+fn restored_observation_keeps_residual_directories_until_a_new_removal() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous_release = release("1.18.31", "bin/opencode");
+    let current_release = artifact(
+        "1.19.0",
+        "bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    publish(
+        &store,
+        &previous_release,
+        &archive("bin/opencode", b"previous"),
+    )
+    .unwrap();
+    publish(
+        &store,
+        &current_release,
+        &archive("bin/opencode", b"current"),
+    )
+    .unwrap();
+    let previous = RuntimeArtifact::for_release(&previous_release);
+    let current = RuntimeArtifact::for_release(&current_release);
+    let request = InstallRequest::new("unix:501", "replace-a-with-b").unwrap();
+    let mut installation = ManagedInstallation::new(agent(), previous.clone());
+    installation
+        .record_replacement(current.clone(), request.clone())
+        .unwrap();
+    let admission = installation
+        .admit_reclamation(
+            &request,
+            ReclamationOperationId::new("remove-a-1").unwrap(),
+            ReclamationTrigger::ReplacementFollowUp,
+        )
+        .unwrap();
+    assert!(matches!(admission, AdmissionResult::Fresh { .. }));
+    let mut lease = store.reclamation_lease(&agent()).unwrap();
+    lease
+        .retain_reclamation(&installation, ReclamationPersistenceStage::RetainAdmission)
+        .unwrap();
+    std::fs::remove_file(artifact_path(root.path()).join("bin/opencode")).unwrap();
+    assert!(artifact_path(root.path()).join("bin").is_dir());
+    drop(lease);
+
+    let mut reopened = store.reclamation_lease(&agent()).unwrap();
+    let mut restored = reopened.load_reclamation().unwrap().unwrap();
+    let ReclamationWork::Observe(restored_admission) = restored.work(&request).unwrap() else {
+        panic!("the retained effect-pending operation must restore as observation-only work")
+    };
+    let operation_id = restored_admission.operation_id().clone();
+    assert_eq!(
+        reopened.observe_superseded(&agent(), &current, &previous),
+        RuntimeReclamationEffect::StillPresent,
+        "residual managed directories are not authoritative absence"
+    );
+    restored
+        .record_observation(&operation_id, ReclamationObservation::StillPresent)
+        .unwrap();
+    restored.acknowledge_audit(&operation_id).unwrap();
+    let next = restored
+        .admit_reclamation(
+            &request,
+            ReclamationOperationId::new("remove-a-2").unwrap(),
+            ReclamationTrigger::CallerRetry(request.clone()),
+        )
+        .unwrap();
+    assert!(matches!(next, AdmissionResult::Fresh { .. }));
+    reopened
+        .retain_reclamation(&restored, ReclamationPersistenceStage::RetainAdmission)
+        .unwrap();
+
+    assert_eq!(
+        reopened.remove_superseded(&agent(), &current, &previous),
+        RuntimeReclamationEffect::AlreadyAbsent
+    );
+    assert!(!artifact_path(root.path()).exists());
 }
 
 /// The directories `unpack` expects to already exist, made the way `publish`
