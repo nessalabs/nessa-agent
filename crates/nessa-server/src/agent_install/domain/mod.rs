@@ -13,9 +13,19 @@
 //! escape it, a release names exactly one program to launch, an archive is
 //! fetched over https from a host that is named. Deciding *where* a runtime
 //! goes and putting it there is infrastructure.
+//!
+//! `ManagedInstallation` owns current artifact identity and pending reclamation
+//! together. Its effect permits never perform I/O; application ports persist
+//! the aggregate before infrastructure receives one.
+pub mod aggregates;
 pub mod entities;
 mod release_selection;
 pub mod value_objects;
+pub use aggregates::{
+    AdmissionResult, ManagedInstallation, ManagedInstallationError, PendingReclamation,
+    ReclamationObservation, ReclamationOperation, ReclamationUpdate, ReclamationWork,
+    RemovalPermit,
+};
 pub use entities::{InstallAttempt, InstallAttemptError, InstallEventAdmission};
 pub use release_selection::preferred_release;
 pub use value_objects::{
@@ -24,7 +34,9 @@ pub use value_objects::{
     InstallFailureKind, InstallRequest, InstallRequestError, InstallTransition,
     InstallTransitionError, InstallTransitionFacts, InstallTransitionKind, Libc, NotAnAgentName,
     PinRejected, PinnedRelease, PublicationDeliveryError, PublicationOutcome,
-    PublicationPreparation, PublicationSettlement, RecoveryFailureEvidence, RecoveryState,
-    ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
-    RollbackState, RuntimeArtifact,
+    PublicationPreparation, PublicationSettlement, ReclamationActivation, ReclamationAdmission,
+    ReclamationAuditState, ReclamationCause, ReclamationError, ReclamationEvent,
+    ReclamationObligation, ReclamationOperationId, ReclamationPhysicalOutcome, ReclamationTrigger,
+    RecoveryFailureEvidence, RecoveryState, ReleaseContents, ReleaseFile, ReleasePlatform,
+    ReleaseRequirements, ReleaseVersion, RollbackState, RuntimeArtifact,
 };

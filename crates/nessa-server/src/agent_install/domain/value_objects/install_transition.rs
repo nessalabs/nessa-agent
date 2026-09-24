@@ -43,6 +43,14 @@ impl RuntimeArtifact {
     pub fn contents(&self) -> &ReleaseContents {
         &self.contents
     }
+
+    /// Return the on-disk identity shared by every description of these bytes.
+    ///
+    /// Contents remain part of the complete artifact evidence, while version
+    /// and digest identify the physical directory that reclamation protects.
+    pub fn physical_identity(&self) -> (&ReleaseVersion, &ArchiveDigest) {
+        (&self.version, &self.digest)
+    }
 }
 
 /// The verified local account and command invocation that requested an install.
