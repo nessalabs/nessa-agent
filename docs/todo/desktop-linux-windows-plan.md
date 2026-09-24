@@ -87,7 +87,12 @@ Do these once. Linux uses them first, Windows reuses them.
    assembler builds `nessa` and `nessa-mcp`, installs both locked ACP harnesses,
    includes the model catalogue, fingerprints the tree, and publishes its
    manifest after platform checks. Shared Node acquisition pins and verifies the
-   official archive before extracting Node and its license. macOS signs the
+   official archive before extracting Node and its license. The archive cache is
+   immutable and digest-named: invalid or nonregular objects fail with an exact
+   path and remain untouched instead of being repaired automatically. Exclusive
+   publication coordinates cooperating preparation processes; it does not defend
+   a returned cache path from a same-user process that can rewrite the cache.
+   macOS signs the
    executables; native Linux x86_64 probes them and includes the tree in local
    bundles. Windows remains disabled.
 2. **Updater manifest for more targets.** `RELEASE_TARGETS` lists two Darwin

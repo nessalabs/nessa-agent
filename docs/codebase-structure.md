@@ -463,7 +463,12 @@ independently of whether that turn contains text.
   locked ACP harness installation, model data, and manifest publication after
   platform finalization and fingerprinting. `prepare-node.mjs` owns the pinned,
   hash-verified Node archive and safe extraction of Node plus its license for both
-  platforms. `prepare-macos.mjs` supplies Apple signing; `prepare-linux.mjs`
+  platforms. Its cache objects are named by the pinned digest and published once
+  from a verified private stage. Existing invalid, oversized, or nonregular
+  objects are preserved and refused with their exact path; preparation never
+  repairs or removes them. Exclusive publication coordinates cooperating build
+  processes, while a same-user process with cache write access can still replace
+  an object after one invocation has returned. `prepare-macos.mjs` supplies Apple signing; `prepare-linux.mjs`
   requires native x86_64 GNU/Linux and probes each executable without starting a
   service. Linux local builds bundle that prepared resource, but the Linux
   `GatewayHost` and release targets remain disabled. Windows has no preparation.

@@ -11,7 +11,9 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -253,19 +255,27 @@ function cacheEntryKind(stat) {
 
 function refuseNonregularCacheEntry(path, stat) {
   throw new Error(
-    `Node archive cache entry is ${cacheEntryKind(stat)}; preserve or remove it explicitly before retrying: ${path}`,
+    `Node archive cache entry is ${cacheEntryKind(stat)} and was preserved; inspect that exact path before retrying: ${path}`,
   )
 }
 
-function inspectArchive(path, expectedSha256) {
+function pathIdentity(path, { allowAbsent = false } = {}) {
   let pathStat
   try {
     pathStat = lstatSync(path)
   } catch (error) {
-    if (error?.code === "ENOENT") return { status: "absent" }
+    if (allowAbsent && error?.code === "ENOENT") return undefined
     throw error
   }
   if (!pathStat.isFile()) refuseNonregularCacheEntry(path, pathStat)
+  return { dev: pathStat.dev, ino: pathStat.ino }
+}
+
+function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } = {}) {
+  const initialIdentity = pathIdentity(path, { allowAbsent })
+  if (!initialIdentity) return undefined
+  if (identity && !sameIdentity(initialIdentity, identity))
+    throw new Error(`Node archive path changed and was preserved: ${path}`)
 
   let descriptor
   try {
@@ -274,21 +284,26 @@ function inspectArchive(path, expectedSha256) {
       constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     )
   } catch (error) {
-    if (error?.code === "ENOENT") return { status: "absent" }
+    if (allowAbsent && error?.code === "ENOENT") return undefined
     if (error?.code === "ELOOP")
       throw new Error(`Node archive cache entry changed to a symbolic link: ${path}`, {
         cause: error,
       })
     throw new Error(
-      `Node archive cache entry could not be opened safely; preserve or remove it explicitly before retrying: ${path}`,
+      `Node archive cache entry could not be opened safely and was preserved; inspect that exact path before retrying: ${path}`,
       { cause: error },
     )
   }
   try {
     const before = fstatSync(descriptor)
     if (!before.isFile()) refuseNonregularCacheEntry(path, before)
-    const identity = { dev: before.dev, ino: before.ino }
-    if (before.size > MAX_NODE_ARCHIVE_BYTES) return { identity, status: "corrupt" }
+    const openedIdentity = { dev: before.dev, ino: before.ino }
+    if (!sameIdentity(initialIdentity, openedIdentity))
+      throw new Error(
+        `Node archive path changed while opening and was preserved: ${path}`,
+      )
+    if (before.size > MAX_NODE_ARCHIVE_BYTES)
+      throw new Error(`Node archive cache entry is oversized and was preserved: ${path}`)
 
     const hash = createHash("sha256")
     const chunks = []
@@ -298,13 +313,29 @@ function inspectArchive(path, expectedSha256) {
       const count = readSync(descriptor, chunk, 0, chunk.length, null)
       if (count === 0) break
       size += count
-      if (size > MAX_NODE_ARCHIVE_BYTES) return { identity, status: "corrupt" }
+      if (size > MAX_NODE_ARCHIVE_BYTES)
+        throw new Error(
+          `Node archive cache entry grew beyond its limit and was preserved: ${path}`,
+        )
       const used = chunk.subarray(0, count)
       hash.update(used)
       chunks.push(Buffer.from(used))
     }
-    if (hash.digest("hex") !== expectedSha256) return { identity, status: "corrupt" }
-    return { bytes: Buffer.concat(chunks, size), identity, status: "valid" }
+    const after = fstatSync(descriptor)
+    const finalPathIdentity = pathIdentity(path)
+    if (
+      !sameIdentity(openedIdentity, { dev: after.dev, ino: after.ino }) ||
+      !sameIdentity(openedIdentity, finalPathIdentity) ||
+      after.size !== size
+    )
+      throw new Error(
+        `Node archive path changed while reading and was preserved: ${path}`,
+      )
+    if (hash.digest("hex") !== expectedSha256)
+      throw new Error(
+        `Node archive cache entry fails its pinned digest and was preserved: ${path}`,
+      )
+    return { bytes: Buffer.concat(chunks, size), identity: openedIdentity }
   } finally {
     closeSync(descriptor)
   }
@@ -314,54 +345,128 @@ function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino
 }
 
-/** Return pinned archive bytes, replacing only a corrupt entry in the owned cache. */
+export function nodeCacheObjectName(release) {
+  if (!/^[0-9a-f]{64}$/.test(release.sha256))
+    throw new Error("Node archive descriptor has an invalid SHA-256 digest")
+  return `${release.sha256}.tar.gz`
+}
+
+function directoryIdentity(path) {
+  const stat = lstatSync(path)
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    throw new Error(`Node download stage changed and was preserved: ${path}`)
+  return { dev: stat.dev, ino: stat.ino }
+}
+
+function cleanupDownloadStage({ downloaded, downloadedIdentity, stage, stageIdentity }) {
+  let currentStage
+  try {
+    currentStage = directoryIdentity(stage)
+  } catch (error) {
+    if (error?.code === "ENOENT") return
+    throw error
+  }
+  if (!sameIdentity(currentStage, stageIdentity))
+    throw new Error(`Node download stage changed and was preserved: ${stage}`)
+
+  if (downloadedIdentity) {
+    let currentDownload
+    try {
+      currentDownload = pathIdentity(downloaded, { allowAbsent: true })
+    } catch (error) {
+      throw new Error(`Node download path changed and was preserved: ${downloaded}`, {
+        cause: error,
+      })
+    }
+    if (currentDownload) {
+      if (!sameIdentity(currentDownload, downloadedIdentity))
+        throw new Error(`Node download path changed and was preserved: ${downloaded}`)
+      unlinkSync(downloaded)
+    }
+  }
+  if (readdirSync(stage).length !== 0)
+    throw new Error(
+      `Node download stage contains an unowned entry and was preserved: ${stage}`,
+    )
+  rmdirSync(stage)
+}
+
+/**
+ * Return one immutable digest-named cache object.
+ *
+ * Exclusive publication coordinates cooperative writers. A process with write
+ * access to the cache can still replace the object after this function returns;
+ * callers trust only the bytes verified and returned by this invocation.
+ */
 export function acquireVerifiedNodeArchive({
+  beforePublish = () => {},
   cache,
   release,
   download = downloadNodeArchive,
-  publish = linkSync,
 }) {
   mkdirSync(cache, { recursive: true })
   if (!lstatSync(cache).isDirectory())
     throw new Error("Node archive cache must be an owned directory")
-  const archive = join(cache, release.archive)
-  const cached = inspectArchive(archive, release.sha256)
-  if (cached.status === "valid") return cached.bytes
+  const archive = join(cache, nodeCacheObjectName(release))
+  const cached = inspectArchive(archive, release.sha256, { allowAbsent: true })
+  if (cached) return cached.bytes
 
   const downloadStage = mkdtempSync(join(cache, ".node-download-"))
+  const stageIdentity = directoryIdentity(downloadStage)
+  const downloaded = join(downloadStage, release.archive)
+  let downloadedIdentity
+  let result
+  let failure
   try {
-    const downloaded = join(downloadStage, release.archive)
     download({
       destination: downloaded,
       maxBytes: MAX_NODE_ARCHIVE_BYTES,
       timeoutSeconds: NODE_DOWNLOAD_TIMEOUT_SECONDS,
       url: release.url,
     })
-    const staged = inspectArchive(downloaded, release.sha256)
-    if (staged.status !== "valid")
-      throw new Error("Node archive download is invalid, oversized, or corrupt")
-
-    const current = inspectArchive(archive, release.sha256)
-    if (current.status === "valid") return current.bytes
-    if (current.status === "corrupt") {
-      if (cached.status !== "corrupt" || !sameIdentity(current.identity, cached.identity))
-        throw new Error("Node archive cache entry changed during recovery")
-      unlinkSync(archive)
-    }
+    if (!sameIdentity(directoryIdentity(downloadStage), stageIdentity))
+      throw new Error(`Node download stage changed and was preserved: ${downloadStage}`)
+    downloadedIdentity = pathIdentity(downloaded)
+    const staged = inspectArchive(downloaded, release.sha256, {
+      identity: downloadedIdentity,
+    })
+    beforePublish({ destination: archive, source: downloaded })
+    if (!sameIdentity(pathIdentity(downloaded), staged.identity))
+      throw new Error(`Node download path changed and was preserved: ${downloaded}`)
     try {
-      publish(downloaded, archive)
+      linkSync(downloaded, archive)
     } catch (error) {
       if (error?.code !== "EEXIST") throw error
-      const winner = inspectArchive(archive, release.sha256)
-      if (winner.status === "valid") return winner.bytes
-      throw new Error("Node archive cache entry changed during publication", {
-        cause: error,
-      })
+      result = inspectArchive(archive, release.sha256).bytes
     }
-    return staged.bytes
-  } finally {
-    rmSync(downloadStage, { recursive: true, force: true })
+    if (!result) {
+      const published = inspectArchive(archive, release.sha256, {
+        identity: staged.identity,
+      })
+      result = published.bytes
+    }
+  } catch (error) {
+    failure = error
   }
+  let cleanupFailure
+  try {
+    cleanupDownloadStage({
+      downloaded,
+      downloadedIdentity,
+      stage: downloadStage,
+      stageIdentity,
+    })
+  } catch (error) {
+    cleanupFailure = error
+  }
+  if (failure && cleanupFailure)
+    throw new AggregateError(
+      [failure, cleanupFailure],
+      "Node acquisition and stage cleanup failed",
+    )
+  if (failure) throw failure
+  if (cleanupFailure) throw cleanupFailure
+  return result
 }
 
 /** Acquire, verify, and stage Node plus its license into a desktop runtime. */

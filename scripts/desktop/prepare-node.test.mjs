@@ -3,11 +3,12 @@ import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   existsSync,
-  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   truncateSync,
@@ -15,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import test from "node:test"
 import { gzipSync } from "node:zlib"
 
@@ -25,6 +26,7 @@ import {
   acquireVerifiedNodeArchive,
   downloadNodeArchive,
   nodeArchive,
+  nodeCacheObjectName,
   readNodeArchive,
 } from "./prepare-node.mjs"
 
@@ -67,6 +69,18 @@ const selected = [
   { name: `${distribution}/LICENSE`, contents: "license" },
 ]
 
+function fixtureRelease(bytes) {
+  return {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+}
+
+function cacheObject(cache, release) {
+  return join(cache, nodeCacheObjectName(release))
+}
+
 test("the reviewed Node release table is exact and closed", () => {
   assert.deepEqual(nodeArchive("darwin", "arm64"), {
     archive: "node-v26.8.1-darwin-arm64.tar.gz",
@@ -82,6 +96,11 @@ test("the reviewed Node release table is exact and closed", () => {
     nodeArchive("linux", "x64").sha256,
     "b2b76660fa4ded4e0b2a41ee3c0c651cd52ea8170ead91ebac1e147ac3d55643",
   )
+  assert.equal(
+    nodeCacheObjectName(nodeArchive("linux", "x64")),
+    "b2b76660fa4ded4e0b2a41ee3c0c651cd52ea8170ead91ebac1e147ac3d55643.tar.gz",
+  )
+  assert.throws(() => nodeCacheObjectName({ sha256: "not-a-digest" }), /invalid SHA-256/)
   for (const pair of [
     ["linux", "arm64"],
     ["darwin", "ia32"],
@@ -224,33 +243,105 @@ test("archive validation rejects unsafe or contradictory entries", async (t) => 
   )
 })
 
-test("a corrupt cache is replaced only by verified downloaded bytes", (t) => {
+test("an absent digest object is exclusively published and reopened", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-cache-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
   const good = tar(selected)
-  const release = {
-    archive: "node-fixture.tar.gz",
-    sha256: createHash("sha256").update(good).digest("hex"),
-    url: "https://example.invalid/node-fixture.tar.gz",
-  }
-  writeFileSync(join(cache, release.archive), "corrupt")
-  let downloads = 0
+  const release = fixtureRelease(good)
+  let publishedIdentity
   const bytes = acquireVerifiedNodeArchive({
     cache,
     release,
     download({ destination, url }) {
-      downloads += 1
       assert.equal(url, release.url)
       writeFileSync(destination, good)
     },
+    beforePublish({ source, destination }) {
+      const sourceStat = lstatSync(source)
+      publishedIdentity = [sourceStat.dev, sourceStat.ino]
+      assert.equal(existsSync(destination), false)
+    },
   })
-  assert.equal(downloads, 1)
   assert.deepEqual(bytes, good)
-  assert.deepEqual(readFileSync(join(cache, release.archive)), good)
-  assert.deepEqual(readdirSync(cache), [release.archive])
+  assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
+  assert.deepEqual(readdirSync(cache), [nodeCacheObjectName(release)])
+  assert.equal(existsSync(join(cache, release.archive)), false)
+  const published = lstatSync(cacheObject(cache, release))
+  assert.deepEqual([published.dev, published.ino], publishedIdentity)
 })
 
-test("a corrupt download is neither cached nor left staged", (t) => {
+test("an existing valid digest object is reused without download", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-existing-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  writeFileSync(cacheObject(cache, release), good)
+  const bytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download() {
+      assert.fail("valid immutable object must not download")
+    },
+  })
+  assert.deepEqual(bytes, good)
+})
+
+test("an archive-name entry is neither fallback nor migration source", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-old-name-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  const oldPath = join(cache, release.archive)
+  writeFileSync(oldPath, "preserve")
+  const bytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download({ destination }) {
+      writeFileSync(destination, good)
+    },
+  })
+  assert.deepEqual(bytes, good)
+  assert.equal(readFileSync(oldPath, "utf8"), "preserve")
+  assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
+})
+
+test("invalid regular digest objects refuse unchanged without download", async (t) => {
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  for (const kind of ["digest", "oversized"]) {
+    await t.test(kind, () => {
+      const cache = mkdtempSync(join(tmpdir(), "nessa-node-invalid-cache-"))
+      t.after(() => rmSync(cache, { recursive: true, force: true }))
+      const archive = cacheObject(cache, release)
+      if (kind === "digest") writeFileSync(archive, "corrupt")
+      else {
+        writeFileSync(archive, "")
+        truncateSync(archive, MAX_NODE_ARCHIVE_BYTES + 1)
+      }
+      const before = lstatSync(archive)
+      let downloaded = false
+      assert.throws(
+        () =>
+          acquireVerifiedNodeArchive({
+            cache,
+            release,
+            download() {
+              downloaded = true
+            },
+          }),
+        kind === "digest" ? /fails its pinned digest.*preserved/ : /oversized.*preserved/,
+      )
+      const after = lstatSync(archive)
+      assert.equal(downloaded, false)
+      assert.deepEqual(
+        [after.dev, after.ino, after.size],
+        [before.dev, before.ino, before.size],
+      )
+    })
+  }
+})
+
+test("a corrupt staged download is removed without publishing", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-download-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
   const release = {
@@ -267,36 +358,9 @@ test("a corrupt download is neither cached nor left staged", (t) => {
           writeFileSync(destination, "corrupt")
         },
       }),
-    /invalid, oversized, or corrupt/,
+    /fails its pinned digest.*preserved/,
   )
   assert.deepEqual(readdirSync(cache), [])
-})
-
-test("an oversized cache entry is rejected before reading and replaced", (t) => {
-  const cache = mkdtempSync(join(tmpdir(), "nessa-node-oversized-cache-"))
-  t.after(() => rmSync(cache, { recursive: true, force: true }))
-  const good = tar(selected)
-  const release = {
-    archive: "node-fixture.tar.gz",
-    sha256: createHash("sha256").update(good).digest("hex"),
-    url: "https://example.invalid/node-fixture.tar.gz",
-  }
-  const archive = join(cache, release.archive)
-  writeFileSync(archive, "")
-  truncateSync(archive, MAX_NODE_ARCHIVE_BYTES + 1)
-  let downloads = 0
-  const bytes = acquireVerifiedNodeArchive({
-    cache,
-    release,
-    download({ destination, maxBytes }) {
-      downloads += 1
-      assert.equal(maxBytes, MAX_NODE_ARCHIVE_BYTES)
-      writeFileSync(destination, good)
-    },
-  })
-  assert.equal(downloads, 1)
-  assert.deepEqual(bytes, good)
-  assert.deepEqual(readFileSync(archive), good)
 })
 
 test("an oversized unknown-length download is rejected and removed", (t) => {
@@ -317,7 +381,7 @@ test("an oversized unknown-length download is rejected and removed", (t) => {
           truncateSync(destination, maxBytes + 1)
         },
       }),
-    /invalid, oversized, or corrupt/,
+    /oversized.*preserved/,
   )
   assert.deepEqual(readdirSync(cache), [])
 })
@@ -409,91 +473,11 @@ test("a timed-out download leaves no cache or staging entry", (t) => {
   assert.deepEqual(readdirSync(cache), [])
 })
 
-test("a competing valid write during corrupt-cache recovery stays safe", (t) => {
-  const cache = mkdtempSync(join(tmpdir(), "nessa-node-corrupt-race-"))
-  t.after(() => rmSync(cache, { recursive: true, force: true }))
-  const good = tar(selected)
-  const release = {
-    archive: "node-fixture.tar.gz",
-    sha256: createHash("sha256").update(good).digest("hex"),
-    url: "https://example.invalid/node-fixture.tar.gz",
-  }
-  const archive = join(cache, release.archive)
-  writeFileSync(archive, "corrupt")
-  const bytes = acquireVerifiedNodeArchive({
-    cache,
-    release,
-    download({ destination }) {
-      writeFileSync(archive, good)
-      writeFileSync(destination, good)
-    },
-  })
-  assert.deepEqual(bytes, good)
-  assert.deepEqual(readFileSync(archive), good)
-  assert.deepEqual(readdirSync(cache), [release.archive])
-})
-
-test("a valid inode replacing a corrupt cache entry wins recovery", (t) => {
-  const cache = mkdtempSync(join(tmpdir(), "nessa-node-valid-replacement-"))
-  t.after(() => rmSync(cache, { recursive: true, force: true }))
-  const good = tar(selected)
-  const release = {
-    archive: "node-fixture.tar.gz",
-    sha256: createHash("sha256").update(good).digest("hex"),
-    url: "https://example.invalid/node-fixture.tar.gz",
-  }
-  const archive = join(cache, release.archive)
-  writeFileSync(archive, "corrupt")
-  const bytes = acquireVerifiedNodeArchive({
-    cache,
-    release,
-    download({ destination }) {
-      unlinkSync(archive)
-      writeFileSync(archive, good)
-      writeFileSync(destination, good)
-    },
-  })
-  assert.deepEqual(bytes, good)
-  assert.deepEqual(readFileSync(archive), good)
-})
-
-test("a nonregular inode replacing corrupt cache is preserved", (t) => {
-  const cache = mkdtempSync(join(tmpdir(), "nessa-node-foreign-replacement-"))
-  t.after(() => rmSync(cache, { recursive: true, force: true }))
-  const good = tar(selected)
-  const release = {
-    archive: "node-fixture.tar.gz",
-    sha256: createHash("sha256").update(good).digest("hex"),
-    url: "https://example.invalid/node-fixture.tar.gz",
-  }
-  const archive = join(cache, release.archive)
-  writeFileSync(archive, "corrupt")
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          unlinkSync(archive)
-          mkdirSync(archive)
-          writeFileSync(join(archive, "marker"), "preserve")
-          writeFileSync(destination, good)
-        },
-      }),
-    /directory/,
-  )
-  assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
-})
-
 test("concurrent absent writers publish only verified bytes", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-absent-race-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
   const good = tar(selected)
-  const release = {
-    archive: "node-fixture.tar.gz",
-    sha256: createHash("sha256").update(good).digest("hex"),
-    url: "https://example.invalid/node-fixture.tar.gz",
-  }
+  const release = fixtureRelease(good)
   let innerBytes
   const outerBytes = acquireVerifiedNodeArchive({
     cache,
@@ -511,8 +495,8 @@ test("concurrent absent writers publish only verified bytes", (t) => {
   })
   assert.deepEqual(innerBytes, good)
   assert.deepEqual(outerBytes, good)
-  assert.deepEqual(readFileSync(join(cache, release.archive)), good)
-  assert.deepEqual(readdirSync(cache), [release.archive])
+  assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
+  assert.deepEqual(readdirSync(cache), [nodeCacheObjectName(release)])
 })
 
 test("nonregular cache entries are refused without mutation", async (t) => {
@@ -535,7 +519,7 @@ test("nonregular cache entries are refused without mutation", async (t) => {
         const root = mkdtempSync(join(tmpdir(), "nessa-node-nonregular-"))
         t.after(() => rmSync(root, { recursive: true, force: true }))
         const cache = join(root, "cache")
-        const archive = join(cache, release.archive)
+        const archive = cacheObject(cache, release)
         mkdirSync(cache)
         if (kind === "symlink") {
           const external = join(root, "external")
@@ -577,7 +561,7 @@ test("a nonregular replacement during download is preserved and refused", (t) =>
     sha256: createHash("sha256").update(good).digest("hex"),
     url: "https://example.invalid/node-fixture.tar.gz",
   }
-  const archive = join(cache, release.archive)
+  const archive = cacheObject(cache, release)
   assert.throws(
     () =>
       acquireVerifiedNodeArchive({
@@ -603,7 +587,7 @@ test("a nonregular replacement at exclusive publication is preserved", (t) => {
     sha256: createHash("sha256").update(good).digest("hex"),
     url: "https://example.invalid/node-fixture.tar.gz",
   }
-  const archive = join(cache, release.archive)
+  const archive = cacheObject(cache, release)
   assert.throws(
     () =>
       acquireVerifiedNodeArchive({
@@ -612,14 +596,11 @@ test("a nonregular replacement at exclusive publication is preserved", (t) => {
         download({ destination }) {
           writeFileSync(destination, good)
         },
-        publish(source, destination) {
+        beforePublish({ source, destination }) {
           assert.equal(existsSync(source), true)
           assert.equal(destination, archive)
           mkdirSync(destination)
           writeFileSync(join(destination, "marker"), "preserve")
-          const error = new Error("destination appeared")
-          error.code = "EEXIST"
-          throw error
         },
       }),
     /directory/,
@@ -636,26 +617,135 @@ test("a verified publication winner is accepted without overwrite", (t) => {
     sha256: createHash("sha256").update(good).digest("hex"),
     url: "https://example.invalid/node-fixture.tar.gz",
   }
-  const archive = join(cache, release.archive)
+  const archive = cacheObject(cache, release)
   const bytes = acquireVerifiedNodeArchive({
     cache,
     release,
     download({ destination }) {
       writeFileSync(destination, good)
     },
-    publish(source, destination) {
+    beforePublish({ source, destination }) {
       writeFileSync(destination, good)
-      assert.throws(
-        () => linkSync(source, destination),
-        (error) => error.code === "EEXIST",
+      assert.notDeepEqual(
+        [lstatSync(source).dev, lstatSync(source).ino],
+        [lstatSync(destination).dev, lstatSync(destination).ino],
       )
-      const error = new Error("destination appeared")
-      error.code = "EEXIST"
-      throw error
     },
   })
   assert.deepEqual(bytes, good)
   assert.deepEqual(readFileSync(archive), good)
+})
+
+test("an invalid publication winner is preserved and refused", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-publication-invalid-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  const archive = cacheObject(cache, release)
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          writeFileSync(destination, good)
+        },
+        beforePublish({ destination }) {
+          writeFileSync(destination, "preserve")
+        },
+      }),
+    /fails its pinned digest.*preserved/,
+  )
+  assert.equal(readFileSync(archive, "utf8"), "preserve")
+})
+
+test("a substituted download stage is preserved without following it", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-node-stage-substitution-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const cache = join(root, "cache")
+  const external = join(root, "external")
+  mkdirSync(cache)
+  mkdirSync(external)
+  writeFileSync(join(external, "marker"), "preserve")
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  let stage
+  let moved
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          writeFileSync(destination, good)
+          stage = dirname(destination)
+          moved = `${stage}-moved`
+          renameSync(stage, moved)
+          symlinkSync(external, stage)
+        },
+      }),
+    /acquisition and stage cleanup failed/,
+  )
+  assert.equal(lstatSync(stage).isSymbolicLink(), true)
+  assert.deepEqual(readFileSync(join(moved, release.archive)), good)
+  assert.equal(readFileSync(join(external, "marker"), "utf8"), "preserve")
+})
+
+test("a substituted staged path is preserved without following it", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-node-path-substitution-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const cache = join(root, "cache")
+  const external = join(root, "external")
+  mkdirSync(cache)
+  writeFileSync(external, "preserve")
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  let destination
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination: path }) {
+          destination = path
+          symlinkSync(external, destination)
+        },
+      }),
+    /acquisition and stage cleanup failed/,
+  )
+  assert.equal(lstatSync(destination).isSymbolicLink(), true)
+  assert.equal(readFileSync(external, "utf8"), "preserve")
+})
+
+test("a source substituted during publication is preserved and never followed", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-node-source-substitution-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const cache = join(root, "cache")
+  const external = join(root, "external")
+  mkdirSync(cache)
+  writeFileSync(external, "preserve")
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  let source
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          writeFileSync(destination, good)
+        },
+        beforePublish({ source: staged }) {
+          source = staged
+          unlinkSync(staged)
+          symlinkSync(external, staged)
+        },
+      }),
+    /acquisition and stage cleanup failed/,
+  )
+  assert.equal(lstatSync(source).isSymbolicLink(), true)
+  assert.equal(existsSync(cacheObject(cache, release)), false)
+  assert.equal(readFileSync(external, "utf8"), "preserve")
 })
 
 test("a redirected cache is refused before download or external writes", (t) => {
