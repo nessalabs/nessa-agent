@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import test from "node:test"
 
 import {
@@ -66,8 +66,9 @@ function commands(root, calls) {
 function successfulProbe(calls) {
   return (command, args, options) => {
     calls.push({ args, command, options })
-    if (command.endsWith("/node")) return { status: 0, stdout: "v26.8.1\n", stderr: "" }
-    if (command.endsWith("/nessa")) return { status: 0, stdout: "Nessa\n", stderr: "" }
+    if (basename(command) === "node")
+      return { status: 0, stdout: "v26.8.1\n", stderr: "" }
+    if (basename(command) === "nessa") return { status: 0, stdout: "Nessa\n", stderr: "" }
     return {
       status: 1,
       stdout: "",
@@ -110,7 +111,7 @@ test("Linux assembly publishes and freshly verifies the complete runtime", (t) =
     assert.equal(typeof readFileSync(join(out, path), "utf8"), "string")
   assert.deepEqual(
     probeCalls.map(({ args, command, options }) => [
-      command.split("/").at(-1),
+      basename(command),
       args,
       options.timeout,
     ]),

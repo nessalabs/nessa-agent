@@ -31,10 +31,11 @@ function validatePreparedRuntime(out, executables) {
     if (!stat.isFile() || stat.size === 0)
       throw new Error(`Desktop runtime output is not a nonempty file: ${name}`)
   }
-  for (const name of Object.values(executables)) {
-    if ((lstatSync(join(out, name)).mode & 0o111) === 0)
-      throw new Error(`Desktop runtime output is not executable: ${name}`)
-  }
+  if (process.platform !== "win32")
+    for (const name of Object.values(executables)) {
+      if ((lstatSync(join(out, name)).mode & 0o111) === 0)
+        throw new Error(`Desktop runtime output is not executable: ${name}`)
+    }
   for (const name of Object.keys(HARNESSES)) {
     for (const file of ["package.json", "package-lock.json"])
       if (!lstatSync(join(out, name, file)).isFile())

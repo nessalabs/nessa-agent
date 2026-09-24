@@ -279,26 +279,35 @@ test("failed platform finalization cannot publish a runtime manifest", (t) => {
   assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
 })
 
-test("invalid finalized outputs cannot publish a runtime manifest", (t) => {
-  const { out, root, target } = fixture(t)
+test(
+  "invalid finalized outputs cannot publish a runtime manifest",
+  {
+    skip:
+      process.platform === "win32"
+        ? "Windows filesystems do not expose the POSIX execute bits this regression changes"
+        : false,
+  },
+  (t) => {
+    const { out, root, target } = fixture(t)
 
-  assert.throws(
-    () =>
-      assembleDesktopRuntime({
-        root,
-        out,
-        executables: runtimeExecutables("darwin"),
-        run: fakeCommands(target, []),
-        prepareNode({ executable, out: runtime }) {
-          writeFileSync(join(runtime, executable), "node", { mode: 0o755 })
-          writeFileSync(join(runtime, "NODE-LICENSE"), "license")
-          return "26.8.1"
-        },
-        finalizeExecutables({ executables, out: runtime }) {
-          chmodSync(join(runtime, executables.gateway), 0o644)
-        },
-      }),
-    /not executable: nessa/,
-  )
-  assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
-})
+    assert.throws(
+      () =>
+        assembleDesktopRuntime({
+          root,
+          out,
+          executables: runtimeExecutables("darwin"),
+          run: fakeCommands(target, []),
+          prepareNode({ executable, out: runtime }) {
+            writeFileSync(join(runtime, executable), "node", { mode: 0o755 })
+            writeFileSync(join(runtime, "NODE-LICENSE"), "license")
+            return "26.8.1"
+          },
+          finalizeExecutables({ executables, out: runtime }) {
+            chmodSync(join(runtime, executables.gateway), 0o644)
+          },
+        }),
+      /not executable: nessa/,
+    )
+    assert.throws(() => readFileSync(join(out, "manifest.json")), /ENOENT/)
+  },
+)
