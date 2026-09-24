@@ -3,12 +3,12 @@ use super::*;
 use crate::application::agent_execution::providers::{
     ExecutableUseError, ExecutableUseGuard, ResourceCleanup,
 };
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-#[cfg(unix)]
-use std::{path::PathBuf, time::Duration};
 
 struct RetryRelease {
     attempts: Arc<AtomicUsize>,

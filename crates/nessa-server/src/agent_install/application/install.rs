@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::ports::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, InstallDeliveryFailure,
     InstallDeliveryFailureStage, InstallationDelivery, InstallationDeliverySession,
-    PendingInstallationDelivery, PreparedInstallation, PublicationChange,
+    PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
     PublicationCleanupFailure, PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure,
     StagedArchive, StoreFailure,
 };

@@ -1,5 +1,6 @@
 //! Restoration fingerprints distinguish context settings without retaining credentials.
 use super::support::*;
+use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 use crate::application::agent_execution::sessions::{SessionManager, StorageError};
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::acp::sessions::StdioMcpServer;
@@ -61,7 +62,11 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
             }
             2 => changed.arguments.push("semantic-setting".into()),
             3 => changed.arguments.swap(0, 1),
-            4 => changed.executable = PathBuf::from("/nonexistent/different-provider"),
+            4 => {
+                changed.executable = ExecutableUseSnapshot::unmanaged(PathBuf::from(
+                    "/nonexistent/different-provider",
+                ))
+            }
             5 => changed.tools_enabled = false,
             _ => changed.mcp_servers.push(StdioMcpServer {
                 name: "nessa".into(),

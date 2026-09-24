@@ -34,9 +34,19 @@ impl ExecutionAudit for Audit {
 }
 async fn blocked_worker(
     frames: &str,
-) -> (Worker<TestAcpProfile>, ExecutionController, EventReceiver) {
+    retain_executable_use: bool,
+) -> (
+    Worker<TestAcpProfile>,
+    ExecutionController,
+    EventReceiver,
+    Option<ProcessCleanup>,
+) {
     let (_root, mut config, capabilities) = profile_setup();
     config.shutdown_grace = Duration::from_millis(20);
+    let recovery = retain_executable_use.then(|| {
+        let executable_use = config.executable.admit().unwrap();
+        ProcessCleanup::new(config.clone(), executable_use)
+    });
     let mut command = tokio::process::Command::new("/usr/bin/python3");
     command.args([
         "-c",
@@ -108,14 +118,14 @@ async fn blocked_worker(
         correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
     };
-    (worker, execution, receiver)
+    (worker, execution, receiver, recovery)
 }
 
 #[tokio::test]
 async fn live_nested_responses_observe_earliest_execution_or_steering_deadline() {
     for steering_first in [false, true] {
         for method in ["unsupported/test", "session/request_permission"] {
-            let (mut worker, mut execution, _events) = blocked_worker("").await;
+            let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
             tokio::time::pause();
             let began = Instant::now();
             let soon = began + Duration::from_millis(20);
@@ -168,7 +178,8 @@ async fn live_nested_responses_observe_earliest_execution_or_steering_deadline()
 #[tokio::test]
 async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
     for reject_audit in [false, true] {
-        let (mut worker, mut execution, _events) = blocked_worker("").await;
+        let (mut worker, mut execution, _events, recovery) = blocked_worker("", true).await;
+        let recovery = recovery.expect("this fixture admitted executable use before spawn");
         let audit = Arc::new(Audit::default());
         worker.audit = audit.clone();
         worker
@@ -209,7 +220,7 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
         audit.reject.store(reject_audit, Ordering::SeqCst);
         let failure = worker.record_failure(OperationEffectPhase::Worker, AgentError::Deadline);
         let completed = worker
-            .finish(&mut Some(execution), Err(failure), &mut None)
+            .finish(&mut Some(execution), Err(failure), &mut None, &recovery)
             .await;
         assert!(completed.cleanup.is_confirmed());
         assert_eq!(
@@ -258,7 +269,7 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
             "{}\n",
             json!({"jsonrpc":"2.0","id":77,"method":method,"params":{"sessionId":"context"}})
         );
-        let (mut worker, _, _events) = blocked_worker(&frames).await;
+        let (mut worker, _, _events, _recovery) = blocked_worker(&frames, false).await;
         worker.active = None;
         let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
         let (reply, _result) = oneshot::channel();
@@ -296,7 +307,7 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
 
 #[tokio::test]
 async fn successful_completion_releases_its_temporary_shutdown_deadline() {
-    let (mut worker, mut execution, _events) = blocked_worker("").await;
+    let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
     let message =
         serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}))
             .unwrap();
@@ -334,7 +345,7 @@ async fn successful_completion_releases_its_temporary_shutdown_deadline() {
 
 #[tokio::test]
 async fn shutdown_grace_preserves_explicit_cause_past_old_steering_deadline() {
-    let (mut worker, mut execution, _events) = blocked_worker("").await;
+    let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
     let actor = ActionContext::new("owner", "phone", "close").unwrap();
     let request = SessionCloseRequest::Explicit(actor);
     let cause = (request.reason(), request.origin());
@@ -373,7 +384,7 @@ fn request(id: &str) -> ExecutionRequest {
 
 #[tokio::test]
 async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
-    let (mut worker, mut execution, _events) = blocked_worker("").await;
+    let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
     worker.steering_supported = true;
     tokio::time::pause();
     let began = Instant::now();
@@ -412,7 +423,7 @@ async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
 
 #[tokio::test]
 async fn an_execution_write_is_armed_with_what_the_read_left() {
-    let (mut worker, _, _events) = blocked_worker("").await;
+    let (mut worker, _, _events, _recovery) = blocked_worker("", false).await;
     worker.active = None;
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     // The configured limit is longer than what is left, so arming from it

@@ -4,8 +4,7 @@ use super::ports::{Publication, PublicationLease, RuntimeReclamationEffect, Stor
 use crate::agent_install::domain::{
     AdmissionResult, AgentName, InstallFailureEvidence, InstallFailureKind, InstallRequest,
     InstallTransition, ManagedInstallation, ReclamationEvent, ReclamationObservation,
-    ReclamationOperationId, ReclamationPhysicalOutcome, ReclamationTrigger, ReclamationWork,
-    RuntimeArtifact,
+    ReclamationOperationId, ReclamationTrigger, ReclamationWork, RuntimeArtifact,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
