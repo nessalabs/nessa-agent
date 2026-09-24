@@ -16,17 +16,15 @@
 pub mod entities;
 mod release_selection;
 pub mod value_objects;
-pub use entities::{
-    InstallAttempt, InstallAttemptError, InstallEventAdmission, PublicationDeliveryError,
-    PublicationOutcome, PublicationPreparation, PublicationSettlement,
-};
+pub use entities::{InstallAttempt, InstallAttemptError, InstallEventAdmission};
 pub use release_selection::preferred_release;
 pub use value_objects::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveSize, ArchiveUrl, FileRole,
     HostPlatform, InstallEventIdentity, InstallEventSlot, InstallFailureEvidence,
     InstallFailureKind, InstallRequest, InstallRequestError, InstallTransition,
     InstallTransitionError, InstallTransitionFacts, InstallTransitionKind, Libc, NotAnAgentName,
-    PinRejected, PinnedRelease, RecoveryFailureEvidence, RecoveryState, ReleaseContents,
-    ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion, RollbackState,
-    RuntimeArtifact,
+    PinRejected, PinnedRelease, PublicationDeliveryError, PublicationOutcome,
+    PublicationPreparation, PublicationSettlement, RecoveryFailureEvidence, RecoveryState,
+    ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
+    RollbackState, RuntimeArtifact,
 };

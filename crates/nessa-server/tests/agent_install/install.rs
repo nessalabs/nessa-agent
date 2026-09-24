@@ -773,9 +773,7 @@ fn no_effect_outcomes_are_explicit_for_reuse_and_prepublication_failure() {
             calls
                 .iter()
                 .find(|call| matches!(call, DeliveryCall::Retain(_))),
-            Some(DeliveryCall::Retain(
-                PublicationOutcome::NoPublicationEffect(_)
-            ))
+            Some(DeliveryCall::Retain(outcome)) if outcome.is_no_publication_effect()
         ));
         assert!(audit.terminal_records().is_empty());
         assert!(delivery.pending().is_none());

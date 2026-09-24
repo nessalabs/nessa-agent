@@ -923,7 +923,10 @@ representation prevents a rejected digest from equalling the target, a runtime
 from replacing itself, or a rollback from claiming the failed target was
 restored. Incomplete recovery retains the original publication failure, each
 cleanup stage that failed, and either the remaining state the store confirmed
-or an explicit unconfirmed state. `entities/install_attempt.rs` is the sequence
+or an explicit unconfirmed state. `value_objects/publication_delivery.rs` owns
+immutable preparation, outcome, and settlement values; its private outcome
+representation requires every terminal to pass through the install-attempt
+sequence validation. `entities/install_attempt.rs` is the sequence
 owner: started may become verified or rejected, and only verified may become
 installed, replaced, rolled back, or incomplete recovery. Application and
 infrastructure cannot construct contradictory before/after evidence around that

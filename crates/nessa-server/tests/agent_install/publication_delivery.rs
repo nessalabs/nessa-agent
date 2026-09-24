@@ -46,6 +46,22 @@ fn terminal_must_belong_to_the_exact_prepared_attempt() {
 }
 
 #[test]
+fn terminal_constructor_rejects_a_nonterminal_transition_from_the_prepared_attempt() {
+    let release = release("1.0.0", PINNED_DIGEST, &platform());
+    let (mut attempt, started) = InstallAttempt::start(
+        agent(),
+        crate::agent_install::domain::RuntimeArtifact::for_release(&release),
+        request(),
+    );
+    let preparation = PublicationPreparation::new(attempt.verified().unwrap()).unwrap();
+
+    assert_eq!(
+        PublicationOutcome::terminal(&preparation, started),
+        Err(PublicationDeliveryError::OutcomeIsNotTerminal)
+    );
+}
+
+#[test]
 fn settlement_requires_the_exact_retained_predecessor() {
     let mut first = attempt();
     let preparation = PublicationPreparation::new(first.verified().unwrap()).unwrap();

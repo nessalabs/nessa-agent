@@ -117,11 +117,14 @@ impl StoredSettlement {
 
 impl From<&PublicationOutcome> for StoredOutcomeFacts {
     fn from(value: &PublicationOutcome) -> Self {
-        match value {
-            PublicationOutcome::Terminal(transition) => Self::Terminal {
+        match value.terminal_transition() {
+            Some(transition) => Self::Terminal {
                 transition: StoredTransition::from(transition),
             },
-            PublicationOutcome::NoPublicationEffect(_) => Self::NoPublicationEffect,
+            None => {
+                debug_assert!(value.is_no_publication_effect());
+                Self::NoPublicationEffect
+            }
         }
     }
 }

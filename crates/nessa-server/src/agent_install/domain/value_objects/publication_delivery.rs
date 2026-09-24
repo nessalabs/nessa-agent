@@ -27,11 +27,21 @@ impl PublicationPreparation {
 }
 
 /// What the admitted publication established.
+///
+/// The representation is private so every terminal passes through
+/// [`Self::terminal`] and its attempt-sequence validation. Callers cannot
+/// construct a terminal from an arbitrary transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PublicationOutcome {
-    /// Publication or rollback produced an exact terminal install transition.
-    Terminal(InstallTransition),
-    /// The store confirmed that this admitted call performed no publication effect.
+pub struct PublicationOutcome {
+    facts: PublicationOutcomeFacts,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PublicationOutcomeFacts {
+    Terminal {
+        preparation: PublicationPreparation,
+        terminal: InstallTransition,
+    },
     NoPublicationEffect(PublicationPreparation),
 }
 
@@ -55,36 +65,40 @@ impl PublicationOutcome {
         let mut attempt = InstallAttempt::from_started(started)?;
         attempt.admit(verified.clone())?;
         attempt.admit(terminal.clone())?;
-        Ok(Self::Terminal(terminal))
+        Ok(Self {
+            facts: PublicationOutcomeFacts::Terminal {
+                preparation: preparation.clone(),
+                terminal,
+            },
+        })
     }
 
     /// Record the store's typed statement that no publication effect occurred.
     pub fn no_publication_effect(preparation: PublicationPreparation) -> Self {
-        Self::NoPublicationEffect(preparation)
+        Self {
+            facts: PublicationOutcomeFacts::NoPublicationEffect(preparation),
+        }
     }
 
     /// Return the preparation this outcome settles.
     pub fn preparation(&self) -> PublicationPreparation {
-        match self {
-            Self::Terminal(terminal) => PublicationPreparation {
-                verified: InstallTransition::restore(
-                    terminal.agent().clone(),
-                    terminal.target().clone(),
-                    terminal.request().clone(),
-                    InstallTransitionFacts::Verified,
-                )
-                .expect("verified evidence is intrinsically valid"),
-            },
-            Self::NoPublicationEffect(preparation) => preparation.clone(),
+        match &self.facts {
+            PublicationOutcomeFacts::Terminal { preparation, .. }
+            | PublicationOutcomeFacts::NoPublicationEffect(preparation) => preparation.clone(),
         }
     }
 
     /// Return the terminal transition when publication had consequential facts.
     pub fn terminal_transition(&self) -> Option<&InstallTransition> {
-        match self {
-            Self::Terminal(terminal) => Some(terminal),
-            Self::NoPublicationEffect(_) => None,
+        match &self.facts {
+            PublicationOutcomeFacts::Terminal { terminal, .. } => Some(terminal),
+            PublicationOutcomeFacts::NoPublicationEffect(_) => None,
         }
+    }
+
+    /// Return whether the store confirmed that publication made no change.
+    pub fn is_no_publication_effect(&self) -> bool {
+        matches!(&self.facts, PublicationOutcomeFacts::NoPublicationEffect(_))
     }
 }
 
