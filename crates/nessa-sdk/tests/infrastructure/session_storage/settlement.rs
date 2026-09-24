@@ -59,6 +59,10 @@ async fn explicit_settlement_facts_round_trip_all_outcomes_and_cleanup_statuses(
         let resources = [
             ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
             ResourceCleanup::Confirmed(CloseOutcome { forced: true }),
+            ResourceCleanup::ReleasePending {
+                physical: CloseOutcome { forced: true },
+                failure: AgentError::Configuration("release acknowledgement failed".into()),
+            },
             ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain),
         ];
         let mut attachments = vec![

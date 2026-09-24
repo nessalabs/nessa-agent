@@ -24,12 +24,12 @@ pub(super) enum Settlement {
     LocalCancellation(Cleanup),
     ProviderFinalized {
         result: Option<Result<Outcome, SavedError>>,
-        resources: Result<bool, SavedError>,
+        resources: SavedResources,
         completion_failure: Option<SavedError>,
         projection: Vec<FinalizedComponent>,
     },
     LocalCancellationFinalized {
-        resources: Result<bool, SavedError>,
+        resources: SavedResources,
         completion_failure: Option<SavedError>,
         projection: Vec<FinalizedComponent>,
     },
@@ -53,10 +53,17 @@ pub(super) enum Attachment {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Cleanup {
-    resources: Result<bool, SavedError>,
+    resources: SavedResources,
     audit: Result<(), SavedError>,
     operation_failure: Option<SavedError>,
     completion_failure: Option<SavedError>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum SavedResources {
+    Confirmed { forced: bool },
+    ReleasePending { forced: bool, failure: SavedError },
+    Unconfirmed(SavedError),
 }
 impl From<CleanupReport> for Cleanup {
     fn from(value: CleanupReport) -> Self {
@@ -212,16 +219,26 @@ impl From<FinalizedComponent> for FinalizedFailureComponent {
         }
     }
 }
-fn encode_resources(resources: &ResourceCleanup) -> Result<bool, SavedError> {
+fn encode_resources(resources: &ResourceCleanup) -> SavedResources {
     match resources {
-        ResourceCleanup::Confirmed(outcome) => Ok(outcome.forced),
-        ResourceCleanup::Unconfirmed(error) => Err(error.clone().into()),
+        ResourceCleanup::Confirmed(outcome) => SavedResources::Confirmed {
+            forced: outcome.forced,
+        },
+        ResourceCleanup::ReleasePending { physical, failure } => SavedResources::ReleasePending {
+            forced: physical.forced,
+            failure: failure.clone().into(),
+        },
+        ResourceCleanup::Unconfirmed(error) => SavedResources::Unconfirmed(error.clone().into()),
     }
 }
-fn decode_resources(resources: Result<bool, SavedError>) -> ResourceCleanup {
+fn decode_resources(resources: SavedResources) -> ResourceCleanup {
     match resources {
-        Ok(forced) => ResourceCleanup::Confirmed(CloseOutcome { forced }),
-        Err(error) => ResourceCleanup::Unconfirmed(error.into()),
+        SavedResources::Confirmed { forced } => ResourceCleanup::Confirmed(CloseOutcome { forced }),
+        SavedResources::ReleasePending { forced, failure } => ResourceCleanup::ReleasePending {
+            physical: CloseOutcome { forced },
+            failure: failure.into(),
+        },
+        SavedResources::Unconfirmed(error) => ResourceCleanup::Unconfirmed(error.into()),
     }
 }
 fn decode_projection(

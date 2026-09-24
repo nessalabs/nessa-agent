@@ -13,6 +13,13 @@ use std::{future::Future, pin::Pin};
 pub enum ResourceCleanup {
     /// The adapter confirmed release of its owned resources.
     Confirmed(CloseOutcome),
+    /// Physical cleanup is confirmed, while executable-use release still requires retry.
+    ReleasePending {
+        /// Confirmed physical process cleanup.
+        physical: CloseOutcome,
+        /// Why durable executable-use acknowledgement remains pending.
+        failure: AgentError,
+    },
     /// Resources remain owned; retain the provider session and retry cleanup.
     Unconfirmed(AgentError),
 }
@@ -31,6 +38,12 @@ impl CleanupReport {
     pub fn new(resources: ResourceCleanup, audit: Result<(), AgentError>) -> Self {
         let resources = match resources {
             ResourceCleanup::Confirmed(outcome) => ResourceCleanup::Confirmed(outcome),
+            ResourceCleanup::ReleasePending { physical, failure } => {
+                ResourceCleanup::ReleasePending {
+                    physical,
+                    failure: failure.bounded(),
+                }
+            }
             ResourceCleanup::Unconfirmed(error) => ResourceCleanup::Unconfirmed(error.bounded()),
         };
         Self {
@@ -59,6 +72,16 @@ impl CleanupReport {
     /// Whether resource ownership can be released, including audit-only failure.
     pub fn is_confirmed(&self) -> bool {
         matches!(self.resources, ResourceCleanup::Confirmed(_))
+    }
+    /// Return confirmed physical cleanup even while durable use release is pending.
+    pub fn physical_outcome(&self) -> Option<CloseOutcome> {
+        match &self.resources {
+            ResourceCleanup::Confirmed(outcome)
+            | ResourceCleanup::ReleasePending {
+                physical: outcome, ..
+            } => Some(*outcome),
+            ResourceCleanup::Unconfirmed(_) => None,
+        }
     }
     /// Replace physical evidence after retry, retaining the original audit result.
     pub fn with_resources(self, resources: ResourceCleanup) -> Self {
@@ -120,6 +143,13 @@ impl CleanupReport {
             },
             (ResourceCleanup::Confirmed(_), Err(error))
             | (ResourceCleanup::Unconfirmed(error), Ok(())) => error,
+            (ResourceCleanup::ReleasePending { failure, .. }, Ok(())) => failure,
+            (ResourceCleanup::ReleasePending { failure, .. }, Err(audit)) => {
+                AgentError::OperationAndCleanupFailure {
+                    operation_error: Box::new(audit),
+                    cleanup_error: Box::new(failure),
+                }
+            }
             (ResourceCleanup::Unconfirmed(cleanup_error), Err(operation_error)) => {
                 AgentError::OperationAndCleanupFailure {
                     operation_error: Box::new(operation_error),
@@ -242,6 +272,12 @@ impl FinalizedExecutionReport {
     ) -> Self {
         let physical = match physical {
             ResourceCleanup::Confirmed(outcome) => ResourceCleanup::Confirmed(outcome),
+            ResourceCleanup::ReleasePending { physical, failure } => {
+                ResourceCleanup::ReleasePending {
+                    physical,
+                    failure: failure.bounded(),
+                }
+            }
             ResourceCleanup::Unconfirmed(error) => ResourceCleanup::Unconfirmed(error.bounded()),
         };
         let completion_failure = completion_failure.map(AgentError::bounded);
@@ -263,6 +299,7 @@ impl FinalizedExecutionReport {
     fn physical_failure(&self) -> Option<AgentError> {
         let physical = match &self.physical {
             ResourceCleanup::Confirmed(_) => None,
+            ResourceCleanup::ReleasePending { failure, .. } => Some(failure.clone()),
             ResourceCleanup::Unconfirmed(error) => Some(error.clone()),
         };
         combine_failures(physical, self.completion_failure.clone())

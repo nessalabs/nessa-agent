@@ -57,10 +57,17 @@ async fn release_acknowledgement_retries_without_repeating_confirmed_physical_cl
     assert!(!first.is_confirmed());
     assert_eq!(
         first.resources(),
-        &ResourceCleanup::Unconfirmed(AgentError::Configuration(
-            "executable use release acknowledgement failed: release journal acknowledgement failed"
-                .into()
-        ))
+        &ResourceCleanup::ReleasePending {
+            physical: CloseOutcome { forced: false },
+            failure: AgentError::Configuration(
+                "executable use release acknowledgement failed: release journal acknowledgement failed"
+                    .into()
+            ),
+        }
+    );
+    assert_eq!(
+        first.physical_outcome(),
+        Some(CloseOutcome { forced: false })
     );
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 
@@ -70,6 +77,34 @@ async fn release_acknowledgement_retries_without_repeating_confirmed_physical_cl
         &ResourceCleanup::Confirmed(CloseOutcome { forced: false })
     );
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn missing_spawn_transfer_never_acknowledges_executable_use_release() {
+    let (_root, config, _) =
+        crate::infrastructure::acp::tests::profile_substitution::profile_setup();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let cleanup = ProcessCleanup::new(
+        config,
+        Box::new(RetryRelease {
+            attempts: attempts.clone(),
+        }),
+    );
+
+    let report = cleanup.retry_cleanup().await;
+    assert_eq!(
+        report.resources(),
+        &ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain)
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 0);
+
+    drop(cleanup);
+    tokio::task::yield_now().await;
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        0,
+        "an untransferred spawned-process state cannot authorize release"
+    );
 }
 
 #[cfg(unix)]
