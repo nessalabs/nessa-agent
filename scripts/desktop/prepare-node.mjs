@@ -254,9 +254,7 @@ function cacheEntryKind(stat) {
 }
 
 function refuseNonregularCacheEntry(path, stat) {
-  throw new Error(
-    `Node archive cache entry is ${cacheEntryKind(stat)} and was preserved; inspect that exact path before retrying: ${path}`,
-  )
+  throw new Error(`Node archive path is ${cacheEntryKind(stat)}: ${path}`)
 }
 
 function pathIdentity(path, { allowAbsent = false } = {}) {
@@ -275,7 +273,7 @@ function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } 
   const initialIdentity = pathIdentity(path, { allowAbsent })
   if (!initialIdentity) return undefined
   if (identity && !sameIdentity(initialIdentity, identity))
-    throw new Error(`Node archive path changed and was preserved: ${path}`)
+    throw new Error(`Node archive path identity changed: ${path}`)
 
   let descriptor
   try {
@@ -289,21 +287,18 @@ function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } 
       throw new Error(`Node archive cache entry changed to a symbolic link: ${path}`, {
         cause: error,
       })
-    throw new Error(
-      `Node archive cache entry could not be opened safely and was preserved; inspect that exact path before retrying: ${path}`,
-      { cause: error },
-    )
+    throw new Error(`Node archive path could not be opened safely: ${path}`, {
+      cause: error,
+    })
   }
   try {
     const before = fstatSync(descriptor)
     if (!before.isFile()) refuseNonregularCacheEntry(path, before)
     const openedIdentity = { dev: before.dev, ino: before.ino }
     if (!sameIdentity(initialIdentity, openedIdentity))
-      throw new Error(
-        `Node archive path changed while opening and was preserved: ${path}`,
-      )
+      throw new Error(`Node archive path identity changed while opening: ${path}`)
     if (before.size > MAX_NODE_ARCHIVE_BYTES)
-      throw new Error(`Node archive cache entry is oversized and was preserved: ${path}`)
+      throw new Error(`Node archive exceeds its compressed-size limit: ${path}`)
 
     const hash = createHash("sha256")
     const chunks = []
@@ -314,9 +309,7 @@ function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } 
       if (count === 0) break
       size += count
       if (size > MAX_NODE_ARCHIVE_BYTES)
-        throw new Error(
-          `Node archive cache entry grew beyond its limit and was preserved: ${path}`,
-        )
+        throw new Error(`Node archive grew beyond its compressed-size limit: ${path}`)
       const used = chunk.subarray(0, count)
       hash.update(used)
       chunks.push(Buffer.from(used))
@@ -328,13 +321,9 @@ function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } 
       !sameIdentity(openedIdentity, finalPathIdentity) ||
       after.size !== size
     )
-      throw new Error(
-        `Node archive path changed while reading and was preserved: ${path}`,
-      )
+      throw new Error(`Node archive path identity changed while reading: ${path}`)
     if (hash.digest("hex") !== expectedSha256)
-      throw new Error(
-        `Node archive cache entry fails its pinned digest and was preserved: ${path}`,
-      )
+      throw new Error(`Node archive does not match its pinned digest: ${path}`)
     return { bytes: Buffer.concat(chunks, size), identity: openedIdentity }
   } finally {
     closeSync(descriptor)
@@ -354,7 +343,7 @@ export function nodeCacheObjectName(release) {
 function directoryIdentity(path) {
   const stat = lstatSync(path)
   if (!stat.isDirectory() || stat.isSymbolicLink())
-    throw new Error(`Node download stage changed and was preserved: ${path}`)
+    throw new Error(`Node download stage identity changed: ${path}`)
   return { dev: stat.dev, ino: stat.ino }
 }
 
@@ -367,27 +356,25 @@ function cleanupDownloadStage({ downloaded, downloadedIdentity, stage, stageIden
     throw error
   }
   if (!sameIdentity(currentStage, stageIdentity))
-    throw new Error(`Node download stage changed and was preserved: ${stage}`)
+    throw new Error(`Node download stage identity changed: ${stage}`)
 
   if (downloadedIdentity) {
     let currentDownload
     try {
       currentDownload = pathIdentity(downloaded, { allowAbsent: true })
     } catch (error) {
-      throw new Error(`Node download path changed and was preserved: ${downloaded}`, {
+      throw new Error(`Node download path identity changed: ${downloaded}`, {
         cause: error,
       })
     }
     if (currentDownload) {
       if (!sameIdentity(currentDownload, downloadedIdentity))
-        throw new Error(`Node download path changed and was preserved: ${downloaded}`)
+        throw new Error(`Node download path identity changed: ${downloaded}`)
       unlinkSync(downloaded)
     }
   }
   if (readdirSync(stage).length !== 0)
-    throw new Error(
-      `Node download stage contains an unowned entry and was preserved: ${stage}`,
-    )
+    throw new Error(`Node download stage contains an unowned entry: ${stage}`)
   rmdirSync(stage)
 }
 
@@ -408,7 +395,15 @@ export function acquireVerifiedNodeArchive({
   if (!lstatSync(cache).isDirectory())
     throw new Error("Node archive cache must be an owned directory")
   const archive = join(cache, nodeCacheObjectName(release))
-  const cached = inspectArchive(archive, release.sha256, { allowAbsent: true })
+  let cached
+  try {
+    cached = inspectArchive(archive, release.sha256, { allowAbsent: true })
+  } catch (cause) {
+    throw new Error(
+      `Node cache object validation failed; this invocation made no mutation at ${archive}`,
+      { cause },
+    )
+  }
   if (cached) return cached.bytes
 
   const downloadStage = mkdtempSync(join(cache, ".node-download-"))
@@ -425,7 +420,7 @@ export function acquireVerifiedNodeArchive({
       url: release.url,
     })
     if (!sameIdentity(directoryIdentity(downloadStage), stageIdentity))
-      throw new Error(`Node download stage changed and was preserved: ${downloadStage}`)
+      throw new Error(`Node download stage identity changed: ${downloadStage}`)
     downloadedIdentity = pathIdentity(downloaded)
     const staged = inspectArchive(downloaded, release.sha256, {
       identity: downloadedIdentity,
@@ -459,10 +454,18 @@ export function acquireVerifiedNodeArchive({
   if (failure && cleanupFailure)
     throw new AggregateError(
       [failure, cleanupFailure],
-      "Node acquisition and stage cleanup failed",
+      `Node acquisition and owned-stage cleanup both failed; foreign or changed stage content was left untouched at ${downloadStage}`,
     )
-  if (failure) throw failure
-  if (cleanupFailure) throw cleanupFailure
+  if (failure)
+    throw new Error(
+      `Node acquisition failed after its owned stage was removed at ${downloadStage}`,
+      { cause: failure },
+    )
+  if (cleanupFailure)
+    throw new Error(
+      `Node acquisition succeeded but owned-stage cleanup failed; foreign or changed stage content was left untouched at ${downloadStage}`,
+      { cause: cleanupFailure },
+    )
   return result
 }
 

@@ -82,6 +82,15 @@ function cacheObject(cache, release) {
   return join(cache, nodeCacheObjectName(release))
 }
 
+function captureError(run) {
+  let captured
+  assert.throws(run, (error) => {
+    captured = error
+    return true
+  })
+  return captured
+}
+
 test("the reviewed Node release table is exact and closed", () => {
   assert.deepEqual(nodeArchive("darwin", "arm64"), {
     archive: "node-v26.8.1-darwin-arm64.tar.gz",
@@ -323,16 +332,20 @@ test("invalid regular digest objects refuse unchanged without download", async (
       }
       const before = lstatSync(archive)
       let downloaded = false
-      assert.throws(
-        () =>
-          acquireVerifiedNodeArchive({
-            cache,
-            release,
-            download() {
-              downloaded = true
-            },
-          }),
-        kind === "digest" ? /fails its pinned digest.*preserved/ : /oversized.*preserved/,
+      const error = captureError(() =>
+        acquireVerifiedNodeArchive({
+          cache,
+          release,
+          download() {
+            downloaded = true
+          },
+        }),
+      )
+      assert.match(error.message, /validation failed; this invocation made no mutation/)
+      assert.equal(error.message.includes(archive), true)
+      assert.match(
+        error.cause.message,
+        kind === "digest" ? /does not match its pinned digest/ : /compressed-size limit/,
       )
       const after = lstatSync(archive)
       assert.equal(downloaded, false)
@@ -352,40 +365,40 @@ test("a corrupt staged download is removed without publishing", (t) => {
     sha256: "0".repeat(64),
     url: "https://example.invalid/node-fixture.tar.gz",
   }
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          writeFileSync(destination, "corrupt")
-        },
-      }),
-    /fails its pinned digest.*preserved/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, "corrupt")
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /does not match its pinned digest/)
   assert.deepEqual(readdirSync(cache), [])
 })
 
 test("an oversized unknown-length download is rejected and removed", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-oversized-download-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release: {
-          archive: "node-fixture.tar.gz",
-          sha256: "0".repeat(64),
-          url: "https://example.invalid/node-fixture.tar.gz",
-        },
-        download({ destination, maxBytes }) {
-          assert.equal(maxBytes, MAX_NODE_ARCHIVE_BYTES)
-          writeFileSync(destination, "")
-          truncateSync(destination, maxBytes + 1)
-        },
-      }),
-    /oversized.*preserved/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release: {
+        archive: "node-fixture.tar.gz",
+        sha256: "0".repeat(64),
+        url: "https://example.invalid/node-fixture.tar.gz",
+      },
+      download({ destination, maxBytes }) {
+        assert.equal(maxBytes, MAX_NODE_ARCHIVE_BYTES)
+        writeFileSync(destination, "")
+        truncateSync(destination, maxBytes + 1)
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /compressed-size limit/)
   assert.deepEqual(readdirSync(cache), [])
 })
 
@@ -457,22 +470,22 @@ test("a bounded successful transfer writes the exact returned bytes", (t) => {
 test("a timed-out download leaves no cache or staging entry", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-timeout-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release: {
-          archive: "node-fixture.tar.gz",
-          sha256: "0".repeat(64),
-          url: "https://example.invalid/node-fixture.tar.gz",
-        },
-        download({ timeoutSeconds }) {
-          assert.equal(timeoutSeconds, 120)
-          throw new Error("download timed out")
-        },
-      }),
-    /timed out/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release: {
+        archive: "node-fixture.tar.gz",
+        sha256: "0".repeat(64),
+        url: "https://example.invalid/node-fixture.tar.gz",
+      },
+      download({ timeoutSeconds }) {
+        assert.equal(timeoutSeconds, 120)
+        throw new Error("download timed out")
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /download timed out/)
   assert.deepEqual(readdirSync(cache), [])
 })
 
@@ -535,15 +548,19 @@ test("nonregular cache entries are refused without mutation", async (t) => {
           execFileSync("mkfifo", [archive])
         }
         let downloaded = false
-        assert.throws(
-          () =>
-            acquireVerifiedNodeArchive({
-              cache,
-              release,
-              download() {
-                downloaded = true
-              },
-            }),
+        const error = captureError(() =>
+          acquireVerifiedNodeArchive({
+            cache,
+            release,
+            download() {
+              downloaded = true
+            },
+          }),
+        )
+        assert.match(error.message, /validation failed; this invocation made no mutation/)
+        assert.equal(error.message.includes(archive), true)
+        assert.match(
+          error.cause.message,
           new RegExp(kind === "symlink" ? "symbolic link" : kind),
         )
         assert.equal(downloaded, false)
@@ -565,19 +582,19 @@ test("a nonregular replacement during download is preserved and refused", (t) =>
     url: "https://example.invalid/node-fixture.tar.gz",
   }
   const archive = cacheObject(cache, release)
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          mkdirSync(archive)
-          writeFileSync(join(archive, "marker"), "preserve")
-          writeFileSync(destination, good)
-        },
-      }),
-    /directory/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        mkdirSync(archive)
+        writeFileSync(join(archive, "marker"), "preserve")
+        writeFileSync(destination, good)
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /directory/)
   assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
 })
 
@@ -591,26 +608,26 @@ test("a nonregular replacement at exclusive publication is preserved", (t) => {
     url: "https://example.invalid/node-fixture.tar.gz",
   }
   const archive = cacheObject(cache, release)
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          writeFileSync(destination, good)
-        },
-        publish(source, destination) {
-          assert.equal(existsSync(source), true)
-          assert.equal(destination, archive)
-          mkdirSync(destination)
-          writeFileSync(join(destination, "marker"), "preserve")
-          const error = new Error("destination appeared")
-          error.code = "EEXIST"
-          throw error
-        },
-      }),
-    /directory/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, good)
+      },
+      publish(source, destination) {
+        assert.equal(existsSync(source), true)
+        assert.equal(destination, archive)
+        mkdirSync(destination)
+        writeFileSync(join(destination, "marker"), "preserve")
+        const publicationError = new Error("destination appeared")
+        publicationError.code = "EEXIST"
+        throw publicationError
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /directory/)
   assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
 })
 
@@ -651,20 +668,20 @@ test("a publisher reporting success with a corrupt destination is refused", (t) 
   const good = tar(selected)
   const release = fixtureRelease(good)
   const archive = cacheObject(cache, release)
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          writeFileSync(destination, good)
-        },
-        publish(_source, destination) {
-          writeFileSync(destination, "preserve")
-        },
-      }),
-    /path changed.*preserved/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, good)
+      },
+      publish(_source, destination) {
+        writeFileSync(destination, "preserve")
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /path identity changed/)
   assert.equal(readFileSync(archive, "utf8"), "preserve")
 })
 
@@ -674,24 +691,24 @@ test("a publisher reporting success with a valid different inode is refused", (t
   const good = tar(selected)
   const release = fixtureRelease(good)
   const archive = cacheObject(cache, release)
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          writeFileSync(destination, good)
-        },
-        publish(source, destination) {
-          writeFileSync(destination, good)
-          assert.notDeepEqual(
-            [lstatSync(source).dev, lstatSync(source).ino],
-            [lstatSync(destination).dev, lstatSync(destination).ino],
-          )
-        },
-      }),
-    /path changed.*preserved/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, good)
+      },
+      publish(source, destination) {
+        writeFileSync(destination, good)
+        assert.notDeepEqual(
+          [lstatSync(source).dev, lstatSync(source).ino],
+          [lstatSync(destination).dev, lstatSync(destination).ino],
+        )
+      },
+    }),
   )
+  assert.match(error.message, /acquisition failed after its owned stage was removed/)
+  assert.match(error.cause.message, /path identity changed/)
   assert.deepEqual(readFileSync(archive), good)
 })
 
@@ -707,21 +724,24 @@ test("a substituted download stage is preserved without following it", (t) => {
   const release = fixtureRelease(good)
   let stage
   let moved
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          writeFileSync(destination, good)
-          stage = dirname(destination)
-          moved = `${stage}-moved`
-          renameSync(stage, moved)
-          symlinkSync(external, stage)
-        },
-      }),
-    /acquisition and stage cleanup failed/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, good)
+        stage = dirname(destination)
+        moved = `${stage}-moved`
+        renameSync(stage, moved)
+        symlinkSync(external, stage)
+      },
+    }),
   )
+  assert.equal(error instanceof AggregateError, true)
+  assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assert.equal(error.errors.length, 2)
+  assert.match(error.errors[0].message, /stage identity changed/)
+  assert.match(error.errors[1].message, /stage identity changed/)
   assert.equal(lstatSync(stage).isSymbolicLink(), true)
   assert.deepEqual(readFileSync(join(moved, release.archive)), good)
   assert.equal(readFileSync(join(external, "marker"), "utf8"), "preserve")
@@ -737,18 +757,21 @@ test("a substituted staged path is preserved without following it", (t) => {
   const good = tar(selected)
   const release = fixtureRelease(good)
   let destination
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination: path }) {
-          destination = path
-          symlinkSync(external, destination)
-        },
-      }),
-    /acquisition and stage cleanup failed/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination: path }) {
+        destination = path
+        symlinkSync(external, destination)
+      },
+    }),
   )
+  assert.equal(error instanceof AggregateError, true)
+  assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assert.equal(error.errors.length, 2)
+  assert.match(error.errors[0].message, /symbolic link/)
+  assert.match(error.errors[1].message, /stage contains an unowned entry/)
   assert.equal(lstatSync(destination).isSymbolicLink(), true)
   assert.equal(readFileSync(external, "utf8"), "preserve")
 })
@@ -763,23 +786,26 @@ test("a source substituted during publication is preserved and never followed", 
   const good = tar(selected)
   const release = fixtureRelease(good)
   let source
-  assert.throws(
-    () =>
-      acquireVerifiedNodeArchive({
-        cache,
-        release,
-        download({ destination }) {
-          writeFileSync(destination, good)
-        },
-        publish(staged, destination) {
-          source = staged
-          unlinkSync(staged)
-          symlinkSync(external, staged)
-          writeFileSync(destination, good)
-        },
-      }),
-    /acquisition and stage cleanup failed/,
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download({ destination }) {
+        writeFileSync(destination, good)
+      },
+      publish(staged, destination) {
+        source = staged
+        unlinkSync(staged)
+        symlinkSync(external, staged)
+        writeFileSync(destination, good)
+      },
+    }),
   )
+  assert.equal(error instanceof AggregateError, true)
+  assert.match(error.message, /acquisition and owned-stage cleanup both failed/)
+  assert.equal(error.errors.length, 2)
+  assert.match(error.errors[0].message, /path identity changed/)
+  assert.match(error.errors[1].message, /download path identity changed/)
   assert.equal(lstatSync(source).isSymbolicLink(), true)
   assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
   assert.equal(readFileSync(external, "utf8"), "preserve")
