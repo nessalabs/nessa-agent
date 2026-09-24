@@ -228,7 +228,7 @@ fn read_bounded_event(file: &mut std::fs::File) -> Result<StoredEvent, Reclamati
         ));
     }
     let mut encoded = Vec::new();
-    file.by_ref()
+    Read::by_ref(file)
         .take(MAXIMUM_AUDIT_RECORD_BYTES + 1)
         .read_to_end(&mut encoded)
         .map_err(audit_error)?;

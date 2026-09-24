@@ -642,7 +642,7 @@ impl ManagedRuntimes {
             ));
         }
         let mut encoded = Vec::new();
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(MAXIMUM_RECLAMATION_STATE_BYTES + 1)
             .read_to_end(&mut encoded)
             .map_err(|error| {
@@ -823,7 +823,7 @@ impl ManagedRuntimes {
             )));
         }
         let mut bytes = Vec::new();
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(MAXIMUM_USE_RECORD_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(unreadable)?;

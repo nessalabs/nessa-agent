@@ -7,7 +7,8 @@ use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, FileRole, InstallFailureEvidence, InstallFailureKind,
     InstallRequest, ReclamationAdmission, ReclamationAuditState, ReclamationEvent,
     ReclamationObligation, ReclamationOperationId, ReclamationPhysicalOutcome, ReclamationTrigger,
-    ReleaseContents, ReleaseFile, ReleaseVersion, RuntimeArtifact,
+    ReleaseContents, ReleaseFile, ReleaseVersion, ReplacementReceipt, ReplacementSettlementState,
+    RuntimeArtifact,
 };
 
 fn artifact(name: char) -> RuntimeArtifact {
