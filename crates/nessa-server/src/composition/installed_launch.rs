@@ -17,7 +17,8 @@
 use std::{path::Path, sync::Arc};
 
 use crate::agent_install::application::{
-    ManagedExecutableUseGuard, ManagedLaunchSnapshot, RuntimeStore, StoreFailure,
+    ManagedExecutableUseAdmissionOwner, ManagedExecutableUseGuard, ManagedLaunchSnapshot,
+    RuntimeStore, StoreFailure,
 };
 use crate::agent_install::domain::{preferred_release, AgentName, HostPlatform};
 use crate::agent_install::infrastructure::{releases_for, PinFileError};
@@ -107,14 +108,22 @@ impl ExecutableUse for SdkExecutableUseBridge {
         match self.snapshot.admit() {
             Ok(guard) => Ok(Box::new(SdkExecutableUseGuardBridge(guard))),
             Err(failure) => {
-                let (error, guard) = failure.into_parts();
+                let (error, owner) = failure.into_parts();
                 let error = ExecutableUseError::new(error.to_string());
-                Err(match guard {
-                    Some(guard) => ExecutableUseAdmissionFailure::with_generation(
-                        error,
-                        Box::new(SdkExecutableUseGuardBridge(guard)),
-                    ),
-                    None => ExecutableUseAdmissionFailure::before_generation(error),
+                Err(match owner {
+                    Some(ManagedExecutableUseAdmissionOwner::Confirmed(guard)) => {
+                        ExecutableUseAdmissionFailure::with_confirmed_generation(
+                            error,
+                            Box::new(SdkExecutableUseGuardBridge(guard)),
+                        )
+                    }
+                    Some(ManagedExecutableUseAdmissionOwner::Uncertain(guard)) => {
+                        ExecutableUseAdmissionFailure::with_uncertain_generation(
+                            error,
+                            Box::new(SdkExecutableUseGuardBridge(guard)),
+                        )
+                    }
+                    None => ExecutableUseAdmissionFailure::without_owner(error),
                 })
             }
         }

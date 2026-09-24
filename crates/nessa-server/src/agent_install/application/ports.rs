@@ -895,26 +895,49 @@ pub trait ManagedExecutableUseGuard: Send {
     fn release(&mut self) -> Result<(), ManagedExecutableUseFailure>;
 }
 
+pub enum ManagedExecutableUseAdmissionOwner {
+    Confirmed(Box<dyn ManagedExecutableUseGuard>),
+    Uncertain(Box<dyn ManagedExecutableUseGuard>),
+}
+
+impl ManagedExecutableUseAdmissionOwner {
+    pub fn into_guard(self) -> Box<dyn ManagedExecutableUseGuard> {
+        match self {
+            Self::Confirmed(guard) | Self::Uncertain(guard) => guard,
+        }
+    }
+}
+
 pub struct ManagedExecutableUseAdmissionFailure {
     failure: ManagedExecutableUseFailure,
-    guard: Option<Box<dyn ManagedExecutableUseGuard>>,
+    owner: Option<ManagedExecutableUseAdmissionOwner>,
 }
 
 impl ManagedExecutableUseAdmissionFailure {
-    pub fn before_generation(failure: ManagedExecutableUseFailure) -> Self {
+    pub fn without_owner(failure: ManagedExecutableUseFailure) -> Self {
         Self {
             failure,
-            guard: None,
+            owner: None,
         }
     }
 
-    pub fn with_generation(
+    pub fn with_confirmed_generation(
         failure: ManagedExecutableUseFailure,
         guard: Box<dyn ManagedExecutableUseGuard>,
     ) -> Self {
         Self {
             failure,
-            guard: Some(guard),
+            owner: Some(ManagedExecutableUseAdmissionOwner::Confirmed(guard)),
+        }
+    }
+
+    pub fn with_uncertain_generation(
+        failure: ManagedExecutableUseFailure,
+        guard: Box<dyn ManagedExecutableUseGuard>,
+    ) -> Self {
+        Self {
+            failure,
+            owner: Some(ManagedExecutableUseAdmissionOwner::Uncertain(guard)),
         }
     }
 
@@ -930,18 +953,23 @@ impl ManagedExecutableUseAdmissionFailure {
         self,
     ) -> (
         ManagedExecutableUseFailure,
-        Option<Box<dyn ManagedExecutableUseGuard>>,
+        Option<ManagedExecutableUseAdmissionOwner>,
     ) {
-        (self.failure, self.guard)
+        (self.failure, self.owner)
     }
 }
 
 impl fmt::Debug for ManagedExecutableUseAdmissionFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ownership = match &self.owner {
+            Some(ManagedExecutableUseAdmissionOwner::Confirmed(_)) => "confirmed",
+            Some(ManagedExecutableUseAdmissionOwner::Uncertain(_)) => "uncertain",
+            None => "none",
+        };
         formatter
             .debug_struct("ManagedExecutableUseAdmissionFailure")
             .field("failure", &self.failure)
-            .field("owns_generation", &self.guard.is_some())
+            .field("ownership", &ownership)
             .finish()
     }
 }

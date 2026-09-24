@@ -76,20 +76,32 @@ fn each_launch_admission_receives_a_distinct_generation_guard() {
 #[test]
 fn admission_failure_distinguishes_pre_generation_from_exact_pre_spawn_ownership() {
     let error = ExecutableUseError::new("expected record durability is uncertain");
-    let before = ExecutableUseAdmissionFailure::before_generation(error.clone());
+    let before = ExecutableUseAdmissionFailure::without_owner(error.clone());
     let (restored, guard) = before.into_parts();
     assert_eq!(restored, error);
     assert!(guard.is_none());
 
     let releases = Arc::new(AtomicUsize::new(0));
-    let after = ExecutableUseAdmissionFailure::with_generation(
+    let after = ExecutableUseAdmissionFailure::with_confirmed_generation(
         error.clone(),
         Box::new(ReleaseCountingGuard(releases.clone())),
     );
     assert_eq!(after.error(), &error);
     let (restored, guard) = after.into_parts();
     assert_eq!(restored, error);
-    let mut guard = guard.expect("a created pre-spawn generation keeps exact ownership");
+    let owner = guard.expect("a created pre-spawn generation keeps exact ownership");
+    assert!(matches!(owner, ExecutableUseAdmissionOwner::Confirmed(_)));
+    let mut guard = owner.into_guard();
     guard.release().unwrap();
     assert_eq!(releases.load(Ordering::SeqCst), 1);
+
+    let uncertain = ExecutableUseAdmissionFailure::with_uncertain_generation(
+        ExecutableUseError::new("expected reservation acknowledgement is uncertain"),
+        Box::new(ReleaseCountingGuard(releases.clone())),
+    );
+    let (_, owner) = uncertain.into_parts();
+    let owner = owner.expect("uncertain reservation keeps reconciliation ownership");
+    assert!(matches!(owner, ExecutableUseAdmissionOwner::Uncertain(_)));
+    owner.into_guard().release().unwrap();
+    assert_eq!(releases.load(Ordering::SeqCst), 2);
 }

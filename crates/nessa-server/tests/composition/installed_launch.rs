@@ -19,6 +19,7 @@ use crate::agent_install::domain::{
 };
 use crate::agent_install::infrastructure::releases_for;
 use crate::composition::desktop::bundled_launch;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseAdmissionOwner;
 
 struct Answers {
     installed: Result<Option<PathBuf>, StoreFailure>,
@@ -27,16 +28,24 @@ struct Answers {
 
 struct FailedAdmission {
     releases: Arc<AtomicUsize>,
+    uncertain: bool,
 }
 
 impl ManagedExecutableUse for FailedAdmission {
     fn admit(
         &self,
     ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
-        Err(ManagedExecutableUseAdmissionFailure::with_generation(
-            ManagedExecutableUseFailure::new("admission durability is uncertain"),
-            Box::new(ReleaseOwner(self.releases.clone())),
-        ))
+        Err(if self.uncertain {
+            ManagedExecutableUseAdmissionFailure::with_uncertain_generation(
+                ManagedExecutableUseFailure::new("admission durability is uncertain"),
+                Box::new(ReleaseOwner(self.releases.clone())),
+            )
+        } else {
+            ManagedExecutableUseAdmissionFailure::with_confirmed_generation(
+                ManagedExecutableUseFailure::new("admission durability is uncertain"),
+                Box::new(ReleaseOwner(self.releases.clone())),
+            )
+        })
     }
 }
 
@@ -216,6 +225,7 @@ fn composition_preserves_a_failed_pre_spawn_generations_release_owner() {
         PathBuf::from("/managed/opencode"),
         Arc::new(FailedAdmission {
             releases: releases.clone(),
+            uncertain: false,
         }),
     );
     let sdk = managed_launch(managed).unwrap();
@@ -229,7 +239,33 @@ fn composition_preserves_a_failed_pre_spawn_generations_release_owner() {
         &ExecutableUseError::new("admission durability is uncertain")
     );
     let (_, guard) = failure.into_parts();
-    let mut guard = guard.expect("composition must carry the exact managed generation owner");
+    let owner = guard.expect("composition must carry the exact managed generation owner");
+    assert!(matches!(owner, ExecutableUseAdmissionOwner::Confirmed(_)));
+    let mut guard = owner.into_guard();
+    guard.release().unwrap();
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn composition_preserves_uncertain_pre_admission_reconciliation_ownership() {
+    let releases = Arc::new(AtomicUsize::new(0));
+    let managed = ManagedLaunchSnapshot::new(
+        PathBuf::from("/managed/opencode"),
+        Arc::new(FailedAdmission {
+            releases: releases.clone(),
+            uncertain: true,
+        }),
+    );
+    let sdk = managed_launch(managed).unwrap();
+
+    let failure = match sdk.admit() {
+        Ok(_) => panic!("uncertain managed admission must cross composition"),
+        Err(failure) => failure,
+    };
+    let (_, owner) = failure.into_parts();
+    let owner = owner.expect("composition must carry uncertain reconciliation ownership");
+    assert!(matches!(owner, ExecutableUseAdmissionOwner::Uncertain(_)));
+    let mut guard = owner.into_guard();
     guard.release().unwrap();
     assert_eq!(releases.load(Ordering::SeqCst), 1);
 }

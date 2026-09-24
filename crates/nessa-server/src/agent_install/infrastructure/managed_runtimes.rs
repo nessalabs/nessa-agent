@@ -314,7 +314,7 @@ impl ManagedExecutableUse for DurableManagedExecutableUse {
 impl DurableManagedExecutableUse {
     fn admit_with(
         &self,
-        mut retain: impl FnMut(
+        retain: impl FnMut(
             &ManagedRuntimes,
             &Path,
             &str,
@@ -322,20 +322,42 @@ impl DurableManagedExecutableUse {
             &ExecutableUseGeneration,
         ) -> Result<(), StoreFailure>,
     ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
-        let before_generation = |error: StoreFailure| {
-            ManagedExecutableUseAdmissionFailure::before_generation(
-                ManagedExecutableUseFailure::new(error.to_string()),
-            )
+        self.admit_with_reconciliation(retain, |store, mutation, directory, generation, record| {
+            store.observe_expected_reservation(mutation, directory, generation, record)
+        })
+    }
+
+    fn admit_with_reconciliation(
+        &self,
+        mut retain: impl FnMut(
+            &ManagedRuntimes,
+            &Path,
+            &str,
+            &str,
+            &ExecutableUseGeneration,
+        ) -> Result<(), StoreFailure>,
+        reconcile: impl Fn(
+            &ManagedRuntimes,
+            &UseMutation,
+            &Path,
+            &str,
+            &ExecutableUseGeneration,
+        ) -> ExpectedReservationObservation,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        let without_owner = |error: StoreFailure| {
+            ManagedExecutableUseAdmissionFailure::without_owner(ManagedExecutableUseFailure::new(
+                error.to_string(),
+            ))
         };
         let _local_mutation = self.local_mutation.lock().map_err(|_| {
-            ManagedExecutableUseAdmissionFailure::before_generation(
-                ManagedExecutableUseFailure::new("executable-use admission mutex was poisoned"),
-            )
+            ManagedExecutableUseAdmissionFailure::without_owner(ManagedExecutableUseFailure::new(
+                "executable-use admission mutex was poisoned",
+            ))
         })?;
         let store = ManagedRuntimes::new(self.root.clone());
         let mutation = store
             .hold_use_mutation(&self.marker_directory)
-            .map_err(before_generation)?;
+            .map_err(without_owner)?;
         let inventory = ExecutableUseInventory {
             agent: self.agent.as_str().to_owned(),
             version: self.artifact.version().as_str().to_owned(),
@@ -343,16 +365,16 @@ impl DurableManagedExecutableUse {
         };
         store
             .validate_use_inventory(&self.marker_directory, &inventory)
-            .map_err(before_generation)?;
+            .map_err(without_owner)?;
         store
             .active_use_remains(&self.agent, &self.artifact)
-            .map_err(before_generation)?;
+            .map_err(without_owner)?;
         if store
             .use_generation_count(&self.marker_directory)
-            .map_err(before_generation)?
+            .map_err(without_owner)?
             >= MAXIMUM_USE_GENERATIONS
         {
-            return Err(ManagedExecutableUseAdmissionFailure::before_generation(
+            return Err(ManagedExecutableUseAdmissionFailure::without_owner(
                 ManagedExecutableUseFailure::new(
                     "executable-use inventory reached its generation capacity",
                 ),
@@ -365,11 +387,12 @@ impl DurableManagedExecutableUse {
             digest: self.artifact.digest().as_str().to_owned(),
             generation: generation.clone(),
         };
-        let generation_guard = || {
+        let generation_guard = |reservation| {
             Box::new(DurableManagedExecutableUseGuard {
                 root: self.root.clone(),
                 marker_directory: self.marker_directory.clone(),
                 record: record.clone(),
+                reservation,
                 released: false,
                 local_mutation: Arc::clone(&self.local_mutation),
             }) as Box<dyn ManagedExecutableUseGuard>
@@ -380,28 +403,65 @@ impl DurableManagedExecutableUse {
             &generation,
             "expected",
             &record,
-        )
-        .and_then(|()| {
-            retain(
+        ) {
+            let failure = ManagedExecutableUseFailure::new(error.to_string());
+            let observation = reconcile(
                 &store,
+                &mutation,
                 &self.marker_directory,
                 &generation,
-                "admitted",
                 &record,
-            )
-        }) {
-            return Err(ManagedExecutableUseAdmissionFailure::with_generation(
-                ManagedExecutableUseFailure::new(error.to_string()),
-                generation_guard(),
-            ));
+            );
+            return Err(match observation {
+                ExpectedReservationObservation::Exact => {
+                    ManagedExecutableUseAdmissionFailure::with_confirmed_generation(
+                        failure,
+                        generation_guard(ExpectedReservationProof::Confirmed),
+                    )
+                }
+                ExpectedReservationObservation::NotFound => {
+                    ManagedExecutableUseAdmissionFailure::without_owner(failure)
+                }
+                ExpectedReservationObservation::Conflict => {
+                    ManagedExecutableUseAdmissionFailure::without_owner(
+                        ManagedExecutableUseFailure::new(format!(
+                            "{failure}; executable-use expected reservation has conflicting facts"
+                        )),
+                    )
+                }
+                ExpectedReservationObservation::Uncertain(observation) => {
+                    ManagedExecutableUseAdmissionFailure::with_uncertain_generation(
+                        ManagedExecutableUseFailure::new(format!(
+                            "{failure}; expected reservation reconciliation is uncertain: {observation}"
+                        )),
+                        generation_guard(ExpectedReservationProof::Uncertain),
+                    )
+                }
+            });
+        }
+        if let Err(error) = retain(
+            &store,
+            &self.marker_directory,
+            &generation,
+            "admitted",
+            &record,
+        ) {
+            return Err(
+                ManagedExecutableUseAdmissionFailure::with_confirmed_generation(
+                    ManagedExecutableUseFailure::new(error.to_string()),
+                    generation_guard(ExpectedReservationProof::Confirmed),
+                ),
+            );
         }
         if let Err(error) = mutation.verify() {
-            return Err(ManagedExecutableUseAdmissionFailure::with_generation(
-                ManagedExecutableUseFailure::new(error.to_string()),
-                generation_guard(),
-            ));
+            return Err(
+                ManagedExecutableUseAdmissionFailure::with_confirmed_generation(
+                    ManagedExecutableUseFailure::new(error.to_string()),
+                    generation_guard(ExpectedReservationProof::Confirmed),
+                ),
+            );
         }
-        Ok(generation_guard())
+        Ok(generation_guard(ExpectedReservationProof::Confirmed))
     }
 }
 
@@ -409,8 +469,22 @@ struct DurableManagedExecutableUseGuard {
     root: PathBuf,
     marker_directory: PathBuf,
     record: ExecutableUseGeneration,
+    reservation: ExpectedReservationProof,
     released: bool,
     local_mutation: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Copy)]
+enum ExpectedReservationProof {
+    Confirmed,
+    Uncertain,
+}
+
+enum ExpectedReservationObservation {
+    Exact,
+    NotFound,
+    Conflict,
+    Uncertain(StoreFailure),
 }
 
 struct UseMutation {
@@ -512,7 +586,34 @@ impl ManagedExecutableUseGuard for DurableManagedExecutableUseGuard {
                     },
                 )
                 .map_err(|error| ManagedExecutableUseFailure::new(error.to_string()))?;
-            for phase in ["expected", "admitted", "released"] {
+            match store.observe_expected_reservation(
+                &mutation,
+                &self.marker_directory,
+                &self.record.generation,
+                &self.record,
+            ) {
+                ExpectedReservationObservation::Exact => {}
+                ExpectedReservationObservation::NotFound
+                    if matches!(self.reservation, ExpectedReservationProof::Uncertain) =>
+                {
+                    self.released = true;
+                    return Ok(());
+                }
+                ExpectedReservationObservation::NotFound => {
+                    return Err(ManagedExecutableUseFailure::new(
+                        "confirmed executable-use reservation is missing",
+                    ));
+                }
+                ExpectedReservationObservation::Conflict => {
+                    return Err(ManagedExecutableUseFailure::new(
+                        "executable-use expected reservation has conflicting facts",
+                    ));
+                }
+                ExpectedReservationObservation::Uncertain(error) => {
+                    return Err(ManagedExecutableUseFailure::new(error.to_string()));
+                }
+            }
+            for phase in ["admitted", "released"] {
                 store
                     .retain_use_generation(
                         &self.marker_directory,
@@ -1018,6 +1119,55 @@ impl ManagedRuntimes {
                 )),
                 Err(_) => Err(original),
             },
+        }
+    }
+
+    fn observe_expected_reservation(
+        &self,
+        mutation: &UseMutation,
+        directory: &Path,
+        generation: &str,
+        expected: &ExecutableUseGeneration,
+    ) -> ExpectedReservationObservation {
+        if let Err(error) = mutation.verify() {
+            return ExpectedReservationObservation::Uncertain(error);
+        }
+        let name = format!("{generation}.expected.json");
+        let mut file = match mutation
+            .directory
+            .open_file(OsStr::new(&name), OpenMode::ReadNonblocking)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return match mutation.verify() {
+                    Ok(()) => ExpectedReservationObservation::NotFound,
+                    Err(error) => ExpectedReservationObservation::Uncertain(error),
+                };
+            }
+            Err(error) => return ExpectedReservationObservation::Uncertain(unreadable(error)),
+        };
+        let path = directory.join(&name);
+        let restored: ExecutableUseGeneration = match self.read_bounded_json_file(&mut file, &path)
+        {
+            Ok(restored) => restored,
+            Err(error) => return ExpectedReservationObservation::Uncertain(error),
+        };
+        match mutation.directory.named_file_is(OsStr::new(&name), &file) {
+            Ok(true) => {}
+            Ok(false) => {
+                return ExpectedReservationObservation::Uncertain(StoreFailure::Unreadable(
+                    "executable-use expected reservation was replaced during reconciliation".into(),
+                ));
+            }
+            Err(error) => return ExpectedReservationObservation::Uncertain(unreadable(error)),
+        }
+        if let Err(error) = mutation.verify() {
+            return ExpectedReservationObservation::Uncertain(error);
+        }
+        if restored == *expected {
+            ExpectedReservationObservation::Exact
+        } else {
+            ExpectedReservationObservation::Conflict
         }
     }
 

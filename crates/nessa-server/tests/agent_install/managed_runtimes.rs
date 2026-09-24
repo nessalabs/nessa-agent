@@ -21,7 +21,7 @@ use sha2::Sha256;
 use tar::{EntryType, Header};
 
 use super::*;
-use crate::agent_install::application::PublicationRecovery;
+use crate::agent_install::application::{ManagedExecutableUseAdmissionOwner, PublicationRecovery};
 use crate::agent_install::domain::{
     AdmissionResult, AgentName, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, InstallRequest,
     Libc, ManagedInstallation, ReclamationObservation, ReclamationOperationId, ReclamationTrigger,
@@ -614,13 +614,29 @@ fn release_record_survives_directory_sync_failure_and_is_reacknowledged_after_re
 }
 
 #[test]
-fn failed_generation_retention_returns_the_exact_never_spawned_owner() {
+fn failed_expected_write_claims_neither_capacity_nor_cleanup_ownership() {
     let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "bin/opencode");
     let artifact = RuntimeArtifact::for_release(&release);
     publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
     let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    for index in 0..MAXIMUM_USE_GENERATIONS - 1 {
+        let generation = format!("released-{index}");
+        let record = ExecutableUseGeneration {
+            agent: agent().as_str().to_owned(),
+            version: artifact.version().as_str().to_owned(),
+            digest: artifact.digest().as_str().to_owned(),
+            generation: generation.clone(),
+        };
+        for phase in ["expected", "admitted", "released"] {
+            store
+                .retain_use_generation(&marker_directory, &generation, phase, &record)
+                .unwrap();
+        }
+    }
+    let launch = store.managed_launch(&agent(), &release).unwrap().unwrap();
+    let later_authority = launch.clone();
     let authority = DurableManagedExecutableUse {
         root: root.path().to_owned(),
         marker_directory: marker_directory.clone(),
@@ -642,23 +658,228 @@ fn failed_generation_retention_returns_the_exact_never_spawned_owner() {
     assert!(failure
         .detail()
         .contains("injected expected-record write failure"));
-    let (_, generation) = failure.into_parts();
-    let mut generation = generation.expect("created generation retains its cleanup owner");
+    let (_, owner) = failure.into_parts();
+    assert!(owner.is_none());
     assert_eq!(active_uses(root.path()), 0);
 
-    generation.release().unwrap();
-    assert_eq!(active_uses(root.path()), 0);
-    drop(generation);
-
-    let reopened = ManagedRuntimes::new(root.path());
-    let launch = reopened
-        .managed_launch(&agent(), &release)
-        .unwrap()
-        .unwrap();
-    let mut later = launch.admit().unwrap();
+    let mut later = later_authority.admit().unwrap();
     assert_eq!(active_uses(root.path()), 1);
     later.release().unwrap();
     assert_eq!(active_uses(root.path()), 0);
+    assert_eq!(
+        store.use_generation_count(&marker_directory).unwrap(),
+        MAXIMUM_USE_GENERATIONS
+    );
+}
+
+#[test]
+fn conflicting_expected_reservation_grants_no_modification_owner() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&release);
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    let authority = DurableManagedExecutableUse {
+        root: root.path().to_owned(),
+        marker_directory: marker_directory.clone(),
+        agent: agent(),
+        artifact,
+        local_mutation: Arc::new(Mutex::new(())),
+        _artifact_lock: store
+            .hold_artifact_for_launch(&agent(), &RuntimeArtifact::for_release(&release))
+            .unwrap(),
+    };
+    let conflicting = RefCell::new(None);
+
+    let failure = match authority.admit_with(|store, directory, generation, phase, record| {
+        assert_eq!(phase, "expected");
+        let mut other = record.clone();
+        other.agent = "another-agent".into();
+        store
+            .retain_use_generation(directory, generation, phase, &other)
+            .unwrap();
+        conflicting.replace(Some((generation.to_owned(), other)));
+        Err(StoreFailure::Unwritable(
+            "injected conflicting expected write".into(),
+        ))
+    }) {
+        Ok(_) => panic!("conflicting expected facts must refuse spawn admission"),
+        Err(failure) => failure,
+    };
+
+    assert!(failure.into_parts().1.is_none());
+    let (generation, expected) = conflicting.into_inner().unwrap();
+    assert!(
+        store
+            .read_bounded_json::<ExecutableUseGeneration>(
+                &marker_directory.join(format!("{generation}.expected.json")),
+            )
+            .unwrap()
+            == expected
+    );
+}
+
+#[test]
+fn uncertain_pre_admission_owner_treats_authoritative_absence_as_a_noop() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&release);
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    let authority = DurableManagedExecutableUse {
+        root: root.path().to_owned(),
+        marker_directory: marker_directory.clone(),
+        agent: agent(),
+        artifact: artifact.clone(),
+        local_mutation: Arc::new(Mutex::new(())),
+        _artifact_lock: store.hold_artifact_for_launch(&agent(), &artifact).unwrap(),
+    };
+    let failure = match authority.admit_with_reconciliation(
+        |_, _, _, _, _| {
+            Err(StoreFailure::Unreadable(
+                "expected write status unknown".into(),
+            ))
+        },
+        |_, _, _, _, _| {
+            ExpectedReservationObservation::Uncertain(StoreFailure::Unreadable(
+                "expected read status unknown".into(),
+            ))
+        },
+    ) {
+        Ok(_) => panic!("uncertain reservation status must refuse spawn admission"),
+        Err(failure) => failure,
+    };
+    let (_, owner) = failure.into_parts();
+    let owner = owner.expect("uncertain pre-admission retains reconciliation ownership");
+    assert!(matches!(
+        owner,
+        ManagedExecutableUseAdmissionOwner::Uncertain(_)
+    ));
+    let mut guard = owner.into_guard();
+
+    guard.release().unwrap();
+    assert_eq!(store.use_generation_count(&marker_directory).unwrap(), 0);
+    assert_eq!(active_uses(root.path()), 0);
+}
+
+#[test]
+fn uncertain_expected_ack_owns_the_counted_slot_until_exact_reconciliation() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    let artifact = RuntimeArtifact::for_release(&release);
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let marker_directory = store.use_marker_directory(&agent(), &artifact);
+    for index in 0..MAXIMUM_USE_GENERATIONS - 1 {
+        let generation = format!("released-{index}");
+        let record = ExecutableUseGeneration {
+            agent: agent().as_str().to_owned(),
+            version: artifact.version().as_str().to_owned(),
+            digest: artifact.digest().as_str().to_owned(),
+            generation: generation.clone(),
+        };
+        for phase in ["expected", "admitted", "released"] {
+            store
+                .retain_use_generation(&marker_directory, &generation, phase, &record)
+                .unwrap();
+        }
+    }
+    let later_authority = store.managed_launch(&agent(), &release).unwrap().unwrap();
+    let authority = DurableManagedExecutableUse {
+        root: root.path().to_owned(),
+        marker_directory: marker_directory.clone(),
+        agent: agent(),
+        artifact: artifact.clone(),
+        local_mutation: Arc::new(Mutex::new(())),
+        _artifact_lock: store.hold_artifact_for_launch(&agent(), &artifact).unwrap(),
+    };
+
+    let failure = match authority.admit_with_reconciliation(
+        |store, directory, generation, phase, record| {
+            assert_eq!(phase, "expected");
+            store.retain_use_generation_with(directory, generation, phase, record, |_| {
+                Err(std::io::Error::other(
+                    "injected expected acknowledgement failure",
+                ))
+            })
+        },
+        |_, _, _, _, _| {
+            ExpectedReservationObservation::Uncertain(StoreFailure::Unreadable(
+                "injected expected reservation read uncertainty".into(),
+            ))
+        },
+    ) {
+        Ok(_) => panic!("uncertain expected acknowledgement must refuse spawn admission"),
+        Err(failure) => failure,
+    };
+    assert_eq!(
+        store.use_generation_count(&marker_directory).unwrap(),
+        MAXIMUM_USE_GENERATIONS
+    );
+    assert_eq!(active_uses(root.path()), 1);
+    let capacity = match later_authority.admit() {
+        Ok(_) => panic!("the uncertain expected reservation already owns the final slot"),
+        Err(failure) => failure,
+    };
+    assert_eq!(
+        capacity.detail(),
+        "executable-use inventory reached its generation capacity"
+    );
+    assert!(capacity.into_parts().1.is_none());
+
+    let (_, owner) = failure.into_parts();
+    let owner = owner.expect("uncertain reservation keeps a reconciliation owner");
+    assert!(matches!(
+        owner,
+        ManagedExecutableUseAdmissionOwner::Uncertain(_)
+    ));
+    let mut guard = owner.into_guard();
+    guard.release().unwrap();
+    assert_eq!(
+        store.use_generation_count(&marker_directory).unwrap(),
+        MAXIMUM_USE_GENERATIONS
+    );
+    assert_eq!(active_uses(root.path()), 0);
+}
+
+#[test]
+fn confirmed_generation_refuses_release_when_its_expected_reservation_was_deleted() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "bin/opencode");
+    publish(&store, &release, &archive("bin/opencode", b"runtime")).unwrap();
+    let launch = store.managed_launch(&agent(), &release).unwrap().unwrap();
+    let mut guard = launch.admit().unwrap();
+    let directory = active_use_directory(root.path());
+    let expected = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(Result::unwrap)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".expected.json")
+        })
+        .unwrap();
+    let generation = expected
+        .file_name()
+        .to_string_lossy()
+        .strip_suffix(".expected.json")
+        .unwrap()
+        .to_owned();
+    std::fs::remove_file(expected.path()).unwrap();
+
+    for _ in 0..2 {
+        assert_eq!(
+            guard.release().unwrap_err().detail(),
+            "confirmed executable-use reservation is missing"
+        );
+    }
+    assert!(!directory
+        .join(format!("{generation}.released.json"))
+        .exists());
 }
 
 #[test]
@@ -696,8 +917,13 @@ fn admitted_record_sync_uncertainty_keeps_retryable_pre_spawn_ownership() {
         .detail()
         .contains("injected admitted directory sync failure"));
     assert_eq!(active_uses(root.path()), 1);
-    let (_, generation) = failure.into_parts();
-    let mut generation = generation.expect("uncertain admission retains exact generation owner");
+    let (_, owner) = failure.into_parts();
+    let owner = owner.expect("uncertain admission retains exact generation owner");
+    assert!(matches!(
+        owner,
+        ManagedExecutableUseAdmissionOwner::Confirmed(_)
+    ));
+    let mut generation = owner.into_guard();
 
     generation.release().unwrap();
     assert_eq!(active_uses(root.path()), 0);

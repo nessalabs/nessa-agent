@@ -75,7 +75,7 @@ impl ExecutableUse for FailedBeforeGeneration {
     }
 
     fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
-        Err(ExecutableUseAdmissionFailure::before_generation(
+        Err(ExecutableUseAdmissionFailure::without_owner(
             ExecutableUseError::new("inventory validation failed before generation creation"),
         ))
     }
@@ -87,7 +87,7 @@ impl ExecutableUse for FailedPreSpawnAdmission {
     }
 
     fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
-        Err(ExecutableUseAdmissionFailure::with_generation(
+        Err(ExecutableUseAdmissionFailure::with_confirmed_generation(
             ExecutableUseError::new("admitted record directory sync is uncertain"),
             Box::new(RetryablePreSpawnRelease(self.releases.clone())),
         ))

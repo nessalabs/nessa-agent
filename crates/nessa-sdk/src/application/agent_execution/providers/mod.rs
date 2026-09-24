@@ -43,8 +43,8 @@ mod session;
 mod steering;
 pub use close::SessionCloseRequest;
 pub use executable_use::{
-    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
-    ExecutableUseSnapshot,
+    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseAdmissionOwner, ExecutableUseError,
+    ExecutableUseGuard, ExecutableUseSnapshot,
 };
 pub(crate) use finalized_execution::{
     FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,

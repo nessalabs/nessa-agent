@@ -3,8 +3,8 @@ use super::AcpConfig;
 use crate::application::agent_execution::{
     agents::AgentError,
     providers::{
-        CleanupFuture, CleanupReport, CloseOutcome, ExecutableUseGuard, ProviderCleanup,
-        ResourceCleanup,
+        CleanupFuture, CleanupReport, CloseOutcome, ExecutableUseAdmissionOwner,
+        ExecutableUseGuard, ProviderCleanup, ResourceCleanup,
     },
 };
 use crate::infrastructure::process::{ProcessScope, RetainedDirectory};
@@ -81,6 +81,13 @@ impl ProcessCleanup {
             config,
             runtime: Handle::current(),
         }
+    }
+
+    pub(crate) fn retaining_failed_admission(
+        config: AcpConfig,
+        owner: ExecutableUseAdmissionOwner,
+    ) -> Self {
+        Self::retaining_use(config, owner.into_guard())
     }
 
     pub(crate) async fn confirmed(&self) -> Option<CloseOutcome> {

@@ -148,15 +148,15 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let mut executable_use = match self.config.executable.admit() {
             Ok(guard) => guard,
             Err(failure) => {
-                let (error, generation) = failure.into_parts();
+                let (error, owner) = failure.into_parts();
                 let cause =
                     AgentError::Configuration(format!("executable use admission failed: {error}"));
-                return Err(match generation {
-                    Some(generation) => ProviderOpenError::with_cleanup(
+                return Err(match owner {
+                    Some(owner) => ProviderOpenError::with_cleanup(
                         cause,
-                        Arc::new(ProcessCleanup::retaining_use(
+                        Arc::new(ProcessCleanup::retaining_failed_admission(
                             self.config.clone(),
-                            generation,
+                            owner,
                         )),
                     ),
                     None => ProviderOpenError::no_resources(cause),

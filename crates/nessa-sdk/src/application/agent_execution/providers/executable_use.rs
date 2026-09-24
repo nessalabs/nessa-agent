@@ -35,30 +35,68 @@ impl std::error::Error for ExecutableUseError {}
 
 /// A failed executable-use admission and any exact pre-spawn generation it created.
 ///
-/// [`Self::into_parts`] returns a guard only when admission created a generation
-/// identity before failing. Its durable evidence may be partial or have an
-/// uncertain acknowledgement. The guard owns that known-never-spawned
-/// generation and may finish its release without process cleanup. A failure
-/// without a guard occurred before any generation existed.
+/// [`Self::into_parts`] returns ownership only when admission may have published
+/// the counted `expected` reservation before failing. Confirmed ownership proves
+/// that exact reservation; uncertain ownership must reconcile authoritative
+/// presence or absence. No process spawn is attempted after any admission
+/// failure.
 pub struct ExecutableUseAdmissionFailure {
     error: ExecutableUseError,
-    guard: Option<Box<dyn ExecutableUseGuard>>,
+    owner: Option<ExecutableUseAdmissionOwner>,
+}
+
+/// Cleanup ownership retained by a failed pre-spawn admission.
+pub enum ExecutableUseAdmissionOwner {
+    /// The exact durable `expected` reservation was acknowledged and must exist.
+    Confirmed(Box<dyn ExecutableUseGuard>),
+    /// Reservation publication is uncertain and cleanup must reconcile it.
+    Uncertain(Box<dyn ExecutableUseGuard>),
+}
+
+impl ExecutableUseAdmissionOwner {
+    /// Returns the exact generation guard while preserving its retryable release behavior.
+    pub fn into_guard(self) -> Box<dyn ExecutableUseGuard> {
+        match self {
+            Self::Confirmed(guard) | Self::Uncertain(guard) => guard,
+        }
+    }
 }
 
 impl ExecutableUseAdmissionFailure {
-    /// Creates a failure that occurred before a process generation was created.
-    pub fn before_generation(error: ExecutableUseError) -> Self {
-        Self { error, guard: None }
+    /// Creates a failure that grants no process-generation cleanup authority.
+    ///
+    /// This includes failures before a reservation was claimed and conflicts
+    /// whose durable evidence this caller has no authority to modify.
+    pub fn without_owner(error: ExecutableUseError) -> Self {
+        Self { error, owner: None }
     }
 
-    /// Creates a failure that still owns an exact, known-never-spawned generation.
+    /// Creates a failure that owns an exact, confirmed `expected` reservation.
     ///
     /// The caller must preserve `guard` until its explicit release succeeds.
     /// Dropping it leaves the durable admission unresolved.
-    pub fn with_generation(error: ExecutableUseError, guard: Box<dyn ExecutableUseGuard>) -> Self {
+    pub fn with_confirmed_generation(
+        error: ExecutableUseError,
+        guard: Box<dyn ExecutableUseGuard>,
+    ) -> Self {
         Self {
             error,
-            guard: Some(guard),
+            owner: Some(ExecutableUseAdmissionOwner::Confirmed(guard)),
+        }
+    }
+
+    /// Creates a failure whose exact pre-spawn reservation remains uncertain.
+    ///
+    /// Its guard must reconcile whether `expected` exists. Authoritative absence
+    /// is a successful no-op because no spawn was attempted; any uncertainty
+    /// remains retryable.
+    pub fn with_uncertain_generation(
+        error: ExecutableUseError,
+        guard: Box<dyn ExecutableUseGuard>,
+    ) -> Self {
+        Self {
+            error,
+            owner: Some(ExecutableUseAdmissionOwner::Uncertain(guard)),
         }
     }
 
@@ -67,22 +105,27 @@ impl ExecutableUseAdmissionFailure {
         &self.error
     }
 
-    /// Separates the diagnostic from an exact pre-spawn generation owner.
+    /// Separates the diagnostic from typed pre-spawn reservation ownership.
     ///
     /// A returned guard may be released immediately because no spawn was
     /// attempted after this admission failure. If release fails, the same guard
     /// retains retry ownership.
-    pub fn into_parts(self) -> (ExecutableUseError, Option<Box<dyn ExecutableUseGuard>>) {
-        (self.error, self.guard)
+    pub fn into_parts(self) -> (ExecutableUseError, Option<ExecutableUseAdmissionOwner>) {
+        (self.error, self.owner)
     }
 }
 
 impl fmt::Debug for ExecutableUseAdmissionFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ownership = match &self.owner {
+            Some(ExecutableUseAdmissionOwner::Confirmed(_)) => "confirmed",
+            Some(ExecutableUseAdmissionOwner::Uncertain(_)) => "uncertain",
+            None => "none",
+        };
         formatter
             .debug_struct("ExecutableUseAdmissionFailure")
             .field("error", &self.error)
-            .field("owns_generation", &self.guard.is_some())
+            .field("ownership", &ownership)
             .finish()
     }
 }
