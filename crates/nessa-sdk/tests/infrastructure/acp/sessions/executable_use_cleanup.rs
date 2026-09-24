@@ -67,6 +67,14 @@ fn cleanup_config() -> (tempfile::TempDir, AcpConfig) {
         max_incoming_frame_bytes: 1024,
         images: None,
     };
+    assert!(config.executable.executable().is_absolute());
+    assert!(config.workspace.is_absolute());
+    assert!([config.shutdown_grace, config.kill_timeout,]
+        .into_iter()
+        .all(|duration| {
+            !duration.is_zero() && tokio::time::Instant::now().checked_add(duration).is_some()
+        }));
+    #[cfg(unix)]
     config.validate().unwrap();
     (root, config)
 }
