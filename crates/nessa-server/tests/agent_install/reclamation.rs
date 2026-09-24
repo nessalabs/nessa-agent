@@ -114,7 +114,9 @@ fn replacement() -> (
     let current = artifact("2.0.0", 'b');
     let request = InstallRequest::new("account-a", "replace-a-with-b").unwrap();
     let (mut attempt, _) = InstallAttempt::start(agent, current.clone(), request.clone());
-    attempt.verified().unwrap();
+    let verified = attempt.verified().unwrap();
+    assert_eq!(verified.target(), &current);
+    assert_eq!(verified.request(), &request);
     let terminal = attempt.replaced(previous.clone()).unwrap();
     (terminal, previous, current, request)
 }
@@ -206,7 +208,7 @@ fn audit_failure_retries_only_the_retained_event_after_restart() {
     assert_eq!(lease.effects.len(), 1, "recovery must not repeat removal");
     assert_eq!(
         accepting.records.lock().unwrap().as_slice(),
-        &[event.clone()]
+        std::slice::from_ref(event)
     );
     assert!(lease.retained.as_ref().unwrap().pending().is_empty());
 }
@@ -241,7 +243,10 @@ fn removal_and_audit_failures_remain_independent_typed_facts() {
     );
     assert_eq!(failure.detail(), "audit journal refused");
     assert_eq!(lease.effects.len(), 1);
-    assert_eq!(audit.records.lock().unwrap().as_slice(), &[event.clone()]);
+    assert_eq!(
+        audit.records.lock().unwrap().as_slice(),
+        std::slice::from_ref(event)
+    );
 }
 
 #[test]
