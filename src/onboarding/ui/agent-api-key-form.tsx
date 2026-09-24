@@ -32,8 +32,8 @@ export function AgentApiKeyForm({
     | "saved"
     | "failed"
     | "audit-unavailable"
-    | "refused-audit-failed"
     | "invalid"
+    | "invalid-audit-failed"
     | "uncertain"
     | "refresh-failed"
   >()
@@ -62,14 +62,9 @@ export function AgentApiKeyForm({
         setOutcome("audit-unavailable")
       } else if (
         failure instanceof AgentApiKeySaveRejected &&
-        failure.auditStatus === "failed"
-      ) {
-        setOutcome("refused-audit-failed")
-      } else if (
-        failure instanceof AgentApiKeySaveRejected &&
         failure.reason === "invalid-credential"
       ) {
-        setOutcome("invalid")
+        setOutcome(failure.auditStatus === "failed" ? "invalid-audit-failed" : "invalid")
       } else {
         setOutcome("failed")
       }
@@ -123,14 +118,15 @@ export function AgentApiKeyForm({
           Nessa could not record the required security audit, so the key was not saved.
         </p>
       ) : null}
-      {outcome === "refused-audit-failed" ? (
-        <p role="alert" className="nessa-text-2 text-destructive">
-          The key was not saved, and Nessa could not record the security audit outcome.
-        </p>
-      ) : null}
       {outcome === "invalid" ? (
         <p role="alert" className="nessa-text-2 text-destructive">
           This key is not valid. Check it and try again.
+        </p>
+      ) : null}
+      {outcome === "invalid-audit-failed" ? (
+        <p role="alert" className="nessa-text-2 text-destructive">
+          This key is not valid and was not saved. Nessa also could not record the
+          security audit outcome.
         </p>
       ) : null}
       {outcome === "uncertain" ? (

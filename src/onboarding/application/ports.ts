@@ -43,15 +43,15 @@ export type AgentApiKeyAuditStatus = "recorded" | "failed" | "unknown"
 
 export type AgentApiKeySaveRejectionReason =
   | "untrusted-caller"
+  | "unsupported-agent"
   | "invalid-credential"
   | "store-unavailable"
   | "audit-unavailable"
-  | "refused"
 
 export type AgentApiKeySaveRejection =
-  | { readonly reason: Exclude<AgentApiKeySaveRejectionReason, "refused"> }
+  | { readonly reason: Exclude<AgentApiKeySaveRejectionReason, "invalid-credential"> }
   | {
-      readonly reason: "refused"
+      readonly reason: "invalid-credential"
       readonly auditStatus: Exclude<AgentApiKeyAuditStatus, "unknown">
     }
 
@@ -67,7 +67,9 @@ export class AgentApiKeySaveRejected extends Error {
   }
 
   get auditStatus() {
-    return this.rejection.reason === "refused" ? this.rejection.auditStatus : undefined
+    return this.rejection.reason === "invalid-credential"
+      ? this.rejection.auditStatus
+      : undefined
   }
 }
 

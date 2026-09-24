@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { superviseSession } from "../session/adapters/lifecycle/supervisor"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import type { EstablishedDevSession } from "../session/adapters/client/dev-session"
+import invalidCredentialAuditFailed from "../../src-tauri/src/agent_credentials/infrastructure/fixtures/invalid-credential-audit-failed.json"
 
 const { invoke, listen, close } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -99,16 +100,38 @@ describe("native agent credential saves", () => {
     },
   )
 
-  it("preserves a validated pre-effect refusal", async () => {
-    invoke.mockRejectedValue({ status: "audit-unavailable" })
-    const { saveAgentApiKey } = await import("./window")
-    await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
-      expect.objectContaining({
-        name: "AgentApiKeySaveRejected",
-        reason: "audit-unavailable",
-      }),
-    )
-  })
+  it.each(["audit-unavailable", "unsupported-agent"] as const)(
+    "preserves the validated %s pre-effect refusal",
+    async (status) => {
+      invoke.mockRejectedValue({ status })
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveRejected",
+          reason: status,
+        }),
+      )
+    },
+  )
+
+  it.each([
+    [{ status: "invalid-credential", auditStatus: "recorded" }, "recorded"],
+    [invalidCredentialAuditFailed, "failed"],
+  ] as const)(
+    "preserves an audited invalid credential with %s delivery",
+    async (failure, auditStatus) => {
+      invoke.mockRejectedValue(failure)
+      const { saveAgentApiKey } = await import("./window")
+
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveRejected",
+          reason: "invalid-credential",
+          auditStatus,
+        }),
+      )
+    },
+  )
 
   it.each(["recorded", "failed", "unknown"] as const)(
     "preserves an uncertain effect with %s audit delivery",
@@ -124,8 +147,9 @@ describe("native agent credential saves", () => {
   it.each([
     new Error("transport lost private"),
     { status: "save-uncertain", auditStatus: "future" },
-    { status: "refused", auditStatus: "unknown" },
-    { status: "invalid-credential", extra: true },
+    { status: "invalid-credential" },
+    { status: "invalid-credential", auditStatus: "unknown" },
+    { status: "invalid-credential", auditStatus: "failed", extra: true },
   ])(
     "does not turn an unrecognized rejection into a definite refusal",
     async (failure) => {

@@ -4,8 +4,10 @@ import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { AgentApiKeySaveRejected, AgentApiKeySaveUncertain } from "../application/ports"
+import { AgentApiKeySaveUncertain } from "../application/ports"
+import { decodeAgentApiKeySaveFailure } from "../../host/window"
 import { AgentApiKeyForm } from "./agent-api-key-form"
+import invalidCredentialAuditFailed from "../../../src-tauri/src/agent_credentials/infrastructure/fixtures/invalid-credential-audit-failed.json"
 
 let container: HTMLDivElement
 let root: Root
@@ -110,35 +112,12 @@ describe("agent API-key entry", () => {
     expect(container.textContent).not.toContain("sk-private-value")
   })
 
-  it("keeps a definite refusal separate from its failed outcome audit", async () => {
-    const save = vi.fn(async () => {
-      throw new AgentApiKeySaveRejected({ reason: "refused", auditStatus: "failed" })
-    })
-    await React.act(async () => {
-      root.render(
-        <AgentApiKeyForm
-          agent="claude"
-          agentName="Claude"
-          onSave={save}
-          onSaved={() => {}}
-        />,
-      )
-    })
-
-    const input = await enterAndSubmit("sk-private-value")
-
-    expect(input.value).toBe("sk-private-value")
-    expect(container.textContent).toContain("key was not saved")
-    expect(container.textContent).toContain("could not record")
-    expect(container.textContent).not.toContain("sk-private-value")
-  })
-
-  it("submits multibyte text whole and reports the domain byte limit honestly", async () => {
+  it("carries the native invalid shape through the host decoder into specific feedback", async () => {
     const boundary = "é".repeat(8192)
     const overBoundary = `${boundary}é`
     const save = vi.fn(async (_agent: string, key: string) => {
       if (new TextEncoder().encode(key).byteLength > 16 * 1024) {
-        throw new AgentApiKeySaveRejected({ reason: "invalid-credential" })
+        throw decodeAgentApiKeySaveFailure(invalidCredentialAuditFailed)
       }
       return { status: "saved" as const }
     })
@@ -160,6 +139,8 @@ describe("agent API-key entry", () => {
     expect(save).toHaveBeenLastCalledWith("claude", overBoundary)
     expect(input.value).toBe(overBoundary)
     expect(container.textContent).toContain("This key is not valid")
+    expect(container.textContent).toContain("was not saved")
+    expect(container.textContent).toContain("could not record")
     expect(container.textContent).not.toContain(overBoundary)
   })
 

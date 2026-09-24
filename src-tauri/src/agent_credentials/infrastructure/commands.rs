@@ -12,7 +12,7 @@ use crate::{
             save_api_key, AgentCredentialStore, CredentialSaveAdmissionFailure,
             CredentialSaveAudit, CredentialSaveIds, CredentialSaveResult, CredentialSaveTargets,
         },
-        domain::value_objects::CredentialSaveCaller,
+        domain::value_objects::{CredentialSaveCaller, CredentialSaveRefusal},
     },
     composition::HostDependencies,
     panel,
@@ -56,13 +56,13 @@ pub enum AuditStatus {
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum SaveAgentApiKeyFailure {
     UntrustedCaller,
-    InvalidCredential,
-    StoreUnavailable,
-    AuditUnavailable,
-    Refused {
+    UnsupportedAgent,
+    InvalidCredential {
         #[serde(rename = "auditStatus")]
         audit_status: DeliveredAuditStatus,
     },
+    StoreUnavailable,
+    AuditUnavailable,
     SaveUncertain {
         #[serde(rename = "auditStatus")]
         audit_status: AuditStatus,
@@ -78,7 +78,7 @@ fn request(label: &str, agent: &str, key: String) -> Result<SaveRequest, SaveAge
     let agent = match agent {
         "claude" => CredentialAgent::Claude,
         "opencode" => CredentialAgent::Opencode,
-        _ => return Err(SaveAgentApiKeyFailure::InvalidCredential),
+        _ => return Err(SaveAgentApiKeyFailure::UnsupportedAgent),
     };
     Ok(SaveRequest {
         caller,
@@ -110,9 +110,9 @@ fn save(
             status: SaveStatus::SavedAuditFailed,
         }),
         Ok(CredentialSaveResult::Refused {
+            failure: CredentialSaveRefusal::Invalid,
             outcome_audit_failed,
-            ..
-        }) => Err(SaveAgentApiKeyFailure::Refused {
+        }) => Err(SaveAgentApiKeyFailure::InvalidCredential {
             audit_status: delivered(outcome_audit_failed),
         }),
         Ok(CredentialSaveResult::Uncertain {
@@ -291,7 +291,7 @@ mod tests {
         );
         assert_eq!(
             request(panel::SETUP_WINDOW, "codex", "secret".into()).err(),
-            Some(SaveAgentApiKeyFailure::InvalidCredential)
+            Some(SaveAgentApiKeyFailure::UnsupportedAgent)
         );
         assert!(request(panel::MAIN_WINDOW, "claude", "secret".into()).is_ok());
         assert!(request(panel::SETUP_WINDOW, "opencode", "secret".into()).is_ok());
@@ -324,7 +324,7 @@ mod tests {
 
         assert_eq!(
             save(&store, &store, &Ids, &audit, candidate),
-            Err(SaveAgentApiKeyFailure::Refused {
+            Err(SaveAgentApiKeyFailure::InvalidCredential {
                 audit_status: DeliveredAuditStatus::Failed,
             })
         );
@@ -354,6 +354,10 @@ mod tests {
     #[test]
     fn command_results_have_one_discriminated_transport_shape() {
         assert_eq!(
+            serde_json::to_value(SaveAgentApiKeyFailure::UnsupportedAgent).unwrap(),
+            serde_json::json!({ "status": "unsupported-agent" })
+        );
+        assert_eq!(
             serde_json::to_value(SaveAgentApiKeyResponse {
                 status: SaveStatus::SavedAuditFailed,
             })
@@ -361,11 +365,14 @@ mod tests {
             serde_json::json!({ "status": "saved-audit-failed" })
         );
         assert_eq!(
-            serde_json::to_value(SaveAgentApiKeyFailure::Refused {
+            serde_json::to_value(SaveAgentApiKeyFailure::InvalidCredential {
                 audit_status: DeliveredAuditStatus::Failed,
             })
             .unwrap(),
-            serde_json::json!({ "status": "refused", "auditStatus": "failed" })
+            serde_json::from_str::<serde_json::Value>(include_str!(
+                "fixtures/invalid-credential-audit-failed.json"
+            ))
+            .unwrap()
         );
         assert_eq!(
             serde_json::to_value(SaveAgentApiKeyFailure::SaveUncertain {

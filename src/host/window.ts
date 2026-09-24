@@ -136,22 +136,28 @@ export function decodeAgentApiKeySaveFailure(failure: unknown): Error {
   if (
     [
       "untrusted-caller",
-      "invalid-credential",
+      "unsupported-agent",
       "store-unavailable",
       "audit-unavailable",
     ].includes(payload.status) &&
     exactKeys(payload, ["status"])
   ) {
     return new AgentApiKeySaveRejected({
-      reason: payload.status as Exclude<AgentApiKeySaveRejectionReason, "refused">,
+      reason: payload.status as Exclude<
+        AgentApiKeySaveRejectionReason,
+        "invalid-credential"
+      >,
     })
   }
   const audit = auditStatus(payload.auditStatus)
   if (!audit || !exactKeys(payload, ["auditStatus", "status"])) {
     return new AgentApiKeySaveUncertain("unknown")
   }
-  if (payload.status === "refused" && audit !== "unknown") {
-    return new AgentApiKeySaveRejected({ reason: "refused", auditStatus: audit })
+  if (payload.status === "invalid-credential" && audit !== "unknown") {
+    return new AgentApiKeySaveRejected({
+      reason: "invalid-credential",
+      auditStatus: audit,
+    })
   }
   if (payload.status === "save-uncertain") return new AgentApiKeySaveUncertain(audit)
   return new AgentApiKeySaveUncertain("unknown")
