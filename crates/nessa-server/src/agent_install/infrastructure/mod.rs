@@ -22,3 +22,4 @@ pub use delivery::DurableInstallationDelivery;
 pub use https_archives::{HttpsArchives, NoHttpsClient};
 pub use managed_runtimes::ManagedRuntimes;
 pub use pinned_releases::{host_platform, releases_for, PinFileError};
+pub use runtime_reclamation::DurableReclamationAudit;

@@ -11,13 +11,16 @@ use crate::agent_install::application::{
     InstallDeliveryFailure, InstallationDelivery, InstallationDeliverySession,
     PendingInstallationDelivery, PreparedInstallation, Publication, PublicationChange,
     PublicationCleanupFailure, PublicationLease, PublicationRecovery, PublishFailure,
-    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    ReclamationAudit, ReclamationAuditFailure, ReclamationPersistenceFailure,
+    ReclamationPersistenceStage, RollbackChange, RuntimeReclamationEffect, RuntimeStore,
+    SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveSize, ArchiveUrl, FileRole, HostPlatform,
-    InstallRequest, InstallTransition, InstallTransitionKind, Libc, PinnedRelease,
-    PublicationOutcome, PublicationPreparation, PublicationSettlement, ReleaseContents,
-    ReleaseFile, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
+    InstallRequest, InstallTransition, InstallTransitionKind, Libc, ManagedInstallation,
+    PinnedRelease, PublicationOutcome, PublicationPreparation, PublicationSettlement,
+    ReclamationEvent, ReleaseContents, ReleaseFile, ReleasePlatform, ReleaseRequirements,
+    ReleaseVersion, RuntimeArtifact,
 };
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 
@@ -29,6 +32,19 @@ pub(crate) const OTHER_DIGEST: &str =
 /// A digest standing for whatever the fake store will say it hashed.
 pub(crate) const PINNED_DIGEST: &str =
     "1111111111111111111111111111111111111111111111111111111111111111";
+
+struct AcceptingReclamationAudit;
+
+impl ReclamationAudit for AcceptingReclamationAudit {
+    fn record(&self, _event: &ReclamationEvent) -> Result<(), ReclamationAuditFailure> {
+        Ok(())
+    }
+}
+
+pub(crate) fn reclamation_audit() -> &'static dyn ReclamationAudit {
+    static AUDIT: AcceptingReclamationAudit = AcceptingReclamationAudit;
+    &AUDIT
+}
 
 /// A store root that is private, the way the real one is.
 ///
@@ -501,7 +517,7 @@ impl RuntimeStore for FakeStore {
         &self,
         _agent: &AgentName,
     ) -> Result<Box<dyn PublicationLease>, StoreFailure> {
-        Ok(Box::new(()))
+        Ok(Box::new(FakeReclamationLease))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
@@ -554,13 +570,7 @@ impl RuntimeStore for FakeStore {
                 Publication::new(
                     self.root.join("opencode"),
                     change,
-                    self.lease_drop.clone().map_or_else(
-                        || {
-                            Box::new(())
-                                as Box<dyn crate::agent_install::application::PublicationLease>
-                        },
-                        |sender| Box::new(DropSignal(sender)),
-                    ),
+                    lease(self.lease_drop.clone()),
                 )
             })
             .map_err(|failure| match self.recovery.clone() {
@@ -592,14 +602,76 @@ impl RuntimeStore for FakeStore {
 
 struct DropSignal(Sender<()>);
 
+struct FakeReclamationLease;
+
 fn lease(
     sender: Option<Sender<()>>,
 ) -> Box<dyn crate::agent_install::application::PublicationLease> {
     sender.map_or_else(
-        || Box::new(()) as Box<dyn crate::agent_install::application::PublicationLease>,
+        || Box::new(FakeReclamationLease) as Box<dyn PublicationLease>,
         |sender| Box::new(DropSignal(sender)),
     )
 }
+
+fn load_no_reclamation() -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+    Ok(None)
+}
+
+fn retain_test_reclamation(
+    _installation: &ManagedInstallation,
+    _stage: ReclamationPersistenceStage,
+) -> Result<(), ReclamationPersistenceFailure> {
+    Ok(())
+}
+
+fn remove_test_superseded(
+    _agent: &AgentName,
+    _current: &RuntimeArtifact,
+    _superseded: &RuntimeArtifact,
+) -> RuntimeReclamationEffect {
+    RuntimeReclamationEffect::AlreadyAbsent
+}
+
+macro_rules! impl_test_reclamation_lease {
+    ($lease:ty) => {
+        impl PublicationLease for $lease {
+            fn load_reclamation(
+                &mut self,
+            ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+                load_no_reclamation()
+            }
+
+            fn retain_reclamation(
+                &mut self,
+                installation: &ManagedInstallation,
+                stage: ReclamationPersistenceStage,
+            ) -> Result<(), ReclamationPersistenceFailure> {
+                retain_test_reclamation(installation, stage)
+            }
+
+            fn remove_superseded(
+                &mut self,
+                agent: &AgentName,
+                current: &RuntimeArtifact,
+                superseded: &RuntimeArtifact,
+            ) -> RuntimeReclamationEffect {
+                remove_test_superseded(agent, current, superseded)
+            }
+
+            fn observe_superseded(
+                &mut self,
+                agent: &AgentName,
+                current: &RuntimeArtifact,
+                superseded: &RuntimeArtifact,
+            ) -> RuntimeReclamationEffect {
+                remove_test_superseded(agent, current, superseded)
+            }
+        }
+    };
+}
+
+impl_test_reclamation_lease!(FakeReclamationLease);
+impl_test_reclamation_lease!(DropSignal);
 
 impl Drop for DropSignal {
     fn drop(&mut self) {

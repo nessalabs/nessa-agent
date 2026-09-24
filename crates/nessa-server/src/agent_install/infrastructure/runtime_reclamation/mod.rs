@@ -2,6 +2,8 @@
 //!
 //! `ManagedInstallation -> record -> private JSON` maps infrastructure data
 //! through domain constructors so restored work cannot bypass invariants.
+mod audit;
 mod record;
 
-pub(in crate::agent_install::infrastructure) use record::StoredManagedInstallation;
+pub use audit::DurableReclamationAudit;
+pub(in crate::agent_install::infrastructure) use record::{StoredEvent, StoredManagedInstallation};

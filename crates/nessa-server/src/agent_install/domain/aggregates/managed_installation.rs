@@ -303,6 +303,20 @@ impl ManagedInstallation {
         self.record_effect(permit, ReclamationPhysicalOutcome::Removed)
     }
 
+    pub fn confirm_already_absent(
+        &mut self,
+        permit: RemovalPermit,
+    ) -> Result<ReclamationEvent, ManagedInstallationError> {
+        self.record_effect(permit, ReclamationPhysicalOutcome::AlreadyAbsent)
+    }
+
+    pub fn record_still_present(
+        &mut self,
+        permit: RemovalPermit,
+    ) -> Result<ReclamationEvent, ManagedInstallationError> {
+        self.record_effect(permit, ReclamationPhysicalOutcome::StillPresent)
+    }
+
     pub fn record_removal_failure(
         &mut self,
         permit: RemovalPermit,

@@ -69,7 +69,7 @@ enum StoredOperation {
 }
 
 #[derive(Deserialize, Serialize)]
-struct StoredEvent {
+pub(in crate::agent_install::infrastructure) struct StoredEvent {
     admission: StoredAdmission,
     outcome: StoredOutcome,
     audit: StoredAudit,
@@ -351,7 +351,13 @@ impl From<&ReclamationEvent> for StoredEvent {
 }
 
 impl StoredEvent {
-    fn restore(self) -> Result<ReclamationEvent, String> {
+    pub(in crate::agent_install::infrastructure) fn from_domain(value: &ReclamationEvent) -> Self {
+        Self::from(value)
+    }
+
+    pub(in crate::agent_install::infrastructure) fn restore(
+        self,
+    ) -> Result<ReclamationEvent, String> {
         Ok(ReclamationEvent::restore(
             self.admission.restore()?,
             self.outcome.restore()?,

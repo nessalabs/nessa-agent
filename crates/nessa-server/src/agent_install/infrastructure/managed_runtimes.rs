@@ -329,6 +329,21 @@ impl PublicationLease for ManagedPublicationLease {
         ManagedRuntimes::new(self.root.clone())
             .remove_superseded_under_lock(agent, current, superseded)
     }
+
+    fn observe_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        if agent != &self.agent {
+            return RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+                "reclamation authority belongs to another agent".into(),
+            ));
+        }
+        ManagedRuntimes::new(self.root.clone())
+            .observe_superseded_under_lock(agent, current, superseded)
+    }
 }
 
 impl ExecutableUseGuard for ManagedExecutableUseGuard {
@@ -696,6 +711,60 @@ impl ManagedRuntimes {
             return RuntimeReclamationEffect::SyncUncertain(unwritable(error));
         }
         RuntimeReclamationEffect::Removed
+    }
+
+    fn observe_superseded_under_lock(
+        &self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        let observed = match self.recorded_artifact(agent) {
+            Ok(observed) => observed,
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        };
+        if observed.as_ref() != Some(current) {
+            return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(
+                "installed runtime changed after reclamation admission".into(),
+            ));
+        }
+        if current.physical_identity() == superseded.physical_identity() {
+            return RuntimeReclamationEffect::DeferredCurrent;
+        }
+        if let Err(error) = self.private_directory(&self.artifact_lock_directory(agent, superseded))
+        {
+            return RuntimeReclamationEffect::Failed(error);
+        }
+        let lock_path = self.artifact_lock_path(agent, superseded);
+        let artifact_lock = match open_beneath(&self.root, &lock_path, OpenMode::OpenOrCreate) {
+            Ok(lock) => lock,
+            Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
+        };
+        if artifact_lock.try_lock().is_err() {
+            return RuntimeReclamationEffect::DeferredInUse;
+        }
+        match self.active_use_remains(agent, superseded) {
+            Ok(true) => return RuntimeReclamationEffect::DeferredInUse,
+            Ok(false) => {}
+            Err(error) => return RuntimeReclamationEffect::Failed(error),
+        }
+        for file in superseded.contents().files() {
+            let path = self.recorded_file_path(agent, superseded, file.path());
+            match open_beneath(&self.root, &path, OpenMode::ReadNonblocking) {
+                Ok(file) if file.metadata().is_ok_and(|metadata| metadata.len() != 0) => {
+                    return RuntimeReclamationEffect::StillPresent
+                }
+                Ok(_) => {
+                    return RuntimeReclamationEffect::Failed(StoreFailure::Unreadable(format!(
+                        "{} is not a complete managed runtime file",
+                        self.absolute(&path).display()
+                    )))
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return RuntimeReclamationEffect::Failed(unreadable(error)),
+            }
+        }
+        RuntimeReclamationEffect::AlreadyAbsent
     }
 
     fn hold_artifact_for_launch(

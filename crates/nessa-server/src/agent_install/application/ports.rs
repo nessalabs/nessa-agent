@@ -304,6 +304,8 @@ pub enum RuntimeReclamationEffect {
     DeferredCurrent,
     /// A live launch authority, process generation, or unresolved marker still owns the target.
     DeferredInUse,
+    /// Observation found retained files after an interrupted removal admission.
+    StillPresent,
     /// Removal failed before durability could be established.
     Failed(StoreFailure),
     /// Files were removed, but the directory update could not be acknowledged as durable.
@@ -327,6 +329,13 @@ pub trait PublicationLease: Send {
 
     /// Attempt one bounded removal while retaining the runtime publication lock.
     fn remove_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect;
+
+    fn observe_superseded(
         &mut self,
         agent: &AgentName,
         current: &RuntimeArtifact,
@@ -365,6 +374,17 @@ impl PublicationLease for () {
             "runtime reclamation is unavailable from this publication lease".into(),
         ))
     }
+
+    fn observe_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation is unavailable from this publication lease".into(),
+        ))
+    }
 }
 
 impl PublicationLease for File {
@@ -388,6 +408,17 @@ impl PublicationLease for File {
         ))
     }
     fn remove_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::Failed(StoreFailure::Unwritable(
+            "runtime reclamation requires its managed publication authority".into(),
+        ))
+    }
+
+    fn observe_superseded(
         &mut self,
         _agent: &AgentName,
         _current: &RuntimeArtifact,
@@ -445,6 +476,15 @@ impl Publication {
         superseded: &RuntimeArtifact,
     ) -> RuntimeReclamationEffect {
         self._lease.remove_superseded(agent, current, superseded)
+    }
+
+    pub fn observe_superseded(
+        &mut self,
+        agent: &AgentName,
+        current: &RuntimeArtifact,
+        superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        self._lease.observe_superseded(agent, current, superseded)
     }
 
     pub fn load_reclamation(
