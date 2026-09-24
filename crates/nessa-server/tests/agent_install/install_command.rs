@@ -115,13 +115,14 @@ fn audit_factory_reuses_the_exact_existing_private_namespace() {
     let temporary = tempfile::tempdir().unwrap();
     let data_root = temporary.path().join("selected");
     create_directory(&data_root).unwrap();
+    let canonical_before = fs::canonicalize(&data_root).unwrap();
     #[cfg(unix)]
     let before = fs::metadata(&data_root).unwrap();
 
     let _audit = install_audit(&data_root).expect("an existing private namespace is valid");
     let after = fs::metadata(&data_root).unwrap();
 
-    assert_eq!(fs::canonicalize(&data_root).unwrap(), data_root);
+    assert_eq!(fs::canonicalize(&data_root).unwrap(), canonical_before);
     assert!(after.is_dir());
     #[cfg(unix)]
     assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
