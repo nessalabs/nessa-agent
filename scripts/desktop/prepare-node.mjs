@@ -88,7 +88,7 @@ function safeArchivePath(name) {
   return canonical
 }
 
-function safeLink(entry, target, hardLink) {
+function safeLink(entry, target, hardLink, distribution) {
   if (
     target.length === 0 ||
     target.includes("\\") ||
@@ -99,7 +99,7 @@ function safeLink(entry, target, hardLink) {
   const resolved = hardLink
     ? posix.normalize(target)
     : posix.normalize(posix.join(posix.dirname(entry), target))
-  if (resolved === ".." || resolved.startsWith("../"))
+  if (!resolved.startsWith(`${distribution}/`))
     throw new Error(`Node archive link escapes its distribution: ${entry}`)
 }
 
@@ -164,7 +164,7 @@ export function readNodeArchive(bytes, distribution) {
     if (longLink && type !== "1" && type !== "2")
       throw new Error("Node archive applies a GNU long link to a non-link entry")
     if (type === "1" || type === "2") {
-      safeLink(name, longLink ?? tarText(header, 157, 100), type === "1")
+      safeLink(name, longLink ?? tarText(header, 157, 100), type === "1", distribution)
       longLink = undefined
     }
     if (selected.has(name)) {

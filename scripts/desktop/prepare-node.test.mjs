@@ -86,6 +86,11 @@ test("archive validation returns only the exact Node and license files", () => {
       ...selected,
       { name: `${distribution}/bin/corepack`, type: "2", link: "../lib/corepack.js" },
       {
+        name: `${distribution}/LICENSE-copy`,
+        type: "1",
+        link: `${distribution}/LICENSE`,
+      },
+      {
         name: "././@LongLink",
         type: "L",
         contents: `${distribution}/${"a".repeat(260)}\0`,
@@ -123,8 +128,28 @@ test("archive validation rejects unsafe or contradictory entries", async (t) => 
       /link escapes/,
     ],
     [
+      "symlink escaping its distribution but not the archive root",
+      [
+        ...selected,
+        { name: `${distribution}/bin/link`, type: "2", link: "../../outside" },
+      ],
+      /link escapes/,
+    ],
+    [
       "escaping hardlink",
       [...selected, { name: `${distribution}/bin/link`, type: "1", link: "../outside" }],
+      /link escapes/,
+    ],
+    [
+      "hardlink escaping its distribution but not the archive root",
+      [
+        ...selected,
+        {
+          name: `${distribution}/bin/link`,
+          type: "1",
+          link: `${distribution}/../outside`,
+        },
+      ],
       /link escapes/,
     ],
     [
