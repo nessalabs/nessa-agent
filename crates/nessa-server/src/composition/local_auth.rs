@@ -6,11 +6,24 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 use super::opencode_profile::EffectiveOpenCodeProfile;
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+#[cfg(unix)]
 use crate::{
     agent_warm_up::application::AgentWarmUp,
+    agent_warm_up::{
+        domain::RuntimeFingerprint,
+        infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
+    },
+    agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
+    attachments::infrastructure::ModelImageNormalizer,
+    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
+    conversation::infrastructure::{
+        DurableConversationCreationAudit, DurableConversationFileLinkAudit,
+        LocalConversationRepository,
+    },
+};
+use crate::{
     agents::{
         application::{AgentCredentialSource, AgentProbe},
-        domain::AgentId,
         infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
@@ -20,20 +33,6 @@ use crate::{
     core::RunError,
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
-};
-#[cfg(unix)]
-use crate::{
-    agent_warm_up::{
-        domain::RuntimeFingerprint,
-        infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
-    },
-    agents::infrastructure::AgentLaunchFiles,
-    attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
-    conversation::infrastructure::{
-        DurableConversationCreationAudit, DurableConversationFileLinkAudit,
-        LocalConversationRepository,
-    },
 };
 use nessa_agent_credentials::CredentialNamespace;
 use nessa_auth::{
@@ -82,6 +81,7 @@ pub(super) struct LocalProduct {
 }
 
 pub(super) enum StartupWarmUp {
+    #[cfg(unix)]
     Fixed(AgentWarmUp),
     #[cfg(unix)]
     Current(Arc<CurrentAgentResolver>),

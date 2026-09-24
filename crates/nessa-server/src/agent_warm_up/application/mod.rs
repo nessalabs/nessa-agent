@@ -12,6 +12,7 @@ pub use ports::{
     ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
 };
 pub use service::AgentWarmUp;
+#[cfg(any(unix, test))]
 pub(crate) use terminal::WarmUpLaunchOwnership;
 #[cfg(test)]
 pub(crate) use terminal::{WarmUpAuditDelivery, WarmUpCompletionRecordDelivery, WarmUpEffect};
