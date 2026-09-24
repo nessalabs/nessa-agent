@@ -1,25 +1,19 @@
 use super::*;
-use crate::agent_install::domain::{InstallAttempt, InstallTransitionFacts, RollbackState};
+use crate::agent_install::domain::{
+    InstallAttempt, InstallRequest, InstallTransitionFacts, RollbackState, RuntimeArtifact,
+};
 use crate::agent_install_test_support::{agent, platform, release, request, PINNED_DIGEST};
 
 fn attempt() -> InstallAttempt {
     let release = release("1.0.0", PINNED_DIGEST, &platform());
-    InstallAttempt::start(
-        agent(),
-        crate::agent_install::domain::RuntimeArtifact::for_release(&release),
-        request(),
-    )
-    .0
+    InstallAttempt::start(agent(), RuntimeArtifact::for_release(&release), request()).0
 }
 
 #[test]
 fn only_verified_evidence_can_prepare_publication() {
     let release = release("1.0.0", PINNED_DIGEST, &platform());
-    let (_, started) = InstallAttempt::start(
-        agent(),
-        crate::agent_install::domain::RuntimeArtifact::for_release(&release),
-        request(),
-    );
+    let (_, started) =
+        InstallAttempt::start(agent(), RuntimeArtifact::for_release(&release), request());
     assert_eq!(
         PublicationPreparation::new(started),
         Err(PublicationDeliveryError::PreparationIsNotVerified)
@@ -33,7 +27,7 @@ fn terminal_must_belong_to_the_exact_prepared_attempt() {
     let mut other = InstallAttempt::start(
         agent(),
         preparation.verified().target().clone(),
-        crate::agent_install::domain::InstallRequest::new("unix:501", "other").unwrap(),
+        InstallRequest::new("unix:501", "other").unwrap(),
     )
     .0;
     assert!(matches!(
@@ -51,11 +45,8 @@ fn terminal_must_belong_to_the_exact_prepared_attempt() {
 #[test]
 fn terminal_constructor_rejects_a_nonterminal_transition_from_the_prepared_attempt() {
     let release = release("1.0.0", PINNED_DIGEST, &platform());
-    let (mut attempt, started) = InstallAttempt::start(
-        agent(),
-        crate::agent_install::domain::RuntimeArtifact::for_release(&release),
-        request(),
-    );
+    let (mut attempt, started) =
+        InstallAttempt::start(agent(), RuntimeArtifact::for_release(&release), request());
     let preparation = PublicationPreparation::new(attempt.verified().unwrap()).unwrap();
 
     assert_eq!(
@@ -74,7 +65,7 @@ fn settlement_requires_the_exact_retained_predecessor() {
     let mut other = InstallAttempt::start(
         agent(),
         preparation.verified().target().clone(),
-        crate::agent_install::domain::InstallRequest::new("unix:501", "other").unwrap(),
+        InstallRequest::new("unix:501", "other").unwrap(),
     )
     .0;
     let other_preparation = PublicationPreparation::new(other.verified().unwrap()).unwrap();

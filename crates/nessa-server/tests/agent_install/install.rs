@@ -126,6 +126,8 @@ enum DeliveryCall {
 struct ScriptedDeliveryState {
     pending: Option<PendingInstallationDelivery>,
     calls: Vec<DeliveryCall>,
+    selected_accounts: Vec<String>,
+    prepared_override: Option<PublicationPreparation>,
     prepare_failures: usize,
     prepare_acknowledgement_failures: usize,
     retain_failures: usize,
@@ -149,6 +151,8 @@ impl ScriptedDelivery {
             state: Mutex::new(ScriptedDeliveryState {
                 pending: None,
                 calls: Vec::new(),
+                selected_accounts: Vec::new(),
+                prepared_override: None,
                 prepare_failures,
                 prepare_acknowledgement_failures: 0,
                 retain_failures,
@@ -169,6 +173,20 @@ impl ScriptedDelivery {
             .unwrap()
             .prepare_acknowledgement_failures = 1;
         self
+    }
+
+    fn returning_preparation(mut self, preparation: PublicationPreparation) -> Self {
+        self.state.get_mut().unwrap().prepared_override = Some(preparation);
+        self
+    }
+
+    fn with_pending(mut self, pending: PendingInstallationDelivery) -> Self {
+        self.state.get_mut().unwrap().pending = Some(pending);
+        self
+    }
+
+    fn selected_accounts(&self) -> Vec<String> {
+        self.state.lock().unwrap().selected_accounts.clone()
     }
 
     fn pending(&self) -> Option<PendingInstallationDelivery> {
@@ -198,8 +216,13 @@ struct ScriptedDeliverySession<'a> {
 impl InstallationDelivery for ScriptedDelivery {
     fn session(
         &self,
-        _account_id: &str,
+        account_id: &str,
     ) -> Result<Box<dyn InstallationDeliverySession + '_>, InstallDeliveryFailure> {
+        self.state
+            .lock()
+            .unwrap()
+            .selected_accounts
+            .push(account_id.to_owned());
         Ok(Box::new(ScriptedDeliverySession { delivery: self }))
     }
 }
@@ -230,9 +253,13 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
                 "another publication is unresolved".into(),
             ));
         }
+        let returned_preparation = state
+            .prepared_override
+            .clone()
+            .unwrap_or_else(|| preparation.clone());
         let prepared = PreparedInstallation::new(
             format!("prepared-{}", preparation.verified().request().request_id()),
-            preparation,
+            returned_preparation,
         );
         state.pending = Some(PendingInstallationDelivery::Prepared(prepared.clone()));
         if state.prepare_acknowledgement_failures > 0 {
@@ -288,6 +315,7 @@ impl InstallationDeliverySession for ScriptedDeliverySession<'_> {
 
 struct ScriptedAudit {
     records: Mutex<Vec<InstallTransition>>,
+    completion_queries: Mutex<Vec<PublicationPreparation>>,
     fail_terminals: bool,
     replay_started_after_terminal_replay: bool,
     lease_dropped: Option<Arc<Mutex<mpsc::Receiver<()>>>>,
@@ -302,6 +330,7 @@ impl ScriptedAudit {
     ) -> Self {
         Self {
             records: Mutex::new(Vec::new()),
+            completion_queries: Mutex::new(Vec::new()),
             fail_terminals,
             replay_started_after_terminal_replay,
             lease_dropped,
@@ -318,6 +347,10 @@ impl ScriptedAudit {
             .into_iter()
             .filter(|record| record.event_identity().slot() == InstallEventSlot::CompletionOutcome)
             .collect()
+    }
+
+    fn completion_queries(&self) -> Vec<PublicationPreparation> {
+        self.completion_queries.lock().unwrap().clone()
     }
 
     fn assert_publication_lease_held(&self) {
@@ -370,6 +403,10 @@ impl InstallAudit for ScriptedAudit {
         &self,
         preparation: &PublicationPreparation,
     ) -> Result<Option<InstallTransition>, AuditFailure> {
+        self.completion_queries
+            .lock()
+            .unwrap()
+            .push(preparation.clone());
         Ok(self.records.lock().unwrap().iter().find_map(|record| {
             (record.event_identity().slot() == InstallEventSlot::CompletionOutcome
                 && record.agent() == preparation.verified().agent()
@@ -520,6 +557,26 @@ fn assert_terminal_operation(case: TerminalPublicationCase, operation: Option<&I
             );
         }
     }
+}
+
+fn publication_preparation(
+    target: RuntimeArtifact,
+    request: InstallRequest,
+) -> PublicationPreparation {
+    let (mut attempt, _) = InstallAttempt::start(agent(), target, request);
+    PublicationPreparation::new(attempt.verified().unwrap()).unwrap()
+}
+
+fn installed_outcome(preparation: &PublicationPreparation) -> PublicationOutcome {
+    let verified = preparation.verified();
+    let terminal = InstallTransition::restore(
+        verified.agent().clone(),
+        verified.target().clone(),
+        verified.request().clone(),
+        InstallTransitionFacts::Installed,
+    )
+    .unwrap();
+    PublicationOutcome::terminal(preparation, terminal).unwrap()
 }
 
 #[test]
@@ -684,56 +741,118 @@ fn combined_terminal_failures_block_a_fresh_request_before_install_effects() {
 
 #[test]
 fn settlement_failure_recovers_by_audit_without_repeating_publication() {
-    let root = tempfile::tempdir().unwrap();
-    let (lease_dropped, dropped) = mpsc::channel();
-    let dropped = Arc::new(Mutex::new(dropped));
-    let delivery = ScriptedDelivery::new(0, 0, 1, Some(Arc::clone(&dropped)));
-    let audit = ScriptedAudit::new(false, true, Some(Arc::clone(&dropped)));
-    let source = FakeSource::serving(b"archive bytes");
-    let store = FakeStore::empty(root.path()).signalling_lease_drop(lease_dropped);
-    let install = InstallAgentRuntime {
-        source: &source,
-        store: &store,
-        audit: &audit,
-        delivery: &delivery,
-    };
-    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    for case in [
+        TerminalPublicationCase::Installed,
+        TerminalPublicationCase::Replaced,
+        TerminalPublicationCase::RolledBack,
+        TerminalPublicationCase::RecoveryIncomplete,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (lease_dropped, dropped) = mpsc::channel();
+        let dropped = Arc::new(Mutex::new(dropped));
+        let delivery = ScriptedDelivery::new(0, 0, 2, Some(Arc::clone(&dropped)));
+        let audit = ScriptedAudit::new(false, true, Some(Arc::clone(&dropped)));
+        let source = FakeSource::serving(b"archive bytes");
+        let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+        let target = RuntimeArtifact::for_release(&pinned);
+        let previous = RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform()));
+        let store = terminal_store(case, root.path(), &previous, lease_dropped);
+        let original_request = request();
+        let install = InstallAgentRuntime {
+            source: &source,
+            store: store.as_ref(),
+            audit: &audit,
+            delivery: &delivery,
+        };
 
-    let failure = install
-        .execute(&agent(), &pinned, &host(), &request())
-        .unwrap_err();
-    assert!(matches!(
-        failure,
-        InstallFailure::Delivery(ref evidence)
-            if evidence.delivery().unwrap().stage() == InstallDeliveryFailureStage::Settle
-    ));
-    let next_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
-    let next = install
-        .execute(&agent(), &pinned, &host(), &next_request)
-        .unwrap_err();
+        let failure = install
+            .execute(&agent(), &pinned, &host(), &original_request)
+            .unwrap_err();
+        let InstallFailure::Delivery(evidence) = failure else {
+            panic!("{case:?}: settlement failure must retain delivery evidence");
+        };
+        assert_eq!(evidence.runtime_state(), &case.expected_runtime_state());
+        assert_terminal_case(
+            case,
+            evidence.terminal().unwrap(),
+            &original_request,
+            &target,
+            &previous,
+        );
+        assert_terminal_operation(case, evidence.operation());
+        assert_eq!(
+            evidence.delivery().unwrap().stage(),
+            InstallDeliveryFailureStage::Settle
+        );
+        assert_eq!(
+            evidence.delivery().unwrap().detail(),
+            "injected settlement failure"
+        );
+        assert!(evidence.audit().is_none());
+        assert!(matches!(
+            delivery.pending(),
+            Some(PendingInstallationDelivery::Outcome { .. })
+        ));
+        assert!(matches!(dropped.lock().unwrap().try_recv(), Ok(())));
 
-    assert_eq!(next, InstallFailure::AttemptReused(next_request));
-    assert_eq!(source.requested().len(), 1);
-    assert_eq!(store.published().len(), 1);
-    assert_eq!(store.discarded().len(), 1);
-    assert_eq!(audit.terminal_records().len(), 2);
-    assert_eq!(
-        delivery
-            .calls()
-            .iter()
-            .filter(|call| matches!(call, DeliveryCall::Retain(_)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        delivery
-            .calls()
-            .iter()
-            .filter(|call| matches!(call, DeliveryCall::Settle(_)))
-            .count(),
-        2
-    );
-    assert!(delivery.pending().is_none());
+        let next_request = InstallRequest::new("unix:501", "install-request-2").unwrap();
+        let recovery_failure = install
+            .execute(&agent(), &pinned, &host(), &next_request)
+            .unwrap_err();
+        let InstallFailure::Delivery(recovery_evidence) = recovery_failure else {
+            panic!("{case:?}: recovery settlement failure must retain delivery evidence");
+        };
+        assert_eq!(
+            recovery_evidence.runtime_state(),
+            &case.expected_runtime_state()
+        );
+        assert_terminal_case(
+            case,
+            recovery_evidence.terminal().unwrap(),
+            &original_request,
+            &target,
+            &previous,
+        );
+        assert!(recovery_evidence.operation().is_none());
+        assert_eq!(
+            recovery_evidence.delivery().unwrap().stage(),
+            InstallDeliveryFailureStage::Settle
+        );
+        assert_eq!(
+            recovery_evidence.delivery().unwrap().detail(),
+            "injected settlement failure"
+        );
+        assert!(recovery_evidence.audit().is_none());
+        assert!(matches!(
+            delivery.pending(),
+            Some(PendingInstallationDelivery::Outcome { .. })
+        ));
+
+        let next = install
+            .execute(&agent(), &pinned, &host(), &next_request)
+            .unwrap_err();
+
+        assert_eq!(next, InstallFailure::AttemptReused(next_request));
+        assert_eq!(source.requested().len(), 1);
+        assert_eq!(audit.terminal_records().len(), 3);
+        assert_eq!(
+            delivery
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, DeliveryCall::Retain(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            delivery
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, DeliveryCall::Settle(_)))
+                .count(),
+            3
+        );
+        assert!(delivery.pending().is_none());
+    }
 }
 
 #[test]
@@ -807,6 +926,197 @@ fn preparation_failure_discards_staging_without_publishing() {
     assert!(store.published().is_empty());
     assert_eq!(store.discarded().len(), 1);
     assert!(delivery.pending().is_none());
+}
+
+#[test]
+fn returned_preparation_must_match_the_locally_verified_attempt_before_publication() {
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let expected_target = RuntimeArtifact::for_release(&pinned);
+    let expected_request = request();
+    let mismatches = [
+        publication_preparation(
+            expected_target.clone(),
+            InstallRequest::new("unix:501", "other-request").unwrap(),
+        ),
+        publication_preparation(
+            expected_target.clone(),
+            InstallRequest::new("unix:502", expected_request.request_id()).unwrap(),
+        ),
+        publication_preparation(
+            RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform())),
+            expected_request.clone(),
+        ),
+    ];
+
+    for returned in mismatches {
+        let root = tempfile::tempdir().unwrap();
+        let delivery = ScriptedDelivery::new(0, 0, 0, None).returning_preparation(returned);
+        let audit = ScriptedAudit::new(false, false, None);
+        let source = FakeSource::serving(b"archive bytes");
+        let store = FakeStore::empty(root.path());
+
+        let failure = InstallAgentRuntime {
+            source: &source,
+            store: &store,
+            audit: &audit,
+            delivery: &delivery,
+        }
+        .execute(&agent(), &pinned, &host(), &expected_request)
+        .unwrap_err();
+
+        let InstallFailure::Delivery(failure) = failure else {
+            panic!("contradictory preparation must be a delivery failure");
+        };
+        assert_eq!(failure.runtime_state(), &RuntimeStateEvidence::Unchanged);
+        assert!(failure.operation().is_none());
+        assert!(failure.terminal().is_none());
+        assert!(failure.audit().is_none());
+        assert_eq!(
+            failure.delivery().unwrap().stage(),
+            InstallDeliveryFailureStage::ReadState
+        );
+        assert_eq!(
+            failure.delivery().unwrap().detail(),
+            "prepared publication disagrees with the verified preparation"
+        );
+        assert_eq!(delivery.selected_accounts(), vec!["unix:501".to_owned()]);
+        assert_eq!(source.requested().len(), 1);
+        assert!(store.published().is_empty());
+        assert_eq!(store.discarded().len(), 1);
+        assert!(audit.terminal_records().is_empty());
+        assert_eq!(
+            delivery.calls(),
+            vec![
+                DeliveryCall::Pending,
+                DeliveryCall::Prepare(publication_preparation(
+                    expected_target.clone(),
+                    expected_request.clone(),
+                )),
+            ]
+        );
+    }
+}
+
+#[test]
+fn exact_returned_preparation_allows_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let expected_request = request();
+    let preparation = publication_preparation(
+        RuntimeArtifact::for_release(&pinned),
+        expected_request.clone(),
+    );
+    let delivery = ScriptedDelivery::new(0, 0, 0, None).returning_preparation(preparation.clone());
+    let store = FakeStore::empty(root.path());
+
+    InstallAgentRuntime {
+        source: &FakeSource::serving(b"archive bytes"),
+        store: &store,
+        audit: audit(),
+        delivery: &delivery,
+    }
+    .execute(&agent(), &pinned, &host(), &expected_request)
+    .unwrap();
+
+    assert_eq!(store.published(), ["opencode"]);
+    assert!(delivery.pending().is_none());
+    assert!(delivery
+        .calls()
+        .iter()
+        .any(|call| matches!(call, DeliveryCall::Prepare(actual) if actual == &preparation)));
+}
+
+#[test]
+fn recovery_rejects_foreign_accounts_and_conflicting_outcomes_before_audit() {
+    let pinned = release("1.18.31", PINNED_DIGEST, &platform());
+    let target = RuntimeArtifact::for_release(&pinned);
+    let selected_request = request();
+    let selected_preparation = publication_preparation(target.clone(), selected_request.clone());
+    let selected_prepared =
+        PreparedInstallation::new("selected-preparation".into(), selected_preparation.clone());
+
+    let foreign_preparation = publication_preparation(
+        target.clone(),
+        InstallRequest::new("unix:502", "foreign-request").unwrap(),
+    );
+    let foreign_delivery =
+        ScriptedDelivery::new(0, 0, 0, None).with_pending(PendingInstallationDelivery::Prepared(
+            PreparedInstallation::new("foreign-preparation".into(), foreign_preparation),
+        ));
+    assert_recovery_refusal(
+        &pinned,
+        &selected_request,
+        &foreign_delivery,
+        "pending publication belongs to another account",
+    );
+
+    let conflicting_preparations = [
+        publication_preparation(
+            target,
+            InstallRequest::new("unix:501", "other-request").unwrap(),
+        ),
+        publication_preparation(
+            RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform())),
+            selected_request.clone(),
+        ),
+    ];
+    for conflicting in conflicting_preparations {
+        let delivery = ScriptedDelivery::new(0, 0, 0, None).with_pending(
+            PendingInstallationDelivery::Outcome {
+                prepared: selected_prepared.clone(),
+                outcome: Box::new(installed_outcome(&conflicting)),
+            },
+        );
+        assert_recovery_refusal(
+            &pinned,
+            &selected_request,
+            &delivery,
+            "publication outcome disagrees with its preparation",
+        );
+    }
+}
+
+fn assert_recovery_refusal(
+    pinned: &PinnedRelease,
+    selected_request: &InstallRequest,
+    delivery: &ScriptedDelivery,
+    expected_detail: &str,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let audit = ScriptedAudit::new(false, false, None);
+    let original_pending = delivery.pending();
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+        delivery,
+    }
+    .execute(&agent(), pinned, &host(), selected_request)
+    .unwrap_err();
+
+    let InstallFailure::Delivery(failure) = failure else {
+        panic!("contradictory recovery state must be a delivery failure");
+    };
+    assert_eq!(failure.runtime_state(), &RuntimeStateEvidence::Unchanged);
+    assert!(failure.operation().is_none());
+    assert!(failure.terminal().is_none());
+    assert!(failure.audit().is_none());
+    assert_eq!(
+        failure.delivery().unwrap().stage(),
+        InstallDeliveryFailureStage::ReadState
+    );
+    assert_eq!(failure.delivery().unwrap().detail(), expected_detail);
+    assert_eq!(delivery.selected_accounts(), vec!["unix:501".to_owned()]);
+    assert_eq!(delivery.calls(), vec![DeliveryCall::Pending]);
+    assert_eq!(delivery.pending(), original_pending);
+    assert!(audit.records().is_empty());
+    assert!(audit.completion_queries().is_empty());
+    assert!(source.requested().is_empty());
+    assert!(store.published().is_empty());
+    assert!(store.discarded().is_empty());
 }
 
 #[test]

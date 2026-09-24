@@ -3,9 +3,10 @@ use std::path::PathBuf;
 
 use super::ports::{
     ArchiveSource, AuditAcknowledgement, AuditFailure, InstallAudit, InstallDeliveryFailure,
-    InstallationDelivery, InstallationDeliverySession, PendingInstallationDelivery,
-    PreparedInstallation, PublicationChange, PublicationCleanupFailure, PublicationRecovery,
-    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    InstallDeliveryFailureStage, InstallationDelivery, InstallationDeliverySession,
+    PendingInstallationDelivery, PreparedInstallation, PublicationChange,
+    PublicationCleanupFailure, PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure,
+    StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError,
@@ -264,7 +265,7 @@ impl InstallAgentRuntime<'_> {
             .delivery
             .session(request.account_id())
             .map_err(delivery_failure)?;
-        self.recover(delivery.as_mut())?;
+        self.recover(delivery.as_mut(), request.account_id())?;
         let (mut attempt, started) = InstallAttempt::start(agent.clone(), target, request.clone());
         if self.audit(started)? == AuditAcknowledgement::Replayed {
             return Err(InstallFailure::AttemptReused(request.clone()));
@@ -345,6 +346,11 @@ impl InstallAgentRuntime<'_> {
         let prepared = delivery
             .prepare(preparation.clone())
             .map_err(delivery_failure)?;
+        if prepared.preparation() != &preparation {
+            return Err(delivery_domain_failure(
+                "prepared publication disagrees with the verified preparation".into(),
+            ));
+        }
         match self.store.publish(agent, release, staged) {
             Ok(publication) => {
                 let transition = match publication.change() {
@@ -445,15 +451,28 @@ impl InstallAgentRuntime<'_> {
     fn recover(
         &self,
         delivery: &mut dyn InstallationDeliverySession,
+        selected_account_id: &str,
     ) -> Result<(), InstallFailure> {
         let Some(pending) = delivery.pending().map_err(delivery_failure)? else {
             return Ok(());
         };
         let (prepared, outcome, retained) = match pending {
             PendingInstallationDelivery::Outcome { prepared, outcome } => {
+                if prepared.preparation().verified().request().account_id() != selected_account_id {
+                    return Err(delivery_domain_failure(
+                        "pending publication belongs to another account".into(),
+                    ));
+                }
+                PublicationSettlement::new(prepared.preparation(), outcome.as_ref().clone())
+                    .map_err(|error| delivery_domain_failure(error.to_string()))?;
                 (prepared, *outcome, None)
             }
             PendingInstallationDelivery::Prepared(prepared) => {
+                if prepared.preparation().verified().request().account_id() != selected_account_id {
+                    return Err(delivery_domain_failure(
+                        "pending publication belongs to another account".into(),
+                    ));
+                }
                 let Some(terminal) =
                     self.audit
                         .completion_for(prepared.preparation())
@@ -500,9 +519,21 @@ impl InstallAgentRuntime<'_> {
         }
         let settlement = PublicationSettlement::new(prepared.preparation(), outcome)
             .map_err(|error| delivery_domain_failure(error.to_string()))?;
-        delivery
-            .settle(&prepared, &settlement)
-            .map_err(delivery_failure)
+        if let Err(error) = delivery.settle(&prepared, &settlement) {
+            let terminal = settlement.outcome().terminal_transition().cloned();
+            let runtime_state = terminal
+                .as_ref()
+                .map(runtime_state_for_transition)
+                .unwrap_or(RuntimeStateEvidence::Unchanged);
+            return Err(publication_delivery_failure(
+                None,
+                runtime_state,
+                terminal,
+                Some(error),
+                None,
+            ));
+        }
+        Ok(())
     }
 
     fn finish_no_effect(
@@ -680,7 +711,7 @@ fn delivery_failure(failure: InstallDeliveryFailure) -> InstallFailure {
 
 fn delivery_domain_failure(detail: String) -> InstallFailure {
     delivery_failure(InstallDeliveryFailure::new(
-        super::ports::InstallDeliveryFailureStage::ReadState,
+        InstallDeliveryFailureStage::ReadState,
         detail,
     ))
 }

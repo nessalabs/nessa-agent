@@ -36,11 +36,8 @@ fn preparation() -> PublicationPreparation {
         PINNED_DIGEST,
         &crate::agent_install_test_support::platform(),
     );
-    let (mut attempt, _) = InstallAttempt::start(
-        agent(),
-        crate::agent_install::domain::RuntimeArtifact::for_release(&release),
-        request(),
-    );
+    let (mut attempt, _) =
+        InstallAttempt::start(agent(), RuntimeArtifact::for_release(&release), request());
     PublicationPreparation::new(attempt.verified().unwrap()).unwrap()
 }
 
