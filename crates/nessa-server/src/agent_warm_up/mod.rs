@@ -7,7 +7,7 @@
 //! configured.
 //!
 //! ```text
-//! composition -> AgentWarmUp::start   (background task, once per fingerprint)
+//! composition -> AgentWarmUp::start   (one self-owned background run)
 //!                    |
 //!                    |-> AgentProvider  open -> close   (a real session)
 //!                    |-> WarmUpRecords  completion in the data directory
@@ -17,10 +17,11 @@
 //! ```
 //!
 //! Arrows show calls. The conversation service waits on the run already in
-//! flight rather than starting a second cold launch. It never fails because the
-//! warm-up failed: a failed preparation is not evidence that the user's own
-//! launch will fail, so the request opens its own provider and reports its own
-//! outcome.
+//! flight rather than starting a second cold launch. The terminal keeps the
+//! preparation result, physical ownership, audit delivery and completion-record
+//! delivery separate. Composition may retry a released failure, while uncertain
+//! physical ownership remains fenced. A warm-up failure never becomes the
+//! conversation result: its freshly resolved provider reports its own outcome.
 pub mod application;
 pub mod domain;
 pub mod infrastructure;

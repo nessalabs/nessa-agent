@@ -5,7 +5,9 @@ use super::*;
 use crate::agents::application::{AgentCredential, AgentCredentialFailure, AgentCredentialSource};
 #[cfg(unix)]
 use crate::composition::local_auth::SystemClock;
+#[cfg(unix)]
 use nessa_sdk::domain::common::value_objects::ImageMediaType;
+#[cfg(unix)]
 use std::ffi::OsStr;
 
 #[cfg(unix)]
@@ -53,6 +55,7 @@ fn agent_configuration_is_explicit_and_rejects_unknown_provider_switches() {
     assert!(serde_json::from_str::<AgentsConfig>(r#"{"model":"configured-model"}"#).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn an_agent_is_started_by_a_command_and_its_arguments() {
     // Not a runtime and an entry script: an agent that speaks the protocol
@@ -79,6 +82,7 @@ fn an_agent_is_started_by_a_command_and_its_arguments() {
 /// question, and `/harness/index.js` is not absolute on Windows — it names no
 /// drive. Written as a Unix path, this test asserted that a relative argument
 /// was found, which is the opposite of what it is for.
+#[cfg(unix)]
 fn absolute(name: &str) -> String {
     if cfg!(windows) {
         format!("C:\\{name}")
@@ -87,6 +91,7 @@ fn absolute(name: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn only_the_arguments_that_are_paths_are_this_machines_to_find() {
     let entry = absolute("harness/index.js");
@@ -107,12 +112,14 @@ fn only_the_arguments_that_are_paths_are_this_machines_to_find() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn the_only_configured_agent_needs_no_choosing() {
     let config: AgentsConfig = serde_json::from_str(one_agent()).unwrap();
     assert_eq!(config.selected().unwrap(), AgentId::Claude);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_second_agent_makes_the_choice_between_them_a_thing_to_state() {
     // Answering this by picking the first one would put a person's next
@@ -127,6 +134,7 @@ fn a_second_agent_makes_the_choice_between_them_a_thing_to_state() {
     assert_eq!(config.selected().unwrap(), AgentId::Codex);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_selection_is_never_honoured_past_what_is_configured() {
     for selected in ["codex", "gemini", ""] {
@@ -137,6 +145,7 @@ fn a_selection_is_never_honoured_past_what_is_configured() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn an_agent_name_with_no_adapter_is_reported_rather_than_skipped() {
     // Skipping it would leave that agent missing from setup, which reads as an
@@ -149,6 +158,7 @@ fn an_agent_name_with_no_adapter_is_reported_rather_than_skipped() {
     assert!(refused.contains("gemini"), "{refused}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_configuration_naming_no_agent_starts_nothing() {
     let value = r#"{"catalog":"/catalog.json","workspace":"/workspace"}"#;
@@ -170,6 +180,7 @@ fn whether_an_agent_runs_its_own_tools_is_asked_of_that_agent_alone() {
     assert!(config.runtime(AgentId::Codex).unwrap().tools_enabled);
 }
 
+#[cfg(unix)]
 #[test]
 fn no_agent_is_told_how_to_sign_itself_in() {
     // Codex's adapter will sign itself in from an environment key if the launch
@@ -194,6 +205,7 @@ fn no_agent_is_told_how_to_sign_itself_in() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration_from() {
     // Every name asked for is answered, so what the assertions see is the key
@@ -207,11 +219,11 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
     };
 
     let opencode = inherited(AgentId::Opencode);
-    // Opencode resolves config, data, cache and state from the XDG variables,
-    // and with them its providers, its plugins and the account a person signed
-    // in on. Under `env_clear` leaving one out is not "unset": Opencode falls
-    // back to a path under `HOME` and reads a different installation than the
-    // readiness probe answered about.
+    // Shared composition gathers the XDG variables OpenCode would otherwise
+    // resolve config, data, cache and state from. The OpenCode SDK adapter treats
+    // these values as untrusted launch input and replaces all four with private
+    // roots before process spawn; this test covers only the shared collection
+    // boundary.
     for key in [
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
@@ -232,9 +244,9 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
     );
     let codex = inherited(AgentId::Codex);
     assert!(codex.contains(&"CODEX_HOME".to_owned()), "{codex:?}");
-    // The XDG variables are general-purpose, so they are Opencode's only by
-    // virtue of being what Opencode reads. An agent with a directory variable
-    // of its own has no business being given them as well.
+    // The XDG variables are general-purpose, so shared composition collects them
+    // only for OpenCode. An agent with a directory variable of its own has no
+    // reason to receive them at this boundary.
     for other in [claude, codex] {
         assert!(!other.contains(&"XDG_CONFIG_HOME".to_owned()), "{other:?}");
     }
@@ -340,6 +352,7 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     // Absent rather than present-and-broken: the conversation service answers a
@@ -349,12 +362,14 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
     assert!(!built.providers.contains_key(&AgentId::Opencode));
 }
 
-/// And Opencode is a provider composition can actually build, which nothing
-/// asserted before: every other test on this path stops at the configuration.
+/// Fixed composition builds every configured bundled provider.
+///
+/// OpenCode is deliberately absent here: its static profile and fresh launch
+/// evidence are joined by `CurrentAgentResolver` inside a supervised cold slot.
 // `providers` is Unix-only; on other platforms it refuses outright.
 #[cfg(unix)]
 #[test]
-fn every_configured_agent_that_can_be_built_is() {
+fn every_configured_bundled_agent_that_can_be_built_is() {
     let root = tempfile::tempdir().unwrap();
     // No agent left out, so nothing is missing: `AgentId::Claude` names an
     // agent that is configured here, which is what makes this the both-built
@@ -369,30 +384,21 @@ fn every_configured_agent_that_can_be_built_is() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
-    assert_eq!(built.providers.len(), 2);
-    assert!(built.providers.contains_key(&AgentId::Opencode));
+    assert_eq!(built.providers.len(), 1);
+    assert!(built.providers.contains_key(&AgentId::Claude));
+    assert!(!built.providers.contains_key(&AgentId::Opencode));
 }
 
-/// Opencode can be started against the catalog Nessa actually ships.
-///
-/// Every other test on this path writes its own catalog, so none of them could
-/// tell "composition builds an Opencode provider" from "composition builds one
-/// when handed a catalog invented for the test". This one hands it the shipped
-/// file and the model the desktop starts Opencode on, which is the pair a real
-/// installation has.
-// `providers` is Unix-only; on other platforms it refuses outright.
+/// The packaged OpenCode policy validates against the catalog Nessa ships.
 #[cfg(unix)]
 #[test]
-fn opencode_builds_against_the_catalog_nessa_ships() {
+fn packaged_opencode_policy_validates_against_the_catalog_nessa_ships() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
-    nessa_local_storage::create_directory(&workspace).unwrap();
     let command = root.path().join("opencode");
-    std::fs::write(&command, "fixture").unwrap();
-    let conversations = root.path().join("conversations");
-    nessa_local_storage::create_directory(&conversations).unwrap();
 
     let config: AgentsConfig = serde_json::from_value(serde_json::json!({
         "catalog": concat!(env!("CARGO_MANIFEST_DIR"), "/../nessa-sdk/data/models.json"),
@@ -401,25 +407,15 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
         "runtimes": {"opencode": {
             "command": command,
             "args": ["acp"],
-            // What `composition::desktop::default_model` starts Opencode on.
-            "model": "opencode/big-pickle",
+            "model": "opencode/minimax-m3",
             "toolsEnabled": true,
         }},
     }))
     .unwrap();
 
-    // Selected, so a refusal would be fatal rather than logged: this asserts
-    // the provider was built, not that the failure was survivable.
-    let built = providers(
-        &config,
-        &conversations,
-        Arc::new(SystemClock),
-        Arc::new(NoImages),
-        no_credentials(),
-    )
-    .unwrap();
-    assert!(built.providers.contains_key(&AgentId::Opencode));
-    assert!(built.unavailable.is_empty());
+    let runtime = config.runtime(AgentId::Opencode).unwrap();
+    let validated = validate_opencode_policy(&config, runtime).unwrap();
+    assert_eq!(validated.model().key().model_id(), "opencode/minimax-m3");
 }
 
 /// No Opencode model Nessa ships can be sent an image, and the whole gateway
@@ -427,8 +423,8 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
 ///
 /// Said out loud here because it is invisible everywhere else. The binding
 /// declares image input whenever composition supplies a byte source, which is
-/// the right declaration; the catalogue is what withholds it. All three
-/// `opencode` entries record no `imageInput` limits — `mimo-v2.5-free`
+/// the right declaration; the catalogue is what withholds it. The `opencode`
+/// entries record no `imageInput` limits — `mimo-v2.5-free`
 /// declares `input.image` and records none — and `EffectiveCapabilities`
 /// offers image input only where the limits are, so the effective modality is
 /// text.
@@ -454,6 +450,7 @@ fn no_opencode_model_nessa_ships_can_be_sent_an_image() {
         "opencode/nemotron-3-ultra-free",
         "opencode/big-pickle",
         "opencode/mimo-v2.5-free",
+        "opencode/minimax-m3",
     ] {
         let config: AgentsConfig = serde_json::from_value(serde_json::json!({
             "catalog": shipped,
@@ -469,26 +466,51 @@ fn no_opencode_model_nessa_ships_can_be_sent_an_image() {
         .unwrap();
 
         assert_eq!(
-            image_limits(&config).unwrap(),
+            image_limits(
+                &config,
+                Some(&model_by_id(AgentId::Opencode, &config, model).unwrap()),
+            )
+            .unwrap(),
             None,
             "{model} records image limits; the binding's docstring says none does"
         );
     }
 }
 
-/// The two ways an agent can be left out are told apart, because readiness
-/// needs them apart.
+#[cfg(unix)]
+#[test]
+fn a_deferred_managed_model_still_bounds_the_shared_image_store() {
+    let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/../nessa-sdk/data/models.json");
+    let config: AgentsConfig = serde_json::from_value(serde_json::json!({
+        "catalog": shipped,
+        "workspace": "/workspace",
+        "selected": "claude",
+        "runtimes": {"claude": {
+            "command": "/claude",
+            "args": [],
+            "model": "claude-sonnet-5",
+            "toolsEnabled": false,
+        }},
+    }))
+    .unwrap();
+
+    assert!(image_limits(&config, None).unwrap().is_some());
+    let current = model_by_id(AgentId::Opencode, &config, "opencode/minimax-m3").unwrap();
+    assert_eq!(
+        image_limits(&config, Some(&current)).unwrap(),
+        None,
+        "a cold-resolved model still shares the same attachment store"
+    );
+}
+
+/// Fixed provider composition does not project OpenCode availability.
 ///
-/// An agent whose command is not on the machine yet is one an install fixes, so
-/// the probe has to go on stating it and answering `not-installed`. An agent
-/// whose command is right there and which still could not be built failed on
-/// something installing does not re-ask — here, a catalog that serves no model
-/// under its vendor — and reporting that one `ready` offers a conversation that
-/// cannot be opened.
+/// Readiness distinguishes missing runtime evidence from invalid static policy
+/// in `CurrentAgentResolver`, where the two facts are observed coherently.
 // `providers` is Unix-only; on other platforms it refuses outright.
 #[cfg(unix)]
 #[test]
-fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
+fn fixed_provider_composition_defers_opencode_without_marking_it_unavailable() {
     let root = tempfile::tempdir().unwrap();
     let (config, conversations) = two_agents(root.path(), "claude", AgentId::Opencode);
     nessa_local_storage::create_directory(&conversations).unwrap();
@@ -499,42 +521,13 @@ fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
         Arc::new(SystemClock),
         Arc::new(NoImages),
         no_credentials(),
+        &HashSet::new(),
     )
     .unwrap();
     assert!(!built.providers.contains_key(&AgentId::Opencode));
     assert!(
         built.unavailable.is_empty(),
         "an agent that is merely not installed is not unstartable; it is not installed"
-    );
-
-    // The same pair, with Opencode's command in place and a catalog that names
-    // no model under its vendor. Nothing anyone installs changes that answer.
-    let root = tempfile::tempdir().unwrap();
-    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Claude);
-    std::fs::write(root.path().join(AgentId::Claude.name()), "fixture").unwrap();
-    std::fs::write(
-        root.path().join("catalog.json"),
-        serde_json::json!({
-            "verifiedOn": "2026-09-11",
-            "models": [catalog_entry("anthropic", "configured-model")],
-        })
-        .to_string(),
-    )
-    .unwrap();
-    nessa_local_storage::create_directory(&conversations).unwrap();
-
-    let built = providers(
-        &config,
-        &conversations,
-        Arc::new(SystemClock),
-        Arc::new(NoImages),
-        no_credentials(),
-    )
-    .unwrap();
-    assert!(!built.providers.contains_key(&AgentId::Opencode));
-    assert_eq!(
-        built.unavailable,
-        std::collections::HashSet::from([AgentId::Opencode])
     );
 }
 
@@ -557,7 +550,8 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
         &conversations,
         Arc::new(SystemClock),
         Arc::new(NoImages),
-        no_credentials()
+        no_credentials(),
+        &HashSet::new()
     )
     .is_err());
 }
@@ -565,6 +559,7 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
 /// The packaged case: the host resolved a path at registration, and that is the
 /// one the agent gets — not the service's own, which has none of the user's
 /// tools on it.
+#[cfg(unix)]
 #[test]
 fn the_agent_takes_the_hosts_resolved_path_over_the_services_own() {
     assert_eq!(
@@ -578,6 +573,7 @@ fn the_agent_takes_the_hosts_resolved_path_over_the_services_own() {
 
 /// The developer loop: `just server` is started from a terminal, there is no
 /// host to resolve anything, and that terminal's path is already the right one.
+#[cfg(unix)]
 #[test]
 fn without_a_resolved_path_the_process_keeps_its_own() {
     assert_eq!(
@@ -588,6 +584,7 @@ fn without_a_resolved_path_the_process_keeps_its_own() {
 
 /// An empty variable is not a path. Treating it as one gives the agent an empty
 /// `PATH`, which searches the working directory it writes to.
+#[cfg(unix)]
 #[test]
 fn an_empty_variable_is_not_a_path() {
     assert_eq!(
@@ -601,6 +598,7 @@ fn an_empty_variable_is_not_a_path() {
 /// The rule above decides nothing unless the launched environment uses it. The
 /// two were wired together separately, and a merge that kept one and dropped
 /// the other would still compile and still pass every test above.
+#[cfg(unix)]
 #[test]
 fn the_agent_is_launched_with_the_path_that_rule_chose() {
     let launched = inherited_environment(
@@ -626,6 +624,7 @@ fn the_agent_is_launched_with_the_path_that_rule_chose() {
 /// Fitting to one model and sending to another is a refusal at the moment of
 /// sending, which is the one point where there is nothing left to do about it:
 /// the bytes are already kept, the message is already written.
+#[cfg(unix)]
 #[test]
 fn an_image_is_fitted_to_what_every_configured_agent_would_take() {
     let limits = |types: Vec<ImageMediaType>, encoded, max_edge, many, native| {

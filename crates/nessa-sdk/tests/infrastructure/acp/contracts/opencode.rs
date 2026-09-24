@@ -371,9 +371,9 @@ async fn a_session_is_refused_rather_than_run_half_configured() {
     }
 }
 
-/// OpenCode Zen rotates the free models it serves, so a provider reporting its
-/// own configuration while this binding is still applying it is correct to name
-/// the model it had rather than the one being asked for.
+/// A provider may report its prior configuration while this binding is still
+/// applying a requested model, so that advisory update is not final eligibility
+/// evidence and need not already name the requested model.
 #[tokio::test]
 async fn opencode_reporting_its_configuration_while_it_is_being_configured_is_not_a_failure() {
     let _process_slot = process_test_slot().await;

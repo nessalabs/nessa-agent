@@ -4,7 +4,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::agents::application::{AgentCredentialSource, AgentProbe, ProbeFailure};
+use crate::agents::application::{
+    AgentCredentialSource, AgentProbe, AgentProbeEvidence, ProbeFailure,
+};
 use crate::agents::domain::AgentId;
 use crate::agents::infrastructure::{claude, codex, credentials};
 
@@ -89,6 +91,10 @@ pub struct LocalAgentProbe {
 }
 
 impl LocalAgentProbe {
+    fn configured(&self, agent: AgentId) -> bool {
+        self.launch_files.contains_key(&agent)
+    }
+
     /// Read this host's environment once, in composition.
     ///
     /// Where each agent lives is not guessed from the filesystem around the
@@ -135,11 +141,16 @@ impl LocalAgentProbe {
 }
 
 impl AgentProbe for LocalAgentProbe {
-    /// Whether composition resolved a launch for this agent.
-    fn configured(&self, agent: AgentId) -> bool {
-        self.launch_files.contains_key(&agent)
+    fn evidence(&self, agent: AgentId) -> Option<AgentProbeEvidence> {
+        self.configured(agent).then_some(())?;
+        Some(AgentProbeEvidence {
+            installed: self.installed(agent),
+            authenticated: agent.needs_sign_in().then(|| self.authenticated(agent)),
+        })
     }
+}
 
+impl LocalAgentProbe {
     /// Whether the agent this server would launch is really on this machine.
     ///
     /// Asked of the filesystem on every call rather than once at construction.

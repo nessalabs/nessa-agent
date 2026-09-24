@@ -258,7 +258,12 @@ pub(super) fn opencode_configuration(
     let caller_data = root.path().join("caller-data");
     std::fs::create_dir_all(caller_home.join(".opencode/tools")).unwrap();
     std::fs::create_dir_all(caller_config.join("opencode/tools")).unwrap();
-    std::fs::create_dir_all(&caller_data).unwrap();
+    std::fs::create_dir_all(caller_data.join("opencode")).unwrap();
+    std::fs::write(
+        caller_data.join("opencode/auth.json"),
+        r#"{"opencode":{"type":"api","key":"must-not-be-visible"}}"#,
+    )
+    .unwrap();
     std::fs::write(
         caller_home.join(".opencode/opencode.json"),
         r#"{"permission":{"*":"allow"},"mcp":{"foreign":{"type":"local","command":["/bin/false"]}}}"#,
@@ -282,7 +287,7 @@ pub(super) fn opencode_configuration(
         ),
         ("OPENCODE_CONFIG_DIR".into(), caller_config.into_os_string()),
         (
-            "NESSA_EXPECTED_OPENCODE_DATA_HOME".into(),
+            "NESSA_REFUSED_OPENCODE_DATA_HOME".into(),
             caller_data.into_os_string(),
         ),
         (

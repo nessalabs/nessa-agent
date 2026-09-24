@@ -2,6 +2,7 @@
 //! this test must never ask the machine it runs on about credentials.
 
 use super::*;
+use crate::agents::application::AgentProbeEvidence;
 use crate::agents::application::{AgentProbe, ProbeFailure};
 use crate::agents_test_support::{StubAgentProbe, WaitingAgentProbe};
 use axum::body::to_bytes;
@@ -39,18 +40,12 @@ struct CountingProbe {
 }
 
 impl AgentProbe for CountingProbe {
-    fn configured(&self, _agent: AgentId) -> bool {
-        true
-    }
-
-    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+    fn evidence(&self, _agent: AgentId) -> Option<AgentProbeEvidence> {
         self.asked.fetch_add(1, Ordering::SeqCst);
-        Ok(true)
-    }
-
-    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        self.asked.fetch_add(1, Ordering::SeqCst);
-        Ok(true)
+        Some(AgentProbeEvidence {
+            installed: Ok(true),
+            authenticated: Some(Ok(true)),
+        })
     }
 }
 
@@ -58,16 +53,8 @@ impl AgentProbe for CountingProbe {
 struct PanickingProbe;
 
 impl AgentProbe for PanickingProbe {
-    fn configured(&self, _agent: AgentId) -> bool {
-        true
-    }
-
-    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+    fn evidence(&self, _agent: AgentId) -> Option<AgentProbeEvidence> {
         panic!("this machine came apart while being asked");
-    }
-
-    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        Ok(true)
     }
 }
 

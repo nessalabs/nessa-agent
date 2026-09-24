@@ -69,11 +69,8 @@ export interface AgentChoice {
  * adapter exists it is the only honest thing to say about it.
  *
  * OpenCode comes last because the order is the order someone reads, and the two
- * agents ahead of it are the ones a person is most likely to already have. It
- * is not last because it is worse: it is the one entry that needs no account,
- * so on a machine with neither Claude nor Codex it is the only one that can
- * reach a model at all, and what the picker shows against each entry is what
- * says so.
+ * agents ahead of it are the ones a person is most likely to already have.
+ * Its saved-key and metered-model requirements are shown beside that choice.
  */
 export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({

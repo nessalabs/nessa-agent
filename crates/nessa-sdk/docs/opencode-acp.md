@@ -51,21 +51,26 @@ What differs is behind `AcpProfile`:
   reasoning, and what would rescue the `other` case, is on
   `opencode_acp/tools/wire.rs`.
 
-## It needs no account
+## Credentials and private process roots
 
-Opencode reaches the free models its own gateway serves with no sign-in
-anywhere, so `AgentId::needs_sign_in` is false for it and `Readiness::from_host`
-takes the sign-in answer as an `Option`. Absent, not `Yes`: `Yes` would mean
-this machine found a sign-in, which is a different thing to be wrong about.
+The SDK binding does not decide which OpenCode model or credential policy a
+product supports. A caller supplies the selected model separately and may place
+an admitted credential in `AcpConfig::credential_environment`. The binding does
+not discover an OpenCode account, read `auth.json`, or promise that a free or
+metered catalogue entry is eligible for that caller.
 
-No credential variable is passed to it either. A key for its gateway is
-something a person gives Opencode itself under `HOME`, so there is no variable
-here that would start a signed-in Opencode, and inventing one would put somebody
-else's key into its environment. What it is given instead are the XDG directory
-variables, because that is what it resolves its own config, data, cache and
-state from — including whatever account the person signed in on — and under
-`env_clear` an unnamed `XDG_CONFIG_HOME` does not mean unset, it means a
-different installation than the readiness probe answered about.
+Nessa's packaged composition requires a saved stage-scoped API key and starts
+on the metered `opencode/minimax-m3` Zen model. Standalone composition preserves
+the explicit runtime policy and captures `OPENCODE_API_KEY` when composition
+starts. Those are composition decisions rather than general restrictions on
+the SDK or on models upstream may offer.
+
+Before launch the binding removes `HOME`, all four XDG roots, and alternate
+OpenCode config inputs from both environment maps. It gives the process fresh
+private HOME, config, data, cache, and state roots, disables project config and
+external plugins, and therefore exposes none of the caller's plugins, provider
+configuration, or account data. The admitted credential environment is the
+only credential path into the process.
 
 ## What bounds a session
 
@@ -93,16 +98,12 @@ statement that has to sit beside the value it qualifies.
 
 ## Install and run
 
-Opencode is not bundled. It is a runtime of its own, nearly two hundred
-megabytes against a few for a Node adapter, so shipping it would put that in
-every download for people who already have an agent. `bundled_launch` returns
-`None` for it, so Opencode has to already be on the machine: install it by
-hand, and it runs. Nothing on this branch or on the install branch turns an
-installed copy into a launch — the installer unpacks a binary and prints a
-report — so nothing yet writes the `runtimes.opencode` entry a launch is read
-from. That step belongs to the install branch and lands after this one, because
-a gateway whose `AgentId` has no `Opencode` variant refuses to start on a
-config naming it.
+Opencode is not bundled. In packaged Nessa, composition resolves only the
+managed runtime at Nessa's exact current pin and retains its executable-use
+authority through provider lifetime. Missing, stale, unsupported, or unreadable
+managed state is refused rather than replaced by a command path from config.
+Standalone composition instead uses its explicit trusted command and arguments;
+the SDK itself accepts the caller-owned executable snapshot in `AcpConfig`.
 
 The release is pinned and the launch sets `OPENCODE_DISABLE_AUTOUPDATE`, so a
 copy only moves when Nessa ships. Only Opencode's own TUI reaches the upgrade
@@ -113,14 +114,13 @@ see `requires Opencode 1.18.31` with nothing saying why.
 
 ## Verification
 
-Fifteen contract tests in `tests/infrastructure/acp/contracts/opencode.rs` run
-against `fixtures/opencode_acp_test_handler.py`, which serves the shapes the
+Contract tests in `tests/infrastructure/acp/contracts/opencode.rs` run against
+`fixtures/opencode_acp_test_handler.py`, which serves the protocol shapes the
 real binary was recorded answering: `agentInfo { name: "OpenCode", version }`,
 no `_meta/steering`, and `session/new` with the `model` and `mode` config
-options. The fixture also asserts the five launch variables above, so a binding
-that stopped setting one fails a test rather than quietly widening.
+options. The fixture also verifies the private environment and pinned launch
+settings, so widening that boundary fails deterministically.
 
-Not claimed: a live answer. `models.opencode.ai` is not reachable from the
-environment this was built in, so everything here is verified against the real
-binary's protocol surface and a fixture that replays it, and not against the
-gateway.
+Not claimed: a successful paid model turn. The fixture proves protocol shape
+and launch isolation; it does not prove that a saved key is accepted by the
+live service or that the selected model will answer.

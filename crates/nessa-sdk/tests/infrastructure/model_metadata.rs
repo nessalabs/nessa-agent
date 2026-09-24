@@ -43,6 +43,7 @@ fn shipped_catalog_loads_from_a_file_and_contains_only_the_current_lineup() {
             ("anthropic", "claude-opus-5"),
             ("anthropic", "claude-sonnet-5"),
             ("anthropic", "claude-haiku-4-5-20251001"),
+            ("opencode", "opencode/minimax-m3"),
             ("opencode", "opencode/nemotron-3-ultra-free"),
             ("opencode", "opencode/big-pickle"),
             ("opencode", "opencode/mimo-v2.5-free"),

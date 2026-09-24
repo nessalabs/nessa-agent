@@ -21,8 +21,9 @@ pub use ports::{
     SubmittedImage, SubmittedMessage,
 };
 pub use service::{
-    ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
-    ConversationLimits, ConversationService, RequestedAgent, SubmissionMode,
+    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
+    ConversationCaller, ConversationDependencies, ConversationLimits, ConversationService,
+    RequestedAgent, SubmissionMode,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,

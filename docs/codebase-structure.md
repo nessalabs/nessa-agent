@@ -348,9 +348,21 @@ numbers are the caller's: the gateway takes them from the selected model's
 (domain), shared Agent orchestration and bounded views (application), and private
 metadata/audit adapters (infrastructure). A conversation records the agent it was
 created on and is reopened on that same agent for the rest of its life, so
-`composition/agent.rs` builds a provider for every configured agent rather than
-only the selected one — yesterday's conversations need the agent nobody selected
-today. `product/conversation.rs` maps the canonical product wire contract;
+`composition/agent.rs` builds fixed providers for configured bundled agents.
+`composition/opencode_profile.rs` owns one static OpenCode decision shared by
+configured/default selection, image limits, readiness, and provider creation.
+Packaged composition either selects the exact current pin with a stage-scoped
+API key or refuses the policy; standalone composition preserves its explicit
+command, arguments, model, tools and budgets and captures `OPENCODE_API_KEY`
+once when composition starts. `composition/current_agent.rs` joins that static
+decision to a fresh launch and credential observation for each readiness call
+and cold slot. Managed observations resolve the exact pinned launch and current
+stage-scoped API key; standalone observations retain the captured environment
+credential. An existing live slot keeps the generation and executable-use
+authority it already owns. `ConversationAgentSource` is the application port
+between those decisions and the service. Yesterday's
+conversations still reopen on their recorded agent even when it is not today's
+default. `product/conversation.rs` maps the canonical product wire contract;
 composition supplies the agents, storage and audit.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
@@ -404,12 +416,16 @@ through one open and close and committing that evidence (application), and the
 completion record and audit files in the data directory (infrastructure). It is
 started by composition once the gateway is listening, so the operating system's
 first-execution scan is paid in the background rather than inside a user's first
-message. The conversation context joins settlement through its own
-`RuntimeReadiness` port without blocking command responses,
-which `composition/warm_up.rs` connects; the two contexts do not depend on each
-other. Warm-up failure releases the settlement gate and the conversation's own
-attachment attempt supplies its authoritative result. Tests live under
-`crates/nessa-server/tests/agent_warm_up/`.
+message. The application terminal keeps preparation, physical launch ownership,
+audit delivery, and completion-record delivery as separate facts. The
+conversation context joins settlement through its own `RuntimeReadiness` port
+without blocking command responses, which `composition/warm_up.rs` connects;
+the two contexts do not depend on each other. Composition coordinates one
+automatic OpenCode run at a time: released failures may be retried, while
+unconfirmed cleanup retains its owner and fences another automatic launch. The
+conversation's freshly resolved provider always supplies the authoritative
+request result. Tests live under `crates/nessa-server/tests/agent_warm_up/` and
+the composition seam under `crates/nessa-server/tests/composition/`.
 
 ## MCP tools
 
@@ -464,7 +480,7 @@ independently of whether that turn contains text.
 - `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, verifies full-tree parity with the packaging digest, and publishes atomically before service mutation. The injected launchd adapter remembers a successful validation only for the exact path, fingerprint and private root directory filesystem identity, so later reconciliation does not hash the full tree again; a different or replaced generation is validated normally. Existing versions are retained; launchd arguments name the staged directory and no search path derives from it — the gateway addresses `nessa`, `node`, the ACP entry and `nessa-mcp` absolutely, so the staged directory is on neither the service's `PATH` nor the agent's. Tests cover cache identity, cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
 - `src-tauri/src/gateway/infrastructure/macos/pruning.rs` collects the staged versions nothing can be running, under the same per-label lock, once the service has advertised its identity. `removable` is the whole rule and is pure: a published fingerprint directory goes only when it is neither the registered nor the running version and neither an unanswered retirement request nor an unacknowledged fence names it. `RetirementEvidence` carries `retired` for exactly that distinction: admission fencing needs only a recorded cause, while collection needs to know whether the old gateway finished and was booted out. An interrupted `.staging-` attempt goes because holding the lock means nobody is staging; every other name is left alone. `RuntimeVersions` is the directory seam, so the rule is tested without a filesystem and the real `LabelDirectory` revalidates each entry as a directory this user owns before removing it. No single entry can stop the pass: a refused removal, an entry the directory will not yield, and an entry with no valid text name are each reported and stepped over while the recognised versions beside them are still collected. Only a directory that cannot be listed at all ends the pass. What is reported is typed rather than a message string, so each line says what actually happened: a path appears only for an entry a removal was really attempted on, and a lossy rendering of an unusable name is never presented as somewhere to look. Failures are reported with their path and never reach registration's result. Reconciliations that return an error collect nothing, because the version they were replacing may still be running.
 - `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
-- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths plus verified installed-runtime launches.
+- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths. Managed OpenCode launch resolution remains live in `composition/current_agent.rs`.
 - `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
 - `settings.onboarding.completed` records that first-run setup finished. `src-tauri/src/main.rs` opens the setup window only when it is false. `panel::finish_setup` owns the whole handoff and its order — show the panel, record completion, close the setup window — in the process that outlives that window; a panel that will not show abandons the handoff and writes nothing, while a refused write is logged and the close still happens. `src/host/window.ts`'s `finishSetupWindow` is a single invoke of it, carrying only whether setup was finished or left (`isOnboardingCompleted`), and maps the reported steps onto the `SetupHandoff` outcomes. `src/onboarding/application/setup-recovery.ts` decides what the setup window shows when it is still there afterwards: a panel that never came up offers the handoff again, a panel that came up over a window that would not close offers only that window's close. The `Destroyed` handler in `main.rs` is a safety net for dismissal and crashes, not the handoff's cleanup path. The debug-only tray item clears the flag through `panel::restart_onboarding`.
 
@@ -710,6 +726,15 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
 
+OpenCode readiness and cold opening instead share `composition/current_agent.rs`.
+Each managed call reads one exact managed launch and one scoped credential
+snapshot; a standalone call combines its explicit launch with the environment
+credential captured at composition time. Readiness maps that evidence without
+carrying the secret, and a cold slot builds an owned provider from a fresh
+observation. The blocking effects have one bounded lane whose native task retains
+its permit after caller timeout or cancellation. The actual executable-use
+admission remains in the SDK immediately before process spawn.
+
 The same context defines `AgentCredentialSource`; one local adapter reads
 standalone Claude environment credentials before the Nessa login-keychain item,
 while preserving API-key versus OAuth meaning. Desktop composition writes a
@@ -720,8 +745,12 @@ and account namespace come from
 infrastructure mapping for the Security.framework service and the Claude and
 OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
 reads the same injected source as readiness on a blocking worker for each process
-open. Neither adapter puts the source value in settings, plist, arguments, audit
-records, or logs.
+open. Packaged OpenCode reads the source once per observation and accepts only
+an API key, which it supplies to that owned process generation. Standalone
+OpenCode never reads that source; it uses only the environment value captured
+by its static profile.
+Neither adapter puts the source value in settings, plist, arguments, audit records,
+or logs.
 
 ## Attachments
 
@@ -890,13 +919,11 @@ machine at the version Nessa has tested. All three agents are pinned, and
 is also *launched* from what was fetched, because the desktop still resolves
 Claude and Codex inside the bundle. Their pins cover macOS on Apple silicon and
 no other platform, which is where the 467 MB was measured and the only archives
-anybody has listed. That split was once
-explained by Opencode being the agent a first-time user could reach with nothing
-signed in, and that turned out to be false — its free models are refused outside
-OpenCode's own application, so all three want the person's own account. What is
-left of the reason applies to every agent equally: telling somebody to go and
-install something before they can use Nessa is the thing this context exists to
-avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
+anybody has listed. The packaged OpenCode profile starts only with a saved API
+key and selects the metered `opencode/minimax-m3` Zen model; Nessa does not infer
+account validity or make a paid call during setup. The broader reason applies to
+every agent equally: telling somebody to go and install something before they
+can use Nessa is the thing this context exists to avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
 fetch all three and ship none.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
@@ -1068,9 +1095,10 @@ selected private data namespace before it constructs the audit and publication
 delivery journal beneath that root; an unsafe namespace stops the command
 before download or publication.
 `scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
-and hashing every platform's archives. Composition reads the store at every
-start through `composition/installed_launch.rs`, which answers with a launch or
-with nothing and never with a path it wrote down earlier. Tests under
+and hashing every platform's archives. Composition reads the store through
+`composition/installed_launch.rs` for each managed readiness observation and
+cold conversation open. It answers with an owned exact-pin launch or with
+nothing, never with a free-text path written down earlier. Tests under
 `tests/agent_install/` split the domain's rules, application ordering and
 failure reporting, the three adapters, concurrent publication authority, and
 the command's output.

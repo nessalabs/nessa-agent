@@ -46,6 +46,60 @@ afterEach(async () => {
 })
 
 describe("onboarding credential-save outcomes", () => {
+  it("offers the OpenCode key only through a usable gateway and discloses metered use", async () => {
+    const state = recordReadiness(startAgentChoice(beginOnboarding()), {
+      opencode: "needs-authentication",
+    })
+    const save = vi.fn(async () => ({ status: "saved" as const }))
+    const onRecheck = vi.fn(async () => {})
+    const view = (gatewayStartup: {
+      revision: number
+      state: "ready" | "starting" | "unmanaged"
+    }) => (
+      <Onboarding
+        state={state}
+        gatewayStartup={gatewayStartup}
+        apiKeys={{ save }}
+        platform="apple"
+        onBegin={() => {}}
+        onChoose={() => {}}
+        onConfirm={() => {}}
+        onFinish={() => {}}
+        onRecheck={onRecheck}
+        onRetryGateway={() => {}}
+      />
+    )
+
+    await React.act(async () => root.render(view({ revision: 1, state: "ready" })))
+    expect(container.textContent).toContain(
+      "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",
+    )
+    const input = container.querySelector("input") as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set
+    await React.act(async () => {
+      setter?.call(input, "opencode-private-value")
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+      container
+        .querySelector("form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+    })
+    expect(save).toHaveBeenCalledWith("opencode", "opencode-private-value")
+    expect(onRecheck).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain("opencode-private-value")
+
+    await React.act(async () => root.render(view({ revision: 2, state: "starting" })))
+    expect(container.querySelector("input")).toBeNull()
+    expect(container.textContent).toContain(
+      "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",
+    )
+
+    await React.act(async () => root.render(view({ revision: 3, state: "unmanaged" })))
+    expect(container.querySelector("input")).not.toBeNull()
+  })
+
   it("retains an audit warning after readiness removes the cleared key form", async () => {
     const asking = startAgentChoice(beginOnboarding())
     let state: OnboardingState = recordReadiness(asking, {

@@ -80,10 +80,7 @@ pub(super) fn installed_launch(
     host: &HostPlatform,
     store: &dyn RuntimeStore,
 ) -> Result<InstalledLaunch, LaunchError> {
-    let name =
-        AgentName::parse(agent.name()).map_err(|_| LaunchError::Name(agent.name().into()))?;
-    let releases = releases_for(&name).map_err(LaunchError::Pins)?;
-    let Some(release) = preferred_release(releases, host) else {
+    let (name, Some(release)) = preferred(agent, host)? else {
         return Ok(InstalledLaunch::UnsupportedHost);
     };
     match store.managed_launch(&name, &release) {
@@ -93,6 +90,35 @@ pub(super) fn installed_launch(
         Ok(None) => Ok(InstalledLaunch::Missing),
         Err(failure) => Ok(InstalledLaunch::Unknown(failure)),
     }
+}
+
+/// Whether this build has a pinned managed release for `agent` on `host`.
+///
+/// This consults only the compiled pin description. It performs no runtime
+/// store or credential effect, so composition can exclude an unsupported host
+/// before readiness or provider resolution asks either boundary.
+pub(super) fn supports_installed_launch(
+    agent: AgentId,
+    host: &HostPlatform,
+) -> Result<bool, LaunchError> {
+    preferred(agent, host).map(|(_, release)| release.is_some())
+}
+
+fn preferred(
+    agent: AgentId,
+    host: &HostPlatform,
+) -> Result<
+    (
+        AgentName,
+        Option<crate::agent_install::domain::PinnedRelease>,
+    ),
+    LaunchError,
+> {
+    let name =
+        AgentName::parse(agent.name()).map_err(|_| LaunchError::Name(agent.name().into()))?;
+    let releases = releases_for(&name).map_err(LaunchError::Pins)?;
+    let release = preferred_release(releases, host);
+    Ok((name, release))
 }
 
 struct SdkExecutableUseBridge {

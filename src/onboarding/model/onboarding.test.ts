@@ -171,17 +171,17 @@ describe("first-run setup", () => {
     expect(AGENT_CHOICES.every((choice) => choice.supported)).toBe(true)
   })
 
-  it("treats the agent that needs no account like any other listed one", () => {
-    // OpenCode reaches a model with nothing signed in, and that is the
-    // runtime's fact to report, not the picker's to assume: it is choosable
-    // because the answer said `ready`, by the same rule as the other two.
+  it("treats readiness as authoritative for every listed agent", () => {
+    // OpenCode is choosable because the current gateway observation said
+    // `ready`, by the same rule as the other two. The picker does not infer a
+    // credential or a provider entitlement of its own.
     const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
       opencode: "ready",
     })
     expect(agentChoice("opencode")?.supported).toBe(true)
     expect(agentReadiness(picking, "opencode")).toBe("ready")
     expect(chooseAgent(picking, "opencode").agent).toBe("opencode")
-    // And nothing about needing no account makes an absent one pickable.
+    // A prior ready answer does not make an absent runtime pickable.
     const missing = recordReadiness(picking, { opencode: "not-installed" })
     expect(chooseAgent(missing, "opencode").agent).toBeUndefined()
   })

@@ -3,13 +3,11 @@
 //! Nessa drives coding agents it does not write, and fetching one is how any of
 //! them arrives.
 //!
-//! Opencode was the first, on a reason that turned out to be false: it was
-//! taken to be the agent a first-time user could reach with nothing signed in.
-//! Its free models are refused outside OpenCode's own application, so it needs
-//! an account like the other two, and there is nothing special about it. What
-//! is left is the part that was always true — telling somebody to go and
-//! install something before they can use this is the thing this context exists
-//! to avoid — and that applies to every agent equally. See
+//! Opencode was the first. Its packaged profile now starts on a metered Zen
+//! model and therefore requires a saved API key before launch. What remains
+//! true independently of provider catalogue behavior is that telling somebody
+//! to install an agent before they can use Nessa is the thing this context
+//! exists to avoid, and that applies to every agent equally. See
 //! `docs/adr/todo/173-fetch-agent-runtimes.md`.
 //!
 //! A release is not always one file, and that is the other thing this context

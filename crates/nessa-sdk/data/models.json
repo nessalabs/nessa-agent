@@ -199,6 +199,27 @@
     },
     {
       "provider": "opencode",
+      "modelId": "opencode/minimax-m3",
+      "displayName": "MiniMax M3",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 512000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-01",
+      "documentationUrl": "https://www.minimax.io/models/text/m3"
+    },
+    {
+      "provider": "opencode",
       "modelId": "opencode/nemotron-3-ultra-free",
       "displayName": "Nemotron 3 Ultra Free",
       "input": {

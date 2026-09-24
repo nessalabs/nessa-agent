@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{effective_data_home, profile::OpencodeProfile};
+use super::profile::OpencodeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
@@ -65,7 +65,8 @@ use tokio::process::Command;
 /// binding instead gives each process a fresh private `HOME` and
 /// `XDG_CONFIG_HOME`, removes every alternate config input, and disables project
 /// config, so neither the checkout nor the person's global config can supply a
-/// custom tool.
+/// custom tool. `XDG_DATA_HOME` is private for the same reason and so the child
+/// cannot acquire a second credential authority from the caller's `auth.json`.
 ///
 /// Plugin-supplied tools took the same route and no longer do: `OPENCODE_PURE`
 /// makes the external plugin list empty, so none is loaded, none of its tools
@@ -79,9 +80,9 @@ use tokio::process::Command;
 /// **An MCP server in config is started, not merely offered.** A top-level or
 /// `agent.plan.permission` block can also outrank this policy. The same private
 /// config boundary closes both paths: there is no global config to contribute
-/// an MCP entry or a later permission rule. The caller's resolved
-/// `XDG_DATA_HOME` is preserved separately because that is where Opencode keeps
-/// `auth.json`; code-loading configuration does not share that directory.
+/// an MCP entry or a later permission rule. The private data root also excludes
+/// the caller's `auth.json`; any admitted credential must arrive through the
+/// caller-supplied process environment in [`AcpConfig`].
 ///
 /// **A launch writes to the machine before any tool runs.** Two effects sit
 /// outside permission evaluation entirely, so no policy reaches them and
@@ -121,6 +122,62 @@ pub struct OpencodeAcpProvider {
 }
 
 impl OpencodeAcpProvider {
+    /// Check the model, token ceilings, and tool policy without constructing a
+    /// process factory or performing effects.
+    ///
+    /// Composition uses this before it reads a managed runtime or credential,
+    /// so a statically invalid profile cannot be mistaken for a missing
+    /// installation or sign-in. `image_input` states whether composition can
+    /// supply image bytes; it changes advertised capabilities but not process
+    /// ownership. No process, file, credential, or network operation occurs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use nessa_sdk::{
+    ///     application::dto::{ModalitiesDto, ModelMetadataDto},
+    ///     domain::{
+    ///         common::value_objects::TokenLimits,
+    ///         model_metadata::entities::ModelMetadata,
+    ///     },
+    ///     infrastructure::opencode_acp::sessions::OpencodeAcpProvider,
+    /// };
+    ///
+    /// let text = ModalitiesDto { text: true, image: false, audio: false };
+    /// let model = ModelMetadata::try_from(ModelMetadataDto {
+    ///     provider: "opencode".into(),
+    ///     model_id: "opencode/example".into(),
+    ///     display_name: "Example".into(),
+    ///     input: text,
+    ///     image_input: None,
+    ///     output: text,
+    ///     tool_use: true,
+    ///     reasoning: false,
+    ///     max_context_window_tokens: 100_000,
+    ///     max_output_tokens: 4096,
+    ///     knowledge_cutoff: "2026-01".into(),
+    ///     documentation_url: "https://example.com/model".into(),
+    /// })?;
+    /// OpencodeAcpProvider::validate_policy(
+    ///     &model,
+    ///     TokenLimits::new(72_000, 3072)?,
+    ///     true,
+    ///     false,
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns the same model, limit, and tool-policy errors as [`Self::new`].
+    pub fn validate_policy(
+        model: &ModelMetadata,
+        limits: TokenLimits,
+        tools_enabled: bool,
+        image_input: bool,
+    ) -> Result<(), AgentError> {
+        capabilities(model, limits, tools_enabled, image_input).map(|_| ())
+    }
+
     /// Configure an Opencode ACP execution factory without starting a process.
     ///
     /// `config` supplies the executable, isolated environment, workspace,
@@ -156,7 +213,7 @@ impl OpencodeAcpProvider {
         audit: Arc<dyn ExecutionAudit>,
     ) -> Result<Self, AgentError> {
         config.validate()?;
-        let config = isolated_config(config)?;
+        let config = isolated_config(config);
         if config
             .permissions
             .decisions()
@@ -165,72 +222,8 @@ impl OpencodeAcpProvider {
         {
             return Err(AgentError::Unsupported("Opencode permissions currently support exact-request scope only; session/application rule enforcement is not implemented".into()));
         }
-        if !config.tools_enabled {
-            return Err(AgentError::Unsupported(
-                "Opencode always runs its own tools; a text-only Opencode binding cannot be configured"
-                    .into(),
-            ));
-        }
-        if model.key().provider() != ModelProvider::Opencode {
-            return Err(AgentError::Configuration(
-                "Opencode requires a model served through OpenCode Zen".into(),
-            ));
-        }
-        let text = Modalities::new(true, false, false).expect("text modality is nonempty");
-        // Image input is offered only when composition supplied the bytes'
-        // source, the same rule the Claude binding states. The model's own
-        // metadata and Opencode's advertised prompt capabilities narrow it
-        // further; neither can widen it.
-        //
-        // This binding declared text-only for a while, and the reason has since
-        // expired: the shared worker built every `session/prompt` as a single
-        // text block, so an image declared here had no way to reach the
-        // process. It now builds text and image blocks and gates them on
-        // `promptCapabilities.image` together with a byte source, so the
-        // capability is deliverable and withholding it is what would be the
-        // false statement. Opencode's `initialize` does advertise image
-        // prompts, measured against 1.18.31.
-        //
-        // No model a person can select today gets one, and the reason is the
-        // catalogue rather than this line. `opencode/mimo-v2.5-free` declares
-        // `input.image` and records no `imageInput` limits, and
-        // `EffectiveCapabilities` offers image input only where the limits
-        // are — without them nothing can prepare an image the model would
-        // accept — so the effective input modality comes out text for all
-        // three Opencode entries. This declaration is still the right one:
-        // the layer that cannot deliver an image is the one that should
-        // withhold it, and a binding that lied about the transport would hide
-        // the catalogue's gap instead of leaving it visible.
-        //
-        // That gap has a cost beyond Opencode, which is the base branch's to
-        // fix rather than this binding's: `composition::agent::image_limits`
-        // keeps no images at all once any configured model records none, and
-        // that value is the one attachment store every conversation shares. So
-        // configuring Opencode turns image attachments off gateway-wide,
-        // Claude conversations included, exactly as configuring Codex already
-        // does — the four `openai` entries record no limits either.
-        // `no_opencode_model_nessa_ships_can_be_sent_an_image` is where that
-        // is said out loud; it goes red the day somebody records limits, which
-        // is the day this comment needs reading again.
-        let input = Modalities::new(true, config.images.is_some(), false)
-            .expect("text modality is nonempty");
-        let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(input, text, true, false),
-            // Binding ceilings, not model or Opencode facts. OpenCode Zen
-            // reports nothing about the windows of the models it serves — and
-            // rotates which ones it serves — so these bound what this binding
-            // admits rather than what the provider does. Lower than the Codex
-            // binding's on purpose: a ceiling this binding cannot check is one
-            // to be conservative with.
-            TokenLimits::new(128_000, 32_000).expect("valid native profile ceilings"),
-        );
-        let capabilities = EffectiveCapabilities::new(model, restrictions, limits)
-            .map_err(|e| AgentError::Configuration(e.to_string()))?;
-        if !capabilities.features().tool_use() {
-            return Err(AgentError::Configuration(
-                "selected model does not support tools".into(),
-            ));
-        }
+        let capabilities =
+            capabilities(model, limits, config.tools_enabled, config.images.is_some())?;
         ProviderIdentity::new("opencode-acp", capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
@@ -282,6 +275,7 @@ impl OpencodeAcpProvider {
             .env("XDG_CONFIG_HOME", private_home.join("config"))
             .env("XDG_CACHE_HOME", private_home.join("cache"))
             .env("XDG_STATE_HOME", private_home.join("state"))
+            .env("XDG_DATA_HOME", private_home.join("data"))
             .env("OPENCODE_PERMISSION", SESSION_POLICY)
             // The workspace Opencode is pointed at is a checkout, and a
             // checkout is somebody else's text. Without this, an
@@ -323,6 +317,77 @@ impl OpencodeAcpProvider {
     }
 }
 
+fn capabilities(
+    model: &ModelMetadata,
+    limits: TokenLimits,
+    tools_enabled: bool,
+    image_input: bool,
+) -> Result<EffectiveCapabilities, AgentError> {
+    if !tools_enabled {
+        return Err(AgentError::Unsupported(
+            "Opencode always runs its own tools; a text-only Opencode binding cannot be configured"
+                .into(),
+        ));
+    }
+    if model.key().provider() != ModelProvider::Opencode {
+        return Err(AgentError::Configuration(
+            "Opencode requires a model served through OpenCode Zen".into(),
+        ));
+    }
+    let text = Modalities::new(true, false, false).expect("text modality is nonempty");
+    // Image input is offered only when composition supplied the bytes' source,
+    // the same rule the Claude binding states. The model's own metadata and
+    // Opencode's advertised prompt capabilities narrow it further; neither can
+    // widen it.
+    //
+    // This binding declared text-only for a while, and the reason has since
+    // expired: the shared worker built every `session/prompt` as a single text
+    // block, so an image declared here had no way to reach the process. It now
+    // builds text and image blocks and gates them on `promptCapabilities.image`
+    // together with a byte source, so the capability is deliverable and
+    // withholding it is what would be the false statement. Opencode's
+    // `initialize` does advertise image prompts, measured against 1.18.31.
+    //
+    // No model a person can select today gets one, and the reason is the
+    // catalogue rather than this line. `opencode/mimo-v2.5-free` declares
+    // `input.image` and records no `imageInput` limits, and
+    // `EffectiveCapabilities` offers image input only where the limits are —
+    // without them nothing can prepare an image the model would accept — so the
+    // effective input modality comes out text for all shipped OpenCode entries.
+    // This declaration is still the right one: the layer that cannot deliver an
+    // image is the one that should withhold it, and a binding that lied about
+    // the transport would hide the catalogue's gap instead of leaving it
+    // visible.
+    //
+    // That gap has a cost beyond Opencode, which is composition's to enforce:
+    // `composition::agent::image_limits` keeps no images at all once any
+    // configured model records none, and that value is the one attachment store
+    // every conversation shares. So configuring Opencode turns image
+    // attachments off gateway-wide, Claude conversations included, exactly as
+    // configuring Codex already does — the `openai` entries record no limits
+    // either. `no_opencode_model_nessa_ships_can_be_sent_an_image` is where that
+    // is said out loud; it goes red the day somebody records limits, which is
+    // the day this comment needs reading again.
+    let input = Modalities::new(true, image_input, false).expect("text modality is nonempty");
+    let restrictions = BindingRestrictions::new(
+        ModelFeatures::new(input, text, true, false),
+        // Binding ceilings, not model or Opencode facts. OpenCode Zen reports
+        // nothing about the windows of the models it serves — and rotates which
+        // ones it serves — so these bound what this binding admits rather than
+        // what the provider does. Lower than the Codex binding's on purpose: a
+        // ceiling this binding cannot check is one to be conservative with.
+        TokenLimits::new(128_000, 32_000).expect("valid native profile ceilings"),
+    );
+    let capabilities = EffectiveCapabilities::new(model, restrictions, limits)
+        .map_err(|error| AgentError::Configuration(error.to_string()))?;
+    if !capabilities.features().tool_use() {
+        return Err(AgentError::Configuration(
+            "selected model does not support tools".into(),
+        ));
+    }
+    Ok(capabilities)
+}
+
 impl AgentProvider for OpencodeAcpProvider {
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
@@ -362,8 +427,7 @@ impl AgentProvider for OpencodeAcpProvider {
     }
 }
 
-fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
-    let data_home = effective_data_home(&config.environment, &config.credential_environment)?;
+fn isolated_config(mut config: AcpConfig) -> AcpConfig {
     for key in [
         "HOME",
         "XDG_CONFIG_HOME",
@@ -378,7 +442,4 @@ fn isolated_config(mut config: AcpConfig) -> Result<AcpConfig, AgentError> {
         config.credential_environment.remove(OsStr::new(key));
     }
     config
-        .environment
-        .insert("XDG_DATA_HOME".into(), data_home.into_os_string());
-    Ok(config)
 }

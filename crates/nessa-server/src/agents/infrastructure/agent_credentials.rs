@@ -1,8 +1,9 @@
 //! Nessa-owned credentials supplied to local agent launches.
 //!
-//! Environment credentials remain an explicit standalone-server input. A
-//! packaged service can instead read a stage-scoped Nessa keychain item once
-//! composition injects this source into its consumers.
+//! This source captures standalone Claude environment credentials. Standalone
+//! OpenCode captures `OPENCODE_API_KEY` in its static composition profile and
+//! never asks this source; packaged agents read stage-scoped Nessa keychain
+//! items once composition injects this source into their consumers.
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
