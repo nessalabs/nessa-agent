@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,6 +11,7 @@ import {
   rmSync,
   symlinkSync,
   truncateSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -47,7 +50,11 @@ function tar(entries, { endingBlocks = 2, trailing = Buffer.alloc(0) } = {}) {
     field(header, 263, 2, "00")
     const checksum = [...header].reduce((sum, byte) => sum + byte, 0)
     field(header, 148, 8, `${checksum.toString(8).padStart(6, "0")}\0 `)
-    blocks.push(header, contents, Buffer.alloc((512 - (contents.length % 512)) % 512))
+    blocks.push(
+      header,
+      contents,
+      Buffer.alloc((512 - (contents.length % 512)) % 512, entry.paddingByte ?? 0),
+    )
   }
   if (endingBlocks > 0) blocks.push(Buffer.alloc(endingBlocks * 512))
   blocks.push(trailing)
@@ -176,6 +183,11 @@ test("archive validation rejects unsafe or contradictory entries", async (t) => 
       "unsupported type",
       [...selected, { name: `${distribution}/device`, type: "3" }],
       /unsupported entry type/,
+    ],
+    [
+      "non-zero entry padding",
+      [{ ...selected[0], paddingByte: 1 }, selected[1]],
+      /non-zero padding/,
     ],
   ]
   for (const [name, entries, message] of cases)
@@ -421,6 +433,58 @@ test("a competing valid write during corrupt-cache recovery stays safe", (t) => 
   assert.deepEqual(readdirSync(cache), [release.archive])
 })
 
+test("a valid inode replacing a corrupt cache entry wins recovery", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-valid-replacement-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  writeFileSync(archive, "corrupt")
+  const bytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download({ destination }) {
+      unlinkSync(archive)
+      writeFileSync(archive, good)
+      writeFileSync(destination, good)
+    },
+  })
+  assert.deepEqual(bytes, good)
+  assert.deepEqual(readFileSync(archive), good)
+})
+
+test("a nonregular inode replacing corrupt cache is preserved", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-foreign-replacement-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  writeFileSync(archive, "corrupt")
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          unlinkSync(archive)
+          mkdirSync(archive)
+          writeFileSync(join(archive, "marker"), "preserve")
+          writeFileSync(destination, good)
+        },
+      }),
+    /directory/,
+  )
+  assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
+})
+
 test("concurrent absent writers publish only verified bytes", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-absent-race-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
@@ -449,6 +513,140 @@ test("concurrent absent writers publish only verified bytes", (t) => {
   assert.deepEqual(outerBytes, good)
   assert.deepEqual(readFileSync(join(cache, release.archive)), good)
   assert.deepEqual(readdirSync(cache), [release.archive])
+})
+
+test("nonregular cache entries are refused without mutation", async (t) => {
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  for (const kind of ["symlink", "directory", "FIFO"]) {
+    await t.test(kind, () => {
+      const root = mkdtempSync(join(tmpdir(), "nessa-node-nonregular-"))
+      t.after(() => rmSync(root, { recursive: true, force: true }))
+      const cache = join(root, "cache")
+      const archive = join(cache, release.archive)
+      mkdirSync(cache)
+      if (kind === "symlink") {
+        const external = join(root, "external")
+        writeFileSync(external, "preserve")
+        symlinkSync(external, archive)
+      } else if (kind === "directory") {
+        mkdirSync(archive)
+        writeFileSync(join(archive, "marker"), "preserve")
+      } else {
+        execFileSync("mkfifo", [archive])
+      }
+      let downloaded = false
+      assert.throws(
+        () =>
+          acquireVerifiedNodeArchive({
+            cache,
+            release,
+            download() {
+              downloaded = true
+            },
+          }),
+        new RegExp(kind === "symlink" ? "symbolic link" : kind),
+      )
+      assert.equal(downloaded, false)
+      if (kind === "symlink") assert.equal(readFileSync(archive, "utf8"), "preserve")
+      if (kind === "directory")
+        assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
+    })
+  }
+})
+
+test("a nonregular replacement during download is preserved and refused", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-download-race-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          mkdirSync(archive)
+          writeFileSync(join(archive, "marker"), "preserve")
+          writeFileSync(destination, good)
+        },
+      }),
+    /directory/,
+  )
+  assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
+})
+
+test("a nonregular replacement at exclusive publication is preserved", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-publication-race-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          writeFileSync(destination, good)
+        },
+        publish(source, destination) {
+          assert.equal(existsSync(source), true)
+          assert.equal(destination, archive)
+          mkdirSync(destination)
+          writeFileSync(join(destination, "marker"), "preserve")
+          const error = new Error("destination appeared")
+          error.code = "EEXIST"
+          throw error
+        },
+      }),
+    /directory/,
+  )
+  assert.equal(readFileSync(join(archive, "marker"), "utf8"), "preserve")
+})
+
+test("a verified publication winner is accepted without overwrite", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-publication-winner-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  const bytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download({ destination }) {
+      writeFileSync(destination, good)
+    },
+    publish(source, destination) {
+      writeFileSync(destination, good)
+      assert.throws(
+        () => linkSync(source, destination),
+        (error) => error.code === "EEXIST",
+      )
+      const error = new Error("destination appeared")
+      error.code = "EEXIST"
+      throw error
+    },
+  })
+  assert.deepEqual(bytes, good)
+  assert.deepEqual(readFileSync(archive), good)
 })
 
 test("a redirected cache is refused before download or external writes", (t) => {
