@@ -7,6 +7,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -16,7 +17,9 @@ import { gzipSync } from "node:zlib"
 
 import {
   NODE_VERSION,
+  MAX_NODE_ARCHIVE_BYTES,
   acquireVerifiedNodeArchive,
+  downloadNodeArchive,
   nodeArchive,
   readNodeArchive,
 } from "./prepare-node.mjs"
@@ -25,7 +28,7 @@ function field(block, offset, length, value) {
   block.write(value, offset, Math.min(length, Buffer.byteLength(value)), "utf8")
 }
 
-function tar(entries, { ending = true } = {}) {
+function tar(entries, { endingBlocks = 2, trailing = Buffer.alloc(0) } = {}) {
   const blocks = []
   for (const entry of entries) {
     const contents = Buffer.from(entry.contents ?? "")
@@ -45,7 +48,8 @@ function tar(entries, { ending = true } = {}) {
     field(header, 148, 8, `${checksum.toString(8).padStart(6, "0")}\0 `)
     blocks.push(header, contents, Buffer.alloc((512 - (contents.length % 512)) % 512))
   }
-  if (ending) blocks.push(Buffer.alloc(1024))
+  if (endingBlocks > 0) blocks.push(Buffer.alloc(endingBlocks * 512))
+  blocks.push(trailing)
   return gzipSync(Buffer.concat(blocks))
 }
 
@@ -99,6 +103,12 @@ test("archive validation returns only the exact Node and license files", () => {
     ]),
     distribution,
   )
+  assert.equal(files.node.toString(), "node")
+  assert.equal(files.license.toString(), "license")
+})
+
+test("archive validation accepts two zero end blocks and zero padding", () => {
+  const files = readNodeArchive(tar(selected, { endingBlocks: 3 }), distribution)
   assert.equal(files.node.toString(), "node")
   assert.equal(files.license.toString(), "license")
 })
@@ -176,8 +186,28 @@ test("archive validation rejects unsafe or contradictory entries", async (t) => 
     /valid gzip/,
   )
   assert.throws(
-    () => readNodeArchive(tar(selected, { ending: false }), distribution),
+    () => readNodeArchive(tar(selected, { endingBlocks: 0 }), distribution),
     /malformed ending/,
+  )
+  assert.throws(
+    () => readNodeArchive(tar(selected, { endingBlocks: 1 }), distribution),
+    /two zero blocks/,
+  )
+  assert.throws(
+    () =>
+      readNodeArchive(tar(selected, { trailing: Buffer.alloc(512, 1) }), distribution),
+    /malformed ending/,
+  )
+  assert.throws(
+    () => readNodeArchive(tar(selected, { trailing: Buffer.from([1]) }), distribution),
+    /malformed ending/,
+  )
+  assert.throws(
+    () =>
+      readNodeArchive(gzipSync(Buffer.alloc(1025)), distribution, {
+        maxExpandedBytes: 1024,
+      }),
+    /expands beyond its allowed size/,
   )
 })
 
@@ -224,9 +254,162 @@ test("a corrupt download is neither cached nor left staged", (t) => {
           writeFileSync(destination, "corrupt")
         },
       }),
-    /checksum mismatch/,
+    /invalid, oversized, or corrupt/,
   )
   assert.deepEqual(readdirSync(cache), [])
+})
+
+test("an oversized cache entry is rejected before reading and replaced", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-oversized-cache-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  writeFileSync(archive, "")
+  truncateSync(archive, MAX_NODE_ARCHIVE_BYTES + 1)
+  let downloads = 0
+  const bytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download({ destination, maxBytes }) {
+      downloads += 1
+      assert.equal(maxBytes, MAX_NODE_ARCHIVE_BYTES)
+      writeFileSync(destination, good)
+    },
+  })
+  assert.equal(downloads, 1)
+  assert.deepEqual(bytes, good)
+  assert.deepEqual(readFileSync(archive), good)
+})
+
+test("an oversized unknown-length download is rejected and removed", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-oversized-download-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release: {
+          archive: "node-fixture.tar.gz",
+          sha256: "0".repeat(64),
+          url: "https://example.invalid/node-fixture.tar.gz",
+        },
+        download({ destination, maxBytes }) {
+          assert.equal(maxBytes, MAX_NODE_ARCHIVE_BYTES)
+          writeFileSync(destination, "")
+          truncateSync(destination, maxBytes + 1)
+        },
+      }),
+    /invalid, oversized, or corrupt/,
+  )
+  assert.deepEqual(readdirSync(cache), [])
+})
+
+test("the downloader enforces transfer and process time ceilings", () => {
+  let executed = false
+  assert.throws(
+    () =>
+      downloadNodeArchive({
+        destination: "/owned-stage/node.tar.gz",
+        url: "https://example.invalid/node.tar.gz",
+        execute(command, arguments_, options) {
+          executed = true
+          assert.equal(command, "curl")
+          assert.deepEqual(arguments_.slice(0, 6), [
+            "--fail",
+            "--location",
+            "--max-filesize",
+            String(MAX_NODE_ARCHIVE_BYTES),
+            "--max-time",
+            "120",
+          ])
+          assert.equal(options.timeout, 125_000)
+          throw new Error("download timed out")
+        },
+      }),
+    /timed out/,
+  )
+  assert.equal(executed, true)
+})
+
+test("a timed-out download leaves no cache or staging entry", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-timeout-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release: {
+          archive: "node-fixture.tar.gz",
+          sha256: "0".repeat(64),
+          url: "https://example.invalid/node-fixture.tar.gz",
+        },
+        download({ timeoutSeconds }) {
+          assert.equal(timeoutSeconds, 120)
+          throw new Error("download timed out")
+        },
+      }),
+    /timed out/,
+  )
+  assert.deepEqual(readdirSync(cache), [])
+})
+
+test("a competing valid write during corrupt-cache recovery stays safe", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-corrupt-race-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  const archive = join(cache, release.archive)
+  writeFileSync(archive, "corrupt")
+  const bytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download({ destination }) {
+      writeFileSync(archive, good)
+      writeFileSync(destination, good)
+    },
+  })
+  assert.deepEqual(bytes, good)
+  assert.deepEqual(readFileSync(archive), good)
+  assert.deepEqual(readdirSync(cache), [release.archive])
+})
+
+test("concurrent absent writers publish only verified bytes", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-absent-race-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = {
+    archive: "node-fixture.tar.gz",
+    sha256: createHash("sha256").update(good).digest("hex"),
+    url: "https://example.invalid/node-fixture.tar.gz",
+  }
+  let innerBytes
+  const outerBytes = acquireVerifiedNodeArchive({
+    cache,
+    release,
+    download({ destination }) {
+      innerBytes = acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination: innerDestination }) {
+          writeFileSync(innerDestination, good)
+        },
+      })
+      writeFileSync(destination, good)
+    },
+  })
+  assert.deepEqual(innerBytes, good)
+  assert.deepEqual(outerBytes, good)
+  assert.deepEqual(readFileSync(join(cache, release.archive)), good)
+  assert.deepEqual(readdirSync(cache), [release.archive])
 })
 
 test("a redirected cache is refused before download or external writes", (t) => {

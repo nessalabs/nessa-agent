@@ -2,12 +2,15 @@ import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   chmodSync,
+  constants,
   cpSync,
-  existsSync,
+  closeSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
+  openSync,
+  readSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -16,6 +19,16 @@ import { dirname, join, posix, win32 } from "node:path"
 import { gunzipSync } from "node:zlib"
 
 export const NODE_VERSION = "26.8.1"
+
+// Official Content-Length and gzip ISIZE values for the pinned archives are
+// 57,813,947/223,933,952 (Darwin arm64), 59,214,465/226,483,712 (Darwin x64),
+// and 62,281,031/229,468,160 (Linux x64). These ceilings preserve every target
+// with headroom while bounding cache reads, downloads, and decompression.
+export const MAX_NODE_ARCHIVE_BYTES = 96 * 1024 * 1024
+export const MAX_NODE_TAR_BYTES = 384 * 1024 * 1024
+const NODE_DOWNLOAD_TIMEOUT_SECONDS = 120
+const NODE_DOWNLOAD_PROCESS_TIMEOUT_MS = 125_000
+const ARCHIVE_READ_CHUNK_BYTES = 1024 * 1024
 
 // These are the matching entries from Node's official v26.8.1 SHASUMS256.txt.
 // They are source data for the build, not values fetched while packaging.
@@ -45,10 +58,6 @@ export function nodeArchive(platform, arch) {
     distribution: release.archive.slice(0, -".tar.gz".length),
     url: `https://nodejs.org/dist/v${NODE_VERSION}/${release.archive}`,
   }
-}
-
-function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex")
 }
 
 function tarText(block, start, length) {
@@ -107,13 +116,20 @@ function safeLink(entry, target, hardLink, distribution) {
  * Read the two files Nessa ships only after validating the complete tar stream.
  * No archive path is handed to an extracting program.
  */
-export function readNodeArchive(bytes, distribution) {
+export function readNodeArchive(
+  bytes,
+  distribution,
+  { maxExpandedBytes = MAX_NODE_TAR_BYTES } = {},
+) {
   let tar
   try {
-    tar = gunzipSync(bytes)
+    tar = gunzipSync(bytes, { maxOutputLength: maxExpandedBytes })
   } catch (error) {
+    if (error?.code === "ERR_BUFFER_TOO_LARGE")
+      throw new Error("Node archive expands beyond its allowed size", { cause: error })
     throw new Error("Node archive is not a valid gzip stream", { cause: error })
   }
+  if (tar.length % 512 !== 0) throw new Error("Node archive has a malformed ending")
   const selected = new Map([
     [`${distribution}/bin/node`, undefined],
     [`${distribution}/LICENSE`, undefined],
@@ -128,6 +144,12 @@ export function readNodeArchive(bytes, distribution) {
     if (header.every((byte) => byte === 0)) {
       if (longName || longLink)
         throw new Error("Node archive ends before its GNU extension is applied")
+      if (
+        offset + 512 > tar.length ||
+        !tar.subarray(offset, offset + 512).every((byte) => byte === 0)
+      )
+        throw new Error("Node archive must end with two zero blocks")
+      offset += 512
       ended = true
       break
     }
@@ -187,41 +209,91 @@ export function readNodeArchive(bytes, distribution) {
   }
 }
 
-function downloadNodeArchive({ destination, url }) {
-  execFileSync("curl", ["--fail", "--location", "--output", destination, url], {
-    stdio: "inherit",
-  })
+export function downloadNodeArchive({
+  destination,
+  url,
+  maxBytes = MAX_NODE_ARCHIVE_BYTES,
+  execute = execFileSync,
+}) {
+  execute(
+    "curl",
+    [
+      "--fail",
+      "--location",
+      "--max-filesize",
+      String(maxBytes),
+      "--max-time",
+      String(NODE_DOWNLOAD_TIMEOUT_SECONDS),
+      "--output",
+      destination,
+      url,
+    ],
+    { stdio: "inherit", timeout: NODE_DOWNLOAD_PROCESS_TIMEOUT_MS },
+  )
+}
+
+function inspectArchive(path, expectedSha256) {
+  let descriptor
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ELOOP") return undefined
+    throw error
+  }
+  try {
+    const before = fstatSync(descriptor)
+    if (!before.isFile()) return undefined
+    if (before.size > MAX_NODE_ARCHIVE_BYTES) return undefined
+
+    const hash = createHash("sha256")
+    const chunks = []
+    let size = 0
+    while (true) {
+      const chunk = Buffer.allocUnsafe(ARCHIVE_READ_CHUNK_BYTES)
+      const count = readSync(descriptor, chunk, 0, chunk.length, null)
+      if (count === 0) break
+      size += count
+      if (size > MAX_NODE_ARCHIVE_BYTES) return undefined
+      const used = chunk.subarray(0, count)
+      hash.update(used)
+      chunks.push(Buffer.from(used))
+    }
+    if (hash.digest("hex") !== expectedSha256) return undefined
+    return Buffer.concat(chunks, size)
+  } finally {
+    closeSync(descriptor)
+  }
 }
 
 /** Return pinned archive bytes, replacing only a corrupt entry in the owned cache. */
-export function acquireVerifiedNodeArchive({ cache, release, download }) {
+export function acquireVerifiedNodeArchive({
+  cache,
+  release,
+  download = downloadNodeArchive,
+}) {
   mkdirSync(cache, { recursive: true })
   if (!lstatSync(cache).isDirectory())
     throw new Error("Node archive cache must be an owned directory")
   const archive = join(cache, release.archive)
-  if (existsSync(archive)) {
-    const stat = lstatSync(archive)
-    if (!stat.isFile() || sha256(readFileSync(archive)) !== release.sha256)
-      rmSync(archive, { recursive: true })
+  const cached = inspectArchive(archive, release.sha256)
+  if (cached) return cached
+
+  const downloadStage = mkdtempSync(join(cache, ".node-download-"))
+  try {
+    const downloaded = join(downloadStage, release.archive)
+    download({
+      destination: downloaded,
+      maxBytes: MAX_NODE_ARCHIVE_BYTES,
+      timeoutSeconds: NODE_DOWNLOAD_TIMEOUT_SECONDS,
+      url: release.url,
+    })
+    const bytes = inspectArchive(downloaded, release.sha256)
+    if (!bytes) throw new Error("Node archive download is invalid, oversized, or corrupt")
+    renameSync(downloaded, archive)
+    return bytes
+  } finally {
+    rmSync(downloadStage, { recursive: true, force: true })
   }
-  if (!existsSync(archive)) {
-    const downloadStage = mkdtempSync(join(cache, ".node-download-"))
-    try {
-      const downloaded = join(downloadStage, release.archive)
-      download({ destination: downloaded, url: release.url })
-      if (!lstatSync(downloaded).isFile())
-        throw new Error("Node download did not produce a regular archive")
-      const bytes = readFileSync(downloaded)
-      if (sha256(bytes) !== release.sha256)
-        throw new Error("Node archive checksum mismatch")
-      renameSync(downloaded, archive)
-    } finally {
-      rmSync(downloadStage, { recursive: true, force: true })
-    }
-  }
-  const bytes = readFileSync(archive)
-  if (sha256(bytes) !== release.sha256) throw new Error("Node archive checksum mismatch")
-  return bytes
 }
 
 /** Acquire, verify, and stage Node plus its license into a desktop runtime. */
