@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::{InstallFailureEvidence, InstallRequest, RuntimeArtifact};
+use super::{AgentName, InstallFailureEvidence, InstallRequest, RuntimeArtifact};
 
 /// A durable obligation to reclaim one superseded physical runtime artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +164,7 @@ impl ReclamationTrigger {
 /// Durable admission recorded before a physical reclamation attempt starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReclamationAdmission {
+    agent: AgentName,
     operation_id: ReclamationOperationId,
     obligation: ReclamationObligation,
     current: RuntimeArtifact,
@@ -173,6 +174,7 @@ pub struct ReclamationAdmission {
 impl ReclamationAdmission {
     /// Restore admission facts while rechecking their physical relationship.
     pub fn restore(
+        agent: AgentName,
         operation_id: ReclamationOperationId,
         obligation: ReclamationObligation,
         current: RuntimeArtifact,
@@ -182,11 +184,16 @@ impl ReclamationAdmission {
             return Err(ReclamationError::CurrentArtifact);
         }
         Ok(Self {
+            agent,
             operation_id,
             obligation,
             current,
             trigger,
         })
+    }
+
+    pub fn agent(&self) -> &AgentName {
+        &self.agent
     }
 
     pub fn operation_id(&self) -> &ReclamationOperationId {
