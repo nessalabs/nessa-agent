@@ -399,10 +399,10 @@ function cleanupDownloadStage({ downloaded, downloadedIdentity, stage, stageIden
  * callers trust only the bytes verified and returned by this invocation.
  */
 export function acquireVerifiedNodeArchive({
-  beforePublish = () => {},
   cache,
   release,
   download = downloadNodeArchive,
+  publish = linkSync,
 }) {
   mkdirSync(cache, { recursive: true })
   if (!lstatSync(cache).isDirectory())
@@ -430,11 +430,8 @@ export function acquireVerifiedNodeArchive({
     const staged = inspectArchive(downloaded, release.sha256, {
       identity: downloadedIdentity,
     })
-    beforePublish({ destination: archive, source: downloaded })
-    if (!sameIdentity(pathIdentity(downloaded), staged.identity))
-      throw new Error(`Node download path changed and was preserved: ${downloaded}`)
     try {
-      linkSync(downloaded, archive)
+      publish(downloaded, archive)
     } catch (error) {
       if (error?.code !== "EEXIST") throw error
       result = inspectArchive(archive, release.sha256).bytes

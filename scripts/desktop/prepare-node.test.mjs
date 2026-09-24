@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -256,10 +257,12 @@ test("an absent digest object is exclusively published and reopened", (t) => {
       assert.equal(url, release.url)
       writeFileSync(destination, good)
     },
-    beforePublish({ source, destination }) {
+    publish(source, destination) {
+      linkSync(source, destination)
       const sourceStat = lstatSync(source)
+      const destinationStat = lstatSync(destination)
       publishedIdentity = [sourceStat.dev, sourceStat.ino]
-      assert.equal(existsSync(destination), false)
+      assert.deepEqual([destinationStat.dev, destinationStat.ino], publishedIdentity)
     },
   })
   assert.deepEqual(bytes, good)
@@ -596,11 +599,14 @@ test("a nonregular replacement at exclusive publication is preserved", (t) => {
         download({ destination }) {
           writeFileSync(destination, good)
         },
-        beforePublish({ source, destination }) {
+        publish(source, destination) {
           assert.equal(existsSync(source), true)
           assert.equal(destination, archive)
           mkdirSync(destination)
           writeFileSync(join(destination, "marker"), "preserve")
+          const error = new Error("destination appeared")
+          error.code = "EEXIST"
+          throw error
         },
       }),
     /directory/,
@@ -624,19 +630,22 @@ test("a verified publication winner is accepted without overwrite", (t) => {
     download({ destination }) {
       writeFileSync(destination, good)
     },
-    beforePublish({ source, destination }) {
+    publish(source, destination) {
       writeFileSync(destination, good)
       assert.notDeepEqual(
         [lstatSync(source).dev, lstatSync(source).ino],
         [lstatSync(destination).dev, lstatSync(destination).ino],
       )
+      const error = new Error("destination appeared")
+      error.code = "EEXIST"
+      throw error
     },
   })
   assert.deepEqual(bytes, good)
   assert.deepEqual(readFileSync(archive), good)
 })
 
-test("an invalid publication winner is preserved and refused", (t) => {
+test("a publisher reporting success with a corrupt destination is refused", (t) => {
   const cache = mkdtempSync(join(tmpdir(), "nessa-node-publication-invalid-"))
   t.after(() => rmSync(cache, { recursive: true, force: true }))
   const good = tar(selected)
@@ -650,13 +659,40 @@ test("an invalid publication winner is preserved and refused", (t) => {
         download({ destination }) {
           writeFileSync(destination, good)
         },
-        beforePublish({ destination }) {
+        publish(_source, destination) {
           writeFileSync(destination, "preserve")
         },
       }),
-    /fails its pinned digest.*preserved/,
+    /path changed.*preserved/,
   )
   assert.equal(readFileSync(archive, "utf8"), "preserve")
+})
+
+test("a publisher reporting success with a valid different inode is refused", (t) => {
+  const cache = mkdtempSync(join(tmpdir(), "nessa-node-publication-substitute-"))
+  t.after(() => rmSync(cache, { recursive: true, force: true }))
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  const archive = cacheObject(cache, release)
+  assert.throws(
+    () =>
+      acquireVerifiedNodeArchive({
+        cache,
+        release,
+        download({ destination }) {
+          writeFileSync(destination, good)
+        },
+        publish(source, destination) {
+          writeFileSync(destination, good)
+          assert.notDeepEqual(
+            [lstatSync(source).dev, lstatSync(source).ino],
+            [lstatSync(destination).dev, lstatSync(destination).ino],
+          )
+        },
+      }),
+    /path changed.*preserved/,
+  )
+  assert.deepEqual(readFileSync(archive), good)
 })
 
 test("a substituted download stage is preserved without following it", (t) => {
@@ -735,16 +771,17 @@ test("a source substituted during publication is preserved and never followed", 
         download({ destination }) {
           writeFileSync(destination, good)
         },
-        beforePublish({ source: staged }) {
+        publish(staged, destination) {
           source = staged
           unlinkSync(staged)
           symlinkSync(external, staged)
+          writeFileSync(destination, good)
         },
       }),
     /acquisition and stage cleanup failed/,
   )
   assert.equal(lstatSync(source).isSymbolicLink(), true)
-  assert.equal(existsSync(cacheObject(cache, release)), false)
+  assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
   assert.equal(readFileSync(external, "utf8"), "preserve")
 })
 
