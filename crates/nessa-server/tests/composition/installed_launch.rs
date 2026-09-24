@@ -31,8 +31,8 @@ impl Answers {
 impl RuntimeStore for Answers {
     fn installed(
         &self,
-        agent: &AgentName,
-        release: &PinnedRelease,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure> {
         self.installed.clone()
     }

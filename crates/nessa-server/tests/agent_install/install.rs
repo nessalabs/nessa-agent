@@ -79,6 +79,40 @@ impl InstallAudit for RefuseTerminalBeforeCommitOnceAudit {
 
 struct SignallingLease(mpsc::Sender<()>);
 
+impl PublicationLease for SignallingLease {
+    fn load_reclamation(
+        &mut self,
+    ) -> Result<Option<ManagedInstallation>, ReclamationPersistenceFailure> {
+        Ok(None)
+    }
+
+    fn retain_reclamation(
+        &mut self,
+        _installation: &ManagedInstallation,
+        _stage: ReclamationPersistenceStage,
+    ) -> Result<(), ReclamationPersistenceFailure> {
+        Ok(())
+    }
+
+    fn remove_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::AlreadyAbsent
+    }
+
+    fn observe_superseded(
+        &mut self,
+        _agent: &AgentName,
+        _current: &RuntimeArtifact,
+        _superseded: &RuntimeArtifact,
+    ) -> RuntimeReclamationEffect {
+        RuntimeReclamationEffect::AlreadyAbsent
+    }
+}
+
 impl Drop for SignallingLease {
     fn drop(&mut self) {
         let _ = self.0.send(());
