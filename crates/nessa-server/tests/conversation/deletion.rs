@@ -703,8 +703,9 @@ enum Fault {
 }
 /// A repository that answers its next loads and tombstone writes with the
 /// faults it was given, in order — `None` passing one through — and passes
-/// everything through once they run out. It deliberately breaks the
-/// repository's contract, which names only `NotFound` and `Metadata`.
+/// everything through once they run out. Besides the errors the repository's
+/// contract names (`NotFound`, `AgentUnsupported`, `Metadata`), it can answer
+/// ones the contract never allows, or panic: those deliberately break it.
 struct Faulty {
     repository: Arc<MemoryRepository>,
     loads: StdMutex<VecDeque<Option<Fault>>>,
@@ -789,24 +790,27 @@ async fn delete_behind_another(
 }
 
 #[tokio::test]
-async fn a_conversation_that_cannot_be_read_is_answered_only_as_its_own_error() {
+async fn a_repository_failure_before_the_fence_is_answered_only_as_its_own_error() {
     let fixture = deleting();
     let repository = Faulty::over(fixture.repository.clone());
     let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
     let id = created(&service).await;
-    // What the repository may say before the fence is what the delete says;
-    // it is never one of the two answers that promise a deletion.
-    for fault in [
-        ConversationError::Metadata,
-        ConversationError::NotFound,
-        ConversationError::AgentUnsupported,
-    ] {
+    // What the repository may say before the fence, reading the conversation
+    // or writing its tombstone, is what the delete says; it is never one of
+    // the two answers that promise a deletion.
+    for (fault, faults) in [&repository.loads, &repository.writes]
+        .into_iter()
+        .flat_map(|faults| {
+            [
+                ConversationError::Metadata,
+                ConversationError::NotFound,
+                ConversationError::AgentUnsupported,
+            ]
+            .map(|fault| (fault, faults))
+        })
+    {
         let given = fault.clone();
-        repository
-            .loads
-            .lock()
-            .unwrap()
-            .push_back(Some(Fault::Fail(fault)));
+        faults.lock().unwrap().push_back(Some(Fault::Fail(fault)));
         let answered = service.delete(id.clone(), caller("delete-1")).await;
         let error = answered.unwrap_err();
         assert!(

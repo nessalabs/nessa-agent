@@ -2023,7 +2023,7 @@ impl ConversationService {
                 .await
                 .map_err(NotFenced::from_repository)?
         };
-        let decided = record.deletion().ok_or(NotFenced::Storage)?;
+        let decided = record.deletion().ok_or(NotFenced::Metadata)?;
         let applied = decided.is_same_decision(&proposed);
         Ok(Fence::Written {
             record: Box::new(record),
@@ -2860,18 +2860,20 @@ enum NotFenced {
     NotFound,
     /// A record from before records named their agent.
     AgentUnsupported,
-    /// Reading the conversation or writing its tombstone failed.
-    Storage,
+    /// Reading the conversation or writing its tombstone failed:
+    /// [`ConversationError::Metadata`].
+    Metadata,
 }
 impl NotFenced {
     /// What a repository's failure before the fence can still say. Only what
     /// the repository's own contract lets it answer there is kept; every other
-    /// error — one a substituted repository returns included — is storage.
+    /// error — one a substituted repository returns included — is
+    /// [`Self::Metadata`].
     fn from_repository(error: ConversationError) -> Self {
         match error {
             ConversationError::NotFound => Self::NotFound,
             ConversationError::AgentUnsupported => Self::AgentUnsupported,
-            _ => Self::Storage,
+            _ => Self::Metadata,
         }
     }
 }
@@ -2881,7 +2883,7 @@ impl From<NotFenced> for ConversationError {
             NotFenced::InvalidInput => Self::InvalidInput,
             NotFenced::NotFound => Self::NotFound,
             NotFenced::AgentUnsupported => Self::AgentUnsupported,
-            NotFenced::Storage => Self::Metadata,
+            NotFenced::Metadata => Self::Metadata,
         }
     }
 }

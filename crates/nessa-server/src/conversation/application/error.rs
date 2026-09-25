@@ -120,8 +120,8 @@ pub enum StopFailure {
 pub struct DeletionFailures {
     /// The conversation's agent could not be confirmed stopped.
     pub stop: Option<StopFailure>,
-    /// The saved history could not be read or erased: storage failed. What
-    /// was read and could not be kept in the tombstone is
+    /// The saved history could not be read or erased: storage failed, or
+    /// retirement ended the wait for its lease. What was read and could not be kept in the tombstone is
     /// [`Self::tombstone`]'s; a lease held elsewhere is
     /// [`Self::history_held`].
     pub history: Option<ConversationError>,

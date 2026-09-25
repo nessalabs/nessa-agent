@@ -146,6 +146,10 @@ pub trait RuntimeReadiness: Send + Sync {
 /// creating it again
 /// (`a_tombstone_outlives_reopening_and_its_identity_is_never_created_again`).
 pub trait ConversationRepository: Send + Sync {
+    /// The conversation as it is recorded, or `None` when there is no record
+    /// of it. [`ConversationError::AgentUnsupported`] for a record written
+    /// before records named their agent; [`ConversationError::Metadata`] for
+    /// one that cannot be read.
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
     /// Create once, or return the existing owner without changing it.
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation>;
@@ -156,9 +160,11 @@ pub trait ConversationRepository: Send + Sync {
     /// conversation and `deletion` — the domain's rule that the first decision
     /// stands; an implementation only persists it. Durable before it
     /// returns. [`ConversationError::NotFound`] when there is no ownership
-    /// record to delete; [`ConversationError::Metadata`] for a tombstone that
-    /// could not stand beside that record ([`Conversation::deleted`]), which
-    /// is not written.
+    /// record to delete; [`ConversationError::AgentUnsupported`] for a record
+    /// written before records named their agent, as [`Self::load`] answers
+    /// it; [`ConversationError::Metadata`] for a record that cannot be read,
+    /// or a tombstone that could not stand beside it
+    /// ([`Conversation::deleted`]), which is not written.
     fn record_deletion(
         &self,
         id: &ConversationId,
