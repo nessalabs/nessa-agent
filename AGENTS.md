@@ -60,18 +60,14 @@ examples.
 
 ## Reviewing, locally and delegated
 
-Use the [local code review gate](CODING_STANDARDS.md#local-code-review-gate) for
-every local review, and give each review subagent the same gate in its brief
-along with the exact checkout, base and head, scope, and known findings. Require
-concrete adversarial evidence and an explicit account of coverage and limits.
-
-Every review applies
-[agreement across fields and layers](CODING_STANDARDS.md#agreement-across-fields-and-layers)
-and reports against
-[evidence and closure](CODING_STANDARDS.md#evidence-and-closure). Include both in
-every delegated brief. After parallel work, run the same gate over the combined
-tree: address every priority, verify adjacent lifecycle paths, and keep a
-disposition for each finding before resolving its thread.
+- [Local code review gate](CODING_STANDARDS.md#local-code-review-gate) — every
+  local review, and every review delegated to a subagent.
+- [Required review brief](CODING_STANDARDS.md#required-review-brief) — what each
+  reviewer is given.
+- [Agreement across fields and layers](CODING_STANDARDS.md#agreement-across-fields-and-layers)
+  — applied by every review.
+- [Evidence and closure](CODING_STANDARDS.md#evidence-and-closure) — what every
+  review reports against, and how its findings are closed.
 
 The checklist itself stays in the standards document. Do not copy it into a
 review rule, a subagent prompt file, or this file.
