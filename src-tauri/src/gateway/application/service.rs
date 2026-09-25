@@ -250,9 +250,13 @@ impl AttemptReceipt {
         self.wait_settlement()?.reported
     }
 
-    fn wait_physical_until(&self, deadline: Instant) -> Result<ReconciledGateway, GatewayError> {
+    fn wait_physical_until(
+        &self,
+        deadline: Instant,
+        clock: &dyn MonotonicClock,
+    ) -> Result<ReconciledGateway, GatewayError> {
         let state = self.state.lock().map_err(|_| state_unavailable())?;
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        let Some(remaining) = deadline.checked_duration_since(clock.now()) else {
             return Err(GatewayError::Stop(
                 "Gateway stop deadline passed while reconciliation was active".into(),
             ));
@@ -829,7 +833,7 @@ impl Gateway {
                     .ok_or(GatewayError::NotReconciled)?;
             };
             drop(lifecycle);
-            attempt.wait_physical_until(deadline)?;
+            attempt.wait_physical_until(deadline, self.clock.as_ref())?;
         };
         let origin = GatewayReconciliationRequest::new(
             allocate_id(self.reconciliation_ids.as_ref())?,

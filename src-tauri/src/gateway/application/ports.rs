@@ -13,7 +13,10 @@ use std::{
     error::Error,
     fmt,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -139,6 +142,7 @@ enum StopDispatchAuthority {
 pub struct GatewayStopSession {
     request: GatewayStopRequest,
     state: Mutex<StopDispatchAuthority>,
+    latest_observation_version: AtomicU64,
     clock: Arc<dyn MonotonicClock>,
 }
 
@@ -147,6 +151,7 @@ impl GatewayStopSession {
         Self {
             request,
             state: Mutex::new(StopDispatchAuthority::AvailableUnproved),
+            latest_observation_version: AtomicU64::new(0),
             clock,
         }
     }
@@ -157,6 +162,10 @@ impl GatewayStopSession {
 
     pub fn deadline_passed(&self) -> bool {
         self.clock.now() >= self.request.deadline
+    }
+
+    pub fn wait(&self, duration: Duration) {
+        self.clock.wait(duration);
     }
 
     pub fn begin_proof(&self) -> Result<(), GatewayError> {
@@ -200,6 +209,14 @@ impl GatewayStopSession {
                 "Gateway stop recipient differs from the intended incarnation".into(),
             ));
         }
+        let latest = self.latest_observation_version.load(Ordering::SeqCst);
+        if observation_version < latest {
+            return Err(GatewayError::Stop(
+                "Gateway stop proof used an obsolete observation version".into(),
+            ));
+        }
+        self.latest_observation_version
+            .store(observation_version, Ordering::SeqCst);
         *state = StopDispatchAuthority::Proved {
             candidate,
             observation_version,
@@ -234,7 +251,8 @@ impl GatewayStopSession {
                 candidate: proved,
                 observation_version: proved_version,
             } if proved == candidate && *proved_version == observation_version
-        );
+        ) && self.latest_observation_version.load(Ordering::SeqCst)
+            == observation_version;
         if !valid_plan || !matches_proof {
             return Err(GatewayError::Stop(
                 "Gateway stop proof, plan, or observation version changed before dispatch".into(),
@@ -242,6 +260,13 @@ impl GatewayStopSession {
         }
         *state = StopDispatchAuthority::Claimed;
         Ok(())
+    }
+
+    /// Advance the application observation version while a proof is still
+    /// revocable. A later claim for an older proof is refused.
+    pub fn observation_changed(&self, observation_version: u64) {
+        self.latest_observation_version
+            .fetch_max(observation_version, Ordering::SeqCst);
     }
 
     pub fn command_result(&self, result: LifecycleCommandResult) -> Result<(), GatewayError> {
@@ -1358,6 +1383,12 @@ mod tests {
         session.begin_proof().unwrap();
         session.prove(intended.clone(), 7).unwrap();
         assert!(session.claim(&receipt, &intended, 8).is_err());
+        session.observation_changed(8);
+        assert!(session.claim(&receipt, &intended, 7).is_err());
+
+        let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 7).unwrap();
         session.claim(&receipt, &intended, 7).unwrap();
         assert!(session.claim(&receipt, &intended, 7).is_err());
     }

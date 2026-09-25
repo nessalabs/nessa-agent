@@ -176,6 +176,189 @@ fn gateway_instances_use_only_their_injected_service_and_surface_stop_failure() 
         );
     }
 }
+
+#[test]
+fn claimed_blocked_stop_becomes_indeterminate_and_starts_no_later_cleanup() {
+    struct BlockedDispatchHost {
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+        returned: mpsc::Sender<Result<(), GatewayError>>,
+        later_cleanup: AtomicUsize,
+    }
+
+    impl GatewayHost for BlockedDispatchHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            admit(attempt, progress, "blocked-stop");
+            Ok(reconciled("blocked-stop"))
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            session.begin_proof()?;
+            let candidate = session.request().intended().audit_identity()?;
+            session.prove(candidate.clone(), 1)?;
+            session.claim(plan, &candidate, 1)?;
+            self.entered
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            let command = session.command_result(LifecycleCommandResult::Accepted);
+            self.returned.send(command.clone()).unwrap();
+            command?;
+            self.later_cleanup.fetch_add(1, Ordering::SeqCst);
+            Err(GatewayError::Stop(
+                "cleanup should not start after indeterminate dispatch".into(),
+            ))
+        }
+    }
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (returned_tx, returned_rx) = mpsc::channel();
+    let host = Arc::new(BlockedDispatchHost {
+        entered: Mutex::new(Some(entered_tx)),
+        release: Mutex::new(release_rx),
+        returned: returned_tx,
+        later_cleanup: AtomicUsize::new(0),
+    });
+    let gateway = Arc::new(Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    ));
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let stop = {
+        let gateway = gateway.clone();
+        thread::spawn(move || {
+            stop_tx
+                .send(gateway.stop_agents(Instant::now() + Duration::from_millis(100)))
+                .unwrap();
+        })
+    };
+    entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        stop_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Err(GatewayError::Stop(message)) if message.contains("did not settle")
+    ));
+    release_tx.send(()).unwrap();
+    assert!(returned_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .is_err());
+    stop.join().unwrap();
+    assert_eq!(host.later_cleanup.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn proof_blocked_across_quit_deadline_never_claims_or_dispatches() {
+    struct BlockedProofHost {
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+        proof_returned: mpsc::Sender<Result<(), GatewayError>>,
+        dispatches: AtomicUsize,
+    }
+
+    impl GatewayHost for BlockedProofHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            admit(attempt, progress, "blocked-proof");
+            Ok(reconciled("blocked-proof"))
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            session.begin_proof()?;
+            self.entered
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            let candidate = session.request().intended().audit_identity()?;
+            let proof = session.prove(candidate.clone(), 1);
+            self.proof_returned.send(proof.clone()).unwrap();
+            proof?;
+            session.claim(plan, &candidate, 1)?;
+            self.dispatches.fetch_add(1, Ordering::SeqCst);
+            Err(GatewayError::Stop(
+                "dispatch should not start after deadline revocation".into(),
+            ))
+        }
+    }
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (proof_tx, proof_rx) = mpsc::channel();
+    let host = Arc::new(BlockedProofHost {
+        entered: Mutex::new(Some(entered_tx)),
+        release: Mutex::new(release_rx),
+        proof_returned: proof_tx,
+        dispatches: AtomicUsize::new(0),
+    });
+    let gateway = Arc::new(Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    ));
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let stop = {
+        let gateway = gateway.clone();
+        thread::spawn(move || {
+            stop_tx
+                .send(gateway.stop_agents(Instant::now() + Duration::from_millis(100)))
+                .unwrap();
+        })
+    };
+    entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        stop_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Err(GatewayError::Stop(message)) if message.contains("did not settle")
+    ));
+    release_tx.send(()).unwrap();
+    assert!(proof_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .is_err());
+    stop.join().unwrap();
+    assert_eq!(host.dispatches.load(Ordering::SeqCst), 0);
+}
 #[test]
 fn failed_registration_is_retried_and_never_derives_a_service_to_stop() {
     let host = Arc::new(FakeHost {

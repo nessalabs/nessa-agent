@@ -276,7 +276,7 @@ fn dispatch_stop_command(service: &str, session: &GatewayStopSession) -> Lifecyc
                         .unwrap_or_else(|error| error.to_string()),
                 );
             }
-            Ok(None) if !session.deadline_passed() => thread::sleep(Duration::from_millis(10)),
+            Ok(None) if !session.deadline_passed() => session.wait(Duration::from_millis(10)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
