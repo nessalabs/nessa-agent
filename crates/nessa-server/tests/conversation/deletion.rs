@@ -640,24 +640,11 @@ async fn a_delete_that_fails_before_its_fence_answers_only_its_own_error() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     fixture.service.shutdown().await.unwrap();
-    let service = ConversationService::new(
-        ConversationDependencies {
-            agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
-            storage: fixture.storage.clone(),
-            metadata: Arc::new(Unfenceable(fixture.repository.clone())),
-            creation_audit: Arc::new(AcceptingCreationAudit),
-            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
-            deletion_audit: fixture.audit.clone(),
-            attachments: Some(fixture.attachments.clone()),
-            summaries: fixture.summaries.clone(),
-            provider_sessions: claude_erasers(),
-            deletion_budgets: DELETION_BUDGETS,
-            clock: Arc::new(TestClock),
-        },
-        ConversationLimits::default(),
-        None,
-    )
-    .unwrap();
+    let service = service_with(
+        &fixture,
+        Arc::new(Unfenceable(fixture.repository.clone())),
+        fixture.storage.clone(),
+    );
     // Not one of the two answers that promise a deletion: only its error.
     assert!(matches!(
         service.delete(id.clone(), caller("delete-1")).await,
@@ -704,8 +691,8 @@ enum Fault {
 /// A repository that answers its next loads and tombstone writes with the
 /// faults it was given, in order — `None` passing one through — and passes
 /// everything through once they run out. Besides the errors the repository's
-/// contract names (`NotFound`, `AgentUnsupported`, `Metadata`), it can answer
-/// ones the contract never allows, or panic: those deliberately break it.
+/// contract lets each call answer, it can answer ones the contract never
+/// allows, or panic: those deliberately break it.
 struct Faulty {
     repository: Arc<MemoryRepository>,
     loads: StdMutex<VecDeque<Option<Fault>>>,
@@ -795,34 +782,53 @@ async fn a_repository_failure_before_the_fence_is_answered_only_as_its_own_error
     let repository = Faulty::over(fixture.repository.clone());
     let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
     let id = created(&service).await;
-    // What the repository may say before the fence, reading the conversation
-    // or writing its tombstone, is what the delete says; it is never one of
-    // the two answers that promise a deletion.
-    for (fault, faults) in [&repository.loads, &repository.writes]
-        .into_iter()
-        .flat_map(|faults| {
-            [
-                ConversationError::Metadata,
-                ConversationError::NotFound,
-                ConversationError::AgentUnsupported,
-            ]
-            .map(|fault| (fault, faults))
-        })
-    {
-        let given = fault.clone();
-        faults.lock().unwrap().push_back(Some(Fault::Fail(fault)));
-        let answered = service.delete(id.clone(), caller("delete-1")).await;
-        let error = answered.unwrap_err();
-        assert!(
-            matches!(
-                (&given, &error),
-                (ConversationError::Metadata, ConversationError::Metadata)
-                    | (ConversationError::NotFound, ConversationError::NotFound)
-                    | (
-                        ConversationError::AgentUnsupported,
-                        ConversationError::AgentUnsupported
-                    )
-            ),
+    // What the repository's contract lets each call answer is what the delete
+    // says; anything else is storage failing. Never one of the two answers
+    // that promise a deletion.
+    for (faults, given, expected) in [
+        (
+            &repository.loads,
+            ConversationError::Metadata,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.loads,
+            ConversationError::AgentUnsupported,
+            ConversationError::AgentUnsupported,
+        ),
+        // A missing record is `Ok(None)` from a read, never `NotFound`.
+        (
+            &repository.loads,
+            ConversationError::NotFound,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::Metadata,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::AgentUnsupported,
+            ConversationError::AgentUnsupported,
+        ),
+        (
+            &repository.writes,
+            ConversationError::NotFound,
+            ConversationError::NotFound,
+        ),
+    ] {
+        faults
+            .lock()
+            .unwrap()
+            .push_back(Some(Fault::Fail(given.clone())));
+        let error = service
+            .delete(id.clone(), caller("delete-1"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&expected),
             "{given:?} was answered {error:?}"
         );
         assert!(unfenced(&fixture, &id));

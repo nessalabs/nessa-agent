@@ -1954,25 +1954,25 @@ impl ConversationService {
     /// lock — waiting for another attempt and answering from the tombstone it
     /// leaves, if one holds it — and write the tombstone.
     ///
-    /// Its failures are [`NotFenced`], so none of them can be answered as one
+    /// Its failures are [`FenceFailure`], so none of them can be answered as one
     /// of the two codes that promise a deletion, whatever a substituted
     /// repository returns (`a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`).
     async fn fence(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
-    ) -> Result<Fence, NotFenced> {
-        caller.actor().map_err(|_| NotFenced::InvalidInput)?;
+    ) -> Result<Fence, FenceFailure> {
+        caller.actor().map_err(|_| FenceFailure::InvalidInput)?;
         let requested_at_ms = self.inner.clock.unix_milliseconds();
         let record = self
             .inner
             .metadata
             .load(id)
             .await
-            .map_err(NotFenced::from_repository)?
-            .ok_or(NotFenced::NotFound)?;
+            .map_err(FenceFailure::from_load)?
+            .ok_or(FenceFailure::NotFound)?;
         if !record.allows(&caller.organization_id, &caller.principal_id) {
-            return Err(NotFenced::NotFound);
+            return Err(FenceFailure::NotFound);
         }
         // Never dated before the conversation it deletes: a clock stepped
         // back since its creation would otherwise propose a tombstone its
@@ -1987,7 +1987,7 @@ impl ConversationService {
             caller.action_id.clone(),
             requested_at_ms,
         )
-        .map_err(|_| NotFenced::InvalidInput)?;
+        .map_err(|_| FenceFailure::InvalidInput)?;
         // A delete that finds another attempt carrying this deletion waits
         // for it and answers from the tombstone it leaves, rather than
         // attempting again: one delete spends at most one attempt
@@ -2004,8 +2004,8 @@ impl ConversationService {
                 .metadata
                 .load(id)
                 .await
-                .map_err(NotFenced::from_repository)?
-                .ok_or(NotFenced::NotFound)?;
+                .map_err(FenceFailure::from_load)?
+                .ok_or(FenceFailure::NotFound)?;
             if let Some(decided) = current.deletion() {
                 let applied = decided.is_same_decision(&proposed);
                 return Ok(if decided.erased() {
@@ -2021,9 +2021,9 @@ impl ConversationService {
                 .metadata
                 .record_deletion(id, proposed.clone())
                 .await
-                .map_err(NotFenced::from_repository)?
+                .map_err(FenceFailure::from_write)?
         };
-        let decided = record.deletion().ok_or(NotFenced::Metadata)?;
+        let decided = record.deletion().ok_or(FenceFailure::Metadata)?;
         let applied = decided.is_same_decision(&proposed);
         Ok(Fence::Written {
             record: Box::new(record),
@@ -2845,15 +2845,16 @@ enum AskFailure {
     Failed(ConversationError),
 }
 
-/// Why a delete failed before its own tombstone was written, when it is not
-/// known whether the conversation is fenced. Nothing here becomes
-/// `conversation_erasure_incomplete` or `audit_unavailable`, the two answers
-/// that promise a deletion: a repository's error is kept only for what it can
-/// say before the fence, and anything else it says is storage failing
-/// ([`Self::from_repository`];
+/// Why a delete failed before its own tombstone write succeeded. Whether the
+/// conversation is fenced is not known — a write that failed may still have
+/// landed — so nothing here becomes `conversation_erasure_incomplete` or
+/// `audit_unavailable`, the two answers that promise a deletion. Of a
+/// repository's error, only what its contract lets that call answer is kept,
+/// and anything else it says is storage failing ([`Self::from_load`],
+/// [`Self::from_write`];
 /// `a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`).
 #[derive(Debug)]
-enum NotFenced {
+enum FenceFailure {
     /// The request's own attribution or deletion could not be made.
     InvalidInput,
     /// No conversation of the caller's by that identity.
@@ -2864,12 +2865,20 @@ enum NotFenced {
     /// [`ConversationError::Metadata`].
     Metadata,
 }
-impl NotFenced {
-    /// What a repository's failure before the fence can still say. Only what
-    /// the repository's own contract lets it answer there is kept; every other
-    /// error — one a substituted repository returns included — is
-    /// [`Self::Metadata`].
-    fn from_repository(error: ConversationError) -> Self {
+impl FenceFailure {
+    /// What [`ConversationRepository::load`]'s failure can say: a record
+    /// from before agents were named, or storage failing. A missing record is
+    /// no error there, so a `NotFound` from it is storage failing too.
+    fn from_load(error: ConversationError) -> Self {
+        match error {
+            ConversationError::AgentUnsupported => Self::AgentUnsupported,
+            _ => Self::Metadata,
+        }
+    }
+    /// What [`ConversationRepository::record_deletion`]'s failure can say:
+    /// no record to delete, a record from before agents were named, or
+    /// storage failing.
+    fn from_write(error: ConversationError) -> Self {
         match error {
             ConversationError::NotFound => Self::NotFound,
             ConversationError::AgentUnsupported => Self::AgentUnsupported,
@@ -2877,13 +2886,13 @@ impl NotFenced {
         }
     }
 }
-impl From<NotFenced> for ConversationError {
-    fn from(failure: NotFenced) -> Self {
+impl From<FenceFailure> for ConversationError {
+    fn from(failure: FenceFailure) -> Self {
         match failure {
-            NotFenced::InvalidInput => Self::InvalidInput,
-            NotFenced::NotFound => Self::NotFound,
-            NotFenced::AgentUnsupported => Self::AgentUnsupported,
-            NotFenced::Metadata => Self::Metadata,
+            FenceFailure::InvalidInput => Self::InvalidInput,
+            FenceFailure::NotFound => Self::NotFound,
+            FenceFailure::AgentUnsupported => Self::AgentUnsupported,
+            FenceFailure::Metadata => Self::Metadata,
         }
     }
 }

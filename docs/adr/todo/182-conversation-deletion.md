@@ -281,10 +281,14 @@ finishes it.
 | 35 | any | Desktop stop (admission closes; not retirement) | as the attempt goes | as the attempt goes | as the attempt goes | the ask is not ended |
 | 36 | waiting | The worker itself panics | — | unchanged | nothing | replaced after one delay with every waiting deletion due, unless retired |
 | 37 | past the fence | Any port panics (deletion record's sink, uploads, session storage, summaries, repository) | unfinished | as far as it got before the panic | as far as it got | left |
-| 38 | any | The delete fails before its own tombstone write succeeds: the conversation cannot be read, the write fails, the repository panics, or, having waited behind another attempt, it cannot read what that left | that failure's own code: `conversation_not_found` or `agent_unsupported` as the repository says, `conversation_storage_unavailable` for any other repository failure (whatever error a substituted repository returns), `temporarily_unavailable` for a panic; never one of the two that promise a deletion, since it is not known whether the conversation is fenced | as it stands | nothing | — |
+| 38 | any | The delete fails before its own tombstone write succeeds: the conversation cannot be read, the write fails, the repository panics, or, having waited behind another attempt, it cannot read what that left | that failure's own code: `conversation_not_found` or `agent_unsupported` where the repository's contract lets that call say so, `conversation_storage_unavailable` for any other repository failure (whatever error a substituted repository returns), `temporarily_unavailable` for a panic; never one of the two that promise a deletion, since it is not known whether the conversation is fenced | as it stands | nothing | — |
 | 38b | `fenced` | The history was read, but the tombstone cannot keep what was read | unfinished | `fenced` | uploads let go; history, summary kept; no deletion record | left |
 | 39 | `read·session` | Agent answered, but the tombstone cannot record the answer | unfinished | `read·session` | uploads let go; history, summary kept; no deletion record | left; the next attempt asks the agent again |
 | 40 | any | Delete refused at the socket: its own pool (8 deletes at once) is full | `temporarily_unavailable`: not known | none written by this delete | nothing | — |
+
+A delete is also one of the requests the socket bounds per connection; that
+bound is the socket's rule for every request, not a deletion's, and is not
+specified here.
 
 **Each row's tests** (in `crates/nessa-server/tests/conversation/deletion.rs`
 unless named otherwise; SDK tests in

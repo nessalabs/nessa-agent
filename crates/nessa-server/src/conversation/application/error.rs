@@ -115,15 +115,17 @@ pub enum StopFailure {
 /// record of the session could not be asked about, or a deletion record the
 /// sink did not take, means the history and summary were kept; uploads were
 /// still let go, since the stopped agent that could have used them is gone.
+/// A history still leased elsewhere is kept too, and so is its summary unless
+/// the tombstone had already settled the provider session.
 /// Otherwise each store was tried and each field says what remains in it.
 #[derive(Clone, Debug, Default)]
 pub struct DeletionFailures {
     /// The conversation's agent could not be confirmed stopped.
     pub stop: Option<StopFailure>,
     /// The saved history could not be read or erased: storage failed, or
-    /// retirement ended the wait for its lease. What was read and could not be kept in the tombstone is
-    /// [`Self::tombstone`]'s; a lease held elsewhere is
-    /// [`Self::history_held`].
+    /// retirement ended the wait for its lease. What was read and could not
+    /// be kept in the tombstone is [`Self::tombstone`]'s; a lease held
+    /// elsewhere is [`Self::history_held`].
     pub history: Option<ConversationError>,
     /// The history's lease was still held elsewhere once the delete's wait
     /// for it ran out, so the history was neither read nor erased. Only that
