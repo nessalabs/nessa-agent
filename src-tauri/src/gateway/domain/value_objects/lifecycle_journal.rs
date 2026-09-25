@@ -663,11 +663,12 @@ impl LifecycleHistory {
                     }
                     LifecyclePhysicalOutcome::Failed { .. }
                         if *cleanup == ReconciliationCleanupDecision::ClearPrior
-                            && self
-                                .latest_observation
-                                .as_ref()
-                                .and_then(LifecycleObservation::incarnation)
-                                .is_some() =>
+                            && self.before.as_ref().is_some_and(|prior| {
+                                self.latest_observation
+                                    .as_ref()
+                                    .and_then(LifecycleObservation::incarnation)
+                                    == Some(prior)
+                            }) =>
                     {
                         return Err(LifecycleJournalError::StateMismatch)
                     }
@@ -1590,6 +1591,48 @@ mod tests {
 
             assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
         }
+    }
+
+    #[test]
+    fn failed_outcome_can_clear_a_retired_prior_when_a_replacement_is_observed() {
+        let prior = incarnation(10);
+        let replacement = incarnation_for("service", 11);
+        let observation = LifecycleObservation::new(1, Some(replacement), true);
+        let records = vec![
+            intent(Some(prior)),
+            plan(1),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "replace".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "replace".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: observation.clone(),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::Failed {
+                        phase: LifecycleFailedPhase::Observation,
+                        message: "replacement did not become ready".into(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::ClearPrior,
+                },
+            ),
+        ];
+
+        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
     }
 
     #[test]
