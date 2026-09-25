@@ -249,9 +249,9 @@ finishes it.
 | 8 | `fenced` | Agent's stop not confirmed within `stopMs` | unfinished | `fenced` | nothing: not even uploads | `ForRelease` |
 | 8b | `fenced` | The agent's stop fails outright: its close fails, or its launch's cleanup cannot be confirmed | unfinished | `fenced` | nothing: not even uploads | left |
 | 8c | `fenced` | Its opening failed and may still hold what it launched (whatever cleanup it carries) | unfinished | `fenced` | nothing: not even uploads | left |
-| 9a | `fenced` or `read·session` | History lease still held elsewhere after `historyLeaseMs` (only this delete's wait for its own lease says so) | unfinished | unchanged | uploads let go; history, summary kept; no deletion record; agent not asked | `ForRelease` |
-| 9b | `read·none`, `read·unknown` or `settled` | History lease still held elsewhere after `historyLeaseMs` | unfinished | unchanged | deletion record written; uploads let go; summary erased; history kept | `ForRelease` |
-| 9c | any after `fenced` | The history's lease cannot be opened at all (storage failing, not held elsewhere), or storage answers `Busy` to reading or erasing the history under this deletion's own lease | unfinished | unchanged | as row 9a or 9b, by state | left |
+| 9a | `fenced` or `read·session` | History still leased elsewhere after `historyLeaseMs` (only this delete's wait for its own lease says so) | unfinished | unchanged | uploads let go; history, summary kept; no deletion record; agent not asked | `ForRelease` |
+| 9b | `read·none`, `read·unknown` or `settled` | History still leased elsewhere after `historyLeaseMs` | unfinished | unchanged | deletion record written; uploads let go; summary erased; history kept | `ForRelease` |
+| 9c | any after `fenced` | The history's lease cannot be opened at all (storage failing, not leased elsewhere), or storage answers `Busy` to reading or erasing the history under this deletion's own lease | unfinished | unchanged | as row 9a or 9b, by state | left |
 | 10 | `ForRelease(g, n<2)` | Its own timer fires; still held | — | unchanged | nothing | `ForRelease(g, n+1)`, due only on its own timer |
 | 11 | `ForRelease(g, 2)` | Third timed try still held | — | unchanged | nothing | left (logged) |
 | 12 | `read·session` | Both agent slots taken (the gateway's own bound; an eraser's error never counts as this) | unfinished | unchanged | uploads let go; history, summary kept; no deletion record | `ForSlot`, due at once: tried as soon as the worker runs, since a slot may have freed before the wait was recorded |

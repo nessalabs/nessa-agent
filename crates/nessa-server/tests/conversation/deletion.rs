@@ -963,7 +963,8 @@ async fn a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion()
         ]
     };
     // Read before the lock, the tombstone write, and the read after waiting
-    // behind another attempt: every repository call before the fence.
+    // behind another attempt: the repository calls `fence` makes. Any it
+    // made besides would still answer only a `FenceFailure`, its return type.
     for error in promising_a_deletion() {
         repository
             .loads
@@ -1299,7 +1300,7 @@ async fn busy_under_the_deletion_s_own_lease_is_left_not_carried_on() {
         );
         let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
         // The deletion holds the lease, so `Busy` here is storage failing, not
-        // a lease held elsewhere: row 9c, not 9a or 9b.
+        // a history leased elsewhere: row 9c, not 9a or 9b.
         assert!(!failures.history_held);
         assert!(matches!(
             failures.history,

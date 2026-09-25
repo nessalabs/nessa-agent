@@ -124,10 +124,10 @@ pub struct DeletionFailures {
     pub stop: Option<StopFailure>,
     /// The saved history could not be read or erased: storage failed, or
     /// retirement ended the wait for its lease. What was read and could not
-    /// be kept in the tombstone is [`Self::tombstone`]'s; a lease held
-    /// elsewhere is [`Self::history_held`].
+    /// be kept in the tombstone is [`Self::tombstone`]'s; a history
+    /// leased elsewhere is [`Self::history_held`].
     pub history: Option<ConversationError>,
-    /// The history's lease was still held elsewhere once the delete's wait
+    /// The history was still leased elsewhere once the delete's wait
     /// for it ran out, so the history was neither read nor erased. Only that
     /// wait sets this — storage answering `Busy` under the deletion's own
     /// lease does not

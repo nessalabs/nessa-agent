@@ -163,8 +163,11 @@ pub trait ConversationRepository: Send + Sync {
     /// record to delete; [`ConversationError::AgentUnsupported`] for a record
     /// written before records named their agent, as [`Self::load`] answers
     /// it; [`ConversationError::Metadata`] for a record that cannot be read,
-    /// or a tombstone that could not stand beside it
-    /// ([`Conversation::deleted`]), which is not written.
+    /// a tombstone that could not stand beside it
+    /// ([`Conversation::deleted`]), which is not written, or a write that
+    /// could not be made durable. That last may already have landed — a
+    /// tombstone published whose directory could not then be synced — so a
+    /// caller cannot take any error here to mean nothing was written.
     fn record_deletion(
         &self,
         id: &ConversationId,
