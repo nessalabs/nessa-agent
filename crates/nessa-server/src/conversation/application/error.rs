@@ -115,15 +115,26 @@ pub enum StopFailure {
 /// record of the session could not be asked about, or a deletion record the
 /// sink did not take, means the history and summary were kept; uploads were
 /// still let go, since the stopped agent that could have used them is gone.
+/// A history still leased elsewhere is kept too, and so is its summary unless
+/// the tombstone had already settled the provider session.
 /// Otherwise each store was tried and each field says what remains in it.
 #[derive(Clone, Debug, Default)]
 pub struct DeletionFailures {
     /// The conversation's agent could not be confirmed stopped.
     pub stop: Option<StopFailure>,
-    /// The saved history could not be read or erased: its lease is still
-    /// held elsewhere, or storage failed. What was read and could not be kept
-    /// in the tombstone is [`Self::tombstone`]'s.
+    /// The saved history could not be read or erased: storage failed, or
+    /// retirement ended the wait for its lease. What was read and could not
+    /// be kept in the tombstone is [`Self::tombstone`]'s; a history
+    /// leased elsewhere is [`Self::history_leased_elsewhere`].
     pub history: Option<ConversationError>,
+    /// The history was still leased elsewhere once the delete's wait
+    /// for it ran out, so the history was neither read nor erased. Only that
+    /// wait sets this — storage answering `Busy` under the deletion's own
+    /// lease does not
+    /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`) — and
+    /// it is what a deletion is carried on for until the lease is let go
+    /// (`a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).
+    pub history_leased_elsewhere: bool,
     /// The agent could not be asked to delete its own record of the provider
     /// session, or refused: `ConversationError::Agent` with the typed cause.
     pub provider: Option<ConversationError>,
@@ -155,6 +166,7 @@ impl DeletionFailures {
     pub fn is_empty(&self) -> bool {
         self.stop.is_none()
             && self.history.is_none()
+            && !self.history_leased_elsewhere
             && self.provider.is_none()
             && !self.no_agent_slot
             && self.audit.is_none()

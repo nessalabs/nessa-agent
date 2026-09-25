@@ -757,6 +757,23 @@ pub struct GatewayReconciliationOutcome {
     failed_phase: LifecycleFailedPhase,
 }
 
+/// Why a terminal lifecycle outcome was not durably acknowledged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GatewayReconciliationOutcomeError {
+    /// The journal state machine rejected contradictory terminal facts.
+    Rejected(GatewayError),
+    /// Valid terminal facts could not be delivered to durable storage.
+    Delivery(GatewayError),
+}
+
+impl GatewayReconciliationOutcomeError {
+    pub fn error(&self) -> &GatewayError {
+        match self {
+            Self::Rejected(error) | Self::Delivery(error) => error,
+        }
+    }
+}
+
 impl GatewayReconciliationOutcome {
     pub fn assess(
         intent: GatewayReconciliationIntent,
@@ -873,7 +890,10 @@ pub trait GatewayReconciliationJournalSession: Send + Sync {
 
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
 
-    fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
+    fn outcome(
+        &self,
+        outcome: &GatewayReconciliationOutcome,
+    ) -> Result<(), GatewayReconciliationOutcomeError>;
 
     /// Records a caller whose request joined this admitted attempt.
     fn joined(&self, joined: &GatewayReconciliationRequest) -> Result<(), GatewayError>;
@@ -1124,10 +1144,11 @@ pub(crate) mod testing {
         AuditDeliveryReceipt, GatewayError, GatewayReconciliationAttempt,
         GatewayReconciliationAudit, GatewayReconciliationIds, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-        GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, LifecycleCommandResult,
-        LifecycleObservation, LifecycleObservationSource, LifecyclePhysicalOutcome,
-        LifecyclePlanStep, LoginShellError, LoginShellPath, ReconciliationCleanupDecision,
-        ReconciliationCorrelation, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
+        GatewayReconciliationOutcomeError, GatewayReconciliationRequest, GatewayStartup,
+        GatewayStartupEvents, LifecycleCommandResult, LifecycleObservation,
+        LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep, LoginShellError,
+        LoginShellPath, ReconciliationCleanupDecision, ReconciliationCorrelation,
+        ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     };
     use std::{
         sync::{
@@ -1186,7 +1207,10 @@ pub(crate) mod testing {
             Ok(())
         }
 
-        fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        fn outcome(
+            &self,
+            _: &GatewayReconciliationOutcome,
+        ) -> Result<(), GatewayReconciliationOutcomeError> {
             Ok(())
         }
 

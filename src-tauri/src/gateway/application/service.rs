@@ -13,9 +13,10 @@ use super::{
     GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
     GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
     GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStartup,
-    GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
-    LoginShellPath, MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
+    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
+    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
+    GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
+    ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -561,12 +562,20 @@ impl GatewayReconciliationProgress for StartupProgress {
     }
 }
 
-fn retry_delivery<T>(
-    mut deliver: impl FnMut() -> Result<T, GatewayError>,
-) -> Result<T, GatewayError> {
+fn retry_delivery<T, E>(mut deliver: impl FnMut() -> Result<T, E>) -> Result<T, E> {
     match deliver() {
         Ok(receipt) => Ok(receipt),
         Err(_) => deliver(),
+    }
+}
+
+fn retry_outcome_delivery(
+    mut deliver: impl FnMut() -> Result<(), GatewayReconciliationOutcomeError>,
+) -> Result<(), GatewayReconciliationOutcomeError> {
+    match deliver() {
+        Err(error @ GatewayReconciliationOutcomeError::Rejected(_)) => Err(error),
+        Ok(()) => Ok(()),
+        Err(GatewayReconciliationOutcomeError::Delivery(_)) => deliver(),
     }
 }
 
@@ -1447,7 +1456,7 @@ fn execute_attempt(
         failed_phase,
         identity,
     );
-    let cleanup = match audit_outcome.cleanup() {
+    let mut cleanup = match audit_outcome.cleanup() {
         ReconciliationCleanupDecision::RetainPrior => CleanupUpdate::Keep,
         ReconciliationCleanupDecision::ClearPrior => CleanupUpdate::Clear,
         ReconciliationCleanupDecision::AdoptClaimed => physical
@@ -1462,17 +1471,22 @@ fn execute_attempt(
     };
     let base_report = intent_delivery_report(&delivery, base_report);
     let audit_result = catch_unwind(AssertUnwindSafe(|| {
-        retry_delivery(|| journal.outcome(&audit_outcome))
+        retry_outcome_delivery(|| journal.outcome(&audit_outcome))
     }));
     let reported = match audit_result {
         Ok(Ok(())) => base_report,
-        Ok(Err(error)) => Err(GatewayError::Audit {
-            audit: error.to_string(),
-            physical: Some(match base_report {
-                Ok(()) => GatewayPhysicalResult::Succeeded,
-                Err(error) => GatewayPhysicalResult::Failed(Box::new(error)),
-            }),
-        }),
+        Ok(Err(error)) => {
+            if matches!(&error, GatewayReconciliationOutcomeError::Rejected(_)) {
+                cleanup = CleanupUpdate::Keep;
+            }
+            Err(GatewayError::Audit {
+                audit: error.error().to_string(),
+                physical: Some(match base_report {
+                    Ok(()) => GatewayPhysicalResult::Succeeded,
+                    Err(error) => GatewayPhysicalResult::Failed(Box::new(error)),
+                }),
+            })
+        }
         Err(_) => Err(GatewayError::Audit {
             audit: "gateway reconciliation audit adapter panicked".into(),
             physical: Some(match base_report {

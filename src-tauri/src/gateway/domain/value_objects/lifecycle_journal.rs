@@ -394,7 +394,11 @@ impl LifecycleHistory {
             .map_err(|_| LifecycleJournalError::CorrelationMismatch)?;
         ReconciliationEvidence::new(*cause, *initiator)
             .map_err(|_| LifecycleJournalError::EvidenceMismatch)?;
-        if first.namespace() != target.service() {
+        if first.namespace() != target.service()
+            || before
+                .as_ref()
+                .is_some_and(|prior| prior.target().service() != first.namespace())
+        {
             return Err(LifecycleJournalError::TargetMismatch);
         }
         if first.sequence() != 0 {
@@ -557,6 +561,12 @@ impl LifecycleHistory {
                 self.pending_observation = Some((plan_id.clone(), step_id.clone()));
             }
             LifecycleRecordPayload::Observation { source, state } => {
+                if state
+                    .incarnation()
+                    .is_some_and(|incarnation| incarnation.target().service() != self.namespace)
+                {
+                    return Err(LifecycleJournalError::TargetMismatch);
+                }
                 match source {
                     LifecycleObservationSource::Intent if !self.plans.is_empty() => {
                         return Err(LifecycleJournalError::NoEffectProofAfterPlan)
@@ -648,6 +658,17 @@ impl LifecycleHistory {
                     }
                     LifecyclePhysicalOutcome::Failed { .. }
                         if *cleanup == ReconciliationCleanupDecision::AdoptClaimed =>
+                    {
+                        return Err(LifecycleJournalError::StateMismatch)
+                    }
+                    LifecyclePhysicalOutcome::Failed { .. }
+                        if *cleanup == ReconciliationCleanupDecision::ClearPrior
+                            && self.before.as_ref().is_some_and(|prior| {
+                                self.latest_observation
+                                    .as_ref()
+                                    .and_then(LifecycleObservation::incarnation)
+                                    == Some(prior)
+                            }) =>
                     {
                         return Err(LifecycleJournalError::StateMismatch)
                     }
@@ -855,6 +876,16 @@ mod tests {
     fn incarnation(serial: u64) -> ReconciliationIncarnation {
         ReconciliationIncarnation::new(
             target(),
+            format!("00000000-0000-4000-8000-{serial:012x}"),
+            serial as u32,
+            7420,
+        )
+        .unwrap()
+    }
+
+    fn incarnation_for(service: &str, serial: u64) -> ReconciliationIncarnation {
+        ReconciliationIncarnation::new(
+            ReconciliationTarget::new(service.into(), "c".repeat(64), "d".repeat(64)).unwrap(),
             format!("00000000-0000-4000-8000-{serial:012x}"),
             serial as u32,
             7420,
@@ -1365,6 +1396,243 @@ mod tests {
             LifecycleHistory::restore(&records).unwrap_err(),
             LifecycleJournalError::UnobservedOutcome
         );
+    }
+
+    #[test]
+    fn intent_rejects_a_prior_incarnation_from_another_namespace() {
+        assert_eq!(
+            LifecycleHistory::restore(&[intent(Some(incarnation_for("other-service", 10)))])
+                .unwrap_err(),
+            LifecycleJournalError::TargetMismatch
+        );
+    }
+
+    #[test]
+    fn cross_namespace_observation_rejection_does_not_mutate_live_history() {
+        let prefix = vec![
+            intent(Some(incarnation(10))),
+            plan(1),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "replace".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+        ];
+        let contradiction = record(
+            3,
+            LifecycleRecordPayload::Observation {
+                source: LifecycleObservationSource::Effect {
+                    plan_id: "replace".into(),
+                    step_id: "primary".into(),
+                },
+                state: LifecycleObservation::new(
+                    1,
+                    Some(incarnation_for("other-service", 11)),
+                    true,
+                ),
+            },
+        );
+        let mut restored_records = prefix.clone();
+        restored_records.push(contradiction.clone());
+        assert_eq!(
+            LifecycleHistory::restore(&restored_records).unwrap_err(),
+            LifecycleJournalError::TargetMismatch
+        );
+
+        let mut live = LifecycleHistory::restore(&prefix).unwrap();
+        assert_eq!(
+            live.append(&contradiction).unwrap_err(),
+            LifecycleJournalError::TargetMismatch
+        );
+        assert_eq!(live.next_sequence(), 3);
+        assert_eq!(live.latest_observation(), None);
+        live.append(&record(
+            3,
+            LifecycleRecordPayload::Observation {
+                source: LifecycleObservationSource::Effect {
+                    plan_id: "replace".into(),
+                    step_id: "primary".into(),
+                },
+                state: LifecycleObservation::new(1, None, true),
+            },
+        ))
+        .unwrap();
+        assert_eq!(live.next_sequence(), 4);
+    }
+
+    #[test]
+    fn same_namespace_replacement_remains_valid_stop_observation() {
+        let intended = incarnation(10);
+        let replacement = incarnation_for("service", 11);
+        let observation = LifecycleObservation::new(1, Some(replacement), true);
+        let records = vec![
+            intent(Some(intended.clone())),
+            stop_plan(1, &intended),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "stop-agents".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "stop-agents".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: observation.clone(),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::StopAgentsSettled {
+                        intended,
+                        command: LifecycleCommandResult::Accepted,
+                        observed: observation.clone(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+
+        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+    }
+
+    #[test]
+    fn failed_clear_prior_rejection_does_not_mutate_live_history() {
+        let prior = incarnation(10);
+        let observation = LifecycleObservation::new(1, Some(prior.clone()), false);
+        let prefix = vec![
+            intent(Some(prior)),
+            record(
+                1,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Intent,
+                    state: observation.clone(),
+                },
+            ),
+        ];
+        let contradiction = record(
+            2,
+            LifecycleRecordPayload::Outcome {
+                physical: LifecyclePhysicalOutcome::Failed {
+                    phase: LifecycleFailedPhase::Planning,
+                    message: "planning failed".into(),
+                },
+                last_confirmed: Some(observation.clone()),
+                cleanup: ReconciliationCleanupDecision::ClearPrior,
+            },
+        );
+        let mut restored_records = prefix.clone();
+        restored_records.push(contradiction.clone());
+        assert_eq!(
+            LifecycleHistory::restore(&restored_records).unwrap_err(),
+            LifecycleJournalError::StateMismatch
+        );
+
+        let mut live = LifecycleHistory::restore(&prefix).unwrap();
+        assert_eq!(
+            live.append(&contradiction).unwrap_err(),
+            LifecycleJournalError::StateMismatch
+        );
+        assert_eq!(live.next_sequence(), 2);
+        assert!(!live.is_terminal());
+        live.append(&record(
+            2,
+            LifecycleRecordPayload::Outcome {
+                physical: LifecyclePhysicalOutcome::Failed {
+                    phase: LifecycleFailedPhase::Planning,
+                    message: "planning failed".into(),
+                },
+                last_confirmed: Some(observation),
+                cleanup: ReconciliationCleanupDecision::RetainPrior,
+            },
+        ))
+        .unwrap();
+        assert!(live.is_terminal());
+    }
+
+    #[test]
+    fn failed_outcome_accepts_retain_or_clear_after_confirmed_absence() {
+        for cleanup in [
+            ReconciliationCleanupDecision::RetainPrior,
+            ReconciliationCleanupDecision::ClearPrior,
+        ] {
+            let observation = LifecycleObservation::new(1, None, false);
+            let records = vec![
+                intent(None),
+                record(
+                    1,
+                    LifecycleRecordPayload::Observation {
+                        source: LifecycleObservationSource::Intent,
+                        state: observation.clone(),
+                    },
+                ),
+                record(
+                    2,
+                    LifecycleRecordPayload::Outcome {
+                        physical: LifecyclePhysicalOutcome::Failed {
+                            phase: LifecycleFailedPhase::Planning,
+                            message: "planning failed".into(),
+                        },
+                        last_confirmed: Some(observation),
+                        cleanup,
+                    },
+                ),
+            ];
+
+            assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+        }
+    }
+
+    #[test]
+    fn failed_outcome_can_clear_a_retired_prior_when_a_replacement_is_observed() {
+        let prior = incarnation(10);
+        let replacement = incarnation_for("service", 11);
+        let observation = LifecycleObservation::new(1, Some(replacement), true);
+        let records = vec![
+            intent(Some(prior)),
+            plan(1),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "replace".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "replace".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: observation.clone(),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::Failed {
+                        phase: LifecycleFailedPhase::Observation,
+                        message: "replacement did not become ready".into(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::ClearPrior,
+                },
+            ),
+        ];
+
+        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
     }
 
     #[test]
