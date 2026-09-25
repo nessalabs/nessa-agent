@@ -2109,9 +2109,16 @@ fn sync_directory(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn private_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(".nessa-linux-staging-test-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .expect("the repository checkout provides a trusted test ancestry")
+    }
+
     #[test]
     fn definitions_publish_once_and_never_follow_an_existing_link() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let directory = temporary
             .path()
             .canonicalize()
@@ -2130,7 +2137,7 @@ mod tests {
 
     #[test]
     fn wants_link_publication_keeps_the_first_exact_identity() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let unit_root = temporary
             .path()
             .canonicalize()
@@ -2151,7 +2158,7 @@ mod tests {
 
     #[test]
     fn wants_link_observation_does_not_create_the_missing_parent() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let unit_root = temporary
             .path()
             .canonicalize()
@@ -2166,7 +2173,7 @@ mod tests {
 
     #[test]
     fn wants_link_cleanup_discards_an_unpublished_temporary_without_publishing_it() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let unit_root = temporary
             .path()
             .canonicalize()
@@ -2189,7 +2196,7 @@ mod tests {
 
     #[test]
     fn wants_link_recovery_settles_every_deterministic_temporary_state() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let unit_root = temporary
             .path()
             .canonicalize()
@@ -2218,7 +2225,7 @@ mod tests {
     fn retained_file_identity_rejects_an_equal_content_replacement() {
         use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let path = root.join("definition.service");
@@ -2238,7 +2245,7 @@ mod tests {
 
     #[test]
     fn definition_transaction_cleanup_retains_the_committed_side() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap().join("owned");
         create_owned_directory_chain(&root).unwrap();
         let definition = root.join("nessa-gateway-prod.service");
@@ -2261,7 +2268,7 @@ mod tests {
 
     #[test]
     fn definition_transaction_cleanup_discards_an_uncommitted_replacement() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap().join("owned");
         create_owned_directory_chain(&root).unwrap();
         let definition = root.join("nessa-gateway-prod.service");
@@ -2284,7 +2291,7 @@ mod tests {
 
     #[test]
     fn directory_transactions_remove_only_the_exact_empty_directory_they_created() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
 
@@ -2335,7 +2342,7 @@ mod tests {
 
     #[test]
     fn directory_transaction_retains_every_created_ancestor_after_a_suffix_failure() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let first = root.join("created");
@@ -2356,7 +2363,7 @@ mod tests {
 
     #[test]
     fn recovered_directory_transaction_removes_the_exact_nested_chain() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let preexisting = root.join("preexisting");
@@ -2454,7 +2461,7 @@ mod tests {
     #[test]
     fn crash_after_mkdir_preserves_ambiguous_empty_nonempty_and_replaced_children() {
         for variant in ["empty", "nonempty", "replaced"] {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
             fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
             let target = root.join("one").join("two");
@@ -2490,7 +2497,7 @@ mod tests {
             }
         }
 
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let target = root.join("one").join("two");
@@ -2505,7 +2512,7 @@ mod tests {
 
     #[test]
     fn crash_after_identity_recording_recovers_the_exact_empty_chain() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         for occurrence in [1, 2] {
@@ -2527,7 +2534,7 @@ mod tests {
 
     #[test]
     fn crash_during_marker_updates_recovers_only_the_last_complete_record() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let generation = "2".repeat(64);
@@ -2575,7 +2582,7 @@ mod tests {
             "marker-remove-completed",
             "marker-parent-sync",
         ] {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
             fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
             let target = root.join("one").join("two");
@@ -2605,7 +2612,7 @@ mod tests {
             (DirectoryTransactionBoundary::FinalDirectorySync, 1),
         ];
         for (serial, (failed_boundary, failed_occurrence)) in cases.into_iter().enumerate() {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
             fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
             let target = root.join("one").join("two");
@@ -2637,7 +2644,7 @@ mod tests {
 
     #[test]
     fn marker_creation_failure_precedes_every_directory_effect() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let target = root.join("one").join("two");
@@ -2654,7 +2661,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn exact_owned_definition_can_be_replaced_after_verified_retirement() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         let definition = root.join("nessa-gateway-prod.service");
         publish_bytes(&definition, b"old", 0o600, &"c".repeat(64)).unwrap();
@@ -2668,7 +2675,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn exact_owned_definition_replacement_preserves_a_substitute() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let definition = temporary
             .path()
             .canonicalize()
@@ -2682,7 +2689,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn staging_cleanup_resumes_from_the_durable_quarantine_name() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap().join("runtimes");
         create_owned_directory_chain(&root).unwrap();
         let generation = "e".repeat(64);

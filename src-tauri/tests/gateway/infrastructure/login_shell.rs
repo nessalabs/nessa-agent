@@ -514,9 +514,16 @@ fn a_real_bash_combines_what_each_of_its_startup_files_adds() {
             .position(|entry| entry == directory)
             .unwrap_or_else(|| panic!("{} is not on {}", directory.display(), resolved.as_str()))
     };
+    #[cfg(target_os = "linux")]
+    assert!(
+        at(&from_bashrc) < at(&from_profile),
+        "the interactive shell's entries come first on Linux: {}",
+        resolved.as_str()
+    );
+    #[cfg(not(target_os = "linux"))]
     assert!(
         at(&from_profile) < at(&from_bashrc),
-        "the login shell's own entries come first: {}",
+        "the login shell's entries come first: {}",
         resolved.as_str()
     );
     // Combining does not repeat what both answers had: each of these is on
@@ -600,6 +607,13 @@ fn a_hanging_bash_profile_still_yields_the_login_shell_entries() {
             .position(|entry| entry == directory)
             .unwrap_or_else(|| panic!("{} is not on {}", directory.display(), resolved.as_str()))
     };
+    #[cfg(target_os = "linux")]
+    assert!(
+        at(&from_rc) < at(&from_login),
+        "the interactive shell's entries come first on Linux even when the login probe timed out: {}",
+        resolved.as_str()
+    );
+    #[cfg(not(target_os = "linux"))]
     assert!(
         at(&from_login) < at(&from_rc),
         "the login shell's entries come first even when its own probe timed out: {}",

@@ -78,11 +78,12 @@ pub(super) fn render(input: UnitDefinition<'_>) -> Result<RenderedUnit, String> 
         })
         .collect::<Result<Vec<_>, String>>()?
         .join(" ");
-    let description = quote(&format!("Nessa gateway ({})", unit.as_str()))?;
+    let description = format!("Nessa gateway ({})", unit.as_str());
     let working_directory = path(working)?;
+    let rendered_working_directory = path_directive(&working_directory)?;
     let bytes = format!(
         "[Unit]\nDescription={description}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory={}\nExecStart={command}\nRestart=on-failure\nRestartSec=5s\nTimeoutStopSec=30s\n\n[Install]\nWantedBy=default.target\n",
-        quote(&working_directory)?,
+        rendered_working_directory,
     )
     .into_bytes();
     Ok(RenderedUnit {
@@ -182,6 +183,29 @@ fn path(value: &Path) -> Result<String, String> {
         .ok_or_else(|| "A systemd gateway path is not UTF-8".into())
 }
 
+fn path_directive(value: &str) -> Result<String, String> {
+    if !value.starts_with('/') {
+        return Err("A systemd gateway path is not absolute".into());
+    }
+    if value.ends_with(char::is_whitespace) {
+        return Err("A systemd gateway path has trailing whitespace".into());
+    }
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '%' => escaped.push_str("%%"),
+            '\\' => return Err("A systemd gateway path contains backslash".into()),
+            character if character.is_control() => {
+                return Err(
+                    "A systemd gateway path contains an unsupported control character".into(),
+                )
+            }
+            character => escaped.push(character),
+        }
+    }
+    Ok(escaped)
+}
+
 fn quote(value: &str) -> Result<String, String> {
     if value.contains('\0') {
         return Err("A systemd unit value contains NUL".into());
@@ -235,6 +259,8 @@ mod tests {
         .unwrap();
         assert!(rendered.contains("ExecStart=:\"/usr/bin/env\" \"-i\""));
         assert!(rendered.contains("/runtime%%one/nessa"));
+        assert!(rendered.contains("Description=Nessa gateway (nessa-gateway-prod.service)"));
+        assert!(rendered.contains("WorkingDirectory=/data"));
         assert!(!rendered.contains("sh -c"));
         assert!(rendered.contains("WantedBy=default.target"));
     }
@@ -243,6 +269,13 @@ mod tests {
     fn rejects_control_characters_before_publication() {
         assert!(quote("line\u{7}").is_err());
         assert_eq!(quote("100%"), Ok("\"100%%\"".into()));
+        assert!(path_directive("relative").is_err());
+        assert!(path_directive("/trailing ").is_err());
+        assert!(path_directive("/back\\slash").is_err());
+        assert_eq!(
+            path_directive("/data with \"quotes\" and 100%").unwrap(),
+            "/data with \"quotes\" and 100%%"
+        );
     }
 
     #[test]
@@ -274,8 +307,8 @@ mod tests {
 
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
-        let runtime = root.join("runtime");
-        let data = root.join("data");
+        let runtime = root.join("runtime with \"quotes\" and 100%");
+        let data = root.join("data with \"quotes\" and 100%");
         fs::create_dir(&runtime).unwrap();
         fs::create_dir(&data).unwrap();
         let executable = runtime.join("nessa");

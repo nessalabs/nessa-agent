@@ -3000,6 +3000,13 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
+    fn private_tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(".nessa-linux-reconciliation-test-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .expect("the repository checkout provides a trusted test ancestry")
+    }
+
     #[derive(Clone)]
     struct FixedManagerFactory {
         identity: SystemdManagerIdentity,
@@ -4267,7 +4274,7 @@ mod tests {
 
     #[test]
     fn settled_definition_recovery_requires_the_admitted_digest() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
         let (unit, target, _) = fixture();
         let paths = LinuxGatewayPaths::new(
