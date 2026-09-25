@@ -2676,7 +2676,7 @@ impl ConversationService {
         retired
     }
 
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) fn retirement_cause(&self) -> Option<ActionContext> {
         self.inner.retirement.get().cloned()
     }

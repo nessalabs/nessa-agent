@@ -1,9 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import {
-  hasImmediateDesktopCfg,
-  hasNoImmediateCfg,
-} from "./platform-boundaries.mjs"
+import { hasImmediateDesktopCfg, hasNoImmediateCfg } from "./platform-boundaries.mjs"
 
 test("native desktop production boundaries require an immediate active cfg attribute", () => {
   assert.equal(
@@ -25,16 +22,10 @@ test("native desktop production boundaries require an immediate active cfg attri
     true,
   )
   assert.equal(
-    hasImmediateDesktopCfg(
-      '/* #[cfg(target_os = "macos")] */\nmod files;',
-      "mod files;",
-    ),
+    hasImmediateDesktopCfg('/* #[cfg(target_os = "macos")] */\nmod files;', "mod files;"),
     false,
   )
-  assert.equal(
-    hasImmediateDesktopCfg("#[cfg(unix)]\nmod files;", "mod files;"),
-    false,
-  )
+  assert.equal(hasImmediateDesktopCfg("#[cfg(unix)]\nmod files;", "mod files;"), false)
   assert.equal(hasImmediateDesktopCfg("mod files;", "mod files;"), false)
 })
 
