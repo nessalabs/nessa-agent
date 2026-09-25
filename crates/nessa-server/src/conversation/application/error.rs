@@ -120,10 +120,18 @@ pub enum StopFailure {
 pub struct DeletionFailures {
     /// The conversation's agent could not be confirmed stopped.
     pub stop: Option<StopFailure>,
-    /// The saved history could not be read or erased: its lease is still
-    /// held elsewhere, or storage failed. What was read and could not be kept
-    /// in the tombstone is [`Self::tombstone`]'s.
+    /// The saved history could not be read or erased: storage failed. What
+    /// was read and could not be kept in the tombstone is
+    /// [`Self::tombstone`]'s; a lease held elsewhere is
+    /// [`Self::history_held`].
     pub history: Option<ConversationError>,
+    /// The history's lease was still held elsewhere once the delete's wait
+    /// for it ran out, so the history was neither read nor erased. Only that
+    /// wait sets this — storage answering `Busy` under the deletion's own
+    /// lease does not — and it is what a deletion is carried on for until the
+    /// lease is let go
+    /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`).
+    pub history_held: bool,
     /// The agent could not be asked to delete its own record of the provider
     /// session, or refused: `ConversationError::Agent` with the typed cause.
     pub provider: Option<ConversationError>,
@@ -155,6 +163,7 @@ impl DeletionFailures {
     pub fn is_empty(&self) -> bool {
         self.stop.is_none()
             && self.history.is_none()
+            && !self.history_held
             && self.provider.is_none()
             && !self.no_agent_slot
             && self.audit.is_none()

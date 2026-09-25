@@ -66,7 +66,8 @@ use std::{
 };
 use tokio::{
     sync::{
-        watch, Mutex, Notify, OnceCell, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore,
+        watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
+        RwLockReadGuard, Semaphore,
     },
     task::JoinHandle,
     time::Instant,
@@ -1904,7 +1905,7 @@ impl ConversationService {
     /// [`ConversationError::Deleted`], and it is left out of both lists
     /// (`a_deleted_conversation_refuses_every_command_on_it`,
     /// `a_create_racing_a_delete_cannot_republish_it`). The rest is
-    /// [`Self::finish_deletion`], which a repeat — or the gateway, when it
+    /// `finish_deletion`, which a repeat — or the gateway, when it
     /// starts ([`Self::finish_deletions`]) — carries on from wherever the
     /// tombstone says it got to, and which a finished deletion skips.
     pub async fn delete(
@@ -1915,74 +1916,23 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            caller.actor()?;
-            let requested_at_ms = service.inner.clock.unix_milliseconds();
-            let record = service
-                .inner
-                .metadata
-                .load(&id)
-                .await?
-                .ok_or(ConversationError::NotFound)?;
-            if !record.allows(&caller.organization_id, &caller.principal_id) {
-                return Err(ConversationError::NotFound);
-            }
-            // Never dated before the conversation it deletes: a clock stepped
-            // back since its creation would otherwise propose a tombstone its
-            // own record refuses, and every delete of it would be refused as
-            // storage trouble. The stored tombstone is still held to that rule
-            // when read back (`a_clock_stepped_back_since_creation_still_deletes`).
-            let requested_at_ms = requested_at_ms.max(record.creation_requested_at_ms());
-            let proposed = ConversationDeletion::new(
-                caller.organization_id.clone(),
-                caller.principal_id.clone(),
-                caller.surface_id.clone(),
-                caller.action_id.clone(),
-                requested_at_ms,
-            )
-            .map_err(|_| ConversationError::InvalidInput)?;
-            // A delete that finds another attempt carrying this deletion waits
-            // for it and answers from the tombstone it leaves, rather than
-            // attempting again: one delete spends at most one attempt
-            // (`a_delete_queued_behind_another_attempt_answers_from_its_tombstone`).
-            // If that attempt never fenced it, this one does
-            // (`a_delete_whose_predecessor_never_fenced_fences_it_itself`).
-            let (_deleting, waited) = match service.inner.deletions.try_lock(&id) {
-                Some(guard) => (guard, false),
-                None => (service.inner.deletions.lock(&id).await, true),
-            };
-            if waited {
-                let current = service
-                    .inner
-                    .metadata
-                    .load(&id)
-                    .await?
-                    .ok_or(ConversationError::NotFound)?;
-                if let Some(decided) = current.deletion() {
-                    let applied = decided.is_same_decision(&proposed);
-                    // Whoever erased it has already told the worker it is done.
-                    if decided.erased() {
-                        return Ok(applied);
-                    }
+            let (record, applied, _deleting) = match service.fence(&id, &caller).await? {
+                Fence::Written {
+                    record,
+                    applied,
+                    deleting,
+                } => (*record, applied, deleting),
+                // Whoever erased it has already told the worker it is done.
+                Fence::FinishedByAnother { applied } => return Ok(applied),
+                Fence::LeftByAnother => {
                     return Err(ConversationError::DeletionIncomplete(Box::new(
                         DeletionFailures {
                             another_attempt: true,
                             ..DeletionFailures::default()
                         },
-                    )));
+                    )))
                 }
-            }
-            // Only past this write does this delete know the conversation is
-            // fenced; any failure before it is just its own error.
-            let record = {
-                let _creation = service.inner.creation.lock().await;
-                service
-                    .inner
-                    .metadata
-                    .record_deletion(&id, proposed.clone())
-                    .await?
             };
-            let decided = record.deletion().ok_or(ConversationError::Metadata)?;
-            let applied = decided.is_same_decision(&proposed);
             match service.finish_deletion(record).await {
                 Ok(()) => {
                     // Nothing is left for the worker to carry
@@ -1999,6 +1949,89 @@ impl ConversationService {
         .await
     }
 
+    /// Everything a delete does up to and including its own tombstone write:
+    /// authorize from the ownership record, take the conversation's delete
+    /// lock — waiting for another attempt and answering from the tombstone it
+    /// leaves, if one holds it — and write the tombstone.
+    ///
+    /// Its failures are [`NotFenced`], so none of them can be answered as one
+    /// of the two codes that promise a deletion, whatever a substituted
+    /// repository returns (`a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`).
+    async fn fence(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Fence, NotFenced> {
+        caller.actor().map_err(|_| NotFenced::InvalidInput)?;
+        let requested_at_ms = self.inner.clock.unix_milliseconds();
+        let record = self
+            .inner
+            .metadata
+            .load(id)
+            .await
+            .map_err(NotFenced::from_repository)?
+            .ok_or(NotFenced::NotFound)?;
+        if !record.allows(&caller.organization_id, &caller.principal_id) {
+            return Err(NotFenced::NotFound);
+        }
+        // Never dated before the conversation it deletes: a clock stepped
+        // back since its creation would otherwise propose a tombstone its
+        // own record refuses, and every delete of it would be refused as
+        // storage trouble. The stored tombstone is still held to that rule
+        // when read back (`a_clock_stepped_back_since_creation_still_deletes`).
+        let requested_at_ms = requested_at_ms.max(record.creation_requested_at_ms());
+        let proposed = ConversationDeletion::new(
+            caller.organization_id.clone(),
+            caller.principal_id.clone(),
+            caller.surface_id.clone(),
+            caller.action_id.clone(),
+            requested_at_ms,
+        )
+        .map_err(|_| NotFenced::InvalidInput)?;
+        // A delete that finds another attempt carrying this deletion waits
+        // for it and answers from the tombstone it leaves, rather than
+        // attempting again: one delete spends at most one attempt
+        // (`a_delete_queued_behind_another_attempt_answers_from_its_tombstone`).
+        // If that attempt never fenced it, this one does
+        // (`a_delete_whose_predecessor_never_fenced_fences_it_itself`).
+        let (deleting, waited) = match self.inner.deletions.try_lock(id) {
+            Some(guard) => (guard, false),
+            None => (self.inner.deletions.lock(id).await, true),
+        };
+        if waited {
+            let current = self
+                .inner
+                .metadata
+                .load(id)
+                .await
+                .map_err(NotFenced::from_repository)?
+                .ok_or(NotFenced::NotFound)?;
+            if let Some(decided) = current.deletion() {
+                let applied = decided.is_same_decision(&proposed);
+                return Ok(if decided.erased() {
+                    Fence::FinishedByAnother { applied }
+                } else {
+                    Fence::LeftByAnother
+                });
+            }
+        }
+        let record = {
+            let _creation = self.inner.creation.lock().await;
+            self.inner
+                .metadata
+                .record_deletion(id, proposed.clone())
+                .await
+                .map_err(NotFenced::from_repository)?
+        };
+        let decided = record.deletion().ok_or(NotFenced::Storage)?;
+        let applied = decided.is_same_decision(&proposed);
+        Ok(Fence::Written {
+            record: Box::new(record),
+            applied,
+            deleting,
+        })
+    }
+
     /// Finish every deletion a tombstone says did not finish: one that
     /// stopped short of its end — an agent not confirmed stopped, a history
     /// still leased, an agent that could not be asked about its own record, a
@@ -2007,7 +2040,7 @@ impl ConversationService {
     /// in the background, so it never holds up startup
     /// (`an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`).
     ///
-    /// Each gets at most [`DELETION_ATTEMPTS`] tries, [`DELETION_RETRY_DELAY`]
+    /// Each gets at most `DELETION_ATTEMPTS` tries, `DELETION_RETRY_DELAY`
     /// apart and growing. What is still unfinished after its tries is
     /// returned with its last typed failure, and logged, and is tried again
     /// at the next start or by a repeated delete. Stops early, returning what
@@ -2246,6 +2279,14 @@ impl ConversationService {
         };
         let lease = match leased {
             Ok(lease) => Some(lease),
+            // Still held after the wait for it: the one place a deletion
+            // learns its history is held elsewhere. `Busy` from reading or
+            // erasing under its own lease is only storage failing
+            // (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`).
+            Err(ConversationError::Storage(StorageError::Busy)) => {
+                failures.history_held = true;
+                None
+            }
             Err(error) => {
                 failures.history = Some(error);
                 None
@@ -2764,11 +2805,7 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
         return Some(Waiting::ForSlot);
     }
     let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
-    let lease_held = matches!(
-        failures.history,
-        Some(ConversationError::Storage(StorageError::Busy))
-    );
-    (still_stopping || lease_held).then_some(Waiting::ForRelease)
+    (still_stopping || failures.history_held).then_some(Waiting::ForRelease)
 }
 
 /// An agent slot taken for one ask. Released on drop, however the ask ends,
@@ -2806,6 +2843,64 @@ enum AskFailure {
     NoFreeSlot,
     /// Anything else: the agent's handler, or the ask itself, failed.
     Failed(ConversationError),
+}
+
+/// Why a delete failed before its own tombstone was written, when it is not
+/// known whether the conversation is fenced. Nothing here becomes
+/// `conversation_erasure_incomplete` or `audit_unavailable`, the two answers
+/// that promise a deletion: a repository's error is kept only for what it can
+/// say before the fence, and anything else it says is storage failing
+/// ([`Self::from_repository`];
+/// `a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`).
+#[derive(Debug)]
+enum NotFenced {
+    /// The request's own attribution or deletion could not be made.
+    InvalidInput,
+    /// No conversation of the caller's by that identity.
+    NotFound,
+    /// A record from before records named their agent.
+    AgentUnsupported,
+    /// Reading the conversation or writing its tombstone failed.
+    Storage,
+}
+impl NotFenced {
+    /// What a repository's failure before the fence can still say. Only what
+    /// the repository's own contract lets it answer there is kept; every other
+    /// error — one a substituted repository returns included — is storage.
+    fn from_repository(error: ConversationError) -> Self {
+        match error {
+            ConversationError::NotFound => Self::NotFound,
+            ConversationError::AgentUnsupported => Self::AgentUnsupported,
+            _ => Self::Storage,
+        }
+    }
+}
+impl From<NotFenced> for ConversationError {
+    fn from(failure: NotFenced) -> Self {
+        match failure {
+            NotFenced::InvalidInput => Self::InvalidInput,
+            NotFenced::NotFound => Self::NotFound,
+            NotFenced::AgentUnsupported => Self::AgentUnsupported,
+            NotFenced::Storage => Self::Metadata,
+        }
+    }
+}
+
+/// How a delete stood once it was past [`ConversationService::fence`].
+enum Fence {
+    /// This delete wrote its tombstone, or carried the one there: the
+    /// conversation as it now stands, whether this request is the deciding
+    /// one, and the delete lock it holds to finish it.
+    Written {
+        record: Box<Conversation>,
+        applied: bool,
+        deleting: OwnedMutexGuard<()>,
+    },
+    /// Another attempt, which this delete waited for, finished it.
+    FinishedByAnother { applied: bool },
+    /// Another attempt, which this delete waited for, fenced it and did not
+    /// finish.
+    LeftByAnother,
 }
 
 /// What one background try came to, when it did not fail.

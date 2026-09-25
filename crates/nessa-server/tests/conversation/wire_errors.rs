@@ -291,6 +291,15 @@ fn a_deleted_conversation_and_an_unfinished_deletion_have_their_own_codes() {
             ..DeletionFailures::default()
         },
         DeletionFailures {
+            history_held: true,
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            history_held: true,
+            attachments: Some(lost_evidence()),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
             summary: Some(ConversationError::Metadata),
             ..DeletionFailures::default()
         },
