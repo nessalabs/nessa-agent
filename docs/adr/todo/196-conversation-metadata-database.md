@@ -99,17 +99,17 @@ A row the caller cannot be shown to own therefore cannot be theirs.
 One row per condition a candidate row can be in. "Met" means the query returned
 it inside the `limit + 1` window.
 
-| Row | Condition | Listed | Counts against `complete` |
-| --- | --- | --- | --- |
-| L1 | Caller's, undeleted, readable summary with the asked archived flag | yes, newest first | no |
-| L2 | Caller's, summary has the other archived flag | no | no |
-| L3 | Caller's, no summary (nothing was said) | no | no |
-| L4 | Caller's, has a tombstone (readable or not) | no | no |
-| L5 | Caller's, met, but the record or summary row fails domain validation or holds text that is not UTF-8 | no | yes |
-| L6 | Somebody else's (a different organization, or an owner that differs by any byte, including case) | no | no |
-| L7 | More than `limit` rows qualify | the newest 500 readable rows among the 501 met; fewer when some of those are L5 | yes |
-| L8 | Exactly 500 qualify | all 500 | no |
-| L9 | The database cannot be queried | the list fails (`conversation_storage_unavailable`); one that cannot be opened stops the gateway starting | — |
+| Row | Condition | Listed | Counts against `complete` | Test |
+| --- | --- | --- | --- | --- |
+| L1 | Caller's, undeleted, readable summary with the asked archived flag | yes, newest first | no | `the_list_is_the_owners_undeleted_said_in_conversations_newest_first` |
+| L2 | Caller's, summary has the other archived flag | no | no | `the_archive_filter_applies_before_the_bound` |
+| L3 | Caller's, no summary (nothing was said) | no | no | `a_conversation_nothing_was_said_in_is_not_listed` |
+| L4 | Caller's, has a tombstone (readable or not) | no | no | `a_tombstone_that_cannot_be_read_still_keeps_its_conversation_out_of_every_list` |
+| L5 | Caller's, met, but the record or summary row fails domain validation or holds text that is not UTF-8 | no | yes | `an_unreadable_row_makes_its_owners_list_incomplete_and_nobody_elses`, `a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone` |
+| L6 | Somebody else's (a different organization, or an owner that differs by any byte, including case) | no | no | `the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`, `a_list_shows_only_what_the_domain_lets_the_caller_see` |
+| L7 | More than `limit` rows qualify | the newest 500 readable rows among the 501 met; fewer when some of those are L5 | yes | `a_list_says_whether_the_bound_left_any_out`, `an_unreadable_row_inside_a_cut_window_costs_the_list_that_row` |
+| L8 | Exactly 500 qualify | all 500 | no | `a_list_says_whether_the_bound_left_any_out` |
+| L9 | The database cannot be queried, or opened | the list fails (`conversation_storage_unavailable`); one that cannot be opened is refused by the store, which composition cannot start without | — | `a_list_the_store_cannot_answer_fails_rather_than_showing_nothing`, `a_database_that_cannot_be_opened_is_metadata_unavailable` |
 
 L5 changes what 182 said. There, a conversation whose summary could not be read
 was listed bare, in the default list. Here a summary row is unreadable only
@@ -123,8 +123,14 @@ so the row is left out and the list says it is incomplete.
 ### No move
 
 Nessa is in alpha, and the owner decided on 2026-09-25 that this change ships
-no migration: the JSON files earlier builds wrote are deleted by hand, once,
-and nothing in this build reads, refuses or mentions them. Keeping a mover and
+no migration: an earlier build's conversations are deleted by hand, once, and
+nothing in this build reads, refuses or mentions their files. What is deleted is
+the namespace's whole `conversations/` directory and its `attachments/`, with
+the gateway stopped — not the JSON directories alone. Audit records, histories
+and uploads are keyed by the same conversation identities, so leaving them
+would let an identity be created again beside its old creation record, which
+the creation audit refuses, or over its old history. A panel tab
+saved before the upgrade names a conversation that is gone, and is closed. Keeping a mover and
 the startup refusal beside it would have been a second reader of an old shape,
 which "One current contract" forbids without that decision.
 

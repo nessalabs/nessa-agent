@@ -262,7 +262,7 @@ finishes it.
 | 27 | `fenced`…`settled` | Any repeat delete by the owner | as the attempt goes; `applied` by row 26's rule | carried on from where it stands; the first decision stays | nothing written down is read or asked again (row 39 is what was not written down) | as the attempt goes |
 | 28 | any | Delete arrives while another attempt holds it | from the tombstone the other leaves: `applied` by row 26's rule if `erased`, else unfinished; if the other never fenced it, this delete fences it and runs its own attempt, answering as that goes | unchanged by this delete, unless it fences | nothing more, unless it runs its own attempt | — |
 | 29 | any | Caller goes away mid-delete | — | the attempt continues to its end | as the attempt goes | as the attempt goes |
-| 30 | `fenced`…`settled` | Gateway starts | — (logged) | each tried up to 3 times, 1 s then 2 s apart | as the tries go | slot and release waits handed to the worker; unreadable records and tombstones without a record counted in the log |
+| 30 | `fenced`…`settled` | Gateway starts | — (logged) | each tried up to 3 times, 1 s then 2 s apart | as the tries go | slot and release waits handed to the worker; an unfinished tombstone whose conversation cannot be named is counted in the log |
 | 31a | `fenced` | Retirement while waiting for the stop | unfinished | `fenced` | nothing: not even uploads | left |
 | 31b | `fenced` or read | Retirement while waiting for the lease | unfinished | unchanged | as row 9a or 9b, by state | left |
 | 32 | `read·session` | Retirement while the agent is asked | unfinished | unchanged | as row 19 | left; the SDK still stops the agent's process, and retirement waits for that |
