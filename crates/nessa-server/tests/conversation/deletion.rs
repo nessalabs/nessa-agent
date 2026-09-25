@@ -963,7 +963,8 @@ async fn a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion()
         ]
     };
     // Read before the lock, the tombstone write, and the read after waiting
-    // behind another attempt: every repository call before the fence.
+    // behind another attempt: the repository calls `fence` makes. Any it
+    // made besides would still answer only a `FenceFailure`, its return type.
     for error in promising_a_deletion() {
         repository
             .loads
