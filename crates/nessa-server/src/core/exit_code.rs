@@ -130,12 +130,11 @@ mod tests {
                 None,
             ),
             RunError::Usage("unknown command".into()),
-            RunError::opening(
-                crate::core::Dataset::ConversationMetadata,
-                std::path::Path::new("metadata.sqlite3"),
-                nessa_local_database::OpenError::Version {
-                    found: 2,
-                    expected: 1,
+            RunError::opening_browser_sessions(
+                std::path::Path::new("browser-sessions.jsonl"),
+                crate::browser_session::adapters::JournalOpenError::Unreadable {
+                    line: Some(1),
+                    problem: "is not a journal record",
                 },
             ),
             RunError::Authentication("setup".into()),

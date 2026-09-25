@@ -30,7 +30,7 @@ use crate::{
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
     conversation::application::ConversationService,
-    core::{Dataset, RunError},
+    core::RunError,
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
 };
@@ -322,7 +322,11 @@ fn conversations(
     let metadata_path = root.join("metadata.sqlite3");
     let metadata = Arc::new(
         LocalConversationStore::open(&metadata_path).map_err(|cause| {
-            RunError::opening(Dataset::ConversationMetadata, &metadata_path, cause)
+            RunError::opening(
+                crate::core::Dataset::ConversationMetadata,
+                &metadata_path,
+                cause,
+            )
         })?,
     );
     let current_opencode_model = opencode

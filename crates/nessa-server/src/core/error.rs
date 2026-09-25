@@ -12,6 +12,7 @@ use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
+#[cfg(unix)]
 use nessa_local_database::OpenError;
 use std::fmt;
 use std::io::{self, ErrorKind};
@@ -59,7 +60,9 @@ pub enum RunError {
 impl RunError {
     /// A gateway-scope store that did not open. What the file holds is a
     /// [`RunError::Dataset`]; anything that can clear — a directory, I/O, a
-    /// lock — stays `Agent`, which is retried.
+    /// lock — stays `Agent`, which is retried. Conversations are composed
+    /// only on Unix, so this is too.
+    #[cfg(unix)]
     pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
         match cause {
             OpenError::Version { .. } | OpenError::Unreadable(_) => {
@@ -255,6 +258,7 @@ impl From<io::Error> for RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::conversation::infrastructure::LocalConversationStore;
     use crate::env::{EnvironmentError, HOST};
 
@@ -271,6 +275,7 @@ mod tests {
         assert!(std::error::Error::source(&silent).is_none());
     }
 
+    #[cfg(unix)]
     /// Opens `metadata.sqlite3` in a private directory, after `prepare` has
     /// left something there, and says what composition would end with.
     fn opening_metadata(prepare: impl FnOnce(&Path)) -> RunError {
@@ -288,6 +293,7 @@ mod tests {
         RunError::opening(Dataset::ConversationMetadata, &path, cause)
     }
 
+    #[cfg(unix)]
     fn assert_refused_for_good(error: &RunError) {
         assert!(
             matches!(error, RunError::Dataset(refusal)
@@ -302,6 +308,7 @@ mod tests {
         assert!(error.to_string().contains("conversation metadata"));
     }
 
+    #[cfg(unix)]
     /// Row G3 of ADR 202: a newer build's file, and a file with tables and
     /// no version, are both another version.
     #[test]
@@ -324,6 +331,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     /// Row G4 of ADR 202.
     #[test]
     fn a_file_that_is_not_a_database_refuses_the_gateway_for_good() {
@@ -335,6 +343,7 @@ mod tests {
         assert_refused_for_good(&error);
     }
 
+    #[cfg(unix)]
     /// Row G5 of ADR 202: a directory that is missing, or not private, can
     /// be put right, so it stays a failure launchd retries.
     #[test]

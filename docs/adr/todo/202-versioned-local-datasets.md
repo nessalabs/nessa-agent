@@ -47,7 +47,7 @@ adds the marker. Nothing is added now, and nothing is deleted by hand.
 | Scope | Stores | What it cannot read |
 | --- | --- | --- |
 | **Gateway** — truth that decides who may do what for everyone | credential registry; browser-session journal; conversation metadata (ownership, tombstones, archived flag, summaries) | The gateway refuses to start |
-| **Record** — truth about one conversation or one upload | session journals; attachment holds and blobs; managed-runtime reclamation and use markers | That record's operations fail, typed. Everything else carries on. |
+| **Record** — truth about one conversation or one upload | session journals; attachment holds (a blob is opaque bytes named by their digest, judged by that digest and never by a marker); managed-runtime reclamation and use markers | That record's operations fail, typed. Everything else carries on. |
 | **Cache** — rebuilt from truth or from outside | warm-up records; `installed.json` and runtime binaries; host `shortcuts.json`; browser `localStorage` | Ignored, and overwritten when next written |
 
 Audit sinks are write-only evidence. They are never migrated and never read for
@@ -76,18 +76,29 @@ as for 196. After alpha, each build carries forward-only migrations in the
 owning context, from every version any 1.x release wrote. They run at open,
 under the store's own lock, all or nothing. A newer version is refused, and
 there is no downgrade. The first migration to ship brings its own record, with
-the ordering table gate 15 asks for (crash mid-step, two openers, failure). No
+the ordering table gate 15 asks for (crash mid-step, two openers, failure). A
+migration that fails keeps its own cause and step. It is not reported as "too
+old". No
 migration code exists before then.
 
 ## Opening a gateway-scope store (gate 15)
 
 | Row | Found | Result | Test |
 | --- | --- | --- | --- |
-| G1 | No file, or an empty one | Created at the current version | `nessa-local-database`: `an_empty_file_is_given_the_schema_at_its_version_and_reopened_as_it_is` |
+| G1 | No file, or an empty one | Created at the current version (see below) | `nessa-local-database`: `an_empty_file_is_given_the_schema_at_its_version_and_reopened_as_it_is` |
 | G2 | The current version | Opened | same, and every store test that reopens |
 | G3 | Any other version, including tables with none | `datasetRefused`, not retried, recorded. File untouched. | `a_metadata_database_at_another_version_refuses_the_gateway_for_good` |
 | G4 | Not a database, or corrupt | `datasetRefused`, not retried, recorded. File untouched. | `a_file_that_is_not_a_database_refuses_the_gateway_for_good` |
 | G5 | Directory missing or not private, file not private, I/O failure, busy | Today's reason (`agent`), retried | `a_metadata_directory_that_cannot_be_used_is_still_retried` |
+
+An existing empty metadata file is given the schema, not refused. A first open
+that dies before its schema commits leaves exactly that file, and refusing it
+would stop that gateway for good. A file emptied by something else has nothing
+left to protect: without ownership rows nothing is reachable, and the creation
+audit refuses an identity created again (196, "No move"). The registry is
+different. An empty `credentials.v1.json` does not parse and is refused; only a
+missing one means "not initialized". An empty browser-session journal holds no
+sessions, which grants nothing.
 
 The browser-session journal has the same rows. Its open returns
 `JournalOpenError`: `Unreadable { line, problem }` for anything replay refuses
