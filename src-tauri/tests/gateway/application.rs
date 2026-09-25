@@ -1,9 +1,9 @@
 use super::*;
+use crate::gateway::application::ports::GatewayLifecycleRecovery;
 use crate::gateway::{
     application::{
         testing::{self, FixedLoginShell},
-        GatewayLifecycleRecovery, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
-        LoginShellError,
+        GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellError,
     },
     domain::value_objects::{
         LifecycleRecordKind, ReconciliationCause, ReconciliationCorrelation,

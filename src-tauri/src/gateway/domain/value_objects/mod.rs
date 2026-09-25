@@ -5,7 +5,7 @@ pub use lifecycle_journal::{
     LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
     LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecordKind,
 };
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub use lifecycle_journal::{LifecycleHistory, LifecycleRecord, LifecycleRecordPayload};
 mod reconciliation_evidence;
 #[cfg(test)]
