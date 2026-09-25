@@ -125,7 +125,7 @@ pub struct DeletionFailures {
     /// The saved history could not be read or erased: storage failed, or
     /// retirement ended the wait for its lease. What was read and could not
     /// be kept in the tombstone is [`Self::tombstone`]'s; a history
-    /// leased elsewhere is [`Self::history_held`].
+    /// leased elsewhere is [`Self::history_leased_elsewhere`].
     pub history: Option<ConversationError>,
     /// The history was still leased elsewhere once the delete's wait
     /// for it ran out, so the history was neither read nor erased. Only that
@@ -134,7 +134,7 @@ pub struct DeletionFailures {
     /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`) — and
     /// it is what a deletion is carried on for until the lease is let go
     /// (`a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).
-    pub history_held: bool,
+    pub history_leased_elsewhere: bool,
     /// The agent could not be asked to delete its own record of the provider
     /// session, or refused: `ConversationError::Agent` with the typed cause.
     pub provider: Option<ConversationError>,
@@ -166,7 +166,7 @@ impl DeletionFailures {
     pub fn is_empty(&self) -> bool {
         self.stop.is_none()
             && self.history.is_none()
-            && !self.history_held
+            && !self.history_leased_elsewhere
             && self.provider.is_none()
             && !self.no_agent_slot
             && self.audit.is_none()
