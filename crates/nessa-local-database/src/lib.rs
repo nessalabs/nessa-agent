@@ -85,8 +85,9 @@ pub enum OpenError {
     /// SQLite refused the file, a pragma, or the schema.
     Database(rusqlite::Error),
     /// The file holds tables at a version other than the one asked for;
-    /// `found` is 0 when it has tables and no version at all.
-    Version { found: u32, expected: u32 },
+    /// `found` is 0 when it has tables and no version at all, and may be any
+    /// integer SQLite holds, negative ones included.
+    Version { found: i64, expected: u32 },
     /// A definition that does not state one version above 0, which could not
     /// be told from an empty file.
     UnversionedSchema,
@@ -144,8 +145,10 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     // Read and, when empty, given its schema under one write lock, so two
     // openers of an empty file cannot both set about creating it.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let found: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if found == schema.version {
+    // Read as SQLite keeps it, a signed integer, so a negative one is another
+    // version rather than a value this code cannot hold.
+    let found: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if found == i64::from(schema.version) {
         drop(transaction);
         return Ok(connection);
     }
@@ -160,8 +163,8 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     // The definition sets its own version, inside the same transaction, and
     // what it set is what it said it would.
     transaction.execute_batch(schema.definition)?;
-    let applied: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if applied != schema.version {
+    let applied: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if applied != i64::from(schema.version) {
         return Err(OpenError::Version {
             found: applied,
             expected: schema.version,

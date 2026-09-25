@@ -64,6 +64,23 @@ fn another_version_is_refused_and_left_as_it_was() {
 }
 
 #[test]
+fn a_negative_version_is_another_version() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    drop(open(&path, &schema()).unwrap());
+    rusqlite_connection(&path)
+        .pragma_update(None, "user_version", -1)
+        .unwrap();
+    assert!(matches!(
+        open(&path, &schema()),
+        Err(OpenError::Version {
+            found: -1,
+            expected: 3
+        })
+    ));
+}
+
+#[test]
 fn tables_without_a_version_are_refused_rather_than_given_a_schema() {
     let (_directory, root) = private_directory();
     let path = root.join("store.sqlite3");

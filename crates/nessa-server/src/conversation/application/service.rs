@@ -1480,9 +1480,10 @@ impl ConversationService {
             .collect();
         // Only a conversation that finished opening has anything to say about
         // running; one still opening, or whose opening failed, is not waited on.
-        // The live conversations are let go of before the list is answered: a
-        // list must not keep a stopped agent, or its history's lease
-        // (`a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased`).
+        // Asked only after the listing has answered, and let go of before the
+        // list is: a list waiting on storage holds nothing live, so it never
+        // keeps a stopped agent, or its history's lease
+        // (`a_list_waiting_on_its_listing_does_not_keep_a_deleted_history_leased`).
         let live: HashMap<ConversationId, Arc<LiveConversation>> = {
             let owners = self.inner.conversations.lock().await;
             owned

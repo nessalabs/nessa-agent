@@ -780,7 +780,11 @@ fn a_database_that_cannot_be_opened_is_metadata_unavailable() {
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let path = private.join("metadata.sqlite3");
-    std::fs::write(&path, [7; 4096]).unwrap();
+    // Private, so it is SQLite, not the privacy check, that refuses it.
+    let mut file =
+        nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew).unwrap();
+    std::io::Write::write_all(&mut file, &[7; 4096]).unwrap();
+    drop(file);
     assert!(matches!(
         LocalConversationStore::open(&path),
         Err(ConversationError::Metadata)

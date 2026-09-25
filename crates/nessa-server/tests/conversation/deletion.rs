@@ -2663,7 +2663,7 @@ async fn a_desktop_stop_leaves_a_delete_asking_its_agent_alone() {
 }
 
 #[tokio::test]
-async fn a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased() {
+async fn a_list_waiting_on_its_listing_does_not_keep_a_deleted_history_leased() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     let (entered_tx, entered) = oneshot::channel();
