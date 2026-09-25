@@ -11,8 +11,10 @@ relative to the repository root. Line numbers were read at `19d42ff1`.
 Three consumers, one mechanism:
 
 1. **Us, debugging our own app.** When a turn hangs, a permission never shows,
-   or the gateway restarts, we need one trace that spans the panel, the gateway,
-   the SDK and the agent process, keyed by IDs we already mint.
+   or the gateway restarts, we need one trace from the gateway request through
+   the SDK's execution, and the agent process's tool runs joined to it by IDs
+   we already mint. One trace across all processes needs W3C context
+   propagation, which is a later slice (3.4).
 2. **Us, debugging agents.** Per execution: which tools ran, how long, which
    reviews were requested and answered, where the provider stalled, what the
    provider refused. Token usage when the provider reports it.
@@ -187,7 +189,7 @@ what each cut costs.
   ┌──────────────────────────────────┐      ┌───────────────────────────────────┐
   │ Agent / scheduler / ACP worker   │      │ tracing subscriber, built once:   │
   │   opens and closes tracing spans │emit  │   fmt text ──▶ stderr / *.log     │
-  │   at the lifecycle sites it      │─────▶│   fmt json ──▶ logs/trace.jsonl   │
+  │   at the lifecycle sites it      │─────▶│   fmt json ──▶ logs/trace/ rolling │
   │   already owns; emits events     │      │   otel layer ─▶ OTLP (opt-in)     │
   │   with typed fields, never text  │      │   any Layer the embedder writes   │
   └──────────────────────────────────┘      └───────────────────────────────────┘
@@ -213,7 +215,7 @@ so they end where the lifecycle ends and there is no separate span map (gate
 | `nessa.execution{execution_id, kind, provider}` | admission (`enqueue`, `enqueue_steering`, `invoke`), parent = caller's current span | `Scheduler::pending[id]` then `ActiveInvocation` (`scheduling.rs:197-240`) | `ActiveInvocation::drop`, which already calls `finish_execution` |
 | `nessa.tool{tool_id, kind}` | first `ToolCallUpdate` for an id | the domain `ToolCall` entity's application wrapper | status `Completed` or `Failed`, or execution end |
 | `nessa.permission{permission_id, tool_id}` | `PermissionRequested` | permission request entry | `Answered` or `Cancelled{reason}` |
-| event `audit.record{kind, ...ids}` | the one private helper that calls `audit.record` | | |
+| event `audit.record{kind, ...ids}` | `observation::record_audited`, the one function every sink call traverses | | |
 | event `audit.delivery_failed{kind, error}` | same helper, on `Err` | | |
 | event `provider.refused{code, phase}` | worker | | |
 | event `output.chunk{kind, bytes}` at `trace` level | worker | | |
@@ -242,13 +244,24 @@ Rules that hold at every emit site:
   error (gate 11). Enforcer for the redaction rule: a collecting `Layer` in
   tests runs a full execution with marker strings in the tool input, options
   and output, and asserts no recorded field contains a marker.
-- **Audit records get one emit site.** `Agent` gains a private
-  `fn audit(&self, record) -> AgentFuture<()>` that emits the
-  `audit.record` event through `audit_fields(&ExecutionAuditRecord)`, a
-  total `match` over its variants, then calls the port. The six direct
-  `self.inner.audit.record(...)` calls in `scheduling.rs` route through it.
-  Result: every audited transition is observable, and a new record variant
-  cannot be silently unobserved.
+- **Audit records get one emit site, and every sink call traverses it.**
+  There are three owners that call the sink today: the scheduler (six calls
+  in `agents/scheduling.rs`), `SessionLifecycle::record_attachment_audit`
+  (`agents/lifecycle.rs:574`) and the ACP worker's `record_audit`
+  (`infrastructure/acp/executions/worker.rs:2174`). Between them they emit
+  every record kind, so a helper on `Agent` alone would miss attachment,
+  finish, close, cancellation, answer and review-decline records. Instead
+  `observation.rs` owns one free function,
+  `record_audited(&dyn ExecutionAudit, ExecutionAuditRecord) -> AgentFuture<()>`,
+  that emits `audit.record` through `audit_fields`, a total `match` over the
+  variants, calls the sink, and emits `audit.delivery_failed` on `Err`. All
+  three owners call it; the panic and timeout wrappers they already apply
+  wrap the returned future exactly as they wrap the sink's today. The
+  enforcer is structural: a source-scanning test in the crate asserts that
+  `.record(` on the `ExecutionAudit` port appears in exactly one function,
+  `record_audited`. Result: every audited transition is observable, a new
+  record variant cannot compile unobserved, and a new caller cannot bypass
+  the emit.
 - **Cross-task continuity is explicit.** Attachment and steering run in
   spawned Tokio tasks (`agent.rs`), so the SDK `.instrument(span.clone())`s
   those futures with the owning span. Nothing relies on `Span::current()`
@@ -282,7 +295,7 @@ namespace otherwise. Metrics are **derived, not emitted**: execution and
 tool duration histograms, permission wait, audit delivery failures and
 provider refusals are all countable from spans and events by every backend
 we care about (Tempo, Honeycomb, Datadog, Langfuse, Grafana span-metrics) and
-by a `jq` over `trace.jsonl`. If a first-class meter is ever needed,
+by a `jq` over the rolling trace files. If a first-class meter is ever needed,
 `tracing-opentelemetry`'s `MetricsLayer` reads `counter.*` and `histogram.*`
 fields from the same events. Nothing changes in the SDK for that.
 
@@ -299,26 +312,45 @@ rpc conversation.send                (gateway span: request_id, principal_id)
     ├── nessa.tool  kind=read         0.08s
     ├── nessa.tool  kind=execute      2.1s
     │   └── nessa.permission          1.6s  (human wait)
-    │       └── mcp.shell.run         0.4s  (nessa-mcp, joined by _meta.traceparent)
     └── nessa.tool  kind=edit         0.05s
+
+mcp.shell.run                        0.4s  (nessa-mcp: its own trace, fields
+                                            command_id and the traceparent it
+                                            was handed; a backend joins it by
+                                            field, not by parent)
 ```
+
+That is two traces joined by a field until W3C propagation lands. The
+gateway-to-SDK half is a real parent and child because it is one process.
+The MCP half becomes a child only when 3.4 step 3 is done in full.
 
 ### 3.4 Context across processes
 
-Same three hops as before, each with the least mechanism that works:
+The first release promises one trace per turn inside the gateway process
+and separately correlated traces elsewhere. Sharing an ID as a field lets a
+backend search across traces; it does not make one span the parent of
+another. Making the whole path one trace is W3C context propagation, and
+each hop below says which of the two it delivers.
 
-1. **Shell → gateway.** No change to `frames.json`. The gateway's RPC span
-   records `request_id` and `execution_id`, and the SDK's execution span
-   carries the same `execution_id`, so any backend joins them by attribute.
-   A W3C `traceparent` on the frame is deferred to the ADR; it would be an
-   optional field, not a version bump (`CODING_STANDARDS.md:445-455`).
-2. **Gateway → SDK.** Free. The gateway calls `enqueue` inside its RPC span,
-   so the execution span's parent is the request span. No map, no glue.
-3. **SDK → agent → nessa-mcp.** `nessa-mcp` reads `_meta.traceparent` on
-   `tools/call` and records it as a field on `mcp.shell.run`; whether a
-   harness forwards `_meta` is unknown and recorded as a tri-state
-   capability like the hook capabilities. Until it is known, the join is by
-   `command_id` and time.
+1. **Shell → gateway: correlation only.** The shell emits no spans in the
+   first release, so the gateway's RPC span is the trace root. It records
+   `request_id` and `execution_id`. When the shell does emit spans, a W3C
+   `traceparent` on the frame makes the gateway span a remote child; that is
+   an optional field in `frames.json`, not a version bump
+   (`CODING_STANDARDS.md:445-455`), and it is its own sub-issue.
+2. **Gateway → SDK: real parent and child.** The gateway calls `enqueue`
+   inside its RPC span, so the execution span's parent is the request span.
+   Same process, no map, no glue.
+3. **SDK → agent → nessa-mcp: correlation first, propagation when the
+   harness allows it.** In full, this hop is: the SDK writes a `traceparent`
+   for the execution span into the ACP `session/prompt` `_meta`, the harness
+   forwards `_meta` on its `tools/call`, and `nessa-mcp` installs it as the
+   remote parent of `mcp.shell.run` through `tracing-opentelemetry`'s
+   `set_parent`. Whether any harness forwards `_meta` is unknown and is
+   recorded as a tri-state capability like the hook capabilities. The first
+   release does the two ends we control: the SDK writes the header, and
+   `nessa-mcp` records whatever `traceparent` it receives as a field. The
+   parent link is installed in the slice that proves a harness forwards it.
 4. **Gateway ↔ desktop host.** `EndpointIdentity` becomes the gateway's
    `service.instance.id`; the host records it and its reconciliation
    `correlation_id` on the same spans it already audits.
@@ -361,12 +393,38 @@ Same three hops as before, each with the least mechanism that works:
   same seam because they are the same defect.
 - Bootstrap: load `Environment`, then build one layered subscriber: `fmt` text
   on stderr (unchanged, so `gateway.log` stays the artefact a person sends
-  us), `fmt` JSON with `FmtSpan::CLOSE` to `<data>/logs/trace.jsonl` bounded
-  like `gateway.log` and always on because it is cheap and bounded, and
+  us), `fmt` JSON with `FmtSpan::CLOSE` to `<data>/logs/trace/` (below), and
   `tracing-opentelemetry` over OTLP only when an endpoint is configured. With
   an endpoint, composition owns the provider and calls `shutdown()` after
   `ConversationService::shutdown` in the graceful path
   (`dependency-injection.md:46-49`).
+- The trace file is written off the request path. A plain `fmt` layer
+  formats and writes inside `on_event`, on whichever task closed the span,
+  so a stalled filesystem would stall a turn. The JSON layer therefore
+  writes through `tracing_appender::non_blocking` in lossy mode: a bounded
+  channel (128k lines) to one writer thread; when the channel is full the
+  line is dropped and counted, never awaited. Composition holds the
+  `WorkerGuard` and drops it in the graceful shutdown path after the OTLP
+  `shutdown()`, which flushes the channel; at that point it reads the
+  appender's dropped-line counter and, if non-zero, writes one text line to
+  `gateway.log` saying how many trace records were lost. The text layer on
+  stderr stays synchronous as today: its volume is a handful of lines an
+  hour and it is the last thing that must still work when everything else
+  is broken.
+- The trace file rolls while the process runs. `gateway.log` is truncated
+  only at start, which `core/log_file.rs:32-36` already says does not bound
+  a single long run; that is acceptable for a log that writes a few lines an
+  hour and not for one that writes a line per span close. `trace/` is a
+  `tracing_appender::rolling` appender with hourly rotation and
+  `max_log_files(24)`, so the on-disk set is bounded by count and age
+  during the run, not only at restart. The per-file size is bounded by
+  volume, not enforced: one span close is about 1 KB, so a gateway
+  running 1,000 executions an hour with ten tools each writes about 11 MB
+  an hour and holds about 260 MB at most. If that is too much for a
+  machine, `RUST_LOG` lowers what reaches the layer; a byte-size rotation
+  would be a later change to the same appender. `tracing-appender` is the
+  Tokio project's own crate and adds no transitive dependencies the server
+  does not already build.
 - `#[instrument(skip_all, fields(rpc.method, request_id, principal_id))]` on
   `dispatch` (`product/socket.rs:367`) gives the per-RPC span. A `warn!` at
   the `lagged()` branch (`service.rs:826`) records projection loss.
@@ -408,12 +466,14 @@ Same three hops as before, each with the least mechanism that works:
 
 | Process | Default | Override |
 |---|---|---|
-| gateway | text log + `trace.jsonl`; OTLP off | `OTEL_EXPORTER_OTLP_ENDPOINT` turns OTLP on; `OTEL_EXPORTER_OTLP_HEADERS`, `RUST_LOG` via plist |
+| gateway | text log + rolling JSON trace files; OTLP off | `OTEL_EXPORTER_OTLP_ENDPOINT` turns OTLP on; `OTEL_EXPORTER_OTLP_HEADERS`, `RUST_LOG` via plist |
 | desktop host | text `host.log` | none in the first slice |
 | nessa-mcp | stderr, INFO | `--log-level` argv |
 | SDK embedder | nothing installed | whatever subscriber they build |
 
-Telemetry is never on the request path and never opens a socket by default.
+Telemetry never opens a socket by default. The trace file is written by a
+separate thread through a bounded, lossy channel, so filesystem stalls cost
+dropped trace lines, not turn latency; the enforcer is named in section 6.
 
 ### 3.7 Out of scope, unchanged
 
@@ -445,7 +505,7 @@ What the structure refuses, and why that is the growth story rather than a
 limitation:
 
 - **Telemetry is not a product input.** The shell never renders a timeline
-  from `trace.jsonl`; a "what did the agent do" feature reads session
+  from the trace files; a "what did the agent do" feature reads session
   snapshots and audit, which are durable and authoritative. The moment a
   product feature reads spans, span shape becomes a contract with a UI, and
   the vocabulary stops being cheap to change. This is the "diagnostic is not
@@ -496,9 +556,13 @@ Where the design would be re-cut if the pressure arrives:
 4. **`traceparent` on the wire** stays deferred; attribute joining is enough
    for the first release.
 5. **Harness `_meta` forwarding** is unknown; recorded as a capability.
-6. **`trace.jsonl` growth.** Bounded exactly as `gateway.log` is: copy to
-   `.1` and truncate at start. Span close events at `info`, chunk events at
-   `trace` and filtered out by default.
+6. **Trace file growth and loss.** Hourly rolling with 24 files kept bounds
+   the set by count and age while the process runs; per-file size is bounded
+   by volume with the estimate in 3.5, not enforced. The non-blocking writer
+   drops lines when its channel is full and reports the count at shutdown;
+   a dropped trace line is acceptable by design, and the count is how we
+   learn the buffer is too small. Span close events at `info`, chunk events
+   at `trace` and filtered out by default.
 
 ## 5. Delivery slices
 
@@ -506,7 +570,7 @@ Where the design would be re-cut if the pressure arrives:
 |---|---|---|
 | 0 | [#195](https://github.com/nessalabs/nessa-agent/issues/195) and [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md): `tracing` spans are the SDK's observation contract, no custom observer port, OTel is a host composition choice, `traceparent` deferred. This document and the index rows. `docs/ARCHITECTURE.md` gains its telemetry paragraph with slice 1, when it becomes true. | docs |
 | 1 | SDK spans, events, `audit` helper, `.instrument`, the three tests, `tracing.md`, two examples. | nessa-sdk |
-| 2 | Gateway env seam and bootstrap reorder, layered subscriber, `trace.jsonl`, `#[instrument]` on `dispatch`, `lagged` warn, OTLP shutdown, plist env. | nessa-server, plist |
+| 2 | Gateway env seam and bootstrap reorder, layered subscriber, rolling non-blocking trace file with dropped-line report, `#[instrument]` on `dispatch`, `lagged` warn, OTLP shutdown, plist env. | nessa-server, plist |
 | 3 | nessa-mcp span, `_meta.traceparent` field, env-filter. | nessa-mcp, desktop composition |
 | 4 | Host `tracing` wiring, `host.log`, `eprintln!` migration, spans, tray item. | src-tauri |
 | later | `gen_ai.usage.*` when a binding reports tokens; `traceparent` in `frames.json`; shell timing; `MetricsLayer` if a meter is ever needed. | |
@@ -521,11 +585,13 @@ server suites; no new job (`CODING_STANDARDS.md:714-740`).
 |---|---|
 | Telemetry cannot change an execution's outcome, audit records or snapshot | `tracing` macros are synchronous and return `()`; test `slow_subscriber_does_not_change_outcome` compares against a no-op subscriber |
 | No tool input, options, titles or message text reach any field | test `no_marker_reaches_subscriber` with a collecting `Layer` and marker strings in input, options and output |
-| Every audited transition is observable | single private `Agent::audit` helper; `audit_fields` is a total `match` with no wildcard, so a new variant fails to compile |
+| Every audited transition is observable | `observation::record_audited` is the only function that calls `.record(` on the audit port, pinned by a source-scanning test; `audit_fields` is a total `match` with no wildcard, so a new variant fails to compile |
+| The trace file cannot delay a turn | the JSON layer's writer is `tracing_appender::non_blocking` in lossy mode; gateway test replaces the file with a pipe nobody reads and asserts `conversation.send` latency is unchanged and the dropped-line counter rises |
+| The trace file set is bounded during a run | rolling appender with `max_log_files(24)`; test writes across three simulated rotations and asserts the oldest file is removed |
 | Every `nessa.execution` open has one close | lifecycle test over the ordering matrix with barriers and a paused clock; the close is `ActiveInvocation::drop`, the same owner that already finishes the execution |
 | `error.type` is typed | `error_kind(&AgentError)` total `match` |
 | No OTLP endpoint means no socket | `TelemetryConfig::from_environment` returns `Otlp(None)`; gateway test asserts no OTel layer is installed and no connection is attempted |
-| Telemetry is not a product input | no code outside `examples/`, tests and composition reads `trace.jsonl`; structural absence test in the server crate |
+| Telemetry is not a product input | no code outside `examples/`, tests and composition reads the trace files; structural absence test in the server crate |
 | An unreachable OTLP endpoint does not delay a turn | `tracing-opentelemetry` batch export is off the request path; gateway test against a refused port asserts `conversation.send` latency unchanged |
 | `gateway.log` stays text | the text layer is unconditional; `from_environment` test |
 

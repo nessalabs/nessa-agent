@@ -40,10 +40,13 @@ lifecycle ends and there is no separate span map. Fields carry identities,
 typed reasons, counts and sizes, never tool input, options, titles or message
 text. The SDK never installs a subscriber and gains no OpenTelemetry
 dependency. Each binary's composition installs one layered subscriber: text on
-stderr, a bounded JSON `trace.jsonl`, and an OpenTelemetry layer through
-`tracing-opentelemetry` only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, read
-through the process's environment seam. Nothing reads telemetry to decide
-anything, and no product feature renders from it.
+stderr, JSON trace files written off the request path by a bounded lossy
+writer and rolled hourly with a fixed number kept, and an OpenTelemetry layer
+through `tracing-opentelemetry` only when `OTEL_EXPORTER_OTLP_ENDPOINT` is
+set, read through the process's environment seam. The first release gives one
+trace per turn inside the gateway process; other processes are correlated by
+identity fields until W3C context propagation lands as its own slice. Nothing
+reads telemetry to decide anything, and no product feature renders from it.
 
 ## Alternatives considered
 
@@ -62,10 +65,13 @@ anything, and no product feature renders from it.
   SDK.** Non-invasive, but the broadcast is lossy by contract and hooks do not
   see attachment, close, tool or permission events, so the trace would have
   holes the runtime could have filled. Rejected.
-- **A `traceparent` field on the wire envelope now.** An optional field, not a
-  version bump, but a shared schema change. Deferred: the RPC span and the
-  execution span already share `executionId`, which every target backend can
-  join on.
+- **W3C context propagation across all three processes in the first
+  release.** The shell emits no spans yet, and whether any harness forwards
+  MCP `_meta` is unknown, so the propagation would be built against two ends
+  that cannot yet use it. Deferred, and the promise is narrowed to match:
+  correlation by `executionId` and `command_id` across processes, one real
+  trace inside the gateway. The `traceparent` frame field and the MCP parent
+  link are their own slices.
 
 ## Consequences
 
@@ -82,7 +88,7 @@ embedders build on, so it changes additively. Model requests and token usage
 stay invisible until a binding reports them, and the design says so rather
 than faking a span.
 
-Watch for: a product feature reading `trace.jsonl`, a second consumer wanting
+Watch for: a product feature reading the trace files, a second consumer wanting
 lifecycle facts as typed values, or a host needing per-instance subscriber
 isolation. The first is a boundary violation; the other two are the signal to
 grow the typed enum this record declined.
