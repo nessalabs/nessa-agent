@@ -1969,7 +1969,7 @@ impl ConversationService {
             .metadata
             .load(id)
             .await
-            .map_err(FenceFailure::from_load)?
+            .map_err(RepositoryFailure::from_load)?
             .ok_or(FenceFailure::NotFound)?;
         if !record.allows(&caller.organization_id, &caller.principal_id) {
             return Err(FenceFailure::NotFound);
@@ -2004,7 +2004,7 @@ impl ConversationService {
                 .metadata
                 .load(id)
                 .await
-                .map_err(FenceFailure::from_load)?
+                .map_err(RepositoryFailure::from_load)?
                 .ok_or(FenceFailure::NotFound)?;
             if let Some(decided) = current.deletion() {
                 let applied = decided.is_same_decision(&proposed);
@@ -2021,9 +2021,9 @@ impl ConversationService {
                 .metadata
                 .record_deletion(id, proposed.clone())
                 .await
-                .map_err(FenceFailure::from_write)?
+                .map_err(RepositoryFailure::from_write)?
         };
-        let decided = record.deletion().ok_or(FenceFailure::Metadata)?;
+        let decided = record.deletion().ok_or(RepositoryFailure::Metadata)?;
         let applied = decided.is_same_decision(&proposed);
         Ok(Fence::Written {
             record: Box::new(record),
@@ -2146,6 +2146,12 @@ impl ConversationService {
     /// One background try at finishing `id`'s deletion from its tombstone as
     /// it now stands, admitted like a delete.
     ///
+    /// Of the repository's error reading the record, only what
+    /// [`RepositoryFailure`] keeps is answered, so the one
+    /// [`ConversationError::DeletionIncomplete`] a try can answer is
+    /// `finish_deletion`'s own
+    /// (`a_repository_error_in_a_background_try_is_never_a_reason_to_wait`).
+    ///
     /// A background finisher never queues on the conversation's delete lock:
     /// whoever holds it is carrying this deletion, and a finisher waiting its
     /// turn would put a whole attempt between that one and a person's delete
@@ -2165,7 +2171,8 @@ impl ConversationService {
                 .inner
                 .metadata
                 .load(&id)
-                .await?
+                .await
+                .map_err(RepositoryFailure::from_load)?
                 .ok_or(ConversationError::NotFound)?;
             service.finish_deletion(record).await?;
             Ok(BackgroundTry::Finished)
@@ -2845,27 +2852,30 @@ enum AskFailure {
     Failed(ConversationError),
 }
 
-/// Why a delete failed before its own tombstone write succeeded. Whether the
-/// conversation is fenced is not known — a write that failed may still have
-/// landed — so nothing here becomes `conversation_erasure_incomplete` or
-/// `audit_unavailable`, the two answers that promise a deletion. Of a
-/// repository's error, only what its contract lets that call answer is kept,
-/// and anything else it says is storage failing ([`Self::from_load`],
-/// [`Self::from_write`];
-/// `a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`).
+/// What a deletion keeps of a repository's failure where that failure is
+/// its answer — the delete's fence, and a background try's read of the
+/// record: only what [`ConversationRepository`]'s contract lets that call
+/// answer. Every other error — one a substituted repository returns
+/// included — is [`Self::Metadata`], so none there can be answered as a
+/// deletion or taken for a reason to wait
+/// (`a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`,
+/// `a_repository_error_in_a_background_try_is_never_a_reason_to_wait`).
+///
+/// Past the fence, a repository's error is kept whole inside
+/// [`DeletionFailures`], and only its own fields decide a wait
+/// ([`waiting_for`];
+/// `a_repository_error_past_the_fence_is_never_a_reason_to_wait`).
 #[derive(Debug)]
-enum FenceFailure {
-    /// The request's own attribution or deletion could not be made.
-    InvalidInput,
-    /// No conversation of the caller's by that identity.
+enum RepositoryFailure {
+    /// No record to delete.
     NotFound,
     /// A record from before records named their agent.
     AgentUnsupported,
-    /// Reading the conversation or writing its tombstone failed:
+    /// The record could not be read or written:
     /// [`ConversationError::Metadata`].
     Metadata,
 }
-impl FenceFailure {
+impl RepositoryFailure {
     /// What [`ConversationRepository::load`]'s failure can say: a record
     /// from before agents were named, or storage failing. A missing record is
     /// no error there, so a `NotFound` from it is storage failing too.
@@ -2886,13 +2896,41 @@ impl FenceFailure {
         }
     }
 }
+impl From<RepositoryFailure> for ConversationError {
+    fn from(failure: RepositoryFailure) -> Self {
+        match failure {
+            RepositoryFailure::NotFound => Self::NotFound,
+            RepositoryFailure::AgentUnsupported => Self::AgentUnsupported,
+            RepositoryFailure::Metadata => Self::Metadata,
+        }
+    }
+}
+
+/// Why a delete failed before its own tombstone write succeeded. Whether the
+/// conversation is fenced is not known — a write that failed may still have
+/// landed — so nothing here becomes `conversation_erasure_incomplete` or
+/// `audit_unavailable`, the two answers that promise a deletion: of a
+/// repository's error, only what [`RepositoryFailure`] keeps.
+#[derive(Debug)]
+enum FenceFailure {
+    /// The request's own attribution or deletion could not be made.
+    InvalidInput,
+    /// No conversation of the caller's by that identity.
+    NotFound,
+    /// The repository failed.
+    Repository(RepositoryFailure),
+}
+impl From<RepositoryFailure> for FenceFailure {
+    fn from(failure: RepositoryFailure) -> Self {
+        Self::Repository(failure)
+    }
+}
 impl From<FenceFailure> for ConversationError {
     fn from(failure: FenceFailure) -> Self {
         match failure {
             FenceFailure::InvalidInput => Self::InvalidInput,
             FenceFailure::NotFound => Self::NotFound,
-            FenceFailure::AgentUnsupported => Self::AgentUnsupported,
-            FenceFailure::Metadata => Self::Metadata,
+            FenceFailure::Repository(failure) => failure.into(),
         }
     }
 }
