@@ -1,8 +1,8 @@
 use crate::gateway::application::{
     GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationAudit,
     GatewayReconciliationIntent, GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStopSession,
-    ReconciledGateway,
+    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
+    GatewayStopSession, ReconciledGateway,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleObservation, LifecycleObservationSource,
@@ -33,7 +33,10 @@ impl GatewayReconciliationJournalSession for UnsupportedJournalSession {
         Ok(())
     }
 
-    fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+    fn outcome(
+        &self,
+        _: &GatewayReconciliationOutcome,
+    ) -> Result<(), GatewayReconciliationOutcomeError> {
         Ok(())
     }
 

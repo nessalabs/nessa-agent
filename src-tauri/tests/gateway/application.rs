@@ -604,6 +604,9 @@ fn reconciled(service: &str) -> ReconciledGateway {
 trait TestAuditBehavior: Send + Sync {
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
     fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
+    fn outcome_rejected(&self, _: &GatewayReconciliationOutcome) -> bool {
+        false
+    }
     fn joined(
         &self,
         attempt: &GatewayReconciliationAttempt,
@@ -666,8 +669,17 @@ impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T
         self.audit.intent(intent)
     }
 
-    fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
-        self.audit.outcome(outcome)
+    fn outcome(
+        &self,
+        outcome: &GatewayReconciliationOutcome,
+    ) -> Result<(), GatewayReconciliationOutcomeError> {
+        self.audit.outcome(outcome).map_err(|error| {
+            if self.audit.outcome_rejected(outcome) {
+                GatewayReconciliationOutcomeError::Rejected(error)
+            } else {
+                GatewayReconciliationOutcomeError::Delivery(error)
+            }
+        })
     }
 
     fn joined(&self, joined: &GatewayReconciliationRequest) -> Result<(), GatewayError> {
@@ -4022,6 +4034,39 @@ impl TestAuditBehavior for FailSecondAudit {
     }
 }
 
+struct RejectSecondClearPriorOutcome {
+    outcome_calls: AtomicUsize,
+}
+
+impl TestAuditBehavior for RejectSecondClearPriorOutcome {
+    fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        let call = self.outcome_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == 2 {
+            Err(GatewayError::Registration(
+                "terminal facts contradicted the latest observation".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn outcome_rejected(&self, outcome: &GatewayReconciliationOutcome) -> bool {
+        outcome.cleanup() == ReconciliationCleanupDecision::ClearPrior
+    }
+
+    fn joined(
+        &self,
+        _: &GatewayReconciliationAttempt,
+        _: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 enum SecondReconciliation {
     IntentOnlyFailure,
@@ -4144,6 +4189,40 @@ fn retained_cleanup_identity_tracks_native_and_audit_facts_separately() {
         gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
         Err(GatewayError::NotReconciled)
     );
+
+    let audit = Arc::new(FailSecondAudit {
+        intent_calls: AtomicUsize::new(0),
+        outcome_calls: AtomicUsize::new(0),
+        fail_intent: false,
+    });
+    let (gateway, _) =
+        retained_identity_gateway(SecondReconciliation::OldServiceUnloaded, audit.clone());
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert!(matches!(
+        tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)),
+        Err(GatewayError::Audit { .. })
+    ));
+    assert_eq!(audit.outcome_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+        Err(GatewayError::NotReconciled)
+    );
+
+    let audit = Arc::new(RejectSecondClearPriorOutcome {
+        outcome_calls: AtomicUsize::new(0),
+    });
+    let (gateway, host) =
+        retained_identity_gateway(SecondReconciliation::OldServiceUnloaded, audit.clone());
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert!(matches!(
+        tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)),
+        Err(GatewayError::Audit { .. })
+    ));
+    assert_eq!(audit.outcome_calls.load(Ordering::SeqCst), 2);
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(*host.stopped.lock().unwrap(), ["old"]);
 
     let audit = Arc::new(FailSecondAudit {
         intent_calls: AtomicUsize::new(0),

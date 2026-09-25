@@ -9,9 +9,10 @@ pub use ports::{
     GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
     GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
     GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-    GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStartup,
-    GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
-    LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway, SystemMonotonicClock,
+    GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
+    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
+    GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway,
+    SystemMonotonicClock,
 };
 #[cfg(target_os = "macos")]
 pub use ports::{GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep};

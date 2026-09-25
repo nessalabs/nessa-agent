@@ -10,7 +10,8 @@ use crate::gateway::{
         GatewayError, GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep,
         GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
         GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-        GatewayReconciliationOutcome, GatewayReconciliationRequest, MonotonicClock,
+        GatewayReconciliationOutcome, GatewayReconciliationOutcomeError,
+        GatewayReconciliationRequest, MonotonicClock,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -83,6 +84,19 @@ struct SessionState {
     terminal: bool,
     history: Option<LifecycleHistory>,
     latest_observation: Option<LifecycleObservation>,
+}
+
+enum JournalAppendError {
+    Rejected(GatewayError),
+    Delivery(GatewayError),
+}
+
+impl JournalAppendError {
+    fn into_gateway_error(self) -> GatewayError {
+        match self {
+            Self::Rejected(error) | Self::Delivery(error) => error,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1006,24 +1020,29 @@ impl FileJournalSession {
         namespace: String,
         domain_payload: LifecycleRecordPayload,
         payload: Value,
-    ) -> Result<AuditDeliveryReceipt, GatewayError> {
-        self.check_deadline()?;
-        let mut state = self.state.lock().map_err(|_| {
-            GatewayError::Registration("Gateway lifecycle journal state is unavailable".into())
-        })?;
+    ) -> Result<AuditDeliveryReceipt, JournalAppendError> {
+        self.check_deadline()
+            .map_err(JournalAppendError::Delivery)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| {
+                GatewayError::Registration("Gateway lifecycle journal state is unavailable".into())
+            })
+            .map_err(JournalAppendError::Delivery)?;
         if state.terminal {
-            return Err(GatewayError::Registration(
+            return Err(JournalAppendError::Rejected(GatewayError::Registration(
                 "Gateway lifecycle attempt is already settled".into(),
-            ));
+            )));
         }
         if state
             .namespace
             .as_ref()
             .is_some_and(|established| established != &namespace)
         {
-            return Err(GatewayError::Registration(
+            return Err(JournalAppendError::Rejected(GatewayError::Registration(
                 "Gateway lifecycle attempt changed service namespace".into(),
-            ));
+            )));
         }
         let domain_record = LifecycleRecord::new(
             namespace.clone(),
@@ -1031,17 +1050,20 @@ impl FileJournalSession {
             state.next_sequence,
             domain_payload,
         )
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        .map_err(|error| {
+            JournalAppendError::Rejected(GatewayError::Registration(error.to_string()))
+        })?;
         let next_history = match &state.history {
             Some(history) => {
                 let mut history = history.clone();
-                history
-                    .append(&domain_record)
-                    .map_err(|error| GatewayError::Registration(error.to_string()))?;
+                history.append(&domain_record).map_err(|error| {
+                    JournalAppendError::Rejected(GatewayError::Registration(error.to_string()))
+                })?;
                 history
             }
-            None => LifecycleHistory::restore(std::slice::from_ref(&domain_record))
-                .map_err(|error| GatewayError::Registration(error.to_string()))?,
+            None => LifecycleHistory::restore(std::slice::from_ref(&domain_record)).map_err(
+                |error| JournalAppendError::Rejected(GatewayError::Registration(error.to_string())),
+            )?,
         };
         let kind = domain_record.kind();
         let record = StoredRecord {
@@ -1053,16 +1075,20 @@ impl FileJournalSession {
         };
         let name = record.file_name();
         let bytes = serde_json::to_vec(&record)
-            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            .map_err(|error| GatewayError::Registration(error.to_string()))
+            .map_err(JournalAppendError::Delivery)?;
         let mut temporary = self
             .directory
             .reserve_temp()
-            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            .map_err(|error| GatewayError::Registration(error.to_string()))
+            .map_err(JournalAppendError::Delivery)?;
         temporary
             .as_file_mut()
             .write_all(&bytes)
-            .map_err(|error| GatewayError::Registration(error.to_string()))?;
-        self.check_deadline()?;
+            .map_err(|error| GatewayError::Registration(error.to_string()))
+            .map_err(JournalAppendError::Delivery)?;
+        self.check_deadline()
+            .map_err(JournalAppendError::Delivery)?;
         let published = temporary.publish_new(OsStr::new(&name));
         let receipt = match published {
             Ok(published) => {
@@ -1071,19 +1097,23 @@ impl FileJournalSession {
                     OsStr::new(&name),
                     Some(&record),
                     Some(published.as_file()),
-                )?
+                )
+                .map_err(JournalAppendError::Delivery)?
                 .1
             }
             Err(error) if error.source_error().kind() == io::ErrorKind::AlreadyExists => {
-                acknowledge_final_record(&self.directory, OsStr::new(&name), Some(&record), None)?.1
+                acknowledge_final_record(&self.directory, OsStr::new(&name), Some(&record), None)
+                    .map_err(JournalAppendError::Delivery)?
+                    .1
             }
             Err(error) => {
-                return Err(GatewayError::Registration(format!(
-                    "Could not record gateway lifecycle: {error}"
+                return Err(JournalAppendError::Delivery(GatewayError::Registration(
+                    format!("Could not record gateway lifecycle: {error}"),
                 )))
             }
         };
-        self.check_deadline()?;
+        self.check_deadline()
+            .map_err(JournalAppendError::Delivery)?;
         state.namespace = Some(namespace);
         state.next_sequence += 1;
         state.terminal = kind == LifecycleRecordKind::Outcome;
@@ -1199,11 +1229,15 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
                 "target": target(intent.target()),
                 "before": intent.before().map(identity),
             }),
-        )?;
+        )
+        .map_err(JournalAppendError::into_gateway_error)?;
         Ok(())
     }
 
-    fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+    fn outcome(
+        &self,
+        outcome: &GatewayReconciliationOutcome,
+    ) -> Result<(), GatewayReconciliationOutcomeError> {
         let physical = match outcome.effect() {
             GatewayReconciliationEffect::Confirmed { after, .. } => {
                 LifecyclePhysicalOutcome::Confirmed(after.clone())
@@ -1224,11 +1258,15 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
             .lock()
             .map_err(|_| {
                 GatewayError::Registration("Gateway lifecycle journal state is unavailable".into())
-            })?
+            })
+            .map_err(GatewayReconciliationOutcomeError::Delivery)?
             .latest_observation
             .clone();
+        let namespace = self
+            .namespace()
+            .map_err(GatewayReconciliationOutcomeError::Delivery)?;
         self.append(
-            self.namespace()?,
+            namespace,
             LifecycleRecordPayload::Outcome {
                 physical: physical.clone(),
                 last_confirmed: last_confirmed.clone(),
@@ -1239,7 +1277,15 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
                 "lastConfirmed":last_confirmed.as_ref().map(observation),
                 "cleanup":cleanup(outcome.cleanup()),
             }),
-        )?;
+        )
+        .map_err(|error| match error {
+            JournalAppendError::Rejected(error) => {
+                GatewayReconciliationOutcomeError::Rejected(error)
+            }
+            JournalAppendError::Delivery(error) => {
+                GatewayReconciliationOutcomeError::Delivery(error)
+            }
+        })?;
         Ok(())
     }
 
@@ -1256,7 +1302,8 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
                 "originRequestCorrelation": self.attempt.origin().correlation().as_str(),
                 "joinedRequest": request(joined),
             }),
-        )?;
+        )
+        .map_err(JournalAppendError::into_gateway_error)?;
         Ok(())
     }
 
@@ -1285,6 +1332,7 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
                 "cleanup": cleanup_steps.iter().map(plan_step).collect::<Vec<_>>(),
             }),
         )
+        .map_err(JournalAppendError::into_gateway_error)
     }
 
     fn effect_completion(
@@ -1302,6 +1350,7 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
             },
             json!({"planId":plan_id, "stepId":step_id, "result":command_result(result)}),
         )
+        .map_err(JournalAppendError::into_gateway_error)
     }
 
     fn observation(
@@ -1317,6 +1366,7 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
             },
             json!({"source":observation_source(source), "state":observation(state)}),
         )
+        .map_err(JournalAppendError::into_gateway_error)
     }
 
     fn physical_outcome(
@@ -1338,6 +1388,7 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
                 "cleanup": cleanup(cleanup_value),
             }),
         )
+        .map_err(JournalAppendError::into_gateway_error)
     }
 }
 
@@ -1511,6 +1562,10 @@ fn identity(gateway: &ReconciliationIncarnation) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::{
+        application::{GatewayReconciliationEffectTiming, GatewayReconciliationIntentDelivery},
+        domain::value_objects::ReconciliationHistoryFact,
+    };
     use std::{
         cell::Cell,
         fs,
@@ -1786,6 +1841,79 @@ mod tests {
             || Ok(serde_json::to_vec(&changed).unwrap()),
         )
         .is_err());
+    }
+
+    #[test]
+    fn contradictory_outcome_is_classified_as_rejected_by_the_file_adapter() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let clock = Arc::new(AdvancingClock {
+            now: Mutex::new(Instant::now()),
+            waits: AtomicUsize::new(0),
+        });
+        let request = GatewayReconciliationRequest::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000101".into())
+                .unwrap(),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let attempt = GatewayReconciliationAttempt::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000102".into())
+                .unwrap(),
+            request,
+        )
+        .unwrap();
+        let prior_target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "c".repeat(64),
+            "d".repeat(64),
+        )
+        .unwrap();
+        let prior = ReconciliationIncarnation::new(
+            prior_target,
+            "00000000-0000-4000-8000-000000000103".into(),
+            103,
+            7420,
+        )
+        .unwrap();
+        let target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let intent =
+            GatewayReconciliationIntent::new(attempt.clone(), target, Some(prior.clone())).unwrap();
+        let session = Arc::new(FileReconciliationAudit::new(Some(root), clock))
+            .open(&attempt, None)
+            .unwrap();
+        session.intent(&intent).unwrap();
+        session
+            .observation(
+                &LifecycleObservationSource::Intent,
+                &LifecycleObservation::new(1, Some(prior), false),
+            )
+            .unwrap();
+        let outcome = GatewayReconciliationOutcome::assess(
+            intent,
+            GatewayReconciliationIntentDelivery::Acknowledged,
+            GatewayReconciliationEffectTiming::AfterIntentAcknowledgement,
+            vec![
+                ReconciliationHistoryFact::RetirementAcknowledged,
+                ReconciliationHistoryFact::OldServiceUnloaded,
+            ],
+            LifecycleFailedPhase::Planning,
+            Err(GatewayError::Registration("planning failed".into())),
+        );
+        assert_eq!(outcome.cleanup(), ReconciliationCleanupDecision::ClearPrior);
+
+        assert!(matches!(
+            session.outcome(&outcome),
+            Err(GatewayReconciliationOutcomeError::Rejected(_))
+        ));
     }
 
     #[test]
