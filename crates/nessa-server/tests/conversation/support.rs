@@ -172,7 +172,9 @@ impl ConversationRepository for MemoryRepository {
 /// else; what the promise means is tested against the store that keeps it
 /// (`store.rs`, `listing.rs`). Summaries are read through
 /// [`MemorySummaries`], so its failures and gate apply here too: one that
-/// cannot be read is counted.
+/// cannot be read is counted — under either archived flag, and past the
+/// limit too, where the store counts only rows it meets. A service wired to
+/// this is judged on its own behaviour, never on what `complete` says.
 pub(crate) struct MemoryListing {
     pub(crate) repository: Arc<MemoryRepository>,
     pub(crate) summaries: Arc<MemorySummaries>,

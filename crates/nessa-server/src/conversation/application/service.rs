@@ -1464,9 +1464,8 @@ impl ConversationService {
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
-        // Whose they are, and that none is deleted, is the listing's answer:
-        // it compares ownership exactly as `Conversation::allows` does
-        // (`the_list_is_the_owners_undeleted_said_in_conversations_newest_first`).
+        // Whose they are, and that none is deleted, is the listing's answer,
+        // which asks the domain (`ConversationListing::list`).
         let owned: Vec<ListedConversation> = listed
             .conversations
             .into_iter()
@@ -1991,9 +1990,9 @@ impl ConversationService {
     /// returned with its last typed failure, and logged, and is tried again
     /// at the next start or by a repeated delete. Stops early, returning what
     /// it has, once the service is retired. Tombstones that could not be read
-    /// are counted too: a deletion nothing here can see, let alone finish
-    /// (`an_unfinished_deletion_that_cannot_be_named_is_counted`).
-    /// Only unfinished deletions are read, never every conversation.
+    /// are counted too: a deletion nothing here can see, let alone finish.
+    /// Only unfinished deletions are read, not every conversation
+    /// (`unfinished_deletions_are_read_by_their_index_and_an_unnamed_one_is_counted`).
     ///
     /// # Errors
     /// The repository's error when the records cannot be enumerated at all.

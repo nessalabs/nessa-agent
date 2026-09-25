@@ -500,21 +500,17 @@ submission can be retried with the same immutable input and identities; the SDK
 recovers its saved receipt instead of running it twice. Changed input is a new
 submission, not an edit to a running operation. Pending input can be removed.
 
-The gateway stores conversation ownership separately from SDK JSONL sessions.
-A conversation's owner record is written and synced under a private temporary
-name and only then published under its conversation ID, and publication never
-replaces a name another owner already holds. An interrupted creation therefore
-leaves either no record, so the same ID can still be created, or a complete
-record whose original creator owns it. On Unix an interruption between
-publishing the record and releasing the writer's own name leaves two links to
-that complete record, which fails private-file verification until the next
-gateway start releases the leftover temporary. A genuinely corrupt owner record
-still fails closed and is never repaired; recovering that conversation ID
-requires archiving the offending file outside the running gateway.
-
-Beside the owner records the gateway keeps `summaries/<id>.json` (title, last line
-said, time, archived) for `conversation.list`, `metadata/deleted/<id>.json` for a
-deleted conversation, and `audit/deletion/` for who deleted it. A deleted
+The gateway stores conversation ownership separately from SDK JSONL sessions, in
+`conversations/metadata.sqlite3`: a private SQLite file whose three tables hold
+each conversation's owner record, its summary (title, last line said, time,
+archived) for `conversation.list`, and a deleted conversation's tombstone
+([ADR 196](../adr/todo/196-conversation-metadata-database.md)). An owner record
+is created in one transaction that first looks for the ID, so an interrupted
+creation leaves either no record, and the same ID can still be created, or a
+complete record whose original creator owns it; creating it again never changes
+its owner. A row that cannot be read back still fails closed and is never
+repaired; recovering that conversation means repairing the row with the gateway
+stopped. Who deleted a conversation is kept apart, in `audit/deletion/`. A deleted
 conversation keeps its owner record and its tombstone for good: its identity is
 never reused, and every command its owner sends on it — `create` included —
 answers `conversation_deleted`, except deleting it again (see ADR 182);

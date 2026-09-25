@@ -144,6 +144,10 @@ fn every_connection_enforces_keys_and_overwrites_what_it_deletes() {
         .pragma_query_value(None, "synchronous", |row| row.get(0))
         .unwrap();
     assert_eq!(synchronous, 2);
+    let fullfsync: i64 = connection
+        .pragma_query_value(None, "fullfsync", |row| row.get(0))
+        .unwrap();
+    assert_eq!(fullfsync, 1);
     // What was deleted is not left readable in the file.
     let marker = "a-summary-somebody-deleted";
     connection
@@ -157,6 +161,23 @@ fn every_connection_enforces_keys_and_overwrites_what_it_deletes() {
     assert!(!bytes
         .windows(marker.len())
         .any(|window| window == marker.as_bytes()));
+}
+
+#[test]
+fn a_file_left_in_write_ahead_mode_is_opened_in_the_rollback_journal() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    drop(open(&path, &schema()).unwrap());
+    let other = rusqlite_connection(&path);
+    let _: String = other
+        .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
+        .unwrap();
+    drop(other);
+    let connection = open(&path, &schema()).unwrap();
+    let journal: String = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "delete");
 }
 
 #[cfg(unix)]

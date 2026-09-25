@@ -66,6 +66,9 @@ const TEMPORARY = /^\.nessa-[0-9a-f]{32}\.tmp$/
 
 const DATABASE = "metadata.sqlite3"
 
+/** The longest record, tombstone or summary file the server read. */
+const MAX_BYTES = 4096
+
 /** Fields each file holds, exactly: the build before this one refused any other. */
 const RECORD = {
   id: "string",
@@ -95,6 +98,13 @@ const SUMMARY = {
   archived: "boolean",
 }
 
+/** A string holding half a character, which the server's parser refused. */
+function malformed(value) {
+  if (typeof value === "string") return !value.isWellFormed()
+  if (fits(value, "object")) return Object.values(value).some(malformed)
+  return false
+}
+
 function fits(value, type) {
   if (type.endsWith("?")) return value === null || fits(value, type.slice(0, -1))
   if (type === "integer") return Number.isSafeInteger(value) && value >= 0
@@ -113,7 +123,15 @@ function fits(value, type) {
  *
  * @returns {{row: object} | {why: string}}
  */
-export function parse(text, fields, id) {
+export function parse(bytes, fields, id) {
+  // What the server read, it read whole and at most this long, as UTF-8.
+  if (bytes.length > MAX_BYTES) return { why: `it is longer than ${MAX_BYTES} bytes` }
+  let text
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    return { why: "it is not UTF-8" }
+  }
   let value
   try {
     value = JSON.parse(text)
@@ -121,6 +139,13 @@ export function parse(text, fields, id) {
     return { why: `it is not JSON (${error.message})` }
   }
   if (!fits(value, "object")) return { why: "it is not a JSON object" }
+  // Written by the server (compact) or by the retrofit (two-space, a final
+  // newline), and by nothing else. Any other spelling — a key twice, a number
+  // as `1.0e2`, an escape standing for half a character — is one the
+  // server's parser refused, and taking it would move a meaning it never had.
+  const spelled = [JSON.stringify(value), `${JSON.stringify(value, null, 2)}\n`]
+  if (!spelled.includes(text) || Object.values(value).some(malformed))
+    return { why: "it is not spelled as this server or the retrofit wrote it" }
   if (fields === RECORD && value.agent === undefined)
     return {
       why: "it names no agent; run node scripts/retrofit-conversation-agents.mjs first",
@@ -171,6 +196,12 @@ export function read(conversations, held = new Set()) {
   ]
   for (const [directory, fields, rows] of directories) {
     if (!existsSync(directory)) continue
+    // Through a link, the files removed at the end would be another
+    // directory's.
+    if (!lstatSync(directory).isDirectory()) {
+      found.refused.push({ path: directory, why: "it is not a directory of its own" })
+      continue
+    }
     for (const name of readdirSync(directory).sort()) {
       const path = join(directory, name)
       if (directory === metadata && name === "deleted") continue
@@ -180,12 +211,15 @@ export function read(conversations, held = new Set()) {
       }
       const stat = lstatSync(path)
       if (!stat.isFile() || !name.endsWith(".json")) {
-        found.refused.push({ path, why: "it is not a conversation metadata file" })
+        found.refused.push({
+          path,
+          why: "it is not conversation metadata; move it out, so this directory can be removed",
+        })
         continue
       }
       let text
       try {
-        text = readFileSync(path, "utf8")
+        text = readFileSync(path)
       } catch (error) {
         found.refused.push({ path, why: `it could not be read (${error.message})` })
         continue
@@ -295,7 +329,7 @@ async function database(conversations) {
   const { DatabaseSync } = await import("node:sqlite")
   const path = join(conversations, DATABASE)
   const definition = readFileSync(SCHEMA, "utf8")
-  const version = Number(/^PRAGMA user_version = (\d+);$/m.exec(definition)?.[1])
+  const version = statedVersion(definition)
   let created = false
   if (!existsSync(path)) {
     // Private before SQLite opens it, as the server creates it.
@@ -306,19 +340,39 @@ async function database(conversations) {
   }
   const db = new DatabaseSync(path)
   db.exec(
-    "PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = FULL; PRAGMA journal_mode = DELETE;",
+    "PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = FULL; PRAGMA fullfsync = ON; PRAGMA journal_mode = DELETE;",
   )
   const found = db.prepare("PRAGMA user_version").get().user_version
   if (created || found === 0) {
     const tables = db.prepare("SELECT count(*) AS n FROM sqlite_schema").get().n
     if (tables !== 0) throw new Error(`${path} holds tables with no version`)
-    db.exec(`BEGIN; ${definition} COMMIT;`)
+    db.exec(`BEGIN; ${definition}`)
+    const applied = db.prepare("PRAGMA user_version").get().user_version
+    if (applied !== version) {
+      db.exec("ROLLBACK")
+      throw new Error(`${SCHEMA} states version ${version} and sets ${applied}`)
+    }
+    db.exec("COMMIT")
   } else if (found !== version) {
     throw new Error(
       `${path} is at schema version ${found}, and this move writes ${version}`,
     )
   }
   return db
+}
+
+/**
+ * The one version a definition states, as the server's `Schema::new` reads
+ * it: exactly one `PRAGMA user_version = N;` line, N above 0.
+ */
+export function statedVersion(definition) {
+  const versions = definition
+    .split("\n")
+    .map((line) => /^PRAGMA user_version = (\d+);$/.exec(line.trim()))
+    .filter(Boolean)
+  const version = versions.length === 1 ? Number(versions[0][1]) : 0
+  if (!(version > 0)) throw new Error(`${SCHEMA} does not state one version above 0`)
+  return version
 }
 
 /** Insert each row the database does not hold; name each one it holds differently (M2). */
@@ -355,12 +409,14 @@ function syncDirectory(directory) {
   }
 }
 
-/** The records a database already there holds, read without writing to it. */
+/** The records a database already there holds. */
 async function held(conversations) {
   const path = join(conversations, DATABASE)
   if (!existsSync(path)) return new Set()
   const { DatabaseSync } = await import("node:sqlite")
-  const db = new DatabaseSync(path, { readOnly: true })
+  // Read and write, never read only: a run killed mid-commit leaves a journal
+  // only a writer can roll back, and until it is the file cannot be read.
+  const db = new DatabaseSync(path)
   try {
     const table = db
       .prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name = 'conversations'")

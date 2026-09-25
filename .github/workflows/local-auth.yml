@@ -288,6 +288,10 @@ jobs:
       # its tests; the existing package group below retains its measured order.
       - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
       - run: cargo test -p nessa-gateway-endpoint
+      # The database opener's privacy checks cross the same platform-specific
+      # adapters, so each OS gives its own answer to them too.
+      - run: cargo clippy -p nessa-local-database --all-targets -- -D warnings
+      - run: cargo test -p nessa-local-database
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs

@@ -9,7 +9,9 @@ use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId, ConversationSummary},
     conversation::{
-        application::{ConversationRepository, ConversationSummaries},
+        application::{
+            ConversationListing, ConversationRepository, ConversationSummaries, ListedConversations,
+        },
         infrastructure::LocalConversationStore,
     },
     conversation_test_support::{
@@ -1111,4 +1113,71 @@ async fn the_archive_filter_applies_before_the_bound() {
             .collect::<Vec<_>>()
     );
     assert!(listed.conversations.iter().all(|entry| entry.archived));
+}
+
+#[tokio::test]
+async fn a_list_the_store_cannot_answer_fails_rather_than_showing_nothing() {
+    let listing = stored(ConversationLimits::default());
+    let mine = id();
+    stored_put(&listing, &mine, "org", "person", 1).await;
+    stored_say(&listing, &mine, "mine", 2).await;
+    Connection::open(&listing.path)
+        .unwrap()
+        .execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE summaries;")
+        .unwrap();
+    for archived in [false, true] {
+        assert!(matches!(
+            listing.service.list(owner(), archived).await,
+            Err(ConversationError::Metadata)
+        ));
+    }
+}
+
+/// A listing that answers nothing and remembers how many rows it was asked for.
+#[derive(Default)]
+struct AskedLimit(std::sync::Mutex<Vec<usize>>);
+impl ConversationListing for AskedLimit {
+    fn list(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: bool,
+        limit: usize,
+    ) -> crate::conversation::application::ConversationFuture<'_, ListedConversations> {
+        self.0.lock().unwrap().push(limit);
+        Box::pin(async { Ok(ListedConversations::default()) })
+    }
+}
+
+#[tokio::test]
+async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
+    let asked = Arc::new(AskedLimit::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: Arc::new(CountingStorage::default()),
+            metadata: Arc::new(MemoryRepository::default()),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: asked.clone(),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    for archived in [false, true] {
+        assert!(service.list(owner(), archived).await.unwrap().complete);
+    }
+    assert_eq!(
+        *asked.0.lock().unwrap(),
+        [MAX_LISTED_CONVERSATIONS + 1, MAX_LISTED_CONVERSATIONS + 1]
+    );
 }

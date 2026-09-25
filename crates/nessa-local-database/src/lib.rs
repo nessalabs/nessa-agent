@@ -17,7 +17,7 @@
 //! it (`the_file_is_created_private_before_sqlite_opens_it`).
 //!
 //! Every connection has foreign keys enforced, a rollback journal synced in
-//! full, and `secure_delete`, so a deleted row's bytes are overwritten rather
+//! full (through the drive's cache on macOS), and `secure_delete`, so a deleted row's bytes are overwritten rather
 //! than left in free pages (`every_connection_enforces_keys_and_overwrites_what_it_deletes`).
 //! A rollback journal rather than a write-ahead log for the same reason: a log
 //! keeps old page images until a checkpoint, and a context that erases data
@@ -34,7 +34,7 @@
 //! migrations: a schema change bumps the version and ships its own move,
 //! decided in its own record, because a reader for an older shape is what
 //! "One current contract" forbids.
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fmt, io, path::Path};
 
 pub use rusqlite;
@@ -84,9 +84,6 @@ pub enum OpenError {
     /// A definition that does not state one version above 0, which could not
     /// be told from an empty file.
     UnversionedSchema,
-    /// SQLite kept a journal mode other than the rollback journal, which it
-    /// does for a file another connection holds in write-ahead mode.
-    Journal(String),
 }
 impl fmt::Display for OpenError {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -101,7 +98,6 @@ impl fmt::Display for OpenError {
             Self::UnversionedSchema => output.write_str(
                 "a schema must state one version above 0, as `PRAGMA user_version = N;`",
             ),
-            Self::Journal(mode) => write!(output, "database kept journal mode {mode}"),
         }
     }
 }
@@ -133,17 +129,22 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "secure_delete", true)?;
     connection.pragma_update(None, "synchronous", "FULL")?;
-    let journal: String =
-        connection.pragma_update_and_check(None, "journal_mode", "DELETE", |row| row.get(0))?;
-    if !journal.eq_ignore_ascii_case("delete") {
-        return Err(OpenError::Journal(journal));
-    }
-    let found: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    // On macOS a plain fsync leaves the write in the drive's cache; the
+    // private files these replace were flushed past it, and so is this.
+    connection.pragma_update(None, "fullfsync", true)?;
+    // A file left in write-ahead mode is brought back to the rollback
+    // journal (`a_file_left_in_write_ahead_mode_is_opened_in_the_rollback_journal`).
+    connection.pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))?;
+    // Read and, when empty, given its schema under one write lock, so two
+    // openers of an empty file cannot both set about creating it.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let found: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if found == schema.version {
+        drop(transaction);
         return Ok(connection);
     }
     let tables: u32 =
-        connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
+        transaction.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
     if found != 0 || tables != 0 {
         return Err(OpenError::Version {
             found,
@@ -152,7 +153,6 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     }
     // The definition sets its own version, inside the same transaction, and
     // what it set is what it said it would.
-    let transaction = connection.transaction()?;
     transaction.execute_batch(schema.definition)?;
     let applied: u32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if applied != schema.version {

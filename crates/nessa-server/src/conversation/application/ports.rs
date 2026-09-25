@@ -177,6 +177,7 @@ pub trait ConversationRepository: Send + Sync {
 /// What [`ConversationRepository::unfinished_deletions`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnfinishedDeletions {
+    /// Each conversation whose tombstone says its erasure has not finished.
     pub conversations: Vec<ConversationId>,
     /// Tombstones of unfinished deletions whose conversation could not be
     /// named, so are not among [`Self::conversations`].
@@ -195,11 +196,13 @@ pub trait ConversationListing: Send + Sync {
     /// and have a summary whose archived flag is `archived`: most recently
     /// updated first, then by identity, at most `limit` of them.
     ///
-    /// Ownership is the stored owner compared exactly, as
-    /// [`Conversation::allows`] compares it. A row this owner holds that
-    /// cannot be read back is left out and counted, since it may belong in
-    /// the list; one that is not theirs is never read. Only being unable to
-    /// ask at all is an error.
+    /// Whose a conversation is, is [`Conversation::allows`]'s answer, and a
+    /// store gives the same one while reading only this owner's rows
+    /// (`the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`,
+    /// `the_list_query_reads_only_its_owners_rows_however_many_others_there_are`).
+    /// A row of this owner's that cannot be read back is left out and counted,
+    /// since it may belong in the list. Only being unable to ask at all is an
+    /// error.
     fn list(
         &self,
         organization: &OrganizationId,
@@ -222,7 +225,9 @@ pub struct ListedConversations {
 /// One conversation in a list, with what the list shows about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedConversation {
+    /// The conversation, as its ownership record reads.
     pub conversation: Conversation,
+    /// Its title, last line said, time and archived flag.
     pub summary: ConversationSummary,
 }
 

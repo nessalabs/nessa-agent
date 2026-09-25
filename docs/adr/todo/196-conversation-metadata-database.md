@@ -76,11 +76,14 @@ The one store implements three application ports:
   says how many of the rows it met could not be read.
 
 The service asks for `MAX_LISTED_CONVERSATIONS + 1` rows and reads live state
-only for the rows it keeps. Whose a row is, is the query's answer and nobody
-else's: filtering the rows again in the service would be a second owner of the
-same rule (gate 13). The query compares ownership exactly as
-`Conversation::allows` does, and a test holds the two to the same answer,
-including an owner who differs only in case. The work is one indexed range over the caller's own
+only for the rows it keeps. Whose a row is has two expressions: the domain's
+`Conversation::allows`, and the query's indexed `=`, which is what keeps the
+work to the caller's own rows and cannot ask the domain row by row without
+reading everybody's. Gate 13 allows that only with the two held to one answer,
+so a test runs owner text chosen to separate them — case, Unicode
+normalization, lookalike characters, another organization — through both and
+requires the same set (`the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`).
+Changing either comparison fails it. The work is one indexed range over the caller's own
 records plus a lookup of each one's summary by key, sorted with a limit, so at
 most 501 rows are held.
 
@@ -102,16 +105,17 @@ it inside the `limit + 1` window.
 | L2 | Caller's, summary has the other archived flag | no | no |
 | L3 | Caller's, no summary (nothing was said) | no | no |
 | L4 | Caller's, has a tombstone (readable or not) | no | no |
-| L5 | Caller's, met, but the record or summary row fails domain validation | no | yes |
+| L5 | Caller's, met, but the record or summary row fails domain validation or holds text that is not UTF-8 | no | yes |
 | L6 | Somebody else's (a different organization, or an owner that differs by any byte, including case) | no | no |
-| L7 | More than `limit` rows qualify | the newest 500 | yes |
+| L7 | More than `limit` rows qualify | the newest 500 readable rows among the 501 met; fewer when some of those are L5 | yes |
 | L8 | Exactly 500 qualify | all 500 | no |
-| L9 | The database cannot be opened or queried | the list fails (`metadata_unavailable`) | — |
+| L9 | The database cannot be opened or queried | the list fails (`conversation_storage_unavailable`) | — |
 
 L5 changes what 182 said. There, a conversation whose summary could not be read
-was listed bare, in the default list. With STRICT tables, a summary row can
-only be unreadable by failing a domain bound, which takes editing the database
-by hand. Its archived flag is still a readable column, so the query files it
+was listed bare, in the default list. Here a summary row is unreadable only
+after a hand edit: one that breaks a domain bound, or leaves text that is not
+UTF-8, which `STRICT` does not refuse. One such row costs its list that row,
+never the whole list. Its archived flag is still a readable column, so the query files it
 under that flag. Showing it bare in the other list would mean fetching both
 flags and re-sorting in the service. That precision was not asked for (gate 16),
 so the row is left out and the list says it is incomplete.
@@ -185,11 +189,23 @@ gateway-wide. Pagination was asked about and deferred; see Consequences.
 - A corrupt database file fails every conversation metadata read, where a
   corrupt JSON file cost one conversation. SQLite's own integrity makes that
   rarer than a damaged file was, but it is louder when it happens: the log names
-  the file, and `metadata_unavailable` says so to the caller.
+  the file, and `conversation_storage_unavailable` says so to the caller.
 - Every schema change ships a version bump and its own move. A gateway run
   against a database of another version refuses to open it rather than guess.
 - Namespaces that already have conversations must run the move once, with the
   gateway stopped, before this build starts them.
+- One connection serves every caller, one call at a time, as the files' write
+  lock did for writes; reads now wait too. An owner with a very large history
+  makes every other caller's metadata call wait for their list. The store's
+  own history bounds that, not the gateway's, and it is the first thing to
+  watch: more connections are the remedy if it shows.
+- The move script restates what it writes — the columns, the provider-session
+  and erasure spellings, the pragmas, and the schema version's line — rather
+  than calling the server. It is a tool for this one change, deleted with the
+  refusal, so the duplicate is bounded by that; a test runs the script and
+  reads its database back through `LocalConversationStore`
+  (`a_database_the_move_writes_is_one_this_store_reads`), so a change on
+  either side fails it.
 - What to watch: the `limit + 1` query's cost for an owner with a very large
   history, which is the owner's own and linear in it. A covering index on
   `summaries` would be the next step, and page tokens after that.

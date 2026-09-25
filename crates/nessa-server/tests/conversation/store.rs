@@ -637,6 +637,216 @@ async fn the_list_is_the_owners_undeleted_said_in_conversations_newest_first() {
     );
 }
 
+#[tokio::test]
+async fn the_list_asks_whose_a_conversation_is_as_the_domain_answers_it() {
+    let Opened {
+        _directory, store, ..
+    } = opened();
+    // Owner text chosen to separate an exact comparison from any looser one:
+    // case, composed and decomposed accents, an invisible character, a
+    // lookalike letter from another script, and another organization.
+    let organizations = ["org", "Org"];
+    let owners = [
+        "alice",
+        "Alice",
+        "ALICE",
+        "\u{e9}",
+        "e\u{301}",
+        "a\u{200b}lice",
+        "\u{430}lice",
+    ];
+    let mut all = Vec::new();
+    for organization in organizations {
+        for owner in owners {
+            let id = new_id();
+            store
+                .create(owned_by(&id, organization, owner, 1))
+                .await
+                .unwrap();
+            ConversationSummaries::record(&store, &id, said("hello", 5))
+                .await
+                .unwrap();
+            all.push(
+                ConversationRepository::load(&store, &id)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+    }
+    for organization in organizations {
+        let organization = OrganizationId::new(organization).unwrap();
+        for owner in owners {
+            let owner = PrincipalId::new(owner).unwrap();
+            let listed = ConversationListing::list(&store, &organization, &owner, false, 100)
+                .await
+                .unwrap();
+            let mut listed: Vec<String> = listed
+                .conversations
+                .iter()
+                .map(|listed| listed.conversation.id().to_string())
+                .collect();
+            let mut allowed: Vec<String> = all
+                .iter()
+                .filter(|conversation| conversation.allows(&organization, &owner))
+                .map(|conversation| conversation.id().to_string())
+                .collect();
+            listed.sort();
+            allowed.sort();
+            assert_eq!(listed, allowed, "{organization:?} {owner:?}");
+            assert_eq!(listed.len(), 1, "{organization:?} {owner:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_tombstone_that_cannot_be_read_still_keeps_its_conversation_out_of_every_list() {
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    ConversationSummaries::record(&store, &id, said("hello", 5))
+        .await
+        .unwrap();
+    store
+        .record_deletion(&id, deletion("delete"))
+        .await
+        .unwrap();
+    raw(&path)
+        .execute(
+            "UPDATE deletions SET initiator = 'mallory' WHERE conversation_id = ?1",
+            [id.to_string()],
+        )
+        .unwrap();
+    // Deleted whatever its tombstone says: in neither list, and neither list
+    // is short of anything the caller could be shown.
+    for archived in [false, true] {
+        assert_eq!(listed(&store, &alice(), archived, 10).await, (vec![], 0));
+    }
+}
+
+#[tokio::test]
+async fn a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone() {
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let (kept, damaged) = (new_id(), new_id());
+    for (id, at) in [(&kept, 5), (&damaged, 6)] {
+        store.create(owned(id)).await.unwrap();
+        ConversationSummaries::record(&store, id, said("hello", at))
+            .await
+            .unwrap();
+    }
+    // `STRICT` takes any bytes as text; only reading them back finds out.
+    let raw = raw(&path);
+    raw.execute(
+        "UPDATE summaries SET title = CAST(x'ff' AS TEXT) WHERE conversation_id = ?1",
+        [damaged.to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        listed(&store, &alice(), false, 10).await,
+        (vec![kept.clone()], 1)
+    );
+    // And a tombstone whose conversation is named in such bytes costs the
+    // startup finish that deletion alone.
+    let unfinished = new_id();
+    store.create(owned(&unfinished)).await.unwrap();
+    store
+        .record_deletion(&unfinished, deletion("delete"))
+        .await
+        .unwrap();
+    raw.pragma_update(None, "foreign_keys", false).unwrap();
+    raw.execute(
+        "INSERT INTO deletions VALUES (CAST(x'ff' AS TEXT), 'org', 'alice', 'panel', 'delete', 50, 'unread', NULL, NULL, 0)",
+        [],
+    )
+    .unwrap();
+    let found = store.unfinished_deletions().await.unwrap();
+    assert_eq!(
+        (found.conversations, found.unreadable),
+        (vec![unfinished], 1)
+    );
+}
+
+#[tokio::test]
+async fn a_database_the_move_writes_is_one_this_store_reads() {
+    // Files as the build before this one wrote them, moved by the script the
+    // gateway's refusal names, then read back here: the script's spelling of
+    // every column and the schema's version are held to the store's.
+    let directory = tempfile::tempdir().unwrap();
+    let conversations = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&conversations).unwrap();
+    let (kept, deleted) = (new_id(), new_id());
+    let write = |path: PathBuf, text: String| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    for id in [&kept, &deleted] {
+        write(
+            conversations.join("metadata").join(format!("{id}.json")),
+            format!(
+                r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":1,"agent":"claude"}}"#
+            ),
+        );
+    }
+    write(
+        conversations
+            .join("metadata")
+            .join("deleted")
+            .join(format!("{deleted}.json")),
+        format!(
+            r#"{{"id":"{deleted}","organization":"org","initiator":"alice","surface":"panel","request":"delete","requested_at_ms":50,"provider_session":{{"state":"recorded","id":"provider-session"}},"provider_erasure":"not_listed","erased":false}}"#
+        ),
+    );
+    write(
+        conversations.join("summaries").join(format!("{kept}.json")),
+        format!(
+            r#"{{"id":"{kept}","title":"Plan the trip","preview":"Plan the trip","updated_at_ms":9,"archived":true}}"#
+        ),
+    );
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/move-conversation-metadata.mjs");
+    let moved = std::process::Command::new("node")
+        .arg(&script)
+        .arg(&conversations)
+        .output()
+        .expect("node runs the move, as the gateway's refusal tells an operator to");
+    assert!(
+        moved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&moved.stderr)
+    );
+    let store = LocalConversationStore::open(&conversations.join("metadata.sqlite3")).unwrap();
+    let conversation = ConversationRepository::load(&store, &kept)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.agent(), Some(AgentId::Claude));
+    assert_eq!(
+        ConversationSummaries::load(&store, &kept).await.unwrap(),
+        Some(said("Plan the trip", 9).after_archiving(true))
+    );
+    let tombstone = ConversationRepository::load(&store, &deleted)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tombstone.deletion(),
+        Some(
+            &deletion("delete")
+                .after_reading(Some(ExecutionSessionId::new("provider-session").unwrap()))
+                .after_provider_erasure(ProviderSessionErasure::NotListed)
+        )
+    );
+    assert_eq!(listed(&store, &alice(), true, 10).await, (vec![kept], 0));
+}
+
 /// Rows of `count` conversations owned by `owner`, each with a summary,
 /// written in one transaction.
 fn many(path: &Path, owner: &str, count: usize) {

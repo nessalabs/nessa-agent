@@ -32,7 +32,8 @@ const DEFINITION: &str = include_str!("schema.sql");
 /// each summary and tombstone is looked up by key, and the sort keeps only the
 /// limit, so what it reads is the owner's own conversations and nobody else's
 /// (`the_list_query_reads_only_its_owners_rows_however_many_others_there_are`).
-/// `=` compares text byte for byte, as `Conversation::allows` does.
+/// A row with a tombstone is left out here because the tombstone is what
+/// `Conversation::deletion` is read from.
 pub(crate) const LIST: &str = "
     SELECT c.id, c.organization, c.owner, c.creator_surface, c.creation_action,
            c.creation_requested_at_ms, c.agent,
@@ -87,12 +88,41 @@ impl LocalConversationStore {
         let connection = self.connection.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let mut connection = connection.lock().map_err(|_| ConversationError::Metadata)?;
+                // A call that panicked left no transaction open — rusqlite
+                // rolls one back as it unwinds — so the connection is still
+                // fit for the next caller.
+                let mut connection = connection
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 work(&mut connection)
             })
             .await
             .map_err(|_| ConversationError::Metadata)?
         })
+    }
+}
+
+/// Whether `error` is one row's value that cannot be taken as the type its
+/// column holds — text that is not UTF-8, say, which `STRICT` does not refuse —
+/// rather than the database failing to answer. The first is that row's damage,
+/// and costs a list or a startup finish that row alone
+/// (`a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone`).
+fn damaged(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::FromSqlConversionFailure(..)
+            | rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::Utf8Error(..)
+    )
+}
+
+/// A row's cells, `None` when they are [`damaged`].
+fn cells<T>(stored: rusqlite::Result<T>) -> Result<Option<T>, ConversationError> {
+    match stored {
+        Ok(stored) => Ok(Some(stored)),
+        Err(error) if damaged(&error) => Ok(None),
+        Err(error) => Err(failed(error)),
     }
 }
 
@@ -447,7 +477,8 @@ impl ConversationRepository for LocalConversationStore {
             // Checked before it is written: a tombstone that could not be
             // read back beside its record is never stored.
             let deleted = conversation.deleted(deletion).map_err(contradicted)?;
-            write_deletion(&transaction, &id, deleted.deletion().expect("just deleted"))?;
+            let tombstone = deleted.deletion().ok_or(ConversationError::Metadata)?;
+            write_deletion(&transaction, &id, tombstone)?;
             transaction.commit().map_err(failed)?;
             Ok(deleted)
         })
@@ -458,7 +489,7 @@ impl ConversationRepository for LocalConversationStore {
             let mut rows = statement.query([]).map_err(failed)?;
             let mut found = UnfinishedDeletions::default();
             while let Some(row) = rows.next().map_err(failed)? {
-                let name: String = row.get(0).map_err(failed)?;
+                let name = cells(row.get::<_, String>(0))?.unwrap_or_default();
                 match ConversationId::new(&name).ok() {
                     Some(id) => found.conversations.push(id),
                     None => {
@@ -551,25 +582,36 @@ impl ConversationListing for LocalConversationStore {
         archived: bool,
         limit: usize,
     ) -> ConversationFuture<'_, ListedConversations> {
-        let organization = organization.as_str().to_owned();
-        let owner = owner.as_str().to_owned();
+        let (organization, owner) = (organization.clone(), owner.clone());
+        // `=` on text is byte for byte, which is `Conversation::allows`'s
+        // comparison; the two are held to one answer by
+        // `the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`.
         self.run(move |connection| {
             let limit = i64::try_from(limit).map_err(|_| ConversationError::InvalidInput)?;
             let mut statement = connection.prepare(LIST).map_err(failed)?;
             let mut rows = statement
-                .query(params![organization, owner, archived, limit])
+                .query(params![
+                    organization.as_str(),
+                    owner.as_str(),
+                    archived,
+                    limit
+                ])
                 .map_err(failed)?;
             let mut listed = ListedConversations::default();
             while let Some(row) = rows.next().map_err(failed)? {
-                let conversation = StoredConversation::from_row(row).map_err(failed)?;
-                let name = conversation.id.clone();
-                let summary = StoredSummary {
-                    title: row.get(7).map_err(failed)?,
-                    preview: row.get(8).map_err(failed)?,
-                    updated_at_ms: row.get(9).map_err(failed)?,
-                    archived: row.get(10).map_err(failed)?,
-                };
-                match (conversation.read(), summary.read()) {
+                let conversation = StoredConversation::from_row(row);
+                let summary = (|| {
+                    Ok(StoredSummary {
+                        title: row.get(7)?,
+                        preview: row.get(8)?,
+                        updated_at_ms: row.get(9)?,
+                        archived: row.get(10)?,
+                    })
+                })();
+                let name = row.get::<_, String>(0).unwrap_or_default();
+                let conversation = cells(conversation)?.and_then(StoredConversation::read);
+                let summary = cells(summary)?.and_then(StoredSummary::read);
+                match (conversation, summary) {
                     (Some(conversation), Some(summary)) => {
                         listed.conversations.push(ListedConversation {
                             conversation,
@@ -578,9 +620,14 @@ impl ConversationListing for LocalConversationStore {
                     }
                     // Theirs, and it may belong in this list: left out, and
                     // counted, so the list does not claim to be whole.
-                    _ => {
+                    (conversation, _) => {
                         listed.unreadable += 1;
-                        unreadable("conversations", &name);
+                        let table = if conversation.is_none() {
+                            "conversations"
+                        } else {
+                            "summaries"
+                        };
+                        unreadable(table, &name);
                     }
                 }
             }

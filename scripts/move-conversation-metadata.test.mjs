@@ -1,11 +1,14 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
@@ -55,7 +58,7 @@ function conversationsOf(files) {
   for (const [path, body] of Object.entries(files))
     writeFileSync(
       join(root, path),
-      typeof body === "string" ? body : JSON.stringify(body),
+      typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
       {
         mode: 0o600,
       },
@@ -205,7 +208,7 @@ test("M3, M4: a file that cannot be moved is named, and nothing is committed", a
       record(two, { creation_requested_at_ms: -1 }),
       /creation_requested_at_ms/,
     ],
-    ["metadata/notes.txt", "hello", /not a conversation metadata file/],
+    ["metadata/notes.txt", "hello", /not conversation metadata; move it out/],
     [
       `metadata/deleted/${one}.json`,
       tombstone(one, { provider_session: { state: "absent", id: "x" } }),
@@ -214,6 +217,32 @@ test("M3, M4: a file that cannot be moved is named, and nothing is committed", a
     [`metadata/deleted/${two}.json`, tombstone(two), /has no record/],
     [`summaries/${two}.json`, summary(two), /has no record/],
     [`summaries/${one}.json`, summary(one, { archived: "yes" }), /archived/],
+    // Spellings the server's own parser refused, which would move a meaning
+    // it never had.
+    [
+      `metadata/${two}.json`,
+      JSON.stringify(record(two)).replace(
+        `"owner":"alice"`,
+        `"owner":"alice","owner":"bob"`,
+      ),
+      /not spelled/,
+    ],
+    [
+      `metadata/${two}.json`,
+      JSON.stringify(record(two)).replace(`:123`, `:1.23e2`),
+      /not spelled/,
+    ],
+    [
+      `summaries/${one}.json`,
+      JSON.stringify(summary(one)).replace("Plan", "\\ud800"),
+      /not spelled/,
+    ],
+    [`summaries/${one}.json`, Buffer.from([0x7b, 0xff, 0x7d]), /not UTF-8/],
+    [
+      `metadata/${two}.json`,
+      JSON.stringify(record(two)) + " ".repeat(4096),
+      /longer than 4096/,
+    ],
   ]) {
     const root = conversationsOf({ [`metadata/${one}.json`]: record(one), [path]: body })
     const result = await move(root)
@@ -239,4 +268,83 @@ test("a dry run reads and reports, and writes nothing", async () => {
   })
   assert.ok(!existsSync(join(root, "metadata.sqlite3")))
   assert.ok(existsSync(join(root, "metadata", `${one}.json`)))
+})
+
+test("a record as the retrofit wrote it moves like one the server wrote", async () => {
+  const root = conversationsOf({
+    [`metadata/${one}.json`]: `${JSON.stringify(record(one), null, 2)}\n`,
+  })
+  assert.equal((await move(root)).state, "moved")
+})
+
+test("a directory reached through a link is refused before anything is moved", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  const elsewhere = join(tmpdir(), `nessa-move-elsewhere-${randomUUID()}`)
+  mkdirSync(elsewhere, { mode: 0o700 })
+  rmSync(join(root, "summaries"), { recursive: true })
+  symlinkSync(elsewhere, join(root, "summaries"))
+  const result = await move(root)
+  assert.equal(result.state, "refused")
+  assert.match(result.refused[0].why, /not a directory of its own/)
+  assert.ok(!existsSync(join(root, "metadata.sqlite3")))
+})
+
+test("a database at another version is refused, and the files stay", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  const db = new DatabaseSync(join(root, "metadata.sqlite3"))
+  db.exec("CREATE TABLE other (id TEXT); PRAGMA user_version = 99;")
+  db.close()
+  await assert.rejects(move(root), /schema version 99/)
+  assert.ok(existsSync(join(root, "metadata", `${one}.json`)))
+})
+
+test("M2: a tombstone or summary held differently stops the run too", async () => {
+  for (const [path, changed] of [
+    [`metadata/deleted/${one}.json`, tombstone(one, { request: "another" })],
+    [`summaries/${one}.json`, summary(one, { title: "Another" })],
+  ]) {
+    const root = conversationsOf({
+      [`metadata/${one}.json`]: record(one),
+      [`metadata/deleted/${one}.json`]: tombstone(one),
+      [`summaries/${one}.json`]: summary(one),
+    })
+    await move(root)
+    mkdirSync(join(root, "metadata", "deleted"), { recursive: true, mode: 0o700 })
+    mkdirSync(join(root, "summaries"), { mode: 0o700 })
+    writeFileSync(join(root, path), JSON.stringify(changed), { mode: 0o600 })
+    const result = await move(root)
+    assert.equal(result.state, "refused", path)
+    assert.match(result.refused[0].why, /already holds/, path)
+  }
+})
+
+test("M5: a run killed in the middle of its commit is finished by the next", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  // A database the schema was committed to, then a writer killed with its
+  // pages spilled and its journal hot, as a large move killed mid-commit is.
+  const database = join(root, "metadata.sqlite3")
+  writeFileSync(database, "", { mode: 0o600 })
+  const db = new DatabaseSync(database)
+  db.exec(`${readFileSync(SCHEMA, "utf8")}`)
+  db.close()
+  const killed = spawnSync(process.execPath, [
+    "-e",
+    `const { DatabaseSync } = require("node:sqlite")
+     const db = new DatabaseSync(${JSON.stringify(database)})
+     db.exec("PRAGMA cache_size = 1; BEGIN")
+     const insert = db.prepare("INSERT INTO conversations VALUES (?, 'org', 'alice', 'panel', 'create', 1, 'claude')")
+     for (let n = 0; n < 2000; n += 1) insert.run(crypto.randomUUID())
+     process.kill(process.pid, "SIGKILL")`,
+  ])
+  assert.equal(killed.signal, "SIGKILL")
+  assert.ok(existsSync(`${database}-journal`))
+  assert.deepEqual(await move(root), {
+    state: "moved",
+    records: 1,
+    tombstones: 0,
+    summaries: 0,
+    inserted: 1,
+  })
+  // The killed writer's rows were rolled back, not kept.
+  assert.equal(rows(root, "SELECT count(*) AS n FROM conversations")[0].n, 1)
 })
