@@ -1,14 +1,16 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
-    GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
     GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
     ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
-    LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, ReconciliationCause,
-    ReconciliationIncarnation, ReconciliationTarget, SearchPath, ServiceConfiguration,
+    LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
+    LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationCause,
+    ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
+    ServiceConfiguration,
 };
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
@@ -85,6 +87,109 @@ impl GatewayHost for Launchd {
             RegisterFailure::Audit(error) => error,
         })
     }
+
+    fn recover(
+        &self,
+        recovery: &GatewayLifecycleRecovery,
+        journal: &dyn GatewayReconciliationJournalSession,
+    ) -> Result<(), GatewayError> {
+        let target = recovery.target();
+        let prefix = format!("gui/{}/", unsafe { libc::getuid() });
+        let label = target
+            .service()
+            .strip_prefix(&prefix)
+            .filter(|label| label.starts_with("so.nessa.gateway.") && !label.contains('/'))
+            .ok_or_else(|| {
+                GatewayError::Registration(
+                    "The unresolved gateway namespace is not owned by this desktop host".into(),
+                )
+            })?;
+        let port = recovery
+            .before()
+            .map(ReconciliationIncarnation::port)
+            .unwrap_or_else(|| self.configuration.port());
+        let status = service_status(target.service()).map_err(GatewayError::Registration)?;
+        let observed = observed_incarnation(target.service(), port, &status, health(port));
+        let definition = read_definition(
+            &self
+                .home
+                .join("Library/LaunchAgents")
+                .join(format!("{label}.plist")),
+        )
+        .ok();
+        let agrees_with_prior = observed.as_ref() == recovery.before();
+        let target_is_present = observed
+            .as_ref()
+            .is_some_and(|incarnation| incarnation.target() == target)
+            || installed_generation(definition.as_ref()) == Some(target.service_generation());
+        let target_was_prior = recovery
+            .before()
+            .is_some_and(|incarnation| incarnation.target() == target);
+        let target_artifact_present = target_is_present && !target_was_prior;
+        if target_artifact_present {
+            return Err(GatewayError::Registration(
+                "The unresolved gateway target remains present and requires exact planned recovery"
+                    .into(),
+            ));
+        }
+        let observation = if !recovery.has_effect_plan() {
+            if !agrees_with_prior {
+                return Err(GatewayError::Registration(
+                    "The unresolved gateway intent cannot be closed as no-effect because fresh native state disagrees"
+                        .into(),
+                ));
+            }
+            let version = recovery
+                .latest_observation()
+                .map_or(1, |observation| observation.version().saturating_add(1));
+            let observation = LifecycleObservation::new(version, observed, false);
+            retry_journal_delivery(|| {
+                journal.observation(&LifecycleObservationSource::Intent, &observation)
+            })?;
+            observation
+        } else if let Some(source) = recovery.pending_observation_source() {
+            let version = recovery
+                .latest_observation()
+                .map_or(1, |observation| observation.version().saturating_add(1));
+            let observation = LifecycleObservation::new(version, observed, false);
+            retry_journal_delivery(|| journal.observation(source, &observation))?;
+            observation
+        } else if let Some(last) = recovery.latest_observation() {
+            if last.incarnation() != observed.as_ref() || last.target_artifact_present() {
+                return Err(GatewayError::Registration(
+                    "Fresh gateway state disagrees with the last durable recovery observation"
+                        .into(),
+                ));
+            }
+            last.clone()
+        } else {
+            return Err(GatewayError::Registration(
+                "The unresolved gateway plan has no completion observation and requires exact resume"
+                    .into(),
+            ));
+        };
+        retry_journal_delivery(|| {
+            journal.physical_outcome(
+                &LifecyclePhysicalOutcome::Failed {
+                    phase: if recovery.has_effect_plan() {
+                        LifecycleFailedPhase::Observation
+                    } else {
+                        LifecycleFailedPhase::NativeDispatch
+                    },
+                    message: if recovery.has_effect_plan() {
+                        "Recovered exact planned lifecycle after confirming no target remained"
+                            .into()
+                    } else {
+                        "Recovered admitted intent before any effect-capable plan".into()
+                    },
+                },
+                Some(&observation),
+                ReconciliationCleanupDecision::RetainPrior,
+            )
+        })?;
+        Ok(())
+    }
+
     fn stop_agents(
         &self,
         session: &GatewayStopSession,
@@ -288,6 +393,93 @@ fn run_planned_effect<T>(
         target_artifact_present,
     ) {
         return Err(audit_after_physical(audit, &result));
+    }
+    result.map_err(RegisterFailure::Physical)
+}
+
+fn run_planned_effect_with_cleanup<T>(
+    progress: &dyn GatewayReconciliationProgress,
+    plan_id: &str,
+    effect: LifecycleEffect,
+    cleanup_step: LifecyclePlanStep,
+    run: impl FnOnce() -> Result<T, String>,
+    cleanup: impl FnOnce() -> Result<(), String>,
+    observe: impl Fn() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
+) -> Result<T, RegisterFailure> {
+    let primary =
+        LifecyclePlanStep::new("primary".into(), effect, LifecycleEffectPredicate::Always)
+            .map_err(|error| RegisterFailure::Physical(error.to_string()))?;
+    progress
+        .effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup_step))
+        .map_err(RegisterFailure::Audit)?;
+    let result = run();
+    let completion = match &result {
+        Ok(_) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+    let completion_delivery = progress.effect_completed(plan_id, primary.id(), &completion);
+    let observation_delivery = match &completion_delivery {
+        Ok(_) => match observe() {
+            Ok((incarnation, target_artifact_present)) => progress
+                .physical_observed(
+                    &LifecycleObservationSource::Effect {
+                        plan_id: plan_id.into(),
+                        step_id: primary.id().into(),
+                    },
+                    incarnation,
+                    target_artifact_present,
+                )
+                .map(|_| ()),
+            Err(error) => Err(GatewayError::Registration(error)),
+        },
+        Err(error) => Err(error.clone()),
+    };
+    if result.is_err() || completion_delivery.is_err() || observation_delivery.is_err() {
+        let cleanup_result = cleanup();
+        let cleanup_completion = match &cleanup_result {
+            Ok(()) => LifecycleCommandResult::Accepted,
+            Err(error) => LifecycleCommandResult::Failed(error.clone()),
+        };
+        let cleanup_delivery = progress
+            .effect_completed(plan_id, cleanup_step.id(), &cleanup_completion)
+            .and_then(|_| {
+                let (incarnation, target_artifact_present) =
+                    observe().map_err(|error| GatewayError::Registration(error.to_string()))?;
+                progress
+                    .physical_observed(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: plan_id.into(),
+                            step_id: cleanup_step.id().into(),
+                        },
+                        incarnation,
+                        target_artifact_present,
+                    )
+                    .map(|_| ())
+            });
+        if let Err(audit) = completion_delivery
+            .and(observation_delivery)
+            .and(cleanup_delivery)
+        {
+            let cleanup_detail = cleanup_result
+                .as_ref()
+                .err()
+                .map(|error| format!("; planned cleanup also failed: {error}"))
+                .unwrap_or_default();
+            return Err(audit_after_physical(
+                GatewayError::Registration(format!("{audit}{cleanup_detail}")),
+                &result,
+            ));
+        }
+        if let Err(error) = cleanup_result {
+            return Err(RegisterFailure::Physical(format!(
+                "{}; planned cleanup also failed: {error}",
+                result
+                    .as_ref()
+                    .err()
+                    .cloned()
+                    .unwrap_or_else(|| "gateway audit delivery failed".into())
+            )));
+        }
     }
     result.map_err(RegisterFailure::Physical)
 }
@@ -523,28 +715,64 @@ fn register(
     progress
         .intent_admitted(intent)
         .map_err(RegisterFailure::Audit)?;
-    let _staged_runtime = run_planned_effect(
-        progress,
-        "stage-runtime",
-        LifecycleEffect::StageRuntime {
-            fingerprint: fingerprint.clone(),
-        },
-        || {
-            stage_runtime_cached(
-                runtime,
-                &installations,
-                &fingerprint,
-                &host.validated_runtimes,
-            )
-        },
-        || {
-            let status = service_status(&service)?;
-            Ok((
-                observed_incarnation(&service, port, &status, health(port)),
-                fs::symlink_metadata(&planned_runtime).is_ok(),
-            ))
-        },
-    )?;
+    let staged_runtime_existed = fs::symlink_metadata(&planned_runtime).is_ok();
+    let _staged_runtime = if staged_runtime_existed {
+        run_planned_effect(
+            progress,
+            "stage-runtime",
+            LifecycleEffect::StageRuntime {
+                fingerprint: fingerprint.clone(),
+            },
+            || {
+                stage_runtime_cached(
+                    runtime,
+                    &installations,
+                    &fingerprint,
+                    &host.validated_runtimes,
+                )
+            },
+            || {
+                let status = service_status(&service)?;
+                Ok((
+                    observed_incarnation(&service, port, &status, health(port)),
+                    fs::symlink_metadata(&planned_runtime).is_ok(),
+                ))
+            },
+        )?
+    } else {
+        let cleanup_staged_runtime = LifecyclePlanStep::new(
+            "remove-published-runtime".into(),
+            LifecycleEffect::PruneRuntime {
+                fingerprint: fingerprint.clone(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .map_err(|error| error.to_string())?;
+        run_planned_effect_with_cleanup(
+            progress,
+            "stage-runtime",
+            LifecycleEffect::StageRuntime {
+                fingerprint: fingerprint.clone(),
+            },
+            cleanup_staged_runtime,
+            || {
+                stage_runtime_cached(
+                    runtime,
+                    &installations,
+                    &fingerprint,
+                    &host.validated_runtimes,
+                )
+            },
+            || prune_runtime(&installations, &fingerprint),
+            || {
+                let status = service_status(&service)?;
+                Ok((
+                    observed_incarnation(&service, port, &status, health(port)),
+                    fs::symlink_metadata(&planned_runtime).is_ok(),
+                ))
+            },
+        )?
+    };
     match state {
         ServiceState::ManagedCurrent(running) => {
             // The loaded service already advertises the staged runtime, so the
@@ -1298,16 +1526,16 @@ mod tests {
         bootstrap_succeeded, disabled_service, finish_bootstrap, gave_up_retry,
         installed_generation, matches_reconciled_gateway, prepare_data_directory,
         publish_definition, registered_agent_path, retire_then_unload, run_bootstrap,
-        runtime_fingerprint, service_environment, service_matches, startup, unavailable_service,
-        unreadable_process_identity, BootstrapFailure, SearchPath,
+        run_planned_effect_with_cleanup, runtime_fingerprint, service_environment, service_matches,
+        startup, unavailable_service, unreadable_process_identity, BootstrapFailure, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
         ReconciledGateway, ReconciliationHistoryFact,
     };
     use crate::gateway::domain::value_objects::{
-        AuditDeliveryReceipt, LifecycleCommandResult, LifecycleObservation,
-        LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
+        AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
+        LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
         ReconciliationCorrelation, ReconciliationIncarnation, ServiceConfiguration,
     };
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
@@ -1317,7 +1545,10 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        sync::Mutex,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Mutex,
+        },
     };
 
     #[derive(Default)]
@@ -1416,6 +1647,101 @@ mod tests {
                 ReconciliationHistoryFact::BootstrapCommandRequested,
                 ReconciliationHistoryFact::BootstrapCommandCompleted,
                 ReconciliationHistoryFact::BootstrapCommandSucceeded,
+            ]
+        );
+    }
+
+    #[test]
+    fn staging_cleanup_is_predeclared_and_runs_after_completion_delivery_failure() {
+        struct FailingCompletionProgress(Mutex<Vec<String>>);
+
+        impl GatewayReconciliationProgress for FailingCompletionProgress {
+            fn readiness_invalidated(&self) {}
+
+            fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+                Ok(())
+            }
+
+            fn history_observed(&self, _: ReconciliationHistoryFact) {}
+
+            fn effect_planned(
+                &self,
+                plan_id: &str,
+                _: &LifecyclePlanStep,
+                cleanup: &[LifecyclePlanStep],
+            ) -> Result<AuditDeliveryReceipt, GatewayError> {
+                assert_eq!(plan_id, "stage-runtime");
+                assert_eq!(cleanup.len(), 1);
+                assert_eq!(cleanup[0].id(), "remove-published-runtime");
+                self.0.lock().unwrap().push("plan".into());
+                Ok(test_receipt(1, LifecycleRecordKind::EffectPlan))
+            }
+
+            fn effect_completed(
+                &self,
+                _: &str,
+                step_id: &str,
+                _: &LifecycleCommandResult,
+            ) -> Result<AuditDeliveryReceipt, GatewayError> {
+                self.0.lock().unwrap().push(format!("complete:{step_id}"));
+                if step_id == "primary" {
+                    Err(GatewayError::Registration(
+                        "completion delivery failed".into(),
+                    ))
+                } else {
+                    Ok(test_receipt(2, LifecycleRecordKind::EffectCompletion))
+                }
+            }
+
+            fn physical_observed(
+                &self,
+                _source: &LifecycleObservationSource,
+                incarnation: Option<ReconciliationIncarnation>,
+                target_artifact_present: bool,
+            ) -> Result<LifecycleObservation, GatewayError> {
+                self.0.lock().unwrap().push("observe-cleanup".into());
+                Ok(LifecycleObservation::new(
+                    1,
+                    incarnation,
+                    target_artifact_present,
+                ))
+            }
+        }
+
+        let progress = FailingCompletionProgress(Mutex::new(Vec::new()));
+        let cleaned = AtomicBool::new(false);
+        let cleanup = LifecyclePlanStep::new(
+            "remove-published-runtime".into(),
+            LifecycleEffect::PruneRuntime {
+                fingerprint: "a".repeat(64),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let result = run_planned_effect_with_cleanup(
+            &progress,
+            "stage-runtime",
+            LifecycleEffect::StageRuntime {
+                fingerprint: "a".repeat(64),
+            },
+            cleanup,
+            || Ok("published"),
+            || {
+                cleaned.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            || Ok((None, false)),
+        );
+
+        assert!(matches!(result, Err(super::RegisterFailure::Audit(_))));
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [
+                "plan",
+                "complete:primary",
+                "complete:remove-published-runtime",
+                "observe-cleanup",
             ]
         );
     }

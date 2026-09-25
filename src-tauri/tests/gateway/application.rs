@@ -2,7 +2,8 @@ use super::*;
 use crate::gateway::{
     application::{
         testing::{self, FixedLoginShell},
-        GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellError,
+        GatewayLifecycleRecovery, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
+        LoginShellError,
     },
     domain::value_objects::{
         LifecycleRecordKind, ReconciliationCause, ReconciliationCorrelation,
@@ -403,6 +404,10 @@ trait TestAuditBehavior: Send + Sync {
         attempt: &GatewayReconciliationAttempt,
         joined: &GatewayReconciliationRequest,
     ) -> Result<(), GatewayError>;
+
+    fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
+        None
+    }
 }
 
 struct TestJournal<T> {
@@ -422,6 +427,10 @@ impl<T: TestAuditBehavior> TestJournal<T> {
 }
 
 impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T> {
+    fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
+        self.audit.recovery()
+    }
+
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         self.audit.intent(intent)
     }
@@ -470,6 +479,127 @@ impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T
     ) -> Result<AuditDeliveryReceipt, GatewayError> {
         Ok(self.receipt(LifecycleRecordKind::Outcome))
     }
+}
+
+#[test]
+fn a_restored_no_effect_attempt_settles_before_the_current_attempt_opens() {
+    struct RecoveryAudit {
+        pending: AtomicBool,
+    }
+
+    impl TestAuditBehavior for RecoveryAudit {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn joined(
+            &self,
+            _: &GatewayReconciliationAttempt,
+            _: &GatewayReconciliationRequest,
+        ) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
+            if !self.pending.swap(false, Ordering::SeqCst) {
+                return None;
+            }
+            let request = GatewayReconciliationRequest::new(
+                correlation(90),
+                ReconciliationEvidence::new(
+                    ReconciliationCause::Startup,
+                    ReconciliationInitiator::DesktopHost,
+                )
+                .unwrap(),
+            );
+            let attempt = GatewayReconciliationAttempt::new(correlation(91), request).unwrap();
+            Some(GatewayLifecycleRecovery::new(
+                attempt,
+                ReconciliationTarget::new(
+                    "gui/501/so.nessa.gateway.old".into(),
+                    "c".repeat(64),
+                    "d".repeat(64),
+                )
+                .unwrap(),
+                None,
+                false,
+                None,
+                None,
+            ))
+        }
+    }
+
+    struct RecoveryHost(Mutex<Vec<String>>);
+
+    impl GatewayHost for RecoveryHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            self.0.lock().unwrap().push("register-current".into());
+            admit(attempt, progress, "gui/501/so.nessa.gateway.current");
+            Ok(reconciled("gui/501/so.nessa.gateway.current"))
+        }
+
+        fn recover(
+            &self,
+            recovery: &GatewayLifecycleRecovery,
+            journal: &dyn GatewayReconciliationJournalSession,
+        ) -> Result<(), GatewayError> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("recover:{}", recovery.target().service()));
+            let observation = LifecycleObservation::new(1, None, false);
+            journal.observation(&LifecycleObservationSource::Intent, &observation)?;
+            journal.physical_outcome(
+                &LifecyclePhysicalOutcome::Failed {
+                    phase: LifecycleFailedPhase::NativeDispatch,
+                    message: "no effect".into(),
+                },
+                Some(&observation),
+                ReconciliationCleanupDecision::RetainPrior,
+            )?;
+            Ok(())
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            complete_stop(session, journal, plan, || Ok(()))
+        }
+    }
+
+    let audit = Arc::new(RecoveryAudit {
+        pending: AtomicBool::new(true),
+    });
+    let host = Arc::new(RecoveryHost(Mutex::new(Vec::new())));
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit,
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert_eq!(
+        *host.0.lock().unwrap(),
+        ["recover:gui/501/so.nessa.gateway.old", "register-current"]
+    );
 }
 
 impl<T: TestAuditBehavior + 'static> GatewayReconciliationAudit for T {

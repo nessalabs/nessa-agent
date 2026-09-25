@@ -7,8 +7,8 @@
 //! holds its lock, and orders every record for its attempt.
 use crate::gateway::{
     application::{
-        GatewayError, GatewayReconciliationAttempt, GatewayReconciliationAudit,
-        GatewayReconciliationEffect, GatewayReconciliationIntent,
+        GatewayError, GatewayLifecycleRecovery, GatewayReconciliationAttempt,
+        GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
         GatewayReconciliationRequest, MonotonicClock,
     },
@@ -17,8 +17,8 @@ use crate::gateway::{
         LifecycleEffectPredicate, LifecycleFailedPhase, LifecycleHistory, LifecycleObservation,
         LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecord,
         LifecycleRecordKind, LifecycleRecordPayload, ReconciliationCause,
-        ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationIncarnation,
-        ReconciliationInitiator, ReconciliationTarget,
+        ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
+        ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget,
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
@@ -75,6 +75,7 @@ struct FileJournalSession {
     advanced: Condvar,
     deadline: Option<Instant>,
     clock: Arc<dyn MonotonicClock>,
+    recovery: Option<GatewayLifecycleRecovery>,
 }
 
 struct SessionState {
@@ -592,7 +593,7 @@ fn acquire_lock(
                 "Cannot acquire gateway lifecycle journal lock: {error}"
             )));
         }
-        std::thread::sleep(Duration::from_millis(50));
+        clock.wait(Duration::from_millis(50));
     }
 }
 
@@ -603,9 +604,24 @@ fn load_records(directory: &PrivateDirectory) -> Result<Vec<StoredRecord>, Gatew
         .map_err(|error| GatewayError::Registration(error.to_string()))?
     {
         let entry = entry.map_err(|error| GatewayError::Registration(error.to_string()))?;
-        if entry.name() == OsStr::new(LOCK_FILE)
-            || nessa_local_storage::is_private_temporary_name(entry.name())
-        {
+        if entry.name() == OsStr::new(LOCK_FILE) {
+            continue;
+        }
+        if nessa_local_storage::is_private_temporary_name(entry.name()) {
+            if entry.file_type() != PrivateFileType::RegularFile {
+                return Err(GatewayError::Registration(
+                    "Gateway lifecycle journal contains an unsafe temporary entry".into(),
+                ));
+            }
+            let temporary = directory
+                .open_file(entry.name(), OpenMode::ReadNonblocking)
+                .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            directory
+                .remove_file(entry.name(), &temporary)
+                .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            directory
+                .sync()
+                .map_err(|error| GatewayError::Registration(error.to_string()))?;
             continue;
         }
         if entry.file_type() != PrivateFileType::RegularFile {
@@ -659,6 +675,60 @@ fn validate_stage_records(records: &[StoredRecord]) -> Result<(), GatewayError> 
     Ok(())
 }
 
+fn unresolved_recovery(
+    records: &[StoredRecord],
+) -> Result<Option<(GatewayLifecycleRecovery, LifecycleHistory)>, GatewayError> {
+    let mut index = 0usize;
+    while index < records.len() {
+        let correlation = &records[index].attempt_correlation;
+        let start = index;
+        while index < records.len() && &records[index].attempt_correlation == correlation {
+            index += 1;
+        }
+        let chain = records[start..index]
+            .iter()
+            .map(domain_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        let history = LifecycleHistory::restore(&chain)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        if history.is_terminal() {
+            continue;
+        }
+        let LifecycleRecordPayload::Intent {
+            request_correlation,
+            cause,
+            initiator,
+            target,
+            before,
+        } = chain[0].payload()
+        else {
+            return Err(GatewayError::Registration(
+                "Gateway lifecycle recovery is missing its intent".into(),
+            ));
+        };
+        let evidence = ReconciliationEvidence::new(*cause, *initiator)
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        let request = GatewayReconciliationRequest::new(request_correlation.clone(), evidence);
+        let attempt =
+            GatewayReconciliationAttempt::new(chain[0].attempt_correlation().clone(), request)?;
+        let has_effect_plan = chain
+            .iter()
+            .any(|record| record.kind() == LifecycleRecordKind::EffectPlan);
+        return Ok(Some((
+            GatewayLifecycleRecovery::new(
+                attempt,
+                target.clone(),
+                before.clone(),
+                has_effect_plan,
+                history.latest_observation().cloned(),
+                history.pending_observation_source(),
+            ),
+            history,
+        )));
+    }
+    Ok(None)
+}
+
 fn acknowledge_final_record(
     directory: &PrivateDirectory,
     name: &OsStr,
@@ -673,27 +743,61 @@ fn acknowledge_final_record(
             .open_file(name, OpenMode::ReadNonblocking)
             .map_err(|error| GatewayError::Registration(error.to_string()))?,
     };
-    directory
-        .sync()
+    let identity_file = file
+        .try_clone()
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
-    directory
-        .verify_binding()
+    let record = validate_record_acknowledgement(
+        expected,
+        || {
+            directory
+                .sync()
+                .map_err(|error| GatewayError::Registration(error.to_string()))
+        },
+        || {
+            directory
+                .verify_binding()
+                .map_err(|error| GatewayError::Registration(error.to_string()))
+        },
+        || {
+            directory
+                .named_file_is(name, &identity_file)
+                .map_err(|error| GatewayError::Registration(error.to_string()))
+        },
+        || {
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            let mut bytes = Vec::new();
+            (&mut file)
+                .take(MAX_RECORD_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            Ok(bytes)
+        },
+    )?;
+    let kind = record_kind(&record.kind).ok_or_else(|| {
+        GatewayError::Registration("Unknown gateway lifecycle record kind".into())
+    })?;
+    let correlation = ReconciliationCorrelation::parse(record.attempt_correlation.clone())
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
-    if !directory
-        .named_file_is(name, &file)
-        .map_err(|error| GatewayError::Registration(error.to_string()))?
-    {
+    let receipt = AuditDeliveryReceipt::new(correlation, record.sequence, kind);
+    Ok((record, receipt))
+}
+
+fn validate_record_acknowledgement(
+    expected: Option<&StoredRecord>,
+    sync_directory: impl FnOnce() -> Result<(), GatewayError>,
+    mut verify_binding: impl FnMut() -> Result<(), GatewayError>,
+    mut name_matches: impl FnMut() -> Result<bool, GatewayError>,
+    read: impl FnOnce() -> Result<Vec<u8>, GatewayError>,
+) -> Result<StoredRecord, GatewayError> {
+    sync_directory()?;
+    verify_binding()?;
+    if !name_matches()? {
         return Err(GatewayError::Registration(
             "Gateway lifecycle record identity changed during acknowledgement".into(),
         ));
     }
-    file.seek(SeekFrom::Start(0))
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(MAX_RECORD_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+    let bytes = read()?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {
         return Err(GatewayError::Registration(
             "Gateway lifecycle record exceeds limit".into(),
@@ -702,13 +806,8 @@ fn acknowledge_final_record(
     let record: StoredRecord = serde_json::from_slice(&bytes)
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
     record.validate_header()?;
-    directory
-        .verify_binding()
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
-    if !directory
-        .named_file_is(name, &file)
-        .map_err(|error| GatewayError::Registration(error.to_string()))?
-    {
+    verify_binding()?;
+    if !name_matches()? {
         return Err(GatewayError::Registration(
             "Gateway lifecycle record identity changed during read-back".into(),
         ));
@@ -718,13 +817,7 @@ fn acknowledge_final_record(
             "Gateway lifecycle retry disagrees with the published record".into(),
         ));
     }
-    let kind = record_kind(&record.kind).ok_or_else(|| {
-        GatewayError::Registration("Unknown gateway lifecycle record kind".into())
-    })?;
-    let correlation = ReconciliationCorrelation::parse(record.attempt_correlation.clone())
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
-    let receipt = AuditDeliveryReceipt::new(correlation, record.sequence, kind);
-    Ok((record, receipt))
+    Ok(record)
 }
 
 impl FileJournalSession {
@@ -882,36 +975,43 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
                 "Gateway lifecycle journal deadline passed during recovery".into(),
             ));
         }
-        if records.iter().any(|record| {
-            record.kind != LifecycleRecordKind::Outcome.file_name()
-                && !records.iter().any(|candidate| {
-                    candidate.attempt_correlation == record.attempt_correlation
-                        && candidate.kind == LifecycleRecordKind::Outcome.file_name()
-                })
-        }) {
-            return Err(GatewayError::Registration(
-                "An unresolved gateway lifecycle must be recovered before a new attempt".into(),
-            ));
-        }
+        let recovery = unresolved_recovery(&records)?;
+        let (session_attempt, namespace, next_sequence, history, latest_observation, recovery) =
+            match recovery {
+                Some((recovery, history)) => (
+                    recovery.attempt().clone(),
+                    Some(recovery.target().service().to_owned()),
+                    history.next_sequence(),
+                    Some(history.clone()),
+                    history.latest_observation().cloned(),
+                    Some(recovery),
+                ),
+                None => (attempt.clone(), None, 0, None, None, None),
+            };
         Ok(Arc::new(FileJournalSession {
             directory,
             _lock: lock,
-            attempt: attempt.clone(),
+            attempt: session_attempt,
             state: Mutex::new(SessionState {
-                namespace: None,
-                next_sequence: 0,
+                namespace,
+                next_sequence,
                 terminal: false,
-                history: None,
-                latest_observation: None,
+                history,
+                latest_observation,
             }),
             advanced: Condvar::new(),
             deadline,
             clock: self.clock.clone(),
+            recovery,
         }))
     }
 }
 
 impl GatewayReconciliationJournalSession for FileJournalSession {
+    fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
+        self.recovery.clone()
+    }
+
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         if intent.attempt() != &self.attempt {
             return Err(GatewayError::Registration(
@@ -1244,6 +1344,28 @@ fn identity(gateway: &ReconciliationIncarnation) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        cell::Cell,
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    struct AdvancingClock {
+        now: Mutex<Instant>,
+        waits: AtomicUsize,
+    }
+
+    impl MonotonicClock for AdvancingClock {
+        fn now(&self) -> Instant {
+            *self.now.lock().unwrap()
+        }
+
+        fn wait(&self, duration: Duration) {
+            self.waits.fetch_add(1, Ordering::SeqCst);
+            let mut now = self.now.lock().unwrap();
+            *now += duration;
+        }
+    }
 
     fn stored(correlation: &str, sequence: u64, kind: LifecycleRecordKind) -> StoredRecord {
         let observation = json!({
@@ -1307,6 +1429,13 @@ mod tests {
             stored(unresolved, 0, LifecycleRecordKind::Intent),
         ];
         validate_stage_records(&records).expect("one unresolved attempt is valid");
+        let (recovery, history) = unresolved_recovery(&records)
+            .unwrap()
+            .expect("unresolved attempt is restored");
+        assert_eq!(recovery.attempt().correlation().as_str(), unresolved);
+        assert_eq!(recovery.target().service(), "gui/501/so.nessa.gateway.prod");
+        assert!(!recovery.has_effect_plan());
+        assert_eq!(history.next_sequence(), 1);
     }
 
     #[test]
@@ -1316,5 +1445,133 @@ mod tests {
         let mut second = stored(correlation, 1, LifecycleRecordKind::Outcome);
         second.service_namespace = "gui/501/so.nessa.gateway.other".into();
         assert!(validate_stage_records(&[first, second]).is_err());
+    }
+
+    #[test]
+    fn stage_scan_removes_only_regular_private_temporaries() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let journal = root.join(DIRECTORY);
+        nessa_local_storage::create_private_directory_path(&root).unwrap();
+        nessa_local_storage::create_private_directory_path(&journal).unwrap();
+        let directory = PrivateDirectory::open_path(&root, &journal).unwrap();
+        let name = OsStr::new(".nessa-0123456789abcdef0123456789abcdef.tmp");
+        directory.open_file(name, OpenMode::CreateNew).unwrap();
+
+        assert!(load_records(&directory).unwrap().is_empty());
+        assert!(!journal.join(name).exists());
+
+        fs::create_dir(journal.join(name)).unwrap();
+        assert!(load_records(&directory).is_err());
+        assert!(journal.join(name).is_dir());
+    }
+
+    #[test]
+    fn stage_lock_retry_uses_the_injected_clock_wait() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let journal = root.join(DIRECTORY);
+        nessa_local_storage::create_private_directory_path(&root).unwrap();
+        nessa_local_storage::create_private_directory_path(&journal).unwrap();
+        let directory = PrivateDirectory::open_path(&root, &journal).unwrap();
+        let start = Instant::now();
+        let clock = AdvancingClock {
+            now: Mutex::new(start),
+            waits: AtomicUsize::new(0),
+        };
+        let _held = acquire_lock(&directory, None, &clock).unwrap();
+
+        assert!(
+            acquire_lock(&directory, Some(start + Duration::from_millis(100)), &clock,).is_err()
+        );
+        assert_eq!(clock.waits.load(Ordering::SeqCst), 2);
+        assert_eq!(clock.now(), start + Duration::from_millis(100));
+    }
+
+    #[test]
+    fn acknowledgement_requires_each_directory_sync_and_exact_retry_can_recover() {
+        let record = stored(
+            "00000000-0000-4000-8000-000000000001",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let syncs = Cell::new(0usize);
+        let acknowledge = || {
+            validate_record_acknowledgement(
+                Some(&record),
+                || {
+                    syncs.set(syncs.get() + 1);
+                    if syncs.get() == 1 {
+                        Err(GatewayError::Registration("injected sync failure".into()))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || Ok(()),
+                || Ok(true),
+                || Ok(bytes.clone()),
+            )
+        };
+
+        assert!(acknowledge().is_err());
+        assert_eq!(acknowledge().unwrap(), record);
+        assert_eq!(syncs.get(), 2);
+
+        for _ in 0..2 {
+            assert!(validate_record_acknowledgement(
+                Some(&record),
+                || Err(GatewayError::Registration("persistent sync failure".into())),
+                || Ok(()),
+                || Ok(true),
+                || Ok(bytes.clone()),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn acknowledgement_refuses_name_replacement_before_and_after_readback() {
+        let record = stored(
+            "00000000-0000-4000-8000-000000000001",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        let bytes = serde_json::to_vec(&record).unwrap();
+        for replaced_at in [1usize, 2] {
+            let checks = Cell::new(0usize);
+            let result = validate_record_acknowledgement(
+                Some(&record),
+                || Ok(()),
+                || Ok(()),
+                || {
+                    checks.set(checks.get() + 1);
+                    Ok(checks.get() != replaced_at)
+                },
+                || Ok(bytes.clone()),
+            );
+            assert!(result.is_err());
+            assert_eq!(checks.get(), replaced_at);
+        }
+    }
+
+    #[test]
+    fn acknowledgement_refuses_visible_but_nonidentical_retry_content() {
+        let expected = stored(
+            "00000000-0000-4000-8000-000000000001",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        let mut changed = expected.clone();
+        changed.service_namespace = "gui/501/so.nessa.gateway.changed".into();
+
+        assert!(validate_record_acknowledgement(
+            Some(&expected),
+            || Ok(()),
+            || Ok(()),
+            || Ok(true),
+            || Ok(serde_json::to_vec(&changed).unwrap()),
+        )
+        .is_err());
     }
 }

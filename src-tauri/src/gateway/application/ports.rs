@@ -14,7 +14,7 @@ use std::{
     fmt,
     path::Path,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 /// Exact native runtime incarnation established by successful reconciliation.
@@ -320,6 +320,12 @@ impl GatewayStopSession {
 /// Monotonic time used to arbitrate lifecycle deadlines.
 pub trait MonotonicClock: Send + Sync {
     fn now(&self) -> Instant;
+
+    /// Wait between bounded retries. Test clocks may advance or coordinate
+    /// deterministically instead of sleeping the process thread.
+    fn wait(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
 }
 
 /// Process monotonic clock used by desktop composition.
@@ -785,6 +791,12 @@ impl GatewayReconciliationOutcome {
 /// Dropping it releases the stage lock even when audit delivery or native work
 /// fails.
 pub trait GatewayReconciliationJournalSession: Send + Sync {
+    /// Return a sole validated unresolved lifecycle restored while acquiring
+    /// this stage-wide session. A fresh session returns `None`.
+    fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
+        None
+    }
+
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
 
     fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
@@ -820,6 +832,61 @@ pub trait GatewayReconciliationJournalSession: Send + Sync {
         last_confirmed: Option<&LifecycleObservation>,
         cleanup: ReconciliationCleanupDecision,
     ) -> Result<AuditDeliveryReceipt, GatewayError>;
+}
+
+/// Exact persisted authority that must settle before a fresh attempt starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayLifecycleRecovery {
+    attempt: GatewayReconciliationAttempt,
+    target: ReconciliationTarget,
+    before: Option<ReconciliationIncarnation>,
+    has_effect_plan: bool,
+    latest_observation: Option<LifecycleObservation>,
+    pending_observation_source: Option<LifecycleObservationSource>,
+}
+
+impl GatewayLifecycleRecovery {
+    pub(crate) fn new(
+        attempt: GatewayReconciliationAttempt,
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+        has_effect_plan: bool,
+        latest_observation: Option<LifecycleObservation>,
+        pending_observation_source: Option<LifecycleObservationSource>,
+    ) -> Self {
+        Self {
+            attempt,
+            target,
+            before,
+            has_effect_plan,
+            latest_observation,
+            pending_observation_source,
+        }
+    }
+
+    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
+        &self.attempt
+    }
+
+    pub fn target(&self) -> &ReconciliationTarget {
+        &self.target
+    }
+
+    pub fn before(&self) -> Option<&ReconciliationIncarnation> {
+        self.before.as_ref()
+    }
+
+    pub fn has_effect_plan(&self) -> bool {
+        self.has_effect_plan
+    }
+
+    pub fn latest_observation(&self) -> Option<&LifecycleObservation> {
+        self.latest_observation.as_ref()
+    }
+
+    pub fn pending_observation_source(&self) -> Option<&LifecycleObservationSource> {
+        self.pending_observation_source.as_ref()
+    }
 }
 
 /// Opens the single durable lifecycle journal for one serialized attempt.
@@ -899,6 +966,20 @@ pub trait GatewayHost: Send + Sync {
         attempt: &GatewayReconciliationAttempt,
         progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError>;
+
+    /// Reobserve and settle one validated persisted lifecycle before current
+    /// configuration is allowed to allocate or mutate anything.
+    fn recover(
+        &self,
+        recovery: &GatewayLifecycleRecovery,
+        journal: &dyn GatewayReconciliationJournalSession,
+    ) -> Result<(), GatewayError> {
+        let _ = (recovery, journal);
+        Err(GatewayError::Registration(
+            "The unresolved gateway lifecycle cannot be safely settled by this host".into(),
+        ))
+    }
+
     fn stop_agents(
         &self,
         session: &GatewayStopSession,

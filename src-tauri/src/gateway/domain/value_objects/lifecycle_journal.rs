@@ -645,6 +645,15 @@ impl LifecycleHistory {
         self.latest_observation.as_ref()
     }
 
+    pub fn pending_observation_source(&self) -> Option<LifecycleObservationSource> {
+        self.pending_observation.as_ref().map(|(plan_id, step_id)| {
+            LifecycleObservationSource::Effect {
+                plan_id: plan_id.clone(),
+                step_id: step_id.clone(),
+            }
+        })
+    }
+
     pub fn is_terminal(&self) -> bool {
         self.terminal
     }

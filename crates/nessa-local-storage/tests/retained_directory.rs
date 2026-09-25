@@ -173,6 +173,34 @@ fn named_identity_rejects_a_multiply_linked_witness() {
 }
 
 #[test]
+fn recovery_removes_only_the_name_still_bound_to_the_open_file() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "abandoned", b"old temporary");
+    let old = directory
+        .open_file(OsStr::new("abandoned"), OpenMode::Read)
+        .unwrap();
+    std::fs::remove_file(root.join("records/abandoned")).unwrap();
+    write_named(&directory, "abandoned", b"replacement");
+
+    assert!(directory
+        .remove_file(OsStr::new("abandoned"), &old)
+        .is_err());
+    assert_eq!(
+        std::fs::read(root.join("records/abandoned")).unwrap(),
+        b"replacement"
+    );
+
+    let replacement = directory
+        .open_file(OsStr::new("abandoned"), OpenMode::Read)
+        .unwrap();
+    directory
+        .remove_file(OsStr::new("abandoned"), &replacement)
+        .unwrap();
+    directory.sync().unwrap();
+    assert!(!root.join("records/abandoned").exists());
+}
+
+#[test]
 fn parallel_enumerations_have_independent_cursors() {
     let (_temporary, _root, directory) = fixture();
     write_named(&directory, "a", b"a");

@@ -71,6 +71,19 @@ impl PrivateDirectory {
         Ok(matches)
     }
 
+    /// Remove `name` only while it still identifies the supplied open file.
+    ///
+    /// This is intended for recovery cleanup of a caller-recognized abandoned
+    /// temporary. The caller retains the file handle from inspection through
+    /// deletion, so a replacement at the same name is refused rather than
+    /// removed. Call [`Self::sync`] before claiming that deletion is durable.
+    pub fn remove_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        validate_name(name)?;
+        self.verify_binding()?;
+        self.inner.remove_reserved(name, file)?;
+        self.verify_binding()
+    }
+
     /// Verify that every retained directory still has its original name in its
     /// original parent, including the trusted root path.
     pub fn verify_binding(&self) -> io::Result<()> {

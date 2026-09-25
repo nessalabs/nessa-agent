@@ -1120,7 +1120,7 @@ fn execute_attempt(
     executor: &ReconciliationExecutor,
     receipt: &Arc<AttemptReceipt>,
 ) -> AttemptExecution {
-    let journal = match catch_unwind(AssertUnwindSafe(|| {
+    let open_journal = || match catch_unwind(AssertUnwindSafe(|| {
         executor
             .reconciliation_audit
             .clone()
@@ -1135,6 +1135,36 @@ fn execute_attempt(
             physical: None,
         }),
     };
+    let mut journal = open_journal();
+    let restored = journal.as_ref().ok().cloned();
+    if let Some(recovery) = restored.as_ref().and_then(|session| session.recovery()) {
+        if let Some(restored) = restored {
+            let recovery_result = catch_unwind(AssertUnwindSafe(|| {
+                executor.host.recover(&recovery, restored.as_ref())
+            }))
+            .unwrap_or_else(|_| {
+                Err(GatewayError::Registration(
+                    "gateway host panicked during lifecycle recovery".into(),
+                ))
+            });
+            drop(restored);
+            drop(journal);
+            journal = match recovery_result {
+                Ok(()) => open_journal(),
+                Err(error) => Err(error),
+            };
+            if journal
+                .as_ref()
+                .ok()
+                .and_then(|session| session.recovery())
+                .is_some()
+            {
+                journal = Err(GatewayError::Registration(
+                    "Gateway lifecycle recovery returned without terminal settlement".into(),
+                ));
+            }
+        }
+    }
     if let Err(error) = receipt.publish_journal(journal.clone()) {
         return AttemptExecution {
             physical: Err(error.clone()),
