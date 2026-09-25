@@ -1144,6 +1144,10 @@ async fn a_repository_error_past_the_fence_is_never_a_reason_to_wait() {
             );
             assert!(!failures.no_agent_slot && !failures.history_held);
             assert_eq!(service.inner.retries.waiting_for(&id), None);
+            // A slot wait is due at once, so a deletion wrongly carried on
+            // would already be finished by the worker; nothing may be.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(!tombstone(&fixture, &id).erased());
             service.shutdown().await.unwrap();
         }
     }
