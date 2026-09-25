@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "native reconciliation evidence is exercised only by the macOS adapter"
+    )
+)]
+
 //! Validated cause, caller, correlation, target, and incarnation evidence for
 //! one gateway reconciliation lifecycle.
 //!
@@ -84,7 +92,7 @@ impl ReconciliationEvidence {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -121,7 +129,7 @@ impl ReconciliationCorrelation {
 
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -195,7 +203,7 @@ impl ReconciliationTarget {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -206,7 +214,7 @@ impl ReconciliationTarget {
 
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -217,7 +225,7 @@ impl ReconciliationTarget {
 
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -268,7 +276,7 @@ impl ReconciliationIncarnation {
 
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -334,7 +342,7 @@ impl ReconciliationAttemptRecord {
     }
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(
+        allow(
             dead_code,
             reason = "the native audit adapter is supported only on macOS"
         )
@@ -355,7 +363,7 @@ pub struct ReconciliationIntentRecord {
 impl ReconciliationIntentRecord {
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn new(
         attempt: ReconciliationAttemptRecord,
@@ -387,28 +395,28 @@ impl ReconciliationIntentRecord {
 pub enum ReconciliationHistoryFact {
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     RetirementAcknowledged,
     OldServiceUnloaded,
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     ServiceDefinitionPublished,
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     ServiceDefinitionDurable,
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     BootstrapCommandRequested,
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     BootstrapCommandCompleted,
     BootstrapCommandSucceeded,
@@ -772,7 +780,7 @@ pub enum ReconciliationConsistencyError {
     EqualRequestAndAttempt,
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     PriorServiceMismatch,
 }

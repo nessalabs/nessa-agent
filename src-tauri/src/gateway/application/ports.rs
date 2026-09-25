@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "native gateway lifecycle authority is exercised only by the macOS adapter"
+    )
+)]
+
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleFailedPhase, LifecycleObservation,
     LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep,
@@ -510,17 +518,17 @@ pub trait GatewayStartupEvents: Send + Sync {
 pub trait GatewayReconciliationProgress: Send + Sync {
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     fn readiness_invalidated(&self);
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError>;
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     fn history_observed(&self, fact: ReconciliationHistoryFact);
 
@@ -567,7 +575,7 @@ impl GatewayReconciliationRequest {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
@@ -601,7 +609,7 @@ impl GatewayReconciliationAttempt {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
@@ -631,7 +639,7 @@ pub struct GatewayReconciliationIntent {
 impl GatewayReconciliationIntent {
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn new(
         attempt: GatewayReconciliationAttempt,
@@ -649,7 +657,7 @@ impl GatewayReconciliationIntent {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
         &self.attempt
@@ -657,7 +665,7 @@ impl GatewayReconciliationIntent {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn target(&self) -> &ReconciliationTarget {
         self.record.target()
@@ -665,7 +673,7 @@ impl GatewayReconciliationIntent {
 
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.record.before()

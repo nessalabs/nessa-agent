@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "native gateway lifecycle state is exercised only by the macOS adapter"
+    )
+)]
+
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{

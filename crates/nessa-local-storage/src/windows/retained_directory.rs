@@ -188,7 +188,7 @@ impl RetainedDirectory {
         if file_identity(&deleting)? != file_identity(file)? {
             return Err(unsafe_file());
         }
-        mark_deleted(&deleting)
+        mark_deleted_from_namespace(&deleting)
     }
 
     pub fn file_identity(&self, file: &File) -> io::Result<PrivateFileIdentity> {
@@ -219,6 +219,20 @@ fn mark_deleted(file: &File) -> io::Result<()> {
             FileDispositionInfo,
             (&raw const disposition).cast(),
             size_of::<FILE_DISPOSITION_INFO>() as u32,
+        ))
+    }
+}
+
+fn mark_deleted_from_namespace(file: &File) -> io::Result<()> {
+    let disposition = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+    };
+    unsafe {
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfoEx,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
         ))
     }
 }

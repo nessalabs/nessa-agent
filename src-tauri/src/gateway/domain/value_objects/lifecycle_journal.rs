@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "durable lifecycle journals are implemented only by the macOS adapter"
+    )
+)]
+
 //! Immutable facts and validation for one gateway lifecycle journal.
 //!
 //! ```text

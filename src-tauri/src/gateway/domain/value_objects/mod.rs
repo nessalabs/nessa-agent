@@ -2,10 +2,11 @@
 mod lifecycle_journal;
 pub use lifecycle_journal::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
-    LifecycleFailedPhase, LifecycleHistory, LifecycleObservation, LifecycleObservationSource,
-    LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecord, LifecycleRecordKind,
-    LifecycleRecordPayload,
+    LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
+    LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecordKind,
 };
+#[cfg(any(target_os = "macos", test))]
+pub use lifecycle_journal::{LifecycleHistory, LifecycleRecord, LifecycleRecordPayload};
 mod reconciliation_evidence;
 #[cfg(test)]
 pub use reconciliation_evidence::ReconciliationRuntimeIdentity;
