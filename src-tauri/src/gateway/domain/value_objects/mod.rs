@@ -24,10 +24,11 @@ pub use search_path::{SearchPath, SearchPathError};
 mod service_configuration;
 pub use service_configuration::ServiceConfiguration;
 mod systemd;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub use systemd::SystemdInvocationId;
 pub use systemd::{
-    SystemdEvidenceError, SystemdInvocationId, SystemdJobAttempt, SystemdJobMode,
-    SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName,
-    SystemdUnitState,
+    SystemdEvidenceError, SystemdJobAttempt, SystemdJobMode, SystemdJobOperation,
+    SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
 };
 #[cfg(target_os = "linux")]
 pub use systemd::{SystemdJobConclusion, SystemdJobTerminal};

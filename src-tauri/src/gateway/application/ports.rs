@@ -2,7 +2,7 @@
     not(any(target_os = "macos", target_os = "linux")),
     allow(
         dead_code,
-        reason = "native gateway lifecycle authority is exercised only by the macOS adapter"
+        reason = "native gateway lifecycle authority is exercised only by the macOS and Linux adapters"
     )
 )]
 
@@ -42,8 +42,8 @@ pub struct ReconciledGateway {
     port: u16,
 }
 // The identity itself is portable evidence carried by the `GatewayHost`
-// contract on every target. Reading its parts is what one native adapter does,
-// and macOS is the only host that manages a background service today.
+// contract on every target. Each native adapter reads only the parts its own
+// reconciliation protocol needs.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 impl ReconciledGateway {
     pub fn new(
@@ -66,18 +66,34 @@ impl ReconciledGateway {
     pub fn service(&self) -> &str {
         &self.service
     }
+    #[cfg_attr(
+        target_os = "linux",
+        allow(dead_code, reason = "the launchd adapter reads this portable identity")
+    )]
     pub fn runtime_fingerprint(&self) -> &str {
         &self.runtime_fingerprint
     }
+    #[cfg_attr(
+        target_os = "linux",
+        allow(dead_code, reason = "the launchd adapter reads this portable identity")
+    )]
     pub fn runtime_instance(&self) -> &str {
         &self.runtime_instance
     }
+    #[cfg_attr(
+        target_os = "linux",
+        allow(dead_code, reason = "the launchd adapter reads this portable identity")
+    )]
     pub fn service_generation(&self) -> &str {
         &self.service_generation
     }
     pub fn process_id(&self) -> u32 {
         self.process_id
     }
+    #[cfg_attr(
+        target_os = "linux",
+        allow(dead_code, reason = "the launchd adapter reads this portable identity")
+    )]
     pub fn port(&self) -> u16 {
         self.port
     }
@@ -191,6 +207,10 @@ impl GatewayStopSession {
         self.clock.now() >= self.request.deadline
     }
 
+    #[cfg_attr(
+        target_os = "linux",
+        allow(dead_code, reason = "the launchd adapter owns this bounded wait")
+    )]
     pub fn wait(&self, duration: Duration) {
         self.clock.wait(duration);
     }
@@ -634,6 +654,13 @@ pub trait GatewayReconciliationProgress: Send + Sync {
 
     /// Retry the exact observation whose publication may have succeeded before
     /// acknowledgement. Returns `None` when no observation is pending.
+    #[cfg_attr(
+        target_os = "linux",
+        allow(
+            dead_code,
+            reason = "the launchd progress substitutes use the portable no-pending default"
+        )
+    )]
     fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
         Ok(None)
     }
@@ -1156,6 +1183,13 @@ impl GatewayLifecycleRecovery {
         self.pending_step.as_ref()
     }
 
+    #[cfg_attr(
+        target_os = "linux",
+        allow(
+            dead_code,
+            reason = "the launchd adapter resumes this portable observation delivery"
+        )
+    )]
     pub fn pending_observation_source(&self) -> Option<&LifecycleObservationSource> {
         self.pending_observation_source.as_ref()
     }

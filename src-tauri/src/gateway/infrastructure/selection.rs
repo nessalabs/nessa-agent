@@ -16,6 +16,7 @@ use std::{io, path::PathBuf, sync::Arc};
 
 /// One composition-time snapshot of the account paths used by the gateway.
 pub struct PlatformContext {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     home: PathBuf,
     #[cfg(target_os = "linux")]
     config_home: PathBuf,
@@ -31,15 +32,22 @@ pub fn platform_context(home: PathBuf) -> io::Result<PlatformContext> {
         let config_home = resolved_xdg_root("XDG_CONFIG_HOME", &home, ".config")?;
         let data_home = resolved_xdg_root("XDG_DATA_HOME", &home, ".local/share")?;
         let state_home = resolved_xdg_root("XDG_STATE_HOME", &home, ".local/state")?;
-        return Ok(PlatformContext {
+        Ok(PlatformContext {
             home,
             config_home,
             data_home,
             state_home,
-        });
+        })
     }
-    #[cfg(not(target_os = "linux"))]
-    Ok(PlatformContext { home })
+    #[cfg(target_os = "macos")]
+    {
+        Ok(PlatformContext { home })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = home;
+        Ok(PlatformContext {})
+    }
 }
 
 #[cfg(target_os = "linux")]

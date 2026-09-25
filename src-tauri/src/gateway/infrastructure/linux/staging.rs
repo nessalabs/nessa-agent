@@ -544,10 +544,7 @@ pub(super) fn publish_wants_link(
 ) -> Result<(), String> {
     use std::{
         ffi::CString,
-        os::{
-            fd::{AsRawFd, FromRawFd},
-            unix::ffi::OsStrExt,
-        },
+        os::{fd::AsRawFd, unix::ffi::OsStrExt},
     };
 
     let directory_file = open_owned_directory_chain(directory)?;
@@ -836,10 +833,7 @@ pub(super) fn settle_definition_transaction(
     expected: &[u8],
     generation: &str,
 ) -> Result<bool, String> {
-    use std::{
-        ffi::CString,
-        os::{fd::AsRawFd, unix::ffi::OsStrExt},
-    };
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
     let transaction = definition_transaction(path, generation)?;
     if transaction.publish_temporary.is_some() && transaction.replace_temporary.is_some() {

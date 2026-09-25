@@ -2984,8 +2984,8 @@ mod tests {
     use super::*;
     use crate::gateway::{
         application::{
-            testing::discard_reconciliation_audit, GatewayReconciliationAudit,
-            GatewayReconciliationRequest, SystemMonotonicClock,
+            testing::discard_reconciliation_audit, GatewayReconciliationRequest,
+            SystemMonotonicClock,
         },
         domain::value_objects::{
             LifecycleRecordKind, ReconciliationCorrelation, ReconciliationEvidence,

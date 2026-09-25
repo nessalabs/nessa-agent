@@ -1,8 +1,10 @@
 //! Native background service adapters. The desktop composition root selects launchd
-//! on macOS and the account's systemd user manager on Linux. macOS reconciliation holds a service-label lock through retirement, replacement,
-//! matching process readiness. Failed installation preserves the desired registration
-//! for forward recovery; it never rolls back or stops an unretired replacement. Its `control` module owns private retirement
-//! exchange files, bounded health parsing, and launchctl effects. Its `generation`
+//! on macOS and the account's systemd user manager on Linux. macOS reconciliation
+//! holds a service-label lock through retirement, replacement, and matching process
+//! readiness. Failed installation preserves the desired registration for forward
+//! recovery; it never rolls back or stops an unretired replacement. Its `control`
+//! module owns private retirement exchange files, bounded health parsing, and
+//! launchctl effects. Its `generation`
 //! module reuses the published generation only for an equal unfenced definition;
 //! changed or retired definitions receive a fresh random installation identity.
 //! `staging` verifies and publishes private immutable runtime versions before any
@@ -24,7 +26,7 @@
 //!         -> LoginShell -------> the account's login shell
 //! ```
 //! Arrows mean calls; commands translate only the application-owned startup
-//! contract, and only launchd owns the background process lifetime.
+//! contract, and each native manager adapter owns its background process lifetime.
 mod commands;
 #[cfg(target_os = "linux")]
 mod linux;

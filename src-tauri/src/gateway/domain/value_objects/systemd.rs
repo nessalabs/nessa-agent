@@ -11,6 +11,13 @@ use std::{error::Error, fmt};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SystemdUnitName(String);
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdUnitName {
     pub fn parse(value: String) -> Result<Self, SystemdEvidenceError> {
         let stem = value
@@ -40,6 +47,13 @@ pub struct SystemdManagerIdentity {
     user_id: u32,
 }
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdManagerIdentity {
     pub fn new(
         unique_name: String,
@@ -73,6 +87,13 @@ impl SystemdManagerIdentity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SystemdInvocationId([u8; 16]);
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdInvocationId {
     pub fn new(bytes: Vec<u8>) -> Result<Self, SystemdEvidenceError> {
         let bytes: [u8; 16] = bytes
@@ -98,12 +119,26 @@ pub enum SystemdJobOperation {
 
 /// Fixed conflict policy for this bounded adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 pub enum SystemdJobMode {
     Fail,
 }
 
 /// Closed physical state of the named unit at one fresh observation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 pub enum SystemdUnitState {
     Absent,
     Inactive,
@@ -114,6 +149,13 @@ pub enum SystemdUnitState {
     Unknown,
 }
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdUnitState {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -240,6 +282,13 @@ pub enum SystemdJobConclusion {
     Indeterminate(String),
 }
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdJobMode {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -259,6 +308,13 @@ pub struct SystemdJobAttempt {
     job_id: u32,
 }
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdJobAttempt {
     pub fn new(
         manager: SystemdManagerIdentity,
@@ -370,6 +426,13 @@ pub struct SystemdRuntimeObservation {
     enabled: bool,
 }
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 impl SystemdRuntimeObservation {
     pub fn new(
         target: ReconciliationTarget,
@@ -418,6 +481,13 @@ impl SystemdRuntimeObservation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 pub enum SystemdEvidenceError {
     InvalidUnit,
     InvalidManager,
@@ -444,6 +514,13 @@ impl fmt::Display for SystemdEvidenceError {
 
 impl Error for SystemdEvidenceError {}
 
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux")),
+    allow(
+        dead_code,
+        reason = "the portable journal retains the complete systemd evidence schema on unsupported targets"
+    )
+)]
 fn valid_unique_bus_name(value: &str) -> bool {
     let Some(rest) = value.strip_prefix(':') else {
         return false;
