@@ -22,7 +22,10 @@ use crate::gateway::{
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, MapAccess, SeqAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::{json, Value};
 use std::{
     ffi::OsStr,
@@ -94,6 +97,97 @@ struct StoredRecord {
     sequence: u64,
     kind: String,
     payload: Value,
+}
+
+struct UniqueJson(Value);
+
+impl<'de> Deserialize<'de> for UniqueJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct UniqueJsonVisitor;
+        impl<'de> Visitor<'de> for UniqueJsonVisitor {
+            type Value = UniqueJson;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("JSON without duplicate object keys")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::Number(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::Number(value.into())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(Value::Number)
+                    .map(UniqueJson)
+                    .ok_or_else(|| E::custom("invalid JSON number"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::String(value.to_owned())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::String(value)))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::Null))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(UniqueJson(Value::Null))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                UniqueJson::deserialize(deserializer)
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = sequence.next_element::<UniqueJson>()? {
+                    values.push(value.0);
+                }
+                Ok(UniqueJson(Value::Array(values)))
+            }
+
+            fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = object.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(de::Error::custom(format!(
+                            "duplicate gateway lifecycle JSON field: {key}"
+                        )));
+                    }
+                    values.insert(key, object.next_value::<UniqueJson>()?.0);
+                }
+                Ok(UniqueJson(Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_any(UniqueJsonVisitor)
+    }
 }
 
 impl StoredRecord {
@@ -803,7 +897,13 @@ fn validate_record_acknowledgement(
             "Gateway lifecycle record exceeds limit".into(),
         ));
     }
-    let record: StoredRecord = serde_json::from_slice(&bytes)
+    let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+    let unique = UniqueJson::deserialize(&mut deserializer)
+        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+    deserializer
+        .end()
+        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+    let record: StoredRecord = serde_json::from_value(unique.0)
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
     record.validate_header()?;
     verify_binding()?;
@@ -1573,5 +1673,34 @@ mod tests {
             || Ok(serde_json::to_vec(&changed).unwrap()),
         )
         .is_err());
+    }
+
+    #[test]
+    fn acknowledgement_rejects_duplicate_nested_fields_before_value_decoding() {
+        let record = stored(
+            "00000000-0000-4000-8000-000000000001",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        let encoded = serde_json::to_string(&record).unwrap();
+        let duplicate = encoded.replacen(
+            "\"service\":\"gui/501/so.nessa.gateway.prod\"",
+            "\"service\":\"gui/501/so.nessa.gateway.changed\",\"service\":\"gui/501/so.nessa.gateway.prod\"",
+            1,
+        );
+        assert_ne!(duplicate, encoded);
+
+        let error = validate_record_acknowledgement(
+            None,
+            || Ok(()),
+            || Ok(()),
+            || Ok(true),
+            || Ok(duplicate.as_bytes().to_vec()),
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("duplicate gateway lifecycle JSON field"));
     }
 }
