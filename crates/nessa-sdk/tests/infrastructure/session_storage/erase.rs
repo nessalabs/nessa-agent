@@ -105,6 +105,10 @@ async fn file_erase_removes_the_journal_and_keeps_the_lock_that_excludes_writers
     assert_same(&lease.load().await.unwrap().unwrap(), &fresh);
 }
 
+// Unix only: the failure is made by moving the storage directory away while
+// its lease is held, and Windows refuses to rename a directory with an open
+// file in it.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_failed_file_erase_is_typed_and_leaves_the_history_whole() {
     let root = tempfile::tempdir().unwrap();
