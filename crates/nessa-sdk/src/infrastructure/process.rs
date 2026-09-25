@@ -350,11 +350,6 @@ impl ProcessScope {
         Ok(())
     }
 
-    pub(crate) fn retained_directory_path(&self) -> Option<&Path> {
-        self.retained_directory
-            .as_ref()
-            .map(RetainedDirectory::path)
-    }
     async fn wait_scope(&mut self, budget: Duration) -> bool {
         let end = Instant::now() + budget;
         loop {

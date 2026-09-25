@@ -128,7 +128,8 @@ async fn an_agent_that_never_answers_runs_out_of_the_startup_budget_and_is_stopp
 #[tokio::test]
 async fn an_agent_that_cannot_be_launched_is_a_typed_launch_failure() {
     let (_root, mut config, model) = test_acp_configuration("advertised", 16);
-    config.executable = PathBuf::from("/nonexistent/nessa-agent-for-deletion");
+    config.executable =
+        ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/nessa-agent-for-deletion"));
     let provider = ClaudeAcpProvider::new(
         config,
         &model,

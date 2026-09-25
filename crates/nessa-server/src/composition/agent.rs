@@ -35,25 +35,40 @@
 //! That is reported where it is asked about — setup says the agent is not set
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
+#[cfg(unix)]
+use crate::agents::application::AgentCredentialSource;
 use crate::agents::domain::AgentId;
+#[cfg(unix)]
+use crate::agents::infrastructure::CredentialedClaudeProvider;
+#[cfg(unix)]
 use crate::conversation::application::{ConversationAgent, ProviderSessionErasers};
+#[cfg(any(unix, test))]
 use crate::core::RunError;
+#[cfg(unix)]
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
+    application::agent_execution::providers::ExecutableUseSnapshot,
+    infrastructure::acp::sessions::StdioMcpServer,
+};
+#[cfg(unix)]
+use nessa_sdk::{
     application::agent_execution::providers::UserImageSource,
-    domain::model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
-    infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
+    domain::{
+        common::value_objects::TokenLimits,
+        model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
+    },
+    infrastructure::{
+        model_metadata_json::load_catalog, opencode_acp::sessions::OpencodeAcpProvider,
+    },
 };
-use serde::Deserialize;
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    ffi::OsString,
-    fs::File,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use serde::{Deserialize, Deserializer};
+#[cfg(any(unix, test))]
+use std::collections::HashSet;
+#[cfg(unix)]
+use std::{collections::BTreeMap, ffi::OsString, fs::File, path::Path, sync::Arc};
+use std::{collections::HashMap, path::PathBuf};
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
@@ -77,19 +92,33 @@ pub(super) struct AgentsConfig {
 }
 
 /// How one agent is started, within the shared configuration above.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AgentRuntime {
     /// The executable this server runs for this agent.
-    pub command: PathBuf,
+    #[serde(deserialize_with = "unmanaged_executable")]
+    pub command: ExecutableUseSnapshot,
     /// What that executable is handed. A Node harness takes its entry script; an
     /// agent that speaks ACP itself takes its own subcommand.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Kept portable as configuration data even where no provider can consume it.
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub model: String,
     #[serde(default = "context_tokens")]
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub context_tokens: u32,
     #[serde(default = "output_tokens")]
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub output_tokens: u32,
     /// Whether this agent runs its own tools.
     ///
@@ -110,7 +139,10 @@ pub(super) struct AgentRuntime {
     /// builds none there is no one to tell. It is still parsed and still
     /// required there, because a configuration is either well-formed or it is
     /// not, and that does not vary by host.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(dead_code, reason = "non-Unix parses but cannot launch providers")
+    )]
     pub tools_enabled: bool,
 }
 
@@ -121,6 +153,13 @@ impl AgentRuntime {
     /// has to be on this machine for the launch to work, and an argument that is
     /// not a path is the agent's own vocabulary — a subcommand or a flag — which
     /// is nothing for this machine to be asked about.
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(
+            dead_code,
+            reason = "non-Unix production parses but cannot launch agent paths"
+        )
+    )]
     pub fn paths(&self) -> Vec<PathBuf> {
         self.args
             .iter()
@@ -128,6 +167,13 @@ impl AgentRuntime {
             .filter(|path| path.is_absolute())
             .collect()
     }
+}
+
+fn unmanaged_executable<'de, D>(deserializer: D) -> Result<ExecutableUseSnapshot, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    PathBuf::deserialize(deserializer).map(ExecutableUseSnapshot::unmanaged)
 }
 
 impl AgentsConfig {
@@ -173,27 +219,36 @@ impl AgentsConfig {
     /// Returns [`RunError::Agent`] for a name no adapter exists for, a name with
     /// no configuration under it, no agents at all, or several agents with no
     /// choice stated between them.
+    #[cfg(test)]
     pub fn selected(&self) -> Result<AgentId, RunError> {
+        self.selected_from(&self.agents().into_iter().map(|(agent, _)| agent).collect())
+    }
+
+    /// The default agent among the identities composition can resolve.
+    ///
+    /// Deferred agents have no startup runtime entry, but are still concrete
+    /// configured choices because their launch is resolved at cold open.
+    #[cfg(any(unix, test))]
+    pub fn selected_from(&self, configured: &HashSet<AgentId>) -> Result<AgentId, RunError> {
         if let Some(name) = self.unknown() {
             return Err(RunError::Agent(format!(
                 "configured agent \"{name}\" has no adapter in Nessa"
             )));
         }
-        let configured = self.agents();
         if let Some(name) = &self.selected {
             let agent = AgentId::parse(name).ok_or_else(|| {
                 RunError::Agent(format!("selected agent \"{name}\" has no adapter in Nessa"))
             })?;
-            if self.runtime(agent).is_none() {
+            if !configured.contains(&agent) {
                 return Err(RunError::Agent(format!(
-                    "selected agent \"{name}\" has no configuration under \"runtimes\""
+                    "selected agent \"{name}\" is not configured"
                 )));
             }
             return Ok(agent);
         }
-        match configured.as_slice() {
-            [(agent, _)] => Ok(*agent),
-            [] => Err(RunError::Agent(
+        match configured.len() {
+            1 => Ok(*configured.iter().next().expect("one configured agent")),
+            0 => Err(RunError::Agent(
                 "configure at least one agent under \"agents.runtimes\"".into(),
             )),
             _ => Err(RunError::Agent(
@@ -202,8 +257,9 @@ impl AgentsConfig {
         }
     }
 
-    fn validate(&self) -> Result<(), RunError> {
-        self.selected()?;
+    #[cfg(unix)]
+    fn validate_for(&self, configured: &HashSet<AgentId>) -> Result<(), RunError> {
+        self.selected_from(configured)?;
         if [&self.catalog, &self.workspace]
             .iter()
             .any(|path| !path.is_absolute())
@@ -215,7 +271,7 @@ impl AgentsConfig {
             // is not a path this server resolves at all — it is the agent's own
             // vocabulary, passed through untouched — so there is nothing here to
             // reject it for.
-            if !runtime.command.is_absolute()
+            if !runtime.command.executable().is_absolute()
                 || runtime.model.trim().is_empty()
                 || runtime.output_tokens == 0
                 || runtime.context_tokens <= runtime.output_tokens
@@ -242,6 +298,7 @@ impl AgentsConfig {
 ///
 /// A developer loop has no host and no such variable, and there the process
 /// `PATH` *is* the developer's own shell path, which is the right answer.
+#[cfg(unix)]
 fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
     resolved
         .filter(|path| !path.is_empty())
@@ -264,15 +321,14 @@ fn output_tokens() -> u32 {
 /// shorter and would also hand each agent a pointer into the others'
 /// configuration.
 ///
-/// Opencode's are the XDG ones, because that is what it resolves its own
-/// directories from — config, data, cache and state, and with them its
-/// providers, its plugins and whatever account the person signed in on. Under
-/// `env_clear` an unnamed `XDG_CONFIG_HOME` does not mean "unset", it means
-/// Opencode falls back to `$HOME/.config` and reads a different installation
-/// than the one the readiness probe answered about. They are general-purpose
-/// variables rather than Opencode's own, but they are the person's own paths
-/// and every agent here is already given `HOME`, so nothing is handed over that
-/// was not already reachable.
+/// OpenCode's XDG variables are collected at this shared boundary, then treated
+/// as untrusted launch input by its SDK adapter. That adapter removes `HOME`, all
+/// four XDG roots, and alternate config inputs before retaining the provider
+/// configuration. At process spawn it assigns fresh private HOME, config, data,
+/// cache, and state roots, disables project config and external plugins, and
+/// therefore exposes none of the caller's plugins, provider configuration, or
+/// `auth.json` account data. Credentials enter through the separately selected
+/// credential environment alone.
 ///
 /// Nothing here tells an agent *how* to sign in. Codex's adapter will take a
 /// `DEFAULT_AUTH_REQUEST` and sign itself in from the environment key at
@@ -283,6 +339,7 @@ fn output_tokens() -> u32 {
 /// user's disk, so it is not asked for. Setting
 /// `cli_auth_credentials_store = "ephemeral"` does not avoid the write, which
 /// was checked against the pinned adapter rather than assumed.
+#[cfg(unix)]
 fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     // `PATH` is the one entry that is not simply inherited: under launchd this
     // process's own `PATH` is launchd's, not the user's, and an agent given it
@@ -306,6 +363,7 @@ fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
 /// readable back without a test writing to the environment every other test is
 /// reading. `path` is the entry `agent_search_path` already settled; `lookup`
 /// is every other key.
+#[cfg(unix)]
 fn inherited_environment(
     agent: AgentId,
     path: Option<OsString>,
@@ -338,15 +396,17 @@ fn inherited_environment(
 /// The sign-in this agent is started with, read from this server's own
 /// environment. Named per agent so none is handed another's key.
 ///
-/// Opencode names none. It reaches the models this binding runs it on without
-/// an account at all, and a key for its gateway is something a person gives
-/// Opencode itself, under `HOME` — so there is no variable here that would
-/// start a signed-in Opencode, and inventing one would put somebody else's key
-/// into its environment.
+/// OpenCode names none here. Its one static profile chooses either the injected
+/// packaged credential source or the standalone `OPENCODE_API_KEY` captured by
+/// composition. Keeping that choice out of this fixed-provider helper prevents
+/// ambient credentials from widening packaged policy.
+#[cfg(unix)]
 fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let keys: &[&str] = match agent {
         AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+        // OpenCode credentials have one owner: the injected stage-scoped
+        // source used by the current-agent resolver.
         AgentId::Opencode => &[],
     };
     let mut environment = BTreeMap::new();
@@ -367,6 +427,7 @@ fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
 /// session-bus variables decide whether a keyring can be opened at all.
 /// Inheriting this server's whole environment would let the probe find a
 /// sign-in the launch then cannot use.
+#[cfg(unix)]
 pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let mut environment = process_environment(agent);
     environment.extend(credential_environment(agent));
@@ -378,6 +439,7 @@ pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString>
 /// Not a preference: each harness speaks to one vendor's API and is signed in
 /// to it, so a catalog entry from another vendor is a model that agent cannot
 /// reach, and saying so at startup beats a provider refusing every prompt.
+#[cfg(unix)]
 fn catalog_provider(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "anthropic",
@@ -391,10 +453,20 @@ fn catalog_provider(agent: AgentId) -> &'static str {
 /// Read here rather than inside the provider because two things need it: the
 /// provider is built for it, and uploaded images are fitted to the image
 /// limits it publishes.
+#[cfg(unix)]
 pub(super) fn model(
     agent: AgentId,
     config: &AgentsConfig,
     runtime: &AgentRuntime,
+) -> Result<ModelMetadata, RunError> {
+    model_by_id(agent, config, &runtime.model)
+}
+
+#[cfg(unix)]
+fn model_by_id(
+    agent: AgentId,
+    config: &AgentsConfig,
+    model_id: &str,
 ) -> Result<ModelMetadata, RunError> {
     ModelMetadata::try_from(
         load_catalog(
@@ -402,10 +474,37 @@ pub(super) fn model(
                 .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
         )
         .map_err(|e| RunError::Agent(e.to_string()))?
-        .select(catalog_provider(agent), &runtime.model)
+        .select(catalog_provider(agent), model_id)
         .map_err(|e| RunError::Agent(e.to_string()))?,
     )
     .map_err(|e| RunError::Agent(e.to_string()))
+}
+
+/// Validate the static OpenCode model, budgets, and tool policy without effects.
+#[cfg(unix)]
+pub(super) struct ValidatedOpenCodePolicy {
+    model: ModelMetadata,
+    limits: TokenLimits,
+}
+
+#[cfg(unix)]
+impl ValidatedOpenCodePolicy {
+    pub(super) fn model(&self) -> &ModelMetadata {
+        &self.model
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn validate_opencode_policy(
+    config: &AgentsConfig,
+    runtime: &AgentRuntime,
+) -> Result<ValidatedOpenCodePolicy, RunError> {
+    let model = model(AgentId::Opencode, config, runtime)?;
+    let limits = TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    OpencodeAcpProvider::validate_policy(&model, limits, runtime.tools_enabled, true)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    Ok(ValidatedOpenCodePolicy { model, limits })
 }
 
 /// The image limits every configured agent can meet.
@@ -420,10 +519,22 @@ pub(super) fn model(
 /// `None` is a gateway that keeps no images: either no configured model
 /// publishes image input, or the models between them share no encoding, and in
 /// both cases there is no image this gateway could store and then send.
-pub(super) fn image_limits(config: &AgentsConfig) -> Result<Option<ImageInputLimits>, RunError> {
+#[cfg(unix)]
+pub(super) fn image_limits(
+    config: &AgentsConfig,
+    current_opencode: Option<&ModelMetadata>,
+) -> Result<Option<ImageInputLimits>, RunError> {
     let mut strictest: Option<ImageInputLimits> = None;
-    for (agent, runtime) in config.agents() {
-        let Some(limits) = model(agent, config, runtime)?.image_input().cloned() else {
+    let configured = config
+        .agents()
+        .into_iter()
+        .filter(|(agent, _)| *agent != AgentId::Opencode)
+        .map(|(agent, runtime)| (agent, runtime.model.as_str()));
+    let configured = configured
+        .map(|(agent, model_id)| model_by_id(agent, config, model_id))
+        .chain(current_opencode.cloned().map(Ok));
+    for model in configured {
+        let Some(limits) = model?.image_input().cloned() else {
             // A model that takes no images cannot be met by any image at all.
             return Ok(None);
         };
@@ -447,6 +558,7 @@ pub(super) fn image_limits(config: &AgentsConfig) -> Result<Option<ImageInputLim
 /// edge exceeds the maximum: each model already satisfies it, so the smallest
 /// maximum is at least its own model's smaller edges, and so at least the
 /// smallest of them.
+#[cfg(unix)]
 fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageInputLimits> {
     let media_types: Vec<_> = held
         .media_types()
@@ -494,10 +606,11 @@ fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageIn
 /// it is set to is not a degraded server.
 ///
 /// Most of readiness is answered somewhere else and deliberately stays that
-/// way: `LocalAgentProbe` stats each agent's command on every ask, so an agent
-/// missing here because it is not installed yet still reports `not-installed`
-/// now and `ready` the moment a person installs it. Narrowing the probe to what
-/// was built at startup would freeze that answer to what was true once.
+/// way: the current-agent resolver reads the managed store on every ask, so an
+/// agent missing here because it is not installed yet still reports
+/// `not-installed` now and `ready` after a later verified install. Narrowing
+/// the probe to what was built at startup would freeze that answer to what was
+/// true once.
 ///
 /// That holds for everything an install can change and for nothing else, which
 /// is why the agents left out come back in two groups rather than one. See
@@ -508,13 +621,31 @@ pub(super) fn providers(
     directory: &Path,
     clock: Arc<dyn Clock>,
     images: Arc<dyn UserImageSource>,
+    credentials: Arc<dyn AgentCredentialSource>,
+    deferred: &HashSet<AgentId>,
 ) -> Result<ConfiguredAgents, RunError> {
-    config.validate()?;
-    let selected = config.selected()?;
+    let configured: HashSet<_> = config
+        .agents()
+        .into_iter()
+        .filter(|(agent, _)| *agent != AgentId::Opencode)
+        .map(|(agent, _)| agent)
+        .chain(deferred.iter().copied())
+        .collect();
+    config.validate_for(&configured)?;
+    let selected = config.selected_from(&configured)?;
     let mut providers = HashMap::new();
     let mut unavailable = HashSet::new();
     let mut erasers = ProviderSessionErasers::default();
+    let dependencies = ProviderDependencies {
+        directory: directory.to_owned(),
+        clock,
+        images,
+        credentials,
+    };
     for (agent, runtime) in config.agents() {
+        if agent == AgentId::Opencode {
+            continue;
+        }
         // Every agent is given the source, not only the one whose profile is
         // known to use it: the runtime sends an image only to an agent that
         // advertised `promptCapabilities.image`, so an agent that takes none is
@@ -527,9 +658,9 @@ pub(super) fn providers(
             agent,
             config,
             runtime,
-            directory,
-            clock.clone(),
-            images.clone(),
+            &dependencies,
+            credential_environment(agent),
+            None,
         ) {
             Ok(provider) => provider,
             Err(failure) if agent == selected => return Err(failure),
@@ -578,20 +709,61 @@ pub(super) fn providers(
         erasers,
     })
 }
-#[cfg(not(unix))]
-pub(super) fn providers(
+
+/// Build one provider from a launch and credential observation owned by composition.
+#[cfg(unix)]
+pub(super) fn provider_for(
+    agent: AgentId,
     config: &AgentsConfig,
-    _: &Path,
-    _: Arc<dyn Clock>,
-    _: Arc<dyn UserImageSource>,
-) -> Result<ConfiguredAgents, RunError> {
-    config.validate()?;
-    Err(RunError::Agent(
-        "ACP agents require Unix process supervision".into(),
-    ))
+    runtime: &AgentRuntime,
+    dependencies: &ProviderDependencies,
+    credential_environment: BTreeMap<OsString, OsString>,
+    policy: &ValidatedOpenCodePolicy,
+) -> Result<ConversationAgent, RunError> {
+    let build::ProviderComposition {
+        provider,
+        execution_audit,
+        session_eraser: _,
+    } = build::provider(
+        agent,
+        config,
+        runtime,
+        dependencies,
+        credential_environment,
+        Some(policy),
+    )?;
+    Ok(ConversationAgent {
+        provider,
+        execution_audit,
+        reserved_output_tokens: runtime.output_tokens,
+        readiness: None,
+    })
 }
 
+/// How one agent built from a current observation deletes its own record of a
+/// session: the same binding [`provider_for`] would build, for the eraser
+/// alone.
+#[cfg(unix)]
+pub(super) fn session_eraser_for(
+    agent: AgentId,
+    config: &AgentsConfig,
+    runtime: &AgentRuntime,
+    dependencies: &ProviderDependencies,
+    credential_environment: BTreeMap<OsString, OsString>,
+    policy: &ValidatedOpenCodePolicy,
+) -> Result<Arc<dyn crate::conversation::application::ProviderSessionEraser>, RunError> {
+    build::provider(
+        agent,
+        config,
+        runtime,
+        dependencies,
+        credential_environment,
+        Some(policy),
+    )
+    .map(|built| built.session_eraser)
+}
 /// What building every configured agent settled.
+#[cfg(unix)]
 pub(super) struct ConfiguredAgents {
     /// Every agent a conversation can be created on or reopened on this run.
     pub providers: HashMap<AgentId, ConversationAgent>,
@@ -618,15 +790,27 @@ pub(super) struct ConfiguredAgents {
     /// session, keyed by agent.
     pub erasers: ProviderSessionErasers,
 }
+
+/// Effects shared by every provider generation built for one conversation root.
+#[derive(Clone)]
+#[cfg(unix)]
+pub(super) struct ProviderDependencies {
+    pub(super) directory: PathBuf,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) images: Arc<dyn UserImageSource>,
+    pub(super) credentials: Arc<dyn AgentCredentialSource>,
+}
 #[cfg(unix)]
 mod build {
     use super::super::agent_budgets as budgets;
-    use super::{AgentId, AgentRuntime, AgentsConfig, RunError};
+    use super::{
+        AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider, ProviderDependencies,
+        RunError, ValidatedOpenCodePolicy,
+    };
     use crate::conversation::{
         application::ProviderSessionEraser,
         infrastructure::{BindingSessionEraser, DurableExecutionAudit},
     };
-    use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
         application::agent_execution::{
             agents::AgentError,
@@ -643,16 +827,11 @@ mod build {
             common::value_objects::TokenLimits,
         },
         infrastructure::{
-            acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
-            codex_acp::sessions::CodexAcpProvider, opencode_acp::sessions::OpencodeAcpProvider,
+            acp::sessions::AcpConfig, codex_acp::sessions::CodexAcpProvider,
+            opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
-    use std::{
-        collections::BTreeMap,
-        ffi::OsString,
-        path::{Path, PathBuf},
-        sync::Arc,
-    };
+    use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
 
     pub(super) struct ProviderComposition {
         pub(super) provider: Arc<dyn AgentProvider>,
@@ -710,7 +889,7 @@ mod build {
             .workspace
             .canonicalize()
             .is_ok_and(|workspace| workspace.is_dir())
-            && runtime.command.is_file()
+            && runtime.command.executable().is_file()
             && runtime.paths().iter().all(|path| path.exists())
     }
 
@@ -765,12 +944,20 @@ mod build {
         agent: AgentId,
         config: &AgentsConfig,
         runtime: &AgentRuntime,
-        directory: &Path,
-        clock: Arc<dyn Clock>,
-        images: Arc<dyn UserImageSource>,
+        dependencies: &ProviderDependencies,
+        credential_environment: BTreeMap<OsString, OsString>,
+        validated_opencode: Option<&ValidatedOpenCodePolicy>,
     ) -> Result<ProviderComposition, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
-        let model = super::model(agent, config, runtime)?;
+        let model = match validated_opencode {
+            Some(policy) if agent == AgentId::Opencode => policy.model.clone(),
+            Some(_) => {
+                return Err(RunError::Agent(
+                    "OpenCode policy was supplied to another agent".into(),
+                ));
+            }
+            None => super::model(agent, config, runtime)?,
+        };
         let workspace = config
             .workspace
             .canonicalize()
@@ -781,17 +968,25 @@ mod build {
                 agent.name()
             )));
         }
-        let limits = TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
-            .map_err(|e| RunError::Agent(e.to_string()))?;
-        let audit =
-            Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
+        let limits = match validated_opencode {
+            Some(policy) => policy.limits,
+            None => TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
+                .map_err(|e| RunError::Agent(e.to_string()))?,
+        };
+        let audit = Arc::new(
+            DurableExecutionAudit::new(
+                dependencies.directory.join("audit"),
+                dependencies.clock.clone(),
+            )
+            .map_err(invalid)?,
+        );
         let acp = launch_configuration(
             config,
             runtime,
             workspace,
             super::process_environment(agent),
-            super::credential_environment(agent),
-            Some(images),
+            credential_environment,
+            Some(dependencies.images.clone()),
         );
         let prompt = system_prompt()?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
@@ -800,9 +995,15 @@ mod build {
         let (provider, binding): (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) =
             match agent {
                 AgentId::Claude => bound(
-                    ClaudeAcpProvider::new(acp, &model, limits, audit.clone())
-                        .map_err(failed)?
-                        .with_system_prompt(prompt),
+                    CredentialedClaudeProvider::new(
+                        acp,
+                        model,
+                        limits,
+                        audit.clone(),
+                        prompt,
+                        dependencies.credentials.clone(),
+                    )
+                    .map_err(failed)?,
                 ),
                 AgentId::Codex => bound(
                     CodexAcpProvider::new(acp, &model, limits, audit.clone())

@@ -8,7 +8,7 @@
 mod ports;
 pub use ports::{
     AgentCredential, AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource,
-    AgentProbe, ProbeFailure,
+    AgentProbe, AgentProbeEvidence, ProbeFailure,
 };
 mod readiness;
 pub use readiness::ReadAgentReadiness;

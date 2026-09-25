@@ -7,6 +7,7 @@
 //! the client back under the gateway and loses the typed answer again.
 use super::{build::launch_configuration, AgentRuntime, AgentsConfig};
 use crate::composition::agent_budgets;
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use nessa_sdk::application::agent_execution::providers::UserImageSource;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -30,7 +31,7 @@ fn agents_config() -> AgentsConfig {
 
 fn runtime() -> AgentRuntime {
     AgentRuntime {
-        command: PathBuf::from("/runtime/node"),
+        command: ExecutableUseSnapshot::unmanaged(PathBuf::from("/runtime/node")),
         args: vec!["/runtime/acp/index.js".into()],
         model: "claude-sonnet-5".into(),
         context_tokens: 100_000,

@@ -54,7 +54,7 @@ fn cleanup_fault_process(
 ) -> crate::infrastructure::acp::sessions::binding::ProcessFactory {
     let config = config.clone();
     Arc::new(move || {
-        let mut command = tokio::process::Command::new(&config.executable);
+        let mut command = tokio::process::Command::new(config.executable.executable());
         command
             .args(&config.arguments)
             .current_dir(&config.workspace)

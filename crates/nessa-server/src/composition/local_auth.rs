@@ -1,32 +1,40 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
-use super::{agent::AgentsConfig, warm_up::PreparedRuntime};
+use super::agent::AgentsConfig;
+#[cfg(unix)]
+use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
+#[cfg(unix)]
+use super::opencode_profile::EffectiveOpenCodeProfile;
+#[cfg(unix)]
+use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+#[cfg(unix)]
 use crate::{
+    agent_warm_up::application::AgentWarmUp,
     agent_warm_up::{
-        application::AgentWarmUp,
         domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
+    agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
+    attachments::infrastructure::ModelImageNormalizer,
+    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
+    conversation::infrastructure::{
+        DurableConversationCreationAudit, DurableConversationDeletionAudit,
+        DurableConversationFileLinkAudit, LocalConversationRepository, LocalConversationSummaries,
+    },
+};
+use crate::{
     agents::{
-        domain::AgentId,
-        infrastructure::{AgentLaunchFiles, LocalAgentProbe},
+        application::{AgentCredentialSource, AgentProbe},
+        infrastructure::{LocalAgentCredentials, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
-    attachments::{application::AttachmentService, infrastructure::ModelImageNormalizer},
+    attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
-    conversation::{
-        application::{
-            ConversationAgents, ConversationDependencies, ConversationLimits, ConversationService,
-        },
-        infrastructure::{
-            DurableConversationCreationAudit, DurableConversationDeletionAudit,
-            DurableConversationFileLinkAudit, LocalConversationRepository,
-            LocalConversationSummaries,
-        },
-    },
+    conversation::application::ConversationService,
     core::RunError,
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
 };
+use nessa_agent_credentials::CredentialNamespace;
 use nessa_auth::{
     adapters::{cedar::CedarPolicyEvaluator, local::LocalCredentialStore},
     application::{
@@ -39,9 +47,12 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
+#[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
+#[cfg(unix)]
+use std::collections::HashSet;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -64,10 +75,29 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
-    /// One per configured agent, each preparing its own runtime. Empty when no
-    /// agent is configured, which is the same gateway that serves no
-    /// conversations.
-    pub(super) warm_ups: Vec<AgentWarmUp>,
+    /// Startup preparations for fixed providers plus the current OpenCode
+    /// resolver when configured. Empty when no agent is configured.
+    pub(super) warm_ups: Vec<StartupWarmUp>,
+}
+
+pub(super) enum StartupWarmUp {
+    #[cfg(unix)]
+    Fixed(AgentWarmUp),
+    #[cfg(unix)]
+    Current(Arc<CurrentAgentResolver>),
+}
+
+impl StartupWarmUp {
+    #[cfg(unix)]
+    pub(super) fn start(&self) {
+        match self {
+            Self::Fixed(warm_up) => warm_up.start(),
+            Self::Current(resolver) => resolver.start_warm_up(),
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn start(&self) {}
 }
 
 /// Construct the guarded product route from a previously initialized local registry.
@@ -110,22 +140,42 @@ pub(super) fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
+    let credential_namespace = CredentialNamespace::new(
+        config.stage.as_str().to_owned(),
+        config.instance().map(str::to_owned),
+    )
+    .map_err(setup_error)?;
+    let agent_credentials: Arc<dyn AgentCredentialSource> = Arc::new(
+        LocalAgentCredentials::from_environment(credential_namespace),
+    );
     // Built here, before the launch files below, because building it is how
     // this server finds out which configured agents cannot be started at all,
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
-    let (conversations, unavailable, warm_ups) = match &settings.agents {
+    let managed_opencode = bundle.is_some();
+    let (conversations, agent_probe, warm_ups) = match &settings.agents {
         Some(agents) => {
-            let built = conversations(agents, directory)?;
+            let built = conversations(
+                agents,
+                directory,
+                agent_credentials.clone(),
+                managed_opencode,
+            )?;
             (
                 Some((built.service, built.attachments)),
-                built.unavailable,
+                built.agent_probe,
                 built.warm_ups,
             )
         }
-        None => (None, HashSet::new(), Vec::new()),
+        None => (
+            None,
+            Arc::new(LocalAgentProbe::from_environment(
+                HashMap::new(),
+                agent_credentials.clone(),
+            )) as Arc<dyn AgentProbe>,
+            Vec::new(),
+        ),
     };
-    let agent_launch_files = launch_files(settings.agents.as_ref(), &unavailable);
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -140,7 +190,7 @@ pub(super) fn product_state(
             clock: Arc::new(SystemClock),
             policy,
             uptime_clock: uptime,
-            agent_probe: Arc::new(LocalAgentProbe::from_environment(agent_launch_files)),
+            agent_probe,
         },
     )
     .with_admin(admin)
@@ -184,6 +234,7 @@ pub(super) fn product_state(
 /// so the probe has nothing to stat and readiness reports the agent as not set
 /// up on this installation rather than offering a conversation that would be
 /// refused. See [`super::agent::ConfiguredAgents::unavailable`].
+#[cfg(unix)]
 fn launch_files(
     agents: Option<&AgentsConfig>,
     unavailable: &HashSet<AgentId>,
@@ -198,7 +249,7 @@ fn launch_files(
                     (
                         id,
                         AgentLaunchFiles {
-                            command: runtime.command.clone(),
+                            command: runtime.command.executable().to_owned(),
                             paths: runtime.paths(),
                             environment: super::agent::launch_environment(id),
                         },
@@ -218,13 +269,31 @@ struct BuiltConversations {
     /// before the readiness probe is, which is why this is a function rather
     /// than the tail of [`product_state`]. See
     /// [`super::agent::ConfiguredAgents`].
-    unavailable: HashSet<AgentId>,
-    /// One per configured agent, each preparing its own runtime. Started by the
-    /// server lifecycle once the gateway is listening, not here.
-    warm_ups: Vec<AgentWarmUp>,
+    agent_probe: Arc<dyn AgentProbe>,
+    /// Fixed-provider preparations plus the current OpenCode resolver. Started
+    /// by the server lifecycle once the gateway is listening, not here.
+    warm_ups: Vec<StartupWarmUp>,
 }
 
-fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConversations, RunError> {
+#[cfg(not(unix))]
+fn conversations(
+    _agents: &AgentsConfig,
+    _directory: &Path,
+    _credentials: Arc<dyn AgentCredentialSource>,
+    _managed_opencode: bool,
+) -> Result<BuiltConversations, RunError> {
+    Err(RunError::Agent(
+        "ACP agents require Unix process supervision".into(),
+    ))
+}
+
+#[cfg(unix)]
+fn conversations(
+    agents: &AgentsConfig,
+    directory: &Path,
+    credentials: Arc<dyn AgentCredentialSource>,
+    managed_opencode: bool,
+) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     let root = directory
         .parent()
@@ -233,7 +302,18 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let selected = agents.selected()?;
+    let host = crate::agent_install::infrastructure::host_platform();
+    let opencode = EffectiveOpenCodeProfile::decide(
+        agents,
+        managed_opencode,
+        &host,
+        (!managed_opencode)
+            .then(|| std::env::var_os("OPENCODE_API_KEY"))
+            .flatten(),
+    );
+    if let Some(reason) = opencode.invalid_reason() {
+        tracing::error!(%reason, "configured OpenCode policy is invalid");
+    }
     // Ownership records come first. A binding needs somewhere to read image
     // bytes, reading them needs the attachment store, and beginning an
     // upload needs to ask who owns a conversation: so the repository is
@@ -242,6 +322,9 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         LocalConversationRepository::new(root.join("metadata"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    let current_opencode_model = opencode
+        .configured()
+        .map(|profile| profile.validated().model());
     let attachments = super::attachments::attachments(
         &directory
             .parent()
@@ -256,15 +339,26 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         // image library does not read itself.
         Arc::new(
             ModelImageNormalizer::new(
-                super::agent::image_limits(agents)?.as_ref(),
+                super::agent::image_limits(agents, current_opencode_model)?.as_ref(),
                 nessa_images::platform_decoder(),
             )
             .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
         ),
         clock.clone(),
     )?;
-    let mut built =
-        super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+    let deferred = if opencode.configured().is_some() {
+        HashSet::from([AgentId::Opencode])
+    } else {
+        HashSet::new()
+    };
+    let mut built = super::agent::providers(
+        agents,
+        &root,
+        clock.clone(),
+        attachments.images.clone(),
+        credentials.clone(),
+        &deferred,
+    )?;
     // One warm-up per configured agent, because each runs its own runtime
     // and the operating system scans each of them separately on its first
     // execution. One for the server would leave whichever agent it did not
@@ -308,7 +402,7 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
             runtime,
         );
         agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
-        warm_ups.push(prepared);
+        warm_ups.push(StartupWarmUp::Fixed(prepared));
     }
     let storage = Arc::new(
         LocalFileStorage::new(root.join("sessions"))
@@ -332,9 +426,43 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         LocalConversationSummaries::new(root.join("summaries"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    let fixed_probe = LocalAgentProbe::from_environment(
+        launch_files(Some(agents), &built.unavailable)
+            .into_iter()
+            .filter(|(agent, _)| *agent != AgentId::Opencode)
+            .collect(),
+        credentials.clone(),
+    );
+    let warm_current_opencode = opencode.configured().is_some();
+    let resolver = Arc::new(CurrentAgentResolver::new(CurrentAgentResolverInput {
+        fixed: built.providers,
+        fixed_probe,
+        config: agents.clone(),
+        opencode,
+        store: Arc::new(crate::agent_install::infrastructure::ManagedRuntimes::new(
+            directory
+                .parent()
+                .expect("conversation root already validated")
+                .join("agents"),
+        )),
+        host,
+        credentials,
+        provider_directory: root.clone(),
+        clock: clock.clone(),
+        images: attachments.images.clone(),
+        warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
+    }));
+    let configured = resolver.configured();
+    let selected = resolver.default_agent()?;
+    // The one registry of how each agent deletes its own record of a session:
+    // the fixed agents' bindings, built above, and OpenCode's, whose binding
+    // is built from the current generation each time it is asked, as a cold
+    // conversation's provider is.
+    let mut erasers = built.erasers;
+    resolver.register_session_eraser(&mut erasers);
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: ConversationAgents::new(built.providers, selected)
+            agents: ConversationAgents::from_source(configured, selected, resolver.clone())
                 .map_err(|error| RunError::Agent(error.to_string()))?,
             storage,
             metadata,
@@ -343,7 +471,7 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
             deletion_audit,
             attachments: Some(attachments.conversations),
             summaries,
-            provider_sessions: built.erasers,
+            provider_sessions: erasers,
             deletion_budgets: super::agent_budgets::deletion(),
             clock,
         },
@@ -351,10 +479,13 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         Some(agents.workspace.to_string_lossy().into_owned()),
     )
     .map_err(|error| RunError::Agent(error.to_string()))?;
+    if warm_current_opencode {
+        warm_ups.push(StartupWarmUp::Current(resolver.clone()));
+    }
     Ok(BuiltConversations {
         service,
         attachments: attachments.service,
-        unavailable: built.unavailable,
+        agent_probe: resolver,
         warm_ups,
     })
 }
@@ -407,6 +538,6 @@ impl CredentialAdmin for LocalAdmin {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/composition/local_auth.rs"]
 mod tests;

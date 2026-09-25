@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_failure_names_its_operation_and_keeps_os_evidence() {
+    fn publication_failure_names_its_operation_and_preserves_its_source() {
         let captured = Capture(Arc::new(Mutex::new(Vec::new())));
         let subscriber = tracing_subscriber::fmt()
             .with_writer(captured.clone())
@@ -342,8 +342,10 @@ mod tests {
         let endpoint = endpoint("ws://127.0.0.1:9137");
         let advertisement = GatewayEndpointAdvertisement::new(endpoint, None).unwrap();
 
-        let error = tracing::subscriber::with_default(subscriber, || {
-            publication.publish(&advertisement).unwrap_err()
+        let (error, returned) = tracing::subscriber::with_default(subscriber, || {
+            let error = publication.publish(&advertisement).unwrap_err();
+            let source = io::Error::new(ErrorKind::PermissionDenied, SourceRoot(SourceMarker));
+            (error, publication_failed("replace endpoint record", source))
         });
         let output = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
 
@@ -359,13 +361,6 @@ mod tests {
         );
         assert!(output.contains("error.kind=NotFound"), "{output}");
         assert!(output.contains("error.raw_os_code=Some("), "{output}");
-    }
-
-    #[test]
-    fn publication_failure_returns_the_original_error_source() {
-        let error = io::Error::new(ErrorKind::PermissionDenied, SourceRoot(SourceMarker));
-        let returned = publication_failed("replace endpoint record", error);
-
         assert_eq!(returned.kind(), ErrorKind::PermissionDenied);
         assert!(returned
             .get_ref()

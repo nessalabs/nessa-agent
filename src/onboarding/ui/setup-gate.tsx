@@ -5,7 +5,7 @@ import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
 import { useSetupHandoff } from "./use-setup-handoff"
-import type { AgentReadinessSource } from "../application/ports"
+import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
 import type { SetupRecovery } from "../application/setup-recovery"
 import { isOnboardingCompleted } from "../model/onboarding"
 
@@ -117,12 +117,15 @@ export function HandoffFailed({
  */
 export function SetupGate({
   agents,
+  apiKeys,
   children,
   onHandOver,
 }: {
   /** Where setup asks what each agent's runtime can do. Injected, so a test
    * substitutes an answer instead of a network. */
   agents: AgentReadinessSource
+  /** Native secure-store boundary, present only on a surface that owns it. */
+  apiKeys?: AgentApiKeySink
   /** The panel, for a surface that has to become it in place. Omitted by the
    * desktop setup window, which closes instead. */
   children?: React.ReactNode
@@ -225,6 +228,7 @@ export function SetupGate({
         <SetupChrome onClose={onboarding.dismiss} />
         <Onboarding
           state={onboarding.state}
+          apiKeys={apiKeys}
           accelerator={onboarding.accelerator}
           onBegin={onboarding.begin}
           onChoose={onboarding.choose}

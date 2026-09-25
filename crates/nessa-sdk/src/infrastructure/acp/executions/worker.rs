@@ -408,7 +408,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     let completed: Result<WorkerResult, AgentError> = catch_worker_panic(async {
         Ok::<WorkerResult, AgentError>(
             worker
-                .finish(&mut execution, result, &mut execution_reply)
+                .finish(&mut execution, result, &mut execution_reply, &recovery)
                 .await,
         )
     })
@@ -430,7 +430,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
                 execution_reply = worker.active.take().map(|active| active.reply);
             }
             let resources = match physical {
-                Ok(outcome) => ResourceCleanup::Confirmed(outcome),
+                Ok(outcome) => recovery.confirm_physical(outcome).await.resources().clone(),
                 Err(error) => ResourceCleanup::Unconfirmed(error),
             };
             let _ = worker.retain_operation(OperationEffectPhase::Worker, error.clone());
@@ -453,7 +453,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
             }
         }
     };
-    if !cleanup.is_confirmed() {
+    if recovery.needs_resource().await {
         recovery.retain(worker.scope).await;
     }
     if let Some(ready) = ready {
@@ -520,6 +520,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut Option<ExecutionController>,
         result: Result<(), WorkerFailure>,
         execution_reply: &mut Option<ExecutionReply>,
+        recovery: &ProcessCleanup,
     ) -> WorkerResult {
         // No command may enter a generation that has left its drive loop. The final
         // execution acknowledgement can wake a different runtime thread immediately.
@@ -652,7 +653,7 @@ impl<P: AcpProfile> Worker<P> {
             }
         }
         let resources = match physical {
-            Ok(outcome) => ResourceCleanup::Confirmed(outcome),
+            Ok(outcome) => recovery.confirm_physical(outcome).await.resources().clone(),
             Err(error) => ResourceCleanup::Unconfirmed(error),
         };
         let projection =

@@ -8,7 +8,11 @@
  * answer comes from.
  */
 
-import type { AgentReadinessFailure, AgentReadinessReport } from "../model/onboarding"
+import type {
+  AgentId,
+  AgentReadinessFailure,
+  AgentReadinessReport,
+} from "../model/onboarding"
 
 /**
  * What came back when the runtimes were asked.
@@ -26,6 +30,61 @@ export type AgentReadinessAnswer =
 export interface AgentReadinessSource {
   /** Ask once. Never rejects: every way of not getting an answer is a value. */
   read(): Promise<AgentReadinessAnswer>
+}
+
+/** Agents whose API keys the native host explicitly knows how to store. */
+export type ApiKeyAgent = Extract<AgentId, "claude" | "opencode">
+
+/** Confirmed secure-store effect and its independent audit delivery. */
+export type AgentApiKeySave =
+  { readonly status: "saved" } | { readonly status: "saved-audit-failed" }
+
+export type AgentApiKeyAuditStatus = "recorded" | "failed" | "unknown"
+
+export type AgentApiKeySaveRejectionReason =
+  | "untrusted-caller"
+  | "unsupported-agent"
+  | "invalid-credential"
+  | "store-unavailable"
+  | "audit-unavailable"
+
+export type AgentApiKeySaveRejection =
+  | { readonly reason: Exclude<AgentApiKeySaveRejectionReason, "invalid-credential"> }
+  | {
+      readonly reason: "invalid-credential"
+      readonly auditStatus: Exclude<AgentApiKeyAuditStatus, "unknown">
+    }
+
+/** A validated native refusal that proves no secure-store replacement occurred. */
+export class AgentApiKeySaveRejected extends Error {
+  constructor(readonly rejection: AgentApiKeySaveRejection) {
+    super("The native credential save was refused")
+    this.name = "AgentApiKeySaveRejected"
+  }
+
+  get reason() {
+    return this.rejection.reason
+  }
+
+  get auditStatus() {
+    return this.rejection.reason === "invalid-credential"
+      ? this.rejection.auditStatus
+      : undefined
+  }
+}
+
+/** A save whose secure-store effect could not be classified at the native boundary. */
+export class AgentApiKeySaveUncertain extends Error {
+  constructor(readonly auditStatus: AgentApiKeyAuditStatus) {
+    super("The native credential save outcome is uncertain")
+    this.name = "AgentApiKeySaveUncertain"
+  }
+}
+
+/** The native host boundary that saves one Nessa-owned API key. */
+export interface AgentApiKeySink {
+  /** Save the exact key. Rejects with no secret-bearing diagnostic on failure. */
+  save(agent: ApiKeyAgent, key: string): Promise<AgentApiKeySave>
 }
 
 /** The host-owned progress of the gateway reconciliation for this launch. */

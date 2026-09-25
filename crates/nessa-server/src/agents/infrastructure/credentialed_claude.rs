@@ -3,8 +3,20 @@
 //! Its injected source runs blocking keychain reads off the async executor. An
 //! unavailable or malformed store fails the open before a provider process can
 //! be started. Composition selection remains outside this adapter.
+//!
+//! Deleting Claude's own record of a session launches Claude the same way, with
+//! the credential read at that launch, over the binding's own deletion
+//! exchange; every binding it launched for that is kept until it settles.
 
-use std::{collections::BTreeMap, ffi::OsString, mem, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    future::Future,
+    mem,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use nessa_sdk::{
     application::agent_execution::{
@@ -12,11 +24,12 @@ use nessa_sdk::{
         executions::ExecutionAudit,
         providers::{
             AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture,
-            ProviderOpenRequest,
+            ProviderOpenRequest, ProviderSessionDeleter, ProviderSessionDeletionFuture,
         },
     },
     domain::{
-        agent_execution::prompts::SystemPrompt, common::value_objects::TokenLimits,
+        agent_execution::{prompts::SystemPrompt, sessions::ExecutionSessionId},
+        common::value_objects::TokenLimits,
         effective_capabilities::value_objects::EffectiveCapabilities,
         model_metadata::entities::ModelMetadata,
     },
@@ -40,6 +53,8 @@ pub struct CredentialedClaudeProvider {
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
     capabilities: EffectiveCapabilities,
+    /// Every binding a deletion launched, kept until it has settled.
+    deleting: Mutex<Vec<Arc<ClaudeAcpProvider>>>,
 }
 
 impl CredentialedClaudeProvider {
@@ -69,6 +84,54 @@ impl CredentialedClaudeProvider {
             credentials,
             identity,
             capabilities,
+            deleting: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// A Claude binding launched with the credential current now.
+    async fn current(&self) -> Result<ClaudeAcpProvider, ProviderOpenError> {
+        let mut config = self.config.clone();
+        let inherited_environment = mem::take(&mut config.credential_environment);
+        config.credential_environment = read_credential_environment(
+            inherited_environment,
+            self.credentials.clone(),
+            CREDENTIAL_READ_DEADLINE,
+        )
+        .await?;
+        Ok(
+            ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())
+                .map_err(ProviderOpenError::no_resources)?
+                .with_system_prompt(self.prompt.clone()),
+        )
+    }
+}
+
+impl ProviderSessionDeleter for CredentialedClaudeProvider {
+    fn delete_session(&self, session: ExecutionSessionId) -> ProviderSessionDeletionFuture<'_> {
+        Box::pin(async move {
+            let binding = Arc::new(
+                self.current()
+                    .await
+                    .map_err(|failure| failure.cause().clone())?,
+            );
+            self.deleting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(binding.clone());
+            binding.delete_session(session).await
+        })
+    }
+    fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let launched = mem::take(
+                &mut *self
+                    .deleting
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            for binding in launched {
+                binding.settled().await;
+            }
         })
     }
 }
@@ -83,25 +146,7 @@ impl AgentProvider for CredentialedClaudeProvider {
     }
 
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let credentials = self.credentials.clone();
-        let mut config = self.config.clone();
-        let model = self.model.clone();
-        let limits = self.limits;
-        let audit = self.audit.clone();
-        let prompt = self.prompt.clone();
-        Box::pin(async move {
-            let inherited_environment = mem::take(&mut config.credential_environment);
-            config.credential_environment = read_credential_environment(
-                inherited_environment,
-                credentials,
-                CREDENTIAL_READ_DEADLINE,
-            )
-            .await?;
-            let provider = ClaudeAcpProvider::new(config, &model, limits, audit)
-                .map_err(ProviderOpenError::no_resources)?
-                .with_system_prompt(prompt);
-            provider.open(request).await
-        })
+        Box::pin(async move { self.current().await?.open(request).await })
     }
 }
 
@@ -122,7 +167,7 @@ async fn read_credential_environment(
     .map_err(credential_open_failure)
 }
 
-fn credential_environment(
+pub(super) fn credential_environment(
     mut environment: BTreeMap<OsString, OsString>,
     source: &dyn AgentCredentialSource,
 ) -> Result<BTreeMap<OsString, OsString>, AgentCredentialFailure> {

@@ -7,6 +7,7 @@ import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
 import { SetupGate } from "./onboarding"
+import { nativeAgentApiKeys } from "./onboarding/adapters/agent-api-key"
 import { App } from "./panel"
 import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
@@ -45,7 +46,7 @@ const panel = (
 createRoot(container).render(
   <React.StrictMode>
     {windowSurface() === "setup" ? (
-      <SetupGate agents={dependencies.agents} />
+      <SetupGate agents={dependencies.agents} apiKeys={nativeAgentApiKeys} />
     ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
       <BrowserApplication environment={environment} />
     ) : (

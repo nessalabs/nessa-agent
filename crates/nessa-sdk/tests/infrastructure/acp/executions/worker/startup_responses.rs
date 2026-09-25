@@ -75,6 +75,8 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 config.max_frame_bytes = 16 * 1024 * 1024;
                 config.max_incoming_frame_bytes = 16 * 1024 * 1024;
                 config.shutdown_grace = Duration::from_millis(20);
+                let executable_use = config.executable.admit().unwrap();
+                let recovery = ProcessCleanup::new(config.clone(), executable_use);
                 let socket = root.path().join("control.sock");
                 let listener = UnixListener::bind(&socket).unwrap();
                 // One short atomic stdout write puts both frames in the same read.
@@ -219,7 +221,9 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 };
                 let result = result
                     .map_err(|error| worker.record_failure(OperationEffectPhase::Worker, error));
-                let completed = worker.finish(&mut execution, result, &mut None).await;
+                let completed = worker
+                    .finish(&mut execution, result, &mut None, &recovery)
+                    .await;
                 drop(control);
                 control_thread.join().unwrap();
                 assert_eq!(

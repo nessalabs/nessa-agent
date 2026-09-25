@@ -1,5 +1,4 @@
-//! What a credential in the environment and a credentials file on disk are,
-//! for any agent.
+//! What a credentials file on disk is for any agent.
 //!
 //! Each agent decides *which* variables sign it in and *where* it writes its
 //! file. What makes a variable a credential and a file a sign-in is the same
@@ -20,20 +19,6 @@ use crate::agents::application::ProbeFailure;
 /// larger is not a credentials file this probe can honestly judge, and reading
 /// it would let whatever wrote it choose how much memory the server spends.
 const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
-
-/// The first of `variables` set to something that is not blank.
-///
-/// Returned only so the caller knows one is there. Any one of them on its own
-/// starts the agent, so any one of them on its own is an answered yes; anything
-/// this probe did not check is a machine reported as needing a sign-in it
-/// already has.
-pub(super) fn environment_credential(variables: &[&str]) -> Option<String> {
-    variables.iter().find_map(|key| {
-        std::env::var(key)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-    })
-}
 
 /// Whether the agent that owns `path` has written a usable credentials file there.
 ///

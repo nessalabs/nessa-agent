@@ -3,7 +3,7 @@
 //! timing the test owns.
 
 use super::*;
-use crate::agents::application::ProbeFailure;
+use crate::agents::application::AgentProbeEvidence;
 use crate::agents_test_support::WaitingAgentProbe;
 use std::time::Instant;
 
@@ -88,16 +88,11 @@ struct InstalledOnSecondAsk {
 }
 
 impl AgentProbe for InstalledOnSecondAsk {
-    fn configured(&self, _agent: AgentId) -> bool {
-        true
-    }
-
-    fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
-        Ok(!self.asked.lock().unwrap().insert(agent))
-    }
-
-    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        Ok(true)
+    fn evidence(&self, agent: AgentId) -> Option<AgentProbeEvidence> {
+        Some(AgentProbeEvidence {
+            installed: Ok(!self.asked.lock().unwrap().insert(agent)),
+            authenticated: Some(Ok(true)),
+        })
     }
 }
 
@@ -125,16 +120,8 @@ async fn an_answer_is_never_kept_for_a_caller_who_was_not_waiting_for_it() {
 struct PanickingProbe;
 
 impl AgentProbe for PanickingProbe {
-    fn configured(&self, _agent: AgentId) -> bool {
-        true
-    }
-
-    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+    fn evidence(&self, _agent: AgentId) -> Option<AgentProbeEvidence> {
         panic!("this machine came apart while being asked");
-    }
-
-    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        Ok(true)
     }
 }
 

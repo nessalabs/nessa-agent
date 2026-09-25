@@ -78,9 +78,9 @@ pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
 pub use service::{
-    ConversationAgent, ConversationAgents, ConversationCaller, ConversationDeletionBudgets,
-    ConversationDependencies, ConversationLimits, ConversationService, DeletionsLeft,
-    RequestedAgent, SubmissionMode, MAX_LISTED_CONVERSATIONS,
+    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
+    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
+    ConversationService, DeletionsLeft, RequestedAgent, SubmissionMode, MAX_LISTED_CONVERSATIONS,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,

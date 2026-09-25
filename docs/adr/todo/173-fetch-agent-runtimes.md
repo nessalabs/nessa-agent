@@ -33,10 +33,11 @@ All three agent runtimes come from the same npm registry. Two are vendored at
 build time by `npm ci`; one is fetched by `nessa install-agent`. So the
 difference is not what they are, only when we get them.
 
-That asymmetry was justified by a claim that has since been disproved: Opencode
-was "the agent a first-time user can reach with nothing signed in". It is not —
-its free models are refused outside OpenCode's own app. All three agents need
-the person's own account.
+That asymmetry was justified by treating Opencode as the agent a first-time user
+could reach with nothing signed in. Nessa's supported packaged profile instead
+starts on the metered MiniMax M3 Zen model and requires a saved API key. The
+runtime-delivery decision does not rely on observed behavior of free catalogue
+entries; all three supported profiles require the person's own account.
 
 ## What we decided
 

@@ -215,6 +215,9 @@ const fixture = nativeSmokeFixture({
   workspace,
   providerPath,
   command: process.execPath,
+  dataRoot: data,
+  instance,
+  port: gatewayPort,
 })
 writeFileSync(catalogPath, JSON.stringify(fixture.catalog), { mode: 0o600 })
 const configPath = join(data, "ci", "instances", instance, "config.json")
@@ -227,9 +230,9 @@ writeFileSync(
   { mode: 0o600 },
 )
 
-const settingsPath = join(configHome, "so.nessa.app", `ci-${instance}`, "settings.json")
+const settingsPath = join(configHome, "so.nessa.app", "ci", "settings.json")
 mkdirSync(dirname(settingsPath), { recursive: true, mode: 0o700 })
-writeFileSync(settingsPath, JSON.stringify({ onboarding: { completed: true } }), {
+writeFileSync(settingsPath, JSON.stringify(fixture.settings), {
   mode: 0o600,
 })
 

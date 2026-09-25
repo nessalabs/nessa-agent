@@ -108,21 +108,55 @@ pub(crate) async fn delete_session<P: AcpProfile + Clone>(
     cleanups: &DeletionCleanups,
 ) -> Result<AcpSessionDeletion, AgentError> {
     config.validate()?;
+    // The executable is held in use for this launch exactly as an opening
+    // holds it, and let go only once what the launch made is confirmed gone;
+    // every cleanup owner below keeps retrying after it is dropped.
+    let executable_use = match config.executable.admit() {
+        Ok(guard) => guard,
+        Err(failure) => {
+            let (error, owner) = failure.into_parts();
+            if let Some(owner) = owner {
+                let cleanup = ProcessCleanup::retaining_failed_admission(config.clone(), owner);
+                if !cleanup.retry_cleanup().await.is_confirmed() {
+                    tracing::warn!("a failed executable admission is retained for cleanup");
+                }
+            }
+            return Err(AgentError::Configuration(format!(
+                "executable use admission failed: {error}"
+            )));
+        }
+    };
     let mut scope = match process() {
         Ok(scope) => scope,
         Err(failure) => {
             let (cause, recovery) = failure.into_parts();
-            if let Some(directory) = recovery {
-                // A private directory made for a launch that failed. Its
-                // cleanup owner keeps retrying after this drops it.
-                let cleanup = ProcessCleanup::retaining_directory(config.clone(), directory);
+            let cleanup = match recovery {
+                // A private directory made for a launch that failed.
+                Some(directory) => Some(ProcessCleanup::retaining_directory(
+                    config.clone(),
+                    directory,
+                    executable_use,
+                )),
+                None => {
+                    let mut executable_use = executable_use;
+                    match executable_use.release() {
+                        Ok(()) => None,
+                        Err(_) => Some(ProcessCleanup::retaining_use(
+                            config.clone(),
+                            executable_use,
+                        )),
+                    }
+                }
+            };
+            if let Some(cleanup) = cleanup {
                 if !cleanup.retry_cleanup().await.is_confirmed() {
-                    tracing::warn!("a failed launch's directory is retained for cleanup");
+                    tracing::warn!("a failed launch's resources are retained for cleanup");
                 }
             }
             return Err(cause);
         }
     };
+    let recovery = ProcessCleanup::new(config.clone(), executable_use);
     let (reply, answer) = oneshot::channel();
     let profile = profile.clone();
     let session = session.clone();
@@ -138,12 +172,21 @@ pub(crate) async fn delete_session<P: AcpProfile + Clone>(
             // process is still stopped below.
             () = reply.closed() => None,
         };
-        if let Err(error) = scope
+        match scope
             .cleanup(config.shutdown_grace, config.kill_timeout)
             .await
         {
-            tracing::warn!(%error, "a session-deletion connection's process is retained for cleanup");
-            ProcessCleanup::new(config).retain(scope).await;
+            Ok(outcome) => {
+                if !recovery.confirm_physical(outcome).await.is_confirmed() {
+                    tracing::warn!(
+                        "a session-deletion connection's executable use is retained for cleanup"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "a session-deletion connection's process is retained for cleanup");
+                recovery.retain(scope).await;
+            }
         }
         if let Some(outcome) = outcome {
             let _ = reply.send(outcome);

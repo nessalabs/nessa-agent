@@ -34,21 +34,29 @@
 //! nothing to substitute for a window-server handle. Those stay managed state,
 //! reached where they are used.
 
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use tauri::{AppHandle, Manager};
 
+use crate::agent_credentials::{
+    application::{
+        AgentCredentialStore, CredentialSaveAudit, CredentialSaveIds, CredentialSaveTargets,
+    },
+    infrastructure::{
+        CanonicalCredentialSaveTargets, FileCredentialSaveAudit, LocalAgentCredentialStore,
+        RandomCredentialSaveIds, UnavailableCredentialSaveAudit,
+    },
+};
 use crate::attachments::{
     self, AttachmentTickets, ChosenFiles, ContentTypes, DragBoard, FilePicker, Readiness,
 };
+use crate::gateway::domain::value_objects::ServiceConfiguration;
 use crate::gateway::{self, application::Gateway};
 use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
-use crate::surface_credential::{
-    service_namespace_from_environment, SurfaceCredential, SurfaceCredentials,
-};
+use crate::surface_credential::{service_namespace, SurfaceCredential, SurfaceCredentials};
 #[cfg(desktop)]
 use crate::updater::{self, ReleaseSource};
 
@@ -64,6 +72,14 @@ pub struct HostDependencies {
     /// The settings file: the panel's geometry, the quit policy, and whether
     /// first-run setup has finished.
     pub settings: Arc<dyn SettingsStore>,
+    /// Nessa-owned secure storage for supported local-agent API keys.
+    pub agent_credentials: Arc<dyn AgentCredentialStore>,
+    /// Canonical audited destinations, independent of the effect adapter's claim.
+    pub credential_save_targets: Arc<dyn CredentialSaveTargets>,
+    /// Correlations for credential-save audit lifecycles.
+    pub credential_save_ids: Arc<dyn CredentialSaveIds>,
+    /// Durable secret-free intent and outcome records for credential replacement.
+    pub credential_save_audit: Arc<dyn CredentialSaveAudit>,
     /// The host-owned shortcut cache the shell hydrates from.
     pub shortcuts: Arc<dyn ShortcutStore>,
     /// The bundled surface's native credential.
@@ -127,7 +143,51 @@ impl HostDependencies {
     /// gateway registers; reading the environment again here could disagree.
     pub fn assemble(app: &AppHandle, stage: String) -> tauri::Result<Self> {
         let config_root = local_data::config_root(app, &stage);
-        let service_namespace = service_namespace_from_environment(&stage);
+        let settings: Arc<dyn SettingsStore> = Arc::new(SettingsFile::at(config_root.clone()));
+        // These fields own the service registration and its credential
+        // namespace. A corrupt or unreadable authority cannot be replaced by
+        // defaults without potentially starting and addressing another service.
+        let durable = settings.load_service()?;
+        let home = app.path().home_dir()?;
+        let service_configuration = ServiceConfiguration::new(
+            stage.clone(),
+            durable.data_root.unwrap_or_else(|| home.join(".nessa")),
+            durable.instance,
+            durable
+                .port
+                .or_else(|| crate::stage_port::stage_port(&stage))
+                .ok_or_else(|| {
+                    tauri::Error::Io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("no gateway port is defined for stage {stage}"),
+                    ))
+                })?,
+            durable.claude.configuration_directory,
+        )
+        .map_err(|error| tauri::Error::Io(io::Error::new(io::ErrorKind::InvalidData, error)))?;
+        let service_namespace = service_namespace(
+            Some(service_configuration.data_root().to_path_buf()),
+            service_configuration.stage(),
+            service_configuration.instance(),
+        );
+        let credential_save_audit: Arc<dyn CredentialSaveAudit> = app
+            .path()
+            .app_config_dir()
+            .ok()
+            .and_then(|trusted_root| {
+                config_root.as_ref().and_then(|config_root| {
+                    config_root
+                        .strip_prefix(&trusted_root)
+                        .ok()
+                        .map(|relative| {
+                            Arc::new(FileCredentialSaveAudit::beneath(
+                                trusted_root,
+                                relative.join("agent-credential-audit"),
+                            )) as Arc<dyn CredentialSaveAudit>
+                        })
+                })
+            })
+            .unwrap_or_else(|| Arc::new(UnavailableCredentialSaveAudit));
 
         // A development build has no staged runtime to register, exactly as
         // before: the branch is on the profile, not on whether a path exists.
@@ -138,7 +198,7 @@ impl HostDependencies {
             let reconciliation_audit =
                 gateway::infrastructure::reconciliation_audit(config_root.clone());
             Some(Arc::new(Gateway::bootstrap(
-                gateway::infrastructure::current(),
+                gateway::infrastructure::current(service_configuration.clone(), home),
                 gateway::infrastructure::login_shell_path(),
                 gateway::infrastructure::startup_events(app),
                 gateway::infrastructure::reconciliation_ids(),
@@ -149,7 +209,15 @@ impl HostDependencies {
         };
 
         Ok(Self {
-            settings: Arc::new(SettingsFile::at(config_root.clone())),
+            settings,
+            agent_credentials: Arc::new(LocalAgentCredentialStore::new(
+                service_configuration.credential_namespace().clone(),
+            )),
+            credential_save_targets: Arc::new(CanonicalCredentialSaveTargets::new(
+                service_configuration.credential_namespace().clone(),
+            )),
+            credential_save_ids: Arc::new(RandomCredentialSaveIds),
+            credential_save_audit,
             shortcuts: Arc::new(ShortcutsFile::at(config_root)),
             credential: Arc::new(SurfaceCredential::for_namespace(
                 service_namespace.clone(),

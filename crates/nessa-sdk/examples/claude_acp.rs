@@ -7,6 +7,7 @@ use nessa_sdk::application::agent_execution::executions::{
 use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, PermissionAnswer,
 };
+use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
 use nessa_sdk::application::agent_execution::sessions::SessionManager;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageKind};
 use nessa_sdk::domain::agent_execution::permissions::{
@@ -172,7 +173,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let audit: Arc<dyn ExecutionAudit> = Arc::new(TracingExecutionAudit);
     let binding = ClaudeAcpProvider::new(
         AcpConfig {
-            executable: PathBuf::from(&args[1]),
+            executable: ExecutableUseSnapshot::unmanaged(PathBuf::from(&args[1])),
             arguments: vec![args[2].clone()],
             environment,
             credential_environment,

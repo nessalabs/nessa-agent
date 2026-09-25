@@ -8,13 +8,13 @@ use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, ExecutionUpdate,
 };
-
 use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    ProviderOpenControl, ProviderOpenRequest, ProviderSessionState, ResourceCleanup,
-    SessionCloseRequest,
+    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseError, ExecutableUseGuard,
+    ExecutableUseSnapshot, ProviderOpenControl, ProviderOpenRequest, ProviderSessionState,
+    ResourceCleanup, SessionCloseRequest,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -58,6 +58,54 @@ fn no_startup_control() -> ProviderOpenControl {
 struct RecordingAudit {
     records: Mutex<Vec<ExecutionAuditRecord>>,
     reject: bool,
+}
+
+struct FailedPreSpawnAdmission {
+    executable: PathBuf,
+    releases: Arc<AtomicUsize>,
+}
+
+struct FailedBeforeGeneration {
+    executable: PathBuf,
+}
+
+impl ExecutableUse for FailedBeforeGeneration {
+    fn executable(&self) -> &std::path::Path {
+        &self.executable
+    }
+
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
+        Err(ExecutableUseAdmissionFailure::without_owner(
+            ExecutableUseError::new("inventory validation failed before generation creation"),
+        ))
+    }
+}
+
+impl ExecutableUse for FailedPreSpawnAdmission {
+    fn executable(&self) -> &std::path::Path {
+        &self.executable
+    }
+
+    fn admit(&self) -> Result<Box<dyn ExecutableUseGuard>, ExecutableUseAdmissionFailure> {
+        Err(ExecutableUseAdmissionFailure::with_confirmed_generation(
+            ExecutableUseError::new("admitted record directory sync is uncertain"),
+            Box::new(RetryablePreSpawnRelease(self.releases.clone())),
+        ))
+    }
+}
+
+struct RetryablePreSpawnRelease(Arc<AtomicUsize>);
+
+impl ExecutableUseGuard for RetryablePreSpawnRelease {
+    fn release(&mut self) -> Result<(), ExecutableUseError> {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(ExecutableUseError::new(
+                "injected release acknowledgement failure",
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 impl ExecutionAudit for RecordingAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -188,7 +236,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
     let (_root, config, capabilities) = profile_setup();
     let process_config = config.clone();
     let process = Arc::new(move || {
-        let mut command = tokio::process::Command::new(&process_config.executable);
+        let mut command = tokio::process::Command::new(process_config.executable.executable());
         command
             .args(&process_config.arguments)
             .env_clear()
@@ -334,7 +382,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
     )
     .unwrap();
     let config = AcpConfig {
-        executable: PathBuf::from("/usr/bin/python3"),
+        executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3")),
         arguments: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/test_acp_handler.py")
             .into_os_string()],
@@ -356,6 +404,99 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
     };
     config.validate().unwrap();
     (root, config, capabilities)
+}
+
+#[tokio::test]
+async fn failed_pre_spawn_admission_transfers_exact_release_retry_ownership() {
+    let (_root, mut config, capabilities) = profile_setup();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let executable = config.executable.executable().to_owned();
+    config.executable = ExecutableUseSnapshot::new(
+        executable.clone(),
+        Arc::new(FailedPreSpawnAdmission {
+            executable,
+            releases: releases.clone(),
+        }),
+    )
+    .unwrap();
+    let process_calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = process_calls.clone();
+    let process = Arc::new(move || {
+        observed_calls.fetch_add(1, Ordering::SeqCst);
+        panic!("spawn must not follow failed executable-use admission")
+    });
+
+    let failure = match binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+        no_startup_control(),
+    )
+    .await
+    {
+        Ok(_) => panic!("failed use admission must refuse provider startup"),
+        Err(failure) => failure,
+    };
+
+    assert!(matches!(failure.cause(), AgentError::Configuration(_)));
+    assert_eq!(process_calls.load(Ordering::SeqCst), 0);
+    let cleanup = failure
+        .cleanup()
+        .expect("pre-spawn generation ownership must remain retryable");
+    assert!(matches!(
+        cleanup.retry_cleanup().await.resources(),
+        ResourceCleanup::ReleasePending { .. }
+    ));
+    assert!(matches!(
+        cleanup.retry_cleanup().await.resources(),
+        ResourceCleanup::Confirmed(_)
+    ));
+    assert_eq!(releases.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn pre_generation_admission_failure_never_fabricates_cleanup_ownership() {
+    let (_root, mut config, capabilities) = profile_setup();
+    let executable = config.executable.executable().to_owned();
+    config.executable = ExecutableUseSnapshot::new(
+        executable.clone(),
+        Arc::new(FailedBeforeGeneration { executable }),
+    )
+    .unwrap();
+    let process_calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = process_calls.clone();
+    let process = Arc::new(move || {
+        observed_calls.fetch_add(1, Ordering::SeqCst);
+        panic!("spawn must not follow failed executable-use admission")
+    });
+
+    let failure = match binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+        no_startup_control(),
+    )
+    .await
+    {
+        Ok(_) => panic!("failed use admission must refuse provider startup"),
+        Err(failure) => failure,
+    };
+
+    assert!(matches!(failure.cause(), AgentError::Configuration(_)));
+    assert_eq!(process_calls.load(Ordering::SeqCst), 0);
+    assert!(failure.cleanup().is_none());
 }
 
 #[tokio::test]
@@ -452,7 +593,7 @@ impl ExecutionAudit for RejectAudit {
 fn cleanup_fault_process(config: &AcpConfig) -> binding::ProcessFactory {
     let config = config.clone();
     Arc::new(move || {
-        let mut command = tokio::process::Command::new(&config.executable);
+        let mut command = tokio::process::Command::new(config.executable.executable());
         command
             .args(&config.arguments)
             .env_clear()
@@ -498,7 +639,7 @@ fn one_failed_restoration(
             }
             return Err(failure);
         }
-        let mut command = tokio::process::Command::new(&config.executable);
+        let mut command = tokio::process::Command::new(config.executable.executable());
         command
             .args(&config.arguments)
             .env_clear()
@@ -810,7 +951,7 @@ fn read_process_id(root: &tempfile::TempDir) -> i32 {
 #[tokio::test]
 async fn confirmed_process_scope_cleanup_is_idempotent_before_any_more_effects() {
     let (root, config, _) = profile_setup();
-    let mut command = tokio::process::Command::new(&config.executable);
+    let mut command = tokio::process::Command::new(config.executable.executable());
     command
         .args(&config.arguments)
         .env_clear()
@@ -1014,7 +1155,8 @@ async fn losing_open_wait_before_readiness_preserves_handle_loss_cause_and_clean
             let (confirmed, confirmation) = oneshot::channel();
             let confirmed = Arc::new(Mutex::new(Some(confirmed)));
             let process = Arc::new(move || {
-                let mut command = tokio::process::Command::new(&process_config.executable);
+                let mut command =
+                    tokio::process::Command::new(process_config.executable.executable());
                 command
                     .args(&process_config.arguments)
                     .env_clear()
@@ -1164,7 +1306,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
     let (_root, config, capabilities) = profile_setup();
     let process_config = config.clone();
     let process = Arc::new(move || {
-        let mut command = tokio::process::Command::new(&process_config.executable);
+        let mut command = tokio::process::Command::new(process_config.executable.executable());
         command
             .args(&process_config.arguments)
             .env_clear()

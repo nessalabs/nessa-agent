@@ -51,8 +51,13 @@ for draining writes or stopping workers.
 ## Rust desktop host
 
 `src-tauri/src/composition.rs` holds `HostDependencies`: the settings store, the
-shortcut store, the surface credential, the registered gateway, and the release
-source. Four of the five are traits the host owns with a substitute in tests;
+shortcut store, the surface credential, the agent credential writer, the
+credential-save audit, the independent `CredentialSaveTargets` authority, the
+registered gateway, and the release source. The target authority derives the
+canonical destination from the durable namespace; the save use case compares
+the writer's complete claimed target against it before correlation allocation,
+intent audit, or keychain effect. Effectful dependencies are host-owned traits
+with substitutes in tests;
 the gateway is the concrete `Gateway`, whose own `GatewayHost` is the trait, so
 its substitution happens one level down. `main`'s `setup`
 assembles it once, keeps it to hand the pieces down (`tray::create`,
@@ -170,13 +175,16 @@ is available for future integration. See [local setup](../adr/done/0010-local-au
 ## Gateway Agent integration
 
 Composition optionally loads the private namespace's `agents` configuration and
-constructs a provider for every agent it names — ClaudeAcpProvider,
+constructs a provider for every agent it names — CredentialedClaudeProvider,
 CodexAcpProvider — alongside LocalFileStorage, LocalConversationRepository and
 DurableExecutionAudit. Every configured agent is built, not only the one a
 creation that names none runs on, because a conversation records the agent it
 was created on and is reopened on that same agent. ProductRouteState shares ConversationService across sockets;
 tests inject providers and storage without a production test selector. Shared
 request permits outlive disconnected sockets, and controls have reserved capacity.
+One application-owned `AgentCredentialSource` is injected into Claude readiness
+and provider opening, so both consumers observe the same stage/instance keychain
+namespace; tests substitute that port without changing composition policy.
 The panel's ConversationEffects calls the existing authenticated NessaClient and
 reads bounded replacement views. See [gateway chat](../guides/gateway-chat.md).
 

@@ -35,7 +35,7 @@ opinion rather than the product's.
 | --- | --- |
 | `main.rs` | The entry point. Assembles `HostDependencies` in `setup`, wires the tray, shortcut, and window, and hands the bundle on. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
 | `launch.rs` | The desktop executable's empty command-line contract. It refuses the first supplied argument before Tauri or a platform window host is initialized. |
-| `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the gateway, the release source — and the bundle every command and menu is given. Nothing below it reaches back for a dependency. |
+| `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the agent credential writer and audit, the independent `CredentialSaveTargets` authority derived from the durable namespace, the gateway, the release source — and the bundle every command and menu is given. Before correlation allocation, intent audit, or keychain effect, the save use case compares every field of the writer's claimed target with that canonical authority. Nothing below composition reaches back for a dependency. |
 | `updater.rs` | Whether a newer Nessa is published and installing it. `ReleaseSource`, `CheckOutcome`, `Installer` and `Restarter` are its ports; the decisions are pure and tested, and the module header states which adapters are not. |
 | `attachments/` | Choosing files to attach, and reading the ones that turn out to be images. Four ports, because they are four different outside things: `FilePicker` is the OS dialog, `ChosenFiles` is the filesystem (a chosen file's kind, length and bytes, which fail the same ways at the same moment), `AttachmentTickets` is the desk that mints and spends the one-shot tickets — the operating system's randomness and clock, and the port that carries the rule that a page cannot name a path — and `ContentTypes` is the platform's type database — Launch Services on macOS, shared-mime-info on Linux, nothing elsewhere — so a `.ico` or `.svgz` is recognised as an image without this app keeping a list of formats. That answer goes where a dropped file's `type` goes, which is what keeps one file from taking two routes. Anything that is not a regular file is refused before it is opened, and both the look and the read have deadlines on their own threads, so a FIFO or a stalled mount cannot wedge the panel. A read is authorised by a one-shot ticket the picker minted, never by a path the page names. The page calls `choose_attachment_files` and `read_attachment_bytes`; the host calls the dialog plugin, so `capabilities/` grants the webview nothing. |
 | `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
@@ -238,6 +238,14 @@ are written here.
 - Gateway updates serialize by launchd service identity. Managed replacement
   requires correlated cleanup and audit acknowledgement; failed retirement never
   authorizes bootout. The pre-protocol gateway has one explicit legacy path.
+- Installed agent runtime launches carry an inseparable executable and use
+  authority. Every managed spawn records one bounded durable generation before
+  process creation; only confirmed no-spawn or process-tree cleanup records its
+  release. Superseded artifact removal holds the publication lock, rechecks the
+  current artifact, takes the artifact lock without waiting, and requires a
+  complete released-generation inventory. Replacement delivery remains unsettled
+  until its exact cleanup obligation is durable, and a later replacement requires
+  the exact retained settlement receipt.
 - Failures at the edges — blur, sizing, tray, viewport — are reported and
   survivable, not fatal. The panel opening unblurred, or without a tray, beats
   the panel not opening.
@@ -389,7 +397,13 @@ shared domain, no binary or effects. The gateway adapter constructs its
 validated private credential and stage/instance namespace through a
 caller-owned read port. The canonical keychain names
 are infrastructure data in `protocol/defaults/agent-credentials.json`; provider
-environment mapping stays in the gateway adapter. See the
+environment mapping stays in the gateway adapter. Desktop composition writes
+validated API keys to the matching login-keychain item through a host-owned port
+and records correlated, secret-free intent and outcome evidence. Gateway
+composition injects one credential source into readiness, Claude process launch,
+and packaged OpenCode cold-open resolution. A standalone explicit OpenCode
+runtime instead uses only `OPENCODE_API_KEY` captured when composition starts;
+it does not read the stage-scoped store or promise live environment refresh. See the
 [crate guide](../crates/nessa-agent-credentials/README.md).
 
 ## Gateway authorization

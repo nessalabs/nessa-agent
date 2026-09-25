@@ -2,8 +2,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::agents::application::{AgentProbe, ProbeFailure};
+use crate::agents::application::{
+    AgentCredentialSource, AgentProbe, AgentProbeEvidence, ProbeFailure,
+};
 use crate::agents::domain::AgentId;
 use crate::agents::infrastructure::{claude, codex, credentials};
 
@@ -50,14 +53,6 @@ type VendorStore = fn(Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure>;
 /// is where an agent keeps its file. Whether the file is *there* is asked every
 /// time, which is the part a person can change by signing in.
 struct SignIn {
-    /// A non-empty credential in this process's environment, which is what a
-    /// machine account signs in with. Held only to know that it is there.
-    ///
-    /// `None` for an agent whose own launch would not accept one. A variable
-    /// this server holds and the agent then refuses is not a sign-in, and
-    /// reporting it as one is the readiness answer and the launch describing
-    /// different machines.
-    environment: Option<String>,
     /// The agent's own credentials file, when this host has somewhere to look.
     credentials: Option<PathBuf>,
     /// The agent's own account store, asked the agent's own way — a keychain
@@ -89,11 +84,17 @@ pub struct LocalAgentProbe {
     /// next answer to say so. An agent absent from this map is one this server
     /// has nothing to launch for.
     launch_files: HashMap<AgentId, AgentLaunchFiles>,
+    /// Nessa-owned credential source shared with Claude provider construction.
+    credentials: Arc<dyn AgentCredentialSource>,
     /// Where each agent's sign-in could be.
     sign_in: HashMap<AgentId, SignIn>,
 }
 
 impl LocalAgentProbe {
+    fn configured(&self, agent: AgentId) -> bool {
+        self.launch_files.contains_key(&agent)
+    }
+
     /// Read this host's environment once, in composition.
     ///
     /// Where each agent lives is not guessed from the filesystem around the
@@ -102,14 +103,17 @@ impl LocalAgentProbe {
     /// config. Composition resolves the agent configurations that would really
     /// be launched and hands in their paths. Their existence is not resolved
     /// here — see [`Self::installed`].
-    pub fn from_environment(launch_files: HashMap<AgentId, AgentLaunchFiles>) -> Self {
+    pub fn from_environment(
+        launch_files: HashMap<AgentId, AgentLaunchFiles>,
+        credentials: Arc<dyn AgentCredentialSource>,
+    ) -> Self {
         Self {
             launch_files,
+            credentials,
             sign_in: HashMap::from([
                 (
                     AgentId::Claude,
                     SignIn {
-                        environment: claude::environment_credential(),
                         credentials: claude::credentials_path(),
                         vendor_store: Some(|_| claude::keychain_sign_in()),
                     },
@@ -117,14 +121,6 @@ impl LocalAgentProbe {
                 (
                     AgentId::Codex,
                     SignIn {
-                        // Deliberately none. Codex's app-server builds its
-                        // authentication with the environment key switched off,
-                        // so a key in this server's environment is not a Codex
-                        // sign-in however it got there — `codex login status`
-                        // says "not logged in" with one set and nothing else.
-                        // Counting it here would be readiness describing a
-                        // machine the launch cannot reproduce.
-                        environment: None,
                         credentials: codex::credentials_path(),
                         vendor_store: Some(codex_sign_in),
                     },
@@ -145,11 +141,16 @@ impl LocalAgentProbe {
 }
 
 impl AgentProbe for LocalAgentProbe {
-    /// Whether composition resolved a launch for this agent.
-    fn configured(&self, agent: AgentId) -> bool {
-        self.launch_files.contains_key(&agent)
+    fn evidence(&self, agent: AgentId) -> Option<AgentProbeEvidence> {
+        self.configured(agent).then_some(())?;
+        Some(AgentProbeEvidence {
+            installed: self.installed(agent),
+            authenticated: agent.needs_sign_in().then(|| self.authenticated(agent)),
+        })
     }
+}
 
+impl LocalAgentProbe {
     /// Whether the agent this server would launch is really on this machine.
     ///
     /// Asked of the filesystem on every call rather than once at construction.
@@ -194,10 +195,14 @@ impl AgentProbe for LocalAgentProbe {
     /// the same kind of unanswered question as a directory it cannot read.
     fn authenticated(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
         let sign_in = self.sign_in.get(&agent).ok_or(ProbeFailure::NothingToAsk)?;
-        if sign_in.environment.is_some() {
-            return Ok(true);
-        }
         let mut unanswered = None;
+        if agent == AgentId::Claude {
+            match self.credentials.read(agent) {
+                Ok(Some(_)) => return Ok(true),
+                Ok(None) => {}
+                Err(_) => return Err(ProbeFailure::Unanswered),
+            }
+        }
         if holds(&mut unanswered, Self::credentials_file(sign_in)) {
             return Ok(true);
         }

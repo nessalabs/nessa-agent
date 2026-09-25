@@ -284,7 +284,7 @@ Server composition supplies whether the open came from gateway startup,
 automatic provisioning, or an explicit local command.
 
 `crates/nessa-agent-credentials` is the smaller pure domain consumed by the
-gateway credential-source adapter and available to later credential consumers. It owns
+gateway credential-source adapter and desktop credential writer. It owns
 the immutable validated credential text, API-key/OAuth meaning, the explicit
 Claude/OpenCode credential identity, and the durable stage/instance namespace.
 It owns no keychain, environment, provider, serialization, or filesystem code;
@@ -359,9 +359,21 @@ numbers are the caller's: the gateway takes them from the selected model's
 (domain), shared Agent orchestration and bounded views (application), and private
 metadata/audit adapters (infrastructure). A conversation records the agent it was
 created on and is reopened on that same agent for the rest of its life, so
-`composition/agent.rs` builds a provider for every configured agent rather than
-only the selected one — yesterday's conversations need the agent nobody selected
-today. `product/conversation.rs` maps the canonical product wire contract;
+`composition/agent.rs` builds fixed providers for configured bundled agents.
+`composition/opencode_profile.rs` owns one static OpenCode decision shared by
+configured/default selection, image limits, readiness, and provider creation.
+Packaged composition either selects the exact current pin with a stage-scoped
+API key or refuses the policy; standalone composition preserves its explicit
+command, arguments, model, tools and budgets and captures `OPENCODE_API_KEY`
+once when composition starts. `composition/current_agent.rs` joins that static
+decision to a fresh launch and credential observation for each readiness call
+and cold slot. Managed observations resolve the exact pinned launch and current
+stage-scoped API key; standalone observations retain the captured environment
+credential. An existing live slot keeps the generation and executable-use
+authority it already owns. `ConversationAgentSource` is the application port
+between those decisions and the service. Yesterday's
+conversations still reopen on their recorded agent even when it is not today's
+default. `product/conversation.rs` maps the canonical product wire contract;
 composition supplies the agents, storage and audit.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
@@ -433,12 +445,16 @@ through one open and close and committing that evidence (application), and the
 completion record and audit files in the data directory (infrastructure). It is
 started by composition once the gateway is listening, so the operating system's
 first-execution scan is paid in the background rather than inside a user's first
-message. The conversation context joins settlement through its own
-`RuntimeReadiness` port without blocking command responses,
-which `composition/warm_up.rs` connects; the two contexts do not depend on each
-other. Warm-up failure releases the settlement gate and the conversation's own
-attachment attempt supplies its authoritative result. Tests live under
-`crates/nessa-server/tests/agent_warm_up/`.
+message. The application terminal keeps preparation, physical launch ownership,
+audit delivery, and completion-record delivery as separate facts. The
+conversation context joins settlement through its own `RuntimeReadiness` port
+without blocking command responses, which `composition/warm_up.rs` connects;
+the two contexts do not depend on each other. Composition coordinates one
+automatic OpenCode run at a time: released failures may be retried, while
+unconfirmed cleanup retains its owner and fences another automatic launch. The
+conversation's freshly resolved provider always supplies the authoritative
+request result. Tests live under `crates/nessa-server/tests/agent_warm_up/` and
+the composition seam under `crates/nessa-server/tests/composition/`.
 
 ## MCP tools
 
@@ -469,17 +485,25 @@ independently of whether that turn contains text.
   packages. `src/host/load-fallback.test.ts` owns the embedded fallback's real
   DOM and computed-style clipping regression in the frontend jsdom gate.
 - `scripts/desktop/stage.mjs` resolves one named stage for the Tauri command and its Vite child. Vite records the stage beside the assets it builds; `src-tauri/build.rs` resolves Tauri's effective base, platform, and `TAURI_CONFIG` layers and reads that record from the `build.frontendDist` Tauri will embed. It refuses a frontend whose stage differs from the host bundle stage, and the host accepts only an equal runtime `NESSA_STAGE` override.
-- `scripts/desktop/prepare.mjs` enables managed runtime preparation only on macOS.
+- `scripts/desktop/prepare.mjs` selects runtime preparation on macOS and Linux;
+  Windows leaves it disabled.
   `runtime-layout.mjs` owns the executable names used by assembly, signing, and
   bundle verification. `prepare-runtime.mjs` owns the shared native-target check,
   locked ACP harness installation, model data, and manifest publication after
-  platform finalization and fingerprinting. `prepare-macos.mjs` supplies the checked
-  Node download and Apple signing. Linux and Windows preparation remain disabled;
-  their executable names are defined for future adapters, but no native package or
-  runtime has been verified on either platform.
+  platform finalization and fingerprinting. `prepare-node.mjs` owns the pinned,
+  hash-verified Node archive and safe extraction of Node plus its license for both
+  platforms. Its cache objects are named by the pinned digest and published once
+  from a verified private stage. Existing invalid, oversized, or nonregular
+  objects are preserved and refused with their exact path; preparation never
+  repairs or removes them. Exclusive publication coordinates cooperating build
+  processes, while a same-user process with cache write access can still replace
+  an object after one invocation has returned. `prepare-macos.mjs` supplies Apple signing; `prepare-linux.mjs`
+  requires native x86_64 GNU/Linux and probes each executable without starting a
+  service. Linux local builds bundle that prepared resource, but the Linux
+  `GatewayHost` and release targets remain disabled. Windows has no preparation.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
 - `src-tauri/src/gateway/application/` is the single owner of retryable startup, its revisioned starting, ready and failed projection, the last successfully confirmed readiness identity, and the independently retained cleanup candidate. Packaged startup begins without waiting for a webview; snapshot-after-subscribe closes the setup race. Event callbacks may arrive after a newer snapshot because the receipt owner starts without waiting for an injected callback; consumers compare revisions and discard stale delivery. Independent credential loads reconcile the full native contract again, concurrent callers share one exact attempt settlement, and either the setup Retry command or a later credential load retries a failure. A repeated validation of the same healthy identity leaves the ready revision unchanged, while a changed confirmed identity advances it even when no progress callback invalidated the earlier projection. `gateway/domain/value_objects/reconciliation_evidence.rs` validates request cause and initiator, distinct request and attempt correlations, desired service identity, native before/after incarnations, exact pending-attempt authority, and one ordered native history on every result. Identifiers are allocated before lifecycle admission; the lifecycle lock alone selects one running receipt and one pending successor, and no audit, event callback, physical effect, allocation, or settlement wait runs under it. The detached receipt owner proceeds independently if the admitting caller is cancelled. Each attempt reserves one immutable intent before calling its audit sink, then records acknowledgement or failure. A duplicate intent is refused before a second sink delivery or mutation, and successful reports with effects observed before reservation or acknowledgement remain rejected even if acknowledgement arrives later. The terminal outcome retains intent delivery, earliest effect timing, the claimed physical result, validation facts, trusted history, and the domain-derived cleanup decision. The ordered history distinguishes the local bootstrap-command request from confirmed retirement acknowledgement, unload, definition publication and directory durability, command completion, and successful command exit; invalid reports retain their trusted prefix and never project Ready. `gateway/infrastructure/macos/reconciliation_audit.rs` stores those records privately and atomically under the stage-scoped config root. Audit delivery, physical reconciliation, readiness, pending cause, and retained cleanup identity remain separate facts: cleanup eligibility is derived from validated identity and history rather than readiness acceptance, while trusted unload evidence can clear the prior candidate. `gateway/infrastructure/commands.rs` exposes startup state only to bundled windows and maps the framework-free event port to Tauri. `gateway/infrastructure/` serializes launchd transitions, distinguishes managed, legacy, and foreign processes, and requires the expected health fingerprint and service generation, runtime-instance UUID and matching launchd PID before readiness. Its `macos/generation.rs` reuses the published identity only for an equal unfenced definition and otherwise creates a fresh random generation; configuration reverts never deterministically recreate retired identities. `macos/install_attempt.rs` durably binds a pending bootstrap to the host's exact definition and generation so Retry can replace only that incomplete, unambiguously PID-less attempt; disk state alone never grants that authority.
-- The agent's `PATH` is decided, not inherited. `src-tauri/src/gateway/domain/value_objects/search_path.rs` is the value: absolute entries only, bounded, no control characters, and no staged runtime directory, so Nessa's bundled `node` never shadows the one a project pinned. `gateway/infrastructure/login_shell.rs` reads it from the account's own login shell — the shell named in the account record rather than inherited `SHELL` — behind the `LoginShellPath` port, which tests substitute. How a shell is asked depends on how much one invocation of it can read, measured against real shells. zsh is asked `-i -l -c` once, because for zsh that is a superset: it reads `.zshenv`, `.zprofile`, `.zlogin` and `.zshrc`, and `.zshrc` is where pnpm's installer and the standard nvm setup write. bash has no such invocation — `-i -l -c` reads `.bash_profile` and never `.bashrc`, `-i -c` reads `.bashrc` and none of the login files — so bash is asked both ways and the answers are combined, the login shell's entries first, since that is the shell a terminal opens here. Asking only one of them would succeed with a `PATH` missing whichever half the user's tools are in, and a success is what no fallback can catch. Any other shell gets `-l -c`, which is also where the login files come from when nothing else has brought them: a `.bash_profile` that hangs while interactive leaves the `-i -c` answer alone, and that answer has read neither `/etc/profile` nor `.bash_profile` — no `path_helper`, so no Homebrew. Returning it as a success would be the same failure in a narrower place, and would make the registered path depend on whether a profile happened to hang, which the plist equality check answers by retiring a healthy gateway. Every attempt shares one budget, so a shell asked more ways is not a shell the panel waits longer for; the cost is that an attempt after one that timed out gets what is left rather than a full deadline. The shell runs from the account's home, not from wherever the app was started, so a profile that decides the path from the working directory cannot make two launches register differently. The `PATH` is printed between markers made of `/dev/urandom` bytes and only what is between them is read, so a chatty or hostile profile can neither drown the answer nor forge one. The shell runs with a cleared environment, no stdin, a bounded read, and one deadline over both the output and the exit — output arriving is not the shell being finished with — after which its process group is killed and reaped. `Gateway` resolves it at most once per host process and caches the outcome, failure included: reconciliation runs on every webview load, and a profile edited mid-session would otherwise change the definition and retire a healthy gateway. A changed profile takes effect at the next app launch. The resolved path is registered as `NESSA_AGENT_PATH` in the launchd definition, so it is part of the service's identity and changes only by re-registration; a login shell that cannot be read this launch keeps the path already registered rather than rewriting the definition and retiring a healthy gateway. The service's own `PATH` stays the system one. `crates/nessa-server/src/composition/agent.rs` gives `NESSA_AGENT_PATH` to the ACP child — and through it to Claude Code's Bash tool and the Nessa MCP shell — falling back to the process `PATH`, which is what the developer loop has.
+- The agent's `PATH` is decided, not inherited. `src-tauri/src/gateway/domain/value_objects/search_path.rs` is the value: absolute entries only, bounded, no control characters, and no staged runtime directory, so Nessa's bundled `node` never shadows the one a project pinned. `gateway/infrastructure/login_shell.rs` reads it from the account's own login shell — the shell named in the account record rather than inherited `SHELL` — behind the `LoginShellPath` port, which tests substitute. How a shell is asked depends on how much one invocation of it can read, measured against real shells. zsh is asked `-i -l -c` once, because for zsh that is a superset: it reads `.zshenv`, `.zprofile`, `.zlogin` and `.zshrc`, and `.zshrc` is where pnpm's installer and the standard nvm setup write. bash has no such invocation — `-i -l -c` reads `.bash_profile` and never `.bashrc`, `-i -c` reads `.bashrc` and none of the login files — so bash is asked both ways and the answers are combined, the login shell's entries first, since that is the shell a terminal opens here. Asking only one of them would succeed with a `PATH` missing whichever half the user's tools are in, and a success is what no fallback can catch. Any other shell gets `-l -c`, which is also where the login files come from when nothing else has brought them: a `.bash_profile` that hangs while interactive leaves the `-i -c` answer alone, and that answer has read neither `/etc/profile` nor `.bash_profile` — no `path_helper`, so no Homebrew. Returning it as a success would be the same failure in a narrower place, and would make the registered path depend on whether a profile happened to hang, which the plist equality check answers by retiring a healthy gateway. Every attempt shares one budget, so a shell asked more ways is not a shell the panel waits longer for; the cost is that an attempt after one that timed out gets what is left rather than a full deadline. The shell runs from the account's home, not from wherever the app was started, so a profile that decides the path from the working directory cannot make two launches register differently. The `PATH` is printed between markers made of `/dev/urandom` bytes and only what is between them is read, so a chatty or hostile profile can neither drown the answer nor forge one. The shell runs with a cleared environment, no stdin, a bounded read, and one deadline over both the output and the exit — output arriving is not the shell being finished with — after which its process group is killed and reaped. `Gateway` resolves it at most once per host process and caches the outcome, failure included: reconciliation runs on every webview load, and a profile edited mid-session would otherwise change the definition and retire a healthy gateway. A healthy registration for the same staged runtime keeps its registered path across app launches, so shell-profile or launch-context changes do not retire it. A newly staged runtime takes the current resolved path. The path is registered as `NESSA_AGENT_PATH` in the launchd definition; a login shell that cannot be read and a shell that changed both leave a healthy same-runtime definition alone. The service's own `PATH` stays the system one. `crates/nessa-server/src/composition/agent.rs` gives `NESSA_AGENT_PATH` to the ACP child — and through it to Claude Code's Bash tool and the Nessa MCP shell — falling back to the process `PATH`, which is what the developer loop has.
 - `protocol/defaults/gateway-exit-codes.json` is why the gateway process stopped, said across the process boundary. `crates/nessa-server/src/core/exit_code.rs` maps each `RunError` to a code from that table — the match is exhaustive, so a new fatal error does not compile until it has one — and `Termination::report` exits with it; `RunError::Registry` keeps the credential-registry failure typed rather than flattened into a string so it can choose its own. `src-tauri/src/gateway/infrastructure/macos/startup.rs` includes the same bytes and reads the code back from what `launchctl print` reports as the service's last exit. It never parses the log: a message can be reworded, a line can belong to an earlier run in the same append-only file, and a healthy launch mentions the same subsystems a failing one does. The log tail goes to the app's log as evidence and decides nothing.
 - Not every failure is worth restarting for, and launchd cannot be told which. Its only exit condition is `KeepAlive: { SuccessfulExit: false }` — restart unless the process exited with status zero — with no condition on *which* non-zero code, verified against launchd on macOS 26 rather than read off the man page alone. So `crates/nessa-server/src/core/restart.rs` decides, on the typed fatal error, whether starting again could end differently: a configuration this build cannot parse, a credential registry it cannot read and a prepared runtime that is missing or not the one the registration was fingerprinted against cannot, while a held registry lock, a taken port, I/O and anything whose only evidence is prose can.
 - Exiting zero to stop those restarts is not a diagnostic decision, because nothing will start the service again afterwards except the desktop host's next reconciliation, and the only thing that authorizes *that* is `logs/gateway-startup-failure.json`. So `core/error.rs` publishes the record — durably, under its own name, directory synced — and only then chooses the ending: published means exit zero, and a publication that failed keeps the non-zero code from the shared table, because launchd going on retrying is the old loop and survivable while a silent exit zero is a service nobody can start again. A credential-registry refusal audit is separate evidence: its success never authorizes zero, and its failure stays beside the original registry fault while the managed recovery record independently decides the ending. `core/launch.rs` decides who may do any of this: `Launch::Managed` is resolved once at the process edge from the command launchd is configured to run plus the service generation only the host's plist sets, and only it bounds the log, publishes a record, or forgets one — and only one its own generation wrote. A `nessa server` someone runs in the same data directory while diagnosing exactly this problem is `Standalone`: it keeps the table's non-zero exit codes, so scripts and other supervisors still read a failure as one, and it leaves the registration's recovery evidence untouched. `macos/startup.rs` corroborates the record against the registration being reconciled before it decides anything: it ends the readiness wait for a process launchd is not going to replace, and it is what lets the host boot out and retry a service that gave up, which is otherwise loaded and dead forever even after its cause is repaired. The reason and the exit code it carries must agree with the shared table, or it describes no run the server could have had. A record shown in a sentence is corroborated too, but decides nothing.
@@ -493,7 +517,7 @@ independently of whether that turn contains text.
 - `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, verifies full-tree parity with the packaging digest, and publishes atomically before service mutation. The injected launchd adapter remembers a successful validation only for the exact path, fingerprint and private root directory filesystem identity, so later reconciliation does not hash the full tree again; a different or replaced generation is validated normally. Existing versions are retained; launchd arguments name the staged directory and no search path derives from it — the gateway addresses `nessa`, `node`, the ACP entry and `nessa-mcp` absolutely, so the staged directory is on neither the service's `PATH` nor the agent's. Tests cover cache identity, cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
 - `src-tauri/src/gateway/infrastructure/macos/pruning.rs` collects the staged versions nothing can be running, under the same per-label lock, once the service has advertised its identity. `removable` is the whole rule and is pure: a published fingerprint directory goes only when it is neither the registered nor the running version and neither an unanswered retirement request nor an unacknowledged fence names it. `RetirementEvidence` carries `retired` for exactly that distinction: admission fencing needs only a recorded cause, while collection needs to know whether the old gateway finished and was booted out. An interrupted `.staging-` attempt goes because holding the lock means nobody is staging; every other name is left alone. `RuntimeVersions` is the directory seam, so the rule is tested without a filesystem and the real `LabelDirectory` revalidates each entry as a directory this user owns before removing it. No single entry can stop the pass: a refused removal, an entry the directory will not yield, and an entry with no valid text name are each reported and stepped over while the recognised versions beside them are still collected. Only a directory that cannot be listed at all ends the pass. What is reported is typed rather than a message string, so each line says what actually happened: a path appears only for an entry a removal was really attempted on, and a lossy rendering of an unusable name is never presented as somewhere to look. Failures are reported with their path and never reach registration's result. Reconciliations that return an error collect nothing, because the version they were replacing may still be running.
 - `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
-- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths plus verified installed-runtime launches.
+- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths. Managed OpenCode launch resolution remains live in `composition/current_agent.rs`.
 - `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
 - `settings.onboarding.completed` records that first-run setup finished. `src-tauri/src/main.rs` opens the setup window only when it is false. `panel::finish_setup` owns the whole handoff and its order — show the panel, record completion, close the setup window — in the process that outlives that window; a panel that will not show abandons the handoff and writes nothing, while a refused write is logged and the close still happens. `src/host/window.ts`'s `finishSetupWindow` is a single invoke of it, carrying only whether setup was finished or left (`isOnboardingCompleted`), and maps the reported steps onto the `SetupHandoff` outcomes. `src/onboarding/application/setup-recovery.ts` decides what the setup window shows when it is still there afterwards: a panel that never came up offers the handoff again, a panel that came up over a window that would not close offers only that window's close. The `Destroyed` handler in `main.rs` is a safety net for dismissal and crashes, not the handoff's cleanup path. The debug-only tray item clears the flag through `panel::restart_onboarding`.
 
@@ -724,13 +748,12 @@ unauthenticated request can cost: concurrent callers share a single in-flight
 probe (never a cached answer) and stop waiting for it at a deadline;
 `infrastructure/local.rs` asks this machine about every configured agent, owning
 only the order sources are asked in and what an unanswered source means, with the
-launch files, environment credentials and config directories resolved once in
-composition; `infrastructure/claude.rs` and `infrastructure/codex.rs` each hold
+launch files and config directories resolved once in composition;
+`infrastructure/claude.rs` and `infrastructure/codex.rs` each hold
 what is true of that agent alone — where it keeps a credentials file, whether it
-has a keychain item or answers for its own store by being run, and whether a key
-in this server's environment signs it in at all, which Claude's does and Codex's
-does not — and `infrastructure/credentials.rs` holds what makes a variable a
-credential and a file a sign-in, which is the same for both, so a third agent
+has a keychain item or answers for its own store by being run — and
+`infrastructure/credentials.rs` holds what makes a file a sign-in, which is the
+same for both, so a third agent
 gets a third sibling rather than a branch inside either; `entrypoint/http.rs` owns the wire
 vocabulary and the cross-origin rule for `GET /onboarding/agents`, and answers a
 reading it could not obtain with 503 rather than an invented readiness.
@@ -740,14 +763,31 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
 
-The same context defines `AgentCredentialSource`; its local adapter can read
-standalone Claude environment credentials before the Nessa keychain while
-preserving API-key versus OAuth meaning. Its values and stage/instance account namespace come from
+OpenCode readiness and cold opening instead share `composition/current_agent.rs`.
+Each managed call reads one exact managed launch and one scoped credential
+snapshot; a standalone call combines its explicit launch with the environment
+credential captured at composition time. Readiness maps that evidence without
+carrying the secret, and a cold slot builds an owned provider from a fresh
+observation. The blocking effects have one bounded lane whose native task retains
+its permit after caller timeout or cancellation. The actual executable-use
+admission remains in the SDK immediately before process spawn.
+
+The same context defines `AgentCredentialSource`; one local adapter reads
+standalone Claude environment credentials before the Nessa login-keychain item,
+while preserving API-key versus OAuth meaning. Desktop composition writes a
+validated API key to that same durable stage/instance account through its own
+application port and records secret-free intent and outcome evidence. Its values
+and account namespace come from
 `nessa-agent-credentials`; `protocol/defaults/agent-credentials.json` is the one
 infrastructure mapping for the Security.framework service and the Claude and
 OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
-can read an injected source on a blocking worker for each process open. Neither
-adapter puts the source value in configuration, plist, arguments, or logs.
+reads the same injected source as readiness on a blocking worker for each process
+open. Packaged OpenCode reads the source once per observation and accepts only
+an API key, which it supplies to that owned process generation. Standalone
+OpenCode never reads that source; it uses only the environment value captured
+by its static profile.
+Neither adapter puts the source value in settings, plist, arguments, audit records,
+or logs.
 
 ## Attachments
 
@@ -918,13 +958,11 @@ machine at the version Nessa has tested. All three agents are pinned, and
 is also *launched* from what was fetched, because the desktop still resolves
 Claude and Codex inside the bundle. Their pins cover macOS on Apple silicon and
 no other platform, which is where the 467 MB was measured and the only archives
-anybody has listed. That split was once
-explained by Opencode being the agent a first-time user could reach with nothing
-signed in, and that turned out to be false — its free models are refused outside
-OpenCode's own application, so all three want the person's own account. What is
-left of the reason applies to every agent equally: telling somebody to go and
-install something before they can use Nessa is the thing this context exists to
-avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
+anybody has listed. The packaged OpenCode profile starts only with a saved API
+key and selects the metered `opencode/minimax-m3` Zen model; Nessa does not infer
+account validity or make a paid call during setup. The broader reason applies to
+every agent equally: telling somebody to go and install something before they
+can use Nessa is the thing this context exists to avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
 fetch all three and ship none.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
@@ -969,11 +1007,14 @@ record's random UUID, sequence, and observation time describe its physical
 publication and do not change that semantic identity.
 
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
-first recovers an admitted publication for the account, then does
+first recovers an admitted publication for the account and then resumes its
+durable superseded-runtime work before it does
 installed-already, download, hash, accept, publish, and never unpacks
 an archive that was not accepted. Its ports are `ArchiveSource` (the network),
 `RuntimeStore` (this machine's disk), `InstallAudit` (durable transition
-evidence), and `InstallationDelivery` (publication admission and recovery). The
+evidence), `InstallationDelivery` (publication admission and recovery), and
+`ReclamationAudit` (immutable evidence for each bounded removal attempt), with
+`ReclamationOperationIds` as the injected source of fresh removal identities. The
 delivery session holds one lock from recovery through settlement. It durably
 prepares after verification and before publication, retains the exact terminal
 independently of audit acknowledgement, and settles only a matching outcome. A
@@ -985,6 +1026,18 @@ prior valid artifact while holding the store's per-agent lock and returns that
 authority as a lease. The use case keeps the lease through both immediate durable delivery attempts
 and drops it when `execute` returns. A later invocation must recover and
 acknowledge the retained terminal before it admits another install effect.
+An exact replacement retains a domain-owned cleanup obligation and an
+independent receipt naming the exact delivery preparation on that same lease
+before publication settlement. Cleanup completion does not erase that receipt:
+after settlement the delivery owner returns the exact settled fact, and only
+then may the aggregate acknowledge the receipt and admit a successor
+replacement. Missing or contradictory settlement evidence blocks successor
+effects. One invocation makes at most one removal
+attempt per eligible obligation, retains the physical outcome before audit,
+and reports removal, persistence, and audit failures as separate typed facts
+without reversing the successful install. An interrupted admitted effect
+recovers as observation-only work, so restart cannot repeat a deletion whose
+result is unknown.
 Journal sequence and observation time remain observation order; domain event
 identity and before/after facts retain causal meaning.
 Audit failure stays visible and carries typed state evidence: unchanged, the
@@ -1022,7 +1075,23 @@ crate's `*_beneath` primitives, which walk down one verified component at a
 time; the root itself, which composition owns, is the single path resolved the
 ordinary way. So no symbolic link between the root and a runtime can send a
 read, a write or a removal outside the store, and the installed executable is
-private to its owner like everything else there. `audit/journal.rs` retains one
+private to its owner like everything else there. Managed launch resolution
+also returns an inseparable executable-use authority: each spawn durably admits
+one generation while holding a shared artifact lock. A bounded per-artifact
+inventory is initialized before publication becomes launchable; each generation
+has separate immutable expected, admitted, and released records, so a missing
+inventory, orphan phase, reused identity, or interrupted admission is
+conservative after restart. Cleanup releases only that generation after it
+confirms the process tree is gone or no spawn occurred. Dropped guards, launcher
+death, task cancellation, and failed release acknowledgement leave durable
+evidence; physical cleanup confirmation remains separate from release
+acknowledgement and never regresses when the latter fails. Reclamation holds the publication lock,
+rechecks the current artifact, takes the superseded artifact lock without
+waiting, and refuses current, busy, marked, linked, or unowned targets. It
+removes only the complete retained `ReleaseContents` through anchored storage
+operations. `runtime_reclamation/` persists the aggregate and one immutable
+audit record per operation; retained admissions, physical outcomes, and audit
+acknowledgements remain distinct restart facts. `audit/journal.rs` retains one
 opened directory authority and the original lock-file identity, then takes a
 fresh handle to that same lock for each record so CLI processes serialize one
 monotonically sequenced journal. `audit/record.rs` owns its private JSON mapping
@@ -1048,7 +1117,9 @@ attempts and settlement. `delivery/record.rs` maps private JSON through the same
 domain constructors used by the live path. Records are bounded before
 publication and while read; settlement without its exact predecessor and
 multiple unresolved attempts are refused. Records remain until separate
-reclamation is designed.
+delivery-journal maintenance is designed. A replacement cannot settle until
+its exact installation reclamation obligation has been durably acknowledged;
+settlement does not erase the reclamation aggregate or its immutable audit.
 The stable lock excludes every cooperating writer. On Unix it does not protect
 the check/effect interval inside the journal leaf from a malicious process
 running as the same user and deliberately ignoring that advisory lock; detected
@@ -1063,9 +1134,10 @@ selected private data namespace before it constructs the audit and publication
 delivery journal beneath that root; an unsafe namespace stops the command
 before download or publication.
 `scripts/agents/pin-agents.mjs` regenerates the pin file by downloading
-and hashing every platform's archives. Composition reads the store at every
-start through `composition/installed_launch.rs`, which answers with a launch or
-with nothing and never with a path it wrote down earlier. Tests under
+and hashing every platform's archives. Composition reads the store through
+`composition/installed_launch.rs` for each managed readiness observation and
+cold conversation open. It answers with an owned exact-pin launch or with
+nothing, never with a free-text path written down earlier. Tests under
 `tests/agent_install/` split the domain's rules, application ordering and
 failure reporting, the three adapters, concurrent publication authority, and
 the command's output.

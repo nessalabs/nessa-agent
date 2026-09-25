@@ -1,7 +1,9 @@
 //! The warm-up runs once, off the request path, and leaves evidence behind.
 use super::{AgentWarmUp, RuntimeFingerprint, WarmUpCause, WarmUpState};
 use crate::agent_warm_up::application::{
-    ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
+    ProviderFailure, WarmUpAudit, WarmUpAuditDelivery, WarmUpAuditRecord,
+    WarmUpCompletionRecordDelivery, WarmUpEffect, WarmUpError, WarmUpFuture, WarmUpLaunchOwnership,
+    WarmUpRecords,
 };
 use crate::conversation_test_support::{AcceptingAudit, Provider, ProviderFactory, TestClock};
 use nessa_sdk::application::agent_execution::agents::{
@@ -220,7 +222,15 @@ impl SessionStorageLease for FailPublicationLease {
 #[tokio::test]
 async fn warming_opens_and_closes_one_real_session_and_records_it() {
     let fixture = fixture();
-    fixture.warm_up.wait_until_settled().await;
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+    assert_eq!(terminal.runtime(), &runtime());
+    assert_eq!(terminal.effect(), WarmUpEffect::Prepared);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Acknowledged);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::Recorded
+    );
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -258,7 +268,14 @@ async fn warming_opens_and_closes_one_real_session_and_records_it() {
 async fn an_already_warmed_runtime_is_not_launched_again() {
     let fixture = fixture();
     fixture.records.completed.lock().unwrap().push(runtime());
-    fixture.warm_up.wait_until_settled().await;
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+    assert_eq!(terminal.effect(), WarmUpEffect::AlreadyPrepared);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::NotAttempted);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::Existing
+    );
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 0);
     // Nothing changed, so there is no transition to record.
     assert!(fixture.audit.records.lock().unwrap().is_empty());
@@ -304,7 +321,14 @@ async fn a_caller_arriving_mid_warm_up_joins_it_instead_of_launching_again() {
 async fn a_failed_audit_prevents_a_completion_record_and_leaves_the_runtime_cold() {
     let fixture = fixture();
     *fixture.audit.failure.lock().unwrap() = Some("sink rejected".into());
-    fixture.warm_up.wait_until_settled().await;
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+    assert_eq!(terminal.effect(), WarmUpEffect::Prepared);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Rejected);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::NotAttempted
+    );
     // The session was still opened and closed: audit failure must not prevent
     // the cleanup that had already happened.
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
@@ -326,6 +350,7 @@ async fn confirmed_physical_cleanup_stays_distinct_from_attachment_audit_failure
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
     assert!(fixture.records.completed.lock().unwrap().is_empty());
     let records = fixture.audit.records.lock().unwrap();
+    assert!(records[0].session_id.is_some());
     let failure = records[0].failure.as_ref().unwrap();
     assert_eq!(failure.error, AgentError::AuditFailure);
     assert!(!failure.cleanup_unconfirmed);
@@ -346,6 +371,7 @@ async fn publication_failure_cleans_physical_resources_without_claiming_completi
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
     assert!(fixture.records.completed.lock().unwrap().is_empty());
     let records = fixture.audit.records.lock().unwrap();
+    assert!(records[0].session_id.is_none());
     let failure = records[0].failure.as_ref().unwrap();
     assert!(matches!(
         &failure.error,
@@ -374,16 +400,27 @@ async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
         Arc::new(TestClock),
         runtime(),
     );
-    warm_up.wait_until_settled().await;
+    let terminal = warm_up.wait_for_terminal().await;
 
     assert_eq!(cleanup.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(terminal.effect(), WarmUpEffect::Failed);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Retained);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Acknowledged);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::NotAttempted
+    );
     assert!(records.completed.lock().unwrap().is_empty());
     let audit = audit.records.lock().unwrap();
+    assert!(audit[0].session_id.is_none());
     let failure = audit[0].failure.as_ref().unwrap();
     assert_eq!(
         failure.error,
         AgentError::MultipleOperationFailures {
-            first_error: Box::new(AgentError::Protocol("provider open failed".into())),
+            first_error: Box::new(AgentError::MultipleOperationFailures {
+                first_error: Box::new(AgentError::Protocol("provider open failed".into())),
+                subsequent_error: Box::new(AgentError::Transport("cleanup retained".into())),
+            }),
             subsequent_error: Box::new(AgentError::Transport("cleanup retained".into())),
         }
     );
@@ -404,10 +441,13 @@ async fn provider_open_failure_without_resources_reports_confirmed_absence() {
         Arc::new(TestClock),
         runtime(),
     );
-    warm_up.wait_until_settled().await;
+    let terminal = warm_up.wait_for_terminal().await;
 
+    assert_eq!(terminal.effect(), WarmUpEffect::Failed);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
     assert!(records.completed.lock().unwrap().is_empty());
     let audit = audit.records.lock().unwrap();
+    assert!(audit[0].session_id.is_none());
     let failure = audit[0].failure.as_ref().unwrap();
     assert_eq!(
         failure.error,
@@ -437,7 +477,7 @@ async fn publication_failures_report_physical_cleanup_at_capture_time() {
             CleanupReport::unconfirmed(AgentError::Transport("cleanup retained".into())),
             CleanupReport::confirmed(CloseOutcome { forced: false }),
         ]);
-        fixture.warm_up.wait_until_settled().await;
+        let terminal = fixture.warm_up.wait_for_terminal().await;
 
         while fixture.provider.close_calls.load(Ordering::SeqCst) < 2 {
             let finished = fixture.provider.close_finished.notified();
@@ -447,11 +487,17 @@ async fn publication_failures_report_physical_cleanup_at_capture_time() {
             finished.await;
         }
         assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            terminal.launch_ownership(),
+            WarmUpLaunchOwnership::Released,
+            "the explicit retry confirmed cleanup before terminal publication"
+        );
         assert!(fixture.records.completed.lock().unwrap().is_empty());
         let audit = fixture.audit.records.lock().unwrap();
+        assert_eq!(audit[0].session_id.is_some(), audit_failure);
         let failure = audit[0].failure.as_ref().unwrap();
         if audit_failure {
-            assert!(failure.cleanup_unconfirmed);
+            assert!(!failure.cleanup_unconfirmed);
             assert_eq!(
                 failure.error,
                 AgentError::OperationAndCleanupFailure {
@@ -493,10 +539,12 @@ async fn a_failed_launch_is_audited_as_still_cold_and_not_recorded_complete() {
     ));
     *fixture.provider.close_failure.lock().unwrap() = Some(deadline.clone());
     fixture.warm_up.wait_until_settled().await;
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 2);
     let records = fixture.audit.records.lock().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].before, WarmUpState::Cold);
     assert_eq!(records[0].after, WarmUpState::Cold, "nothing was warmed");
+    assert!(records[0].session_id.is_some());
     assert_eq!(
         records[0].failure,
         Some(ProviderFailure {
@@ -509,10 +557,49 @@ async fn a_failed_launch_is_audited_as_still_cold_and_not_recorded_complete() {
 }
 
 #[tokio::test]
+async fn confirmed_close_retry_and_rejected_warm_up_audit_keep_the_named_session() {
+    let fixture = fixture();
+    fixture.provider.close_reports.lock().unwrap().extend([
+        CleanupReport::unconfirmed(AgentError::Transport("first close uncertain".into())),
+        CleanupReport::confirmed(CloseOutcome { forced: false }),
+    ]);
+    *fixture.audit.failure.lock().unwrap() = Some("sink rejected".into());
+
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(terminal.effect(), WarmUpEffect::Failed);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Rejected);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::NotAttempted
+    );
+    assert!(fixture.records.completed.lock().unwrap().is_empty());
+    let audit = fixture.audit.records.lock().unwrap();
+    assert!(audit[0].session_id.is_some());
+    assert_eq!(
+        audit[0].failure,
+        Some(ProviderFailure {
+            error: AgentError::Transport("first close uncertain".into()),
+            cleanup_unconfirmed: false,
+        })
+    );
+    assert_eq!(audit[0].correlation_id, audit[0].initiator.request_id());
+}
+
+#[tokio::test]
 async fn an_unreadable_record_store_does_not_launch_or_claim_completion() {
     let fixture = fixture();
     *fixture.records.read_failure.lock().unwrap() = Some("unreadable".into());
-    fixture.warm_up.wait_until_settled().await;
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+    assert_eq!(terminal.effect(), WarmUpEffect::Failed);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::NotAttempted);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::ReadRejected
+    );
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 0);
     assert!(fixture.audit.records.lock().unwrap().is_empty());
 }
@@ -521,7 +608,14 @@ async fn an_unreadable_record_store_does_not_launch_or_claim_completion() {
 async fn a_failed_completion_write_keeps_its_audited_evidence() {
     let fixture = fixture();
     *fixture.records.write_failure.lock().unwrap() = Some("read-only".into());
-    fixture.warm_up.wait_until_settled().await;
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+    assert_eq!(terminal.effect(), WarmUpEffect::Prepared);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Released);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Acknowledged);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::WriteRejected
+    );
     let records = fixture.audit.records.lock().unwrap();
     assert_eq!(records.len(), 1);
     // The warm-up did happen; only the record of it could not be kept, so the
@@ -551,7 +645,14 @@ async fn the_run_is_not_repeated_after_it_has_settled() {
 async fn a_panicking_run_settles_the_waiters_instead_of_unwinding_into_them() {
     let fixture = fixture();
     fixture.records.read_panic.store(true, Ordering::SeqCst);
-    fixture.warm_up.wait_until_settled().await;
+    let terminal = fixture.warm_up.wait_for_terminal().await;
+    assert_eq!(terminal.effect(), WarmUpEffect::Unknown);
+    assert_eq!(terminal.launch_ownership(), WarmUpLaunchOwnership::Retained);
+    assert_eq!(terminal.audit_delivery(), WarmUpAuditDelivery::Unknown);
+    assert_eq!(
+        terminal.completion_record_delivery(),
+        WarmUpCompletionRecordDelivery::Unknown
+    );
     // Nothing was warmed and nothing claimed it was.
     assert!(fixture.records.completed.lock().unwrap().is_empty());
     assert!(fixture.audit.records.lock().unwrap().is_empty());

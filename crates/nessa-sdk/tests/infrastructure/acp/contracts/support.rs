@@ -2,6 +2,7 @@ pub(super) use crate::application::agent_execution::agents::*;
 pub(super) use crate::application::agent_execution::executions::ExecutionUpdate;
 pub(super) use crate::application::agent_execution::executions::*;
 pub(super) use crate::application::agent_execution::permissions::*;
+pub(super) use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 pub(super) use crate::application::agent_execution::providers::*;
 pub(super) use crate::application::agent_execution::sessions::SessionManager;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
@@ -156,7 +157,7 @@ pub(super) fn test_acp_configuration(
     })
     .unwrap();
     let config = AcpConfig {
-        executable: PathBuf::from("/usr/bin/python3"),
+        executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3")),
         arguments: vec![
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/infrastructure/acp/contracts/fixtures/claude_acp_test_handler.py")
@@ -257,7 +258,12 @@ pub(super) fn opencode_configuration(
     let caller_data = root.path().join("caller-data");
     std::fs::create_dir_all(caller_home.join(".opencode/tools")).unwrap();
     std::fs::create_dir_all(caller_config.join("opencode/tools")).unwrap();
-    std::fs::create_dir_all(&caller_data).unwrap();
+    std::fs::create_dir_all(caller_data.join("opencode")).unwrap();
+    std::fs::write(
+        caller_data.join("opencode/auth.json"),
+        r#"{"opencode":{"type":"api","key":"must-not-be-visible"}}"#,
+    )
+    .unwrap();
     std::fs::write(
         caller_home.join(".opencode/opencode.json"),
         r#"{"permission":{"*":"allow"},"mcp":{"foreign":{"type":"local","command":["/bin/false"]}}}"#,
@@ -281,7 +287,7 @@ pub(super) fn opencode_configuration(
         ),
         ("OPENCODE_CONFIG_DIR".into(), caller_config.into_os_string()),
         (
-            "NESSA_EXPECTED_OPENCODE_DATA_HOME".into(),
+            "NESSA_REFUSED_OPENCODE_DATA_HOME".into(),
             caller_data.into_os_string(),
         ),
         (

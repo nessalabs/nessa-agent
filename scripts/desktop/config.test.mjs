@@ -99,9 +99,39 @@ test("generated runtime resources exist only in the public build configuration",
   })
   const configIndex = calls[0].args.indexOf("--config")
   assert.ok(configIndex >= 0)
-  assert.deepEqual(JSON.parse(calls[0].args[configIndex + 1]).bundle.resources, {
-    "runtime/": "runtime/",
+  assert.deepEqual(JSON.parse(calls[0].args[configIndex + 1]), {
+    bundle: {
+      resources: { "runtime/": "runtime/" },
+      macOS: { signingIdentity: "-" },
+    },
   })
+
+  const linuxCalls = []
+  runDesktopBuild({
+    args: [],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      linuxCalls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  const linuxConfig = linuxCalls[0].args.indexOf("--config")
+  assert.deepEqual(JSON.parse(linuxCalls[0].args[linuxConfig + 1]), {
+    bundle: { resources: { "runtime/": "runtime/" } },
+  })
+
+  const windowsCalls = []
+  runDesktopBuild({
+    args: [],
+    environment: {},
+    platform: "win32",
+    spawn(command, args, options) {
+      windowsCalls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(windowsCalls[0].args.includes("--config"), false)
 })
 
 test("build argument forms select the exact artifact and disk image to verify", () => {
@@ -210,32 +240,36 @@ test("verification does not inherit artifact selectors without matching argument
   assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, undefined)
 })
 
-test("runtime preparation is capability-scoped to macOS packaging", async () => {
+test("runtime preparation assembles supported POSIX resources without enabling Windows", async () => {
+  assert.equal(
+    config.build.beforeBuildCommand,
+    "node scripts/desktop/prepare.mjs && pnpm build",
+  )
   const { prepareDesktopRuntime } = await import("./prepare.mjs")
-  for (const platform of ["linux", "win32"]) {
-    let loaded = false
-    assert.deepEqual(
-      await prepareDesktopRuntime({
-        platform,
-        loadManagedRuntime: async () => {
-          loaded = true
-        },
-      }),
-      { managedGateway: false },
-    )
-    assert.equal(loaded, false)
-  }
-  let loaded = false
+  const loaded = []
   assert.deepEqual(
     await prepareDesktopRuntime({
       platform: "darwin",
-      loadManagedRuntime: async () => {
-        loaded = true
-      },
+      loadMacosRuntime: async () => () => loaded.push("darwin"),
     }),
     { managedGateway: true },
   )
-  assert.equal(loaded, true)
+  assert.deepEqual(
+    await prepareDesktopRuntime({
+      platform: "linux",
+      loadLinuxRuntime: async () => () => loaded.push("linux"),
+    }),
+    { managedGateway: false },
+  )
+  assert.deepEqual(
+    await prepareDesktopRuntime({
+      platform: "win32",
+      loadMacosRuntime: async () => () => loaded.push("windows-macos"),
+      loadLinuxRuntime: async () => () => loaded.push("windows-linux"),
+    }),
+    { managedGateway: false },
+  )
+  assert.deepEqual(loaded, ["darwin", "linux"])
 })
 
 /**

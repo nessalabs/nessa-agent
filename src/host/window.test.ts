@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { superviseSession } from "../session/adapters/lifecycle/supervisor"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import type { EstablishedDevSession } from "../session/adapters/client/dev-session"
+import invalidCredentialAuditFailed from "../../src-tauri/src/agent_credentials/infrastructure/fixtures/invalid-credential-audit-failed.json"
 
 const { invoke, listen, close } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -68,6 +69,100 @@ describe("gateway startup", () => {
     expect(listen).not.toHaveBeenCalled()
     expect(received).not.toHaveBeenCalled()
   })
+})
+
+describe("native agent credential saves", () => {
+  it.each(["saved", "saved-audit-failed"] as const)(
+    "accepts the exact %s acknowledgement",
+    async (status) => {
+      invoke.mockResolvedValue({ status })
+      const { saveAgentApiKey } = await import("./window")
+
+      await expect(saveAgentApiKey("claude", "private")).resolves.toEqual({ status })
+      expect(invoke).toHaveBeenCalledWith("save_agent_api_key", {
+        agent: "claude",
+        key: "private",
+      })
+    },
+  )
+
+  it.each([undefined, "saved", { status: "saved", extra: true }, { status: "future" }])(
+    "treats a malformed acknowledgement as uncertain",
+    async (acknowledgement) => {
+      invoke.mockResolvedValue(acknowledgement)
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveUncertain",
+          auditStatus: "unknown",
+        }),
+      )
+    },
+  )
+
+  it.each(["audit-unavailable", "unsupported-agent"] as const)(
+    "preserves the validated %s pre-effect refusal",
+    async (status) => {
+      invoke.mockRejectedValue({ status })
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveRejected",
+          reason: status,
+        }),
+      )
+    },
+  )
+
+  it.each([
+    [{ status: "invalid-credential", auditStatus: "recorded" }, "recorded"],
+    [invalidCredentialAuditFailed, "failed"],
+  ] as const)(
+    "preserves an audited invalid credential with %s delivery",
+    async (failure, auditStatus) => {
+      invoke.mockRejectedValue(failure)
+      const { saveAgentApiKey } = await import("./window")
+
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveRejected",
+          reason: "invalid-credential",
+          auditStatus,
+        }),
+      )
+    },
+  )
+
+  it.each(["recorded", "failed", "unknown"] as const)(
+    "preserves an uncertain effect with %s audit delivery",
+    async (auditStatus) => {
+      invoke.mockRejectedValue({ status: "save-uncertain", auditStatus })
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("opencode", "private")).rejects.toEqual(
+        expect.objectContaining({ name: "AgentApiKeySaveUncertain", auditStatus }),
+      )
+    },
+  )
+
+  it.each([
+    new Error("transport lost private"),
+    { status: "save-uncertain", auditStatus: "future" },
+    { status: "invalid-credential" },
+    { status: "invalid-credential", auditStatus: "unknown" },
+    { status: "invalid-credential", auditStatus: "failed", extra: true },
+  ])(
+    "does not turn an unrecognized rejection into a definite refusal",
+    async (failure) => {
+      invoke.mockRejectedValue(failure)
+      const { saveAgentApiKey } = await import("./window")
+      await expect(saveAgentApiKey("claude", "private")).rejects.toEqual(
+        expect.objectContaining({
+          name: "AgentApiKeySaveUncertain",
+          auditStatus: "unknown",
+        }),
+      )
+    },
+  )
 })
 
 describe("native surface credential failures", () => {

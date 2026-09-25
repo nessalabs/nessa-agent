@@ -3,13 +3,11 @@
 //! Nessa drives coding agents it does not write, and fetching one is how any of
 //! them arrives.
 //!
-//! Opencode was the first, on a reason that turned out to be false: it was
-//! taken to be the agent a first-time user could reach with nothing signed in.
-//! Its free models are refused outside OpenCode's own application, so it needs
-//! an account like the other two, and there is nothing special about it. What
-//! is left is the part that was always true — telling somebody to go and
-//! install something before they can use this is the thing this context exists
-//! to avoid — and that applies to every agent equally. See
+//! Opencode was the first. Its packaged profile now starts on a metered Zen
+//! model and therefore requires a saved API key before launch. What remains
+//! true independently of provider catalogue behavior is that telling somebody
+//! to install an agent before they can use Nessa is the thing this context
+//! exists to avoid, and that applies to every agent equally. See
 //! `docs/adr/todo/173-fetch-agent-runtimes.md`.
 //!
 //! A release is not always one file, and that is the other thing this context
@@ -32,9 +30,9 @@
 //! answers "not installed" for anything that does not describe exactly the
 //! artifact the current pin names, or whose files are not all still there. A
 //! launcher that instead kept an absolute path from an earlier install would
-//! keep a *working* one: superseded artifacts are left where they are, so the
-//! file stays launchable after the pin moves, and the agent Nessa tested would
-//! be silently replaced by one it did not. The path `nessa install-agent`
+//! keep a *working* one: a superseded artifact can remain while a process-use
+//! marker defers its removal, so the file can stay launchable after the pin
+//! moves. The path `nessa install-agent`
 //! prints is therefore a report of what just happened, for a person and for a
 //! caller deciding what to say next. It is not a handle to be stored and
 //! launched from later.
@@ -45,10 +43,12 @@
 //!                                                 -> application::RuntimeStore
 //!                                                 -> application::InstallAudit
 //!                                                 -> application::InstallationDelivery
+//!                                                 -> application::ReclamationAudit
 //! infrastructure::HttpsArchives ------------------> ArchiveSource
 //! infrastructure::ManagedRuntimes ----------------> RuntimeStore
 //! infrastructure::DurableInstallAudit ------------> InstallAudit
 //! infrastructure::DurableInstallationDelivery ----> InstallationDelivery
+//! infrastructure::DurableReclamationAudit --------> ReclamationAudit
 //! domain::PinnedRelease --------------------------> what is allowed to be installed
 //!          └─ domain::ReleaseContents ------------> which files, and what each is for
 //! ```

@@ -479,6 +479,30 @@ struct AuditedHost {
     stopped: Mutex<Vec<String>>,
 }
 
+struct ConfigurationChangedHost;
+
+impl GatewayHost for ConfigurationChangedHost {
+    fn startup_cause(&self) -> ReconciliationCause {
+        ReconciliationCause::ClaudeConfigurationChanged
+    }
+
+    fn register(
+        &self,
+        _: &Path,
+        _: &str,
+        _: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        admit(attempt, progress, "configured");
+        Ok(reconciled("configured"))
+    }
+
+    fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
 impl GatewayHost for AuditedHost {
     fn register(
         &self,
@@ -694,6 +718,34 @@ fn every_reconciliation_entry_point_preserves_its_cause_and_verified_initiator()
         ]
     );
     assert_eq!(audit.outcomes.lock().unwrap().len(), 4);
+}
+
+#[test]
+fn desktop_start_audits_a_durable_provider_configuration_change() {
+    let audit = Arc::new(RecordingAudit::default());
+    let gateway = Gateway::bootstrap(
+        Arc::new(ConfigurationChangedHost),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+
+    let intents = audit.intents.lock().unwrap();
+    assert_eq!(intents.len(), 1);
+    assert_eq!(
+        intents[0].attempt().origin().evidence().cause(),
+        ReconciliationCause::ClaudeConfigurationChanged
+    );
+    assert_eq!(
+        intents[0].attempt().origin().evidence().initiator(),
+        ReconciliationInitiator::DesktopHost
+    );
+    assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
 }
 
 #[test]

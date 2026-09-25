@@ -312,6 +312,14 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
             webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
+      # This repeats a release build of nessa-server after the matrix's debug
+      # build below, and a release build of nessa-mcp after gateway-contract.
+      # It is intentionally unique: this is the shipping-profile evidence that
+      # the Linux assembler produces the complete fingerprinted resource tree.
+      # No other job assembles Linux or consumes this generated directory.
+      - name: Assemble the Linux desktop runtime
+        if: runner.os == 'Linux'
+        run: node scripts/desktop/prepare.mjs
       # `cargo install` spent most of a minute building this tool from source
       # on every run, to arrive at a binary its author already publishes. Taken
       # from the release archive instead, pinned the same way actionlint is at

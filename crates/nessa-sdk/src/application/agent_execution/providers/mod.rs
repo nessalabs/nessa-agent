@@ -7,6 +7,7 @@
 //! active ExecutionId -> steer -> Injected / PromptRequired
 //! SessionCloseRequest -> backend close -> CleanupReport (resources + audit)
 //! failed open -> ProviderOpenError -> ProviderCleanup (when resources remain)
+//! executable snapshot -> per-generation use guard -> release after confirmed cleanup
 //! finalized adapter facts -> validated recipe -> ExecutionReport -> storage
 //! ```
 //! Arrows show calls and returned handles. These ports describe a complete
@@ -35,6 +36,7 @@
 
 mod close;
 mod deletion;
+mod executable_use;
 mod finalized_execution;
 mod identity;
 mod images;
@@ -47,6 +49,10 @@ mod steering;
 pub use close::SessionCloseRequest;
 pub use deletion::{
     ProviderSessionDeleter, ProviderSessionDeletion, ProviderSessionDeletionFuture,
+};
+pub use executable_use::{
+    ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseAdmissionOwner, ExecutableUseError,
+    ExecutableUseGuard, ExecutableUseSnapshot,
 };
 pub(crate) use finalized_execution::{
     FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,

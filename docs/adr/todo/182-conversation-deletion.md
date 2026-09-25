@@ -58,8 +58,12 @@ and it is decided here in that light.
 4. **Ask the agent to delete its own session.** Nessa talks to agents over ACP,
    and each agent keeps its own record of a session. The provider session read
    from our saved history is handed to one authority — a registry of erasers
-   keyed by agent, filled at one site in composition — which dispatches to that
-   agent's handler, kept in the agent's own SDK module. Each opens a connection
+   keyed by agent, filled in composition: the fixed agents where their
+   providers are built, and OpenCode by its current generation, observed afresh
+   on each ask as a cold conversation's provider is (not installed or without a
+   credential now is an agent not built this run) — which dispatches to that
+   agent's handler, kept in the agent's own SDK module. Each launch reads the
+   agent's credential and holds its executable in use as an opening does. Each opens a connection
    of its own without resuming the session, and sends `session/delete` only if
    the agent advertises it. The delete is always sent first when it can be,
    and an accepted delete depends on nothing else, since only the agent knows
