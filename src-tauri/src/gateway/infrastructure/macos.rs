@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::{
     fmt::{self, Display, Formatter},
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpStream},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
@@ -49,6 +49,26 @@ pub(super) struct Launchd {
     disabled_services: Arc<dyn DisabledServiceStatus>,
     configuration: ServiceConfiguration,
     home: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BootstrapRecoveryDecision {
+    Adopt(ReconciliationIncarnation),
+    Refuse,
+}
+
+fn bootstrap_recovery_decision(
+    loaded: bool,
+    pid: Option<u32>,
+    observed: Option<&ReconciliationIncarnation>,
+    target: &ReconciliationTarget,
+) -> BootstrapRecoveryDecision {
+    match observed.filter(|incarnation| {
+        loaded && pid == Some(incarnation.process_id()) && incarnation.target() == target
+    }) {
+        Some(incarnation) => BootstrapRecoveryDecision::Adopt(incarnation.clone()),
+        None => BootstrapRecoveryDecision::Refuse,
+    }
 }
 
 impl Launchd {
@@ -162,6 +182,17 @@ impl GatewayHost for Launchd {
                     return Ok(());
                 }
                 LifecycleEffect::BootstrapService { target: planned } => {
+                    let BootstrapRecoveryDecision::Adopt(exact) = bootstrap_recovery_decision(
+                        status.loaded,
+                        status.pid,
+                        observed.as_ref(),
+                        planned,
+                    ) else {
+                        return Err(GatewayError::Registration(
+                            "The unresolved bootstrap target is absent, unhealthy, or replaced; recovery remains unresolved"
+                                .into(),
+                        ));
+                    };
                     let command = step.completion().cloned().unwrap_or_else(|| {
                         LifecycleCommandResult::Indeterminate(
                             "The host restarted before bootstrap returned".into(),
@@ -172,29 +203,19 @@ impl GatewayHost for Launchd {
                             journal.effect_completion(step.plan_id(), step.step().id(), &command)
                         })?;
                     }
-                    let exact_target_present = observed
-                        .as_ref()
-                        .is_some_and(|incarnation| incarnation.target() == planned)
-                        || installed_generation(definition.as_ref())
-                            == Some(planned.service_generation());
                     let observation = LifecycleObservation::new(
                         recovery
                             .latest_observation()
                             .map_or(1, |prior| prior.version().saturating_add(1)),
                         observed.clone(),
-                        exact_target_present,
+                        true,
                     );
                     retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
                     retry_journal_delivery(|| {
                         journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::Failed {
-                                phase: LifecycleFailedPhase::Observation,
-                                message: format!(
-                                    "Recovered bootstrap state after restart with command result {command:?}"
-                                ),
-                            },
+                            &LifecyclePhysicalOutcome::Confirmed(exact.clone()),
                             Some(&observation),
-                            ReconciliationCleanupDecision::RetainPrior,
+                            ReconciliationCleanupDecision::AdoptClaimed,
                         )
                     })?;
                     return Ok(());
@@ -884,6 +905,15 @@ fn audit_after_physical<T, E: Display>(
         physical: Some(physical),
     })
 }
+
+fn artifact_presence(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn prune_planned(
     progress: &dyn GatewayReconciliationProgress,
     installations: &Path,
@@ -926,13 +956,21 @@ fn prune_planned(
         if let Err(audit) = progress.effect_completed(&plan_id, step.id(), &completion) {
             return Err(audit_after_physical(audit, &removal));
         }
+        let artifact_present = artifact_presence(&installations.join(&name)).map_err(|error| {
+            audit_after_physical(
+                GatewayError::Registration(format!(
+                    "Could not observe pruned gateway runtime {name}: {error}"
+                )),
+                &removal,
+            )
+        })?;
         if let Err(audit) = progress.physical_observed(
             &LifecycleObservationSource::Effect {
                 plan_id,
                 step_id: step.id().into(),
             },
             Some(running.clone()),
-            true,
+            artifact_present,
         ) {
             return Err(audit_after_physical(audit, &removal));
         }
@@ -973,7 +1011,7 @@ fn register(
     // `prod` service and keeps 7420; a stage with no entry gets no service at
     // all rather than silently taking the product's socket.
     let port = configuration.port();
-    let data = prepare_data_directory(base, stage, instance)?;
+    let data = data_directory_path(base, stage, instance)?;
     let log = data.join("logs/gateway.log");
     let label = service_label(stage, instance);
     let lock_directory = home
@@ -990,12 +1028,7 @@ fn register(
     let process_identity_known = status.process_identity_known;
     let fingerprint = runtime_fingerprint(runtime)?;
     let private_root = home.join("Library/Application Support/Nessa");
-    nessa_local_storage::create_directory(&private_root).map_err(|error| error.to_string())?;
-    nessa_local_storage::sync_directory(private_root.parent().ok_or("Missing runtime ancestor")?)
-        .map_err(|error| error.to_string())?;
     let runtime_root = private_root.join("gateway-runtimes");
-    nessa_local_storage::create_directory(&runtime_root).map_err(|error| error.to_string())?;
-    nessa_local_storage::sync_directory(&private_root).map_err(|error| error.to_string())?;
     let installations = runtime_root.join(&label);
     let planned_runtime = installations.join(&fingerprint);
     let runtime_for_definition = planned_runtime.as_path();
@@ -1109,6 +1142,7 @@ fn register(
                 fingerprint: fingerprint.clone(),
             },
             || {
+                prepare_data_directory(base, stage, instance)?;
                 stage_runtime_cached(
                     runtime,
                     &installations,
@@ -1141,6 +1175,7 @@ fn register(
             },
             cleanup_staged_runtime,
             || {
+                prepare_data_directory(base, stage, instance)?;
                 stage_runtime_cached(
                     runtime,
                     &installations,
@@ -1647,7 +1682,24 @@ fn prepare_data_directory(
     stage: &str,
     instance: Option<&str>,
 ) -> Result<PathBuf, String> {
+    let destination = data_directory_path(trusted_base, stage, instance)?;
     nessa_local_storage::create_directory(trusted_base).map_err(|error| error.to_string())?;
+    let Ok(relative) = destination.strip_prefix(trusted_base) else {
+        return Err("Gateway data directory escaped its trusted base".into());
+    };
+    if relative.as_os_str().is_empty() {
+        return Ok(destination);
+    }
+    nessa_local_storage::create_directory_beneath(trusted_base, relative)
+        .map_err(|error| error.to_string())?;
+    Ok(destination)
+}
+
+fn data_directory_path(
+    trusted_base: &Path,
+    stage: &str,
+    instance: Option<&str>,
+) -> Result<PathBuf, String> {
     let mut relative = PathBuf::new();
     if stage != "prod" {
         relative.push(stage);
@@ -1659,8 +1711,6 @@ fn prepare_data_directory(
     if relative.as_os_str().is_empty() {
         return Ok(trusted_base.to_path_buf());
     }
-    nessa_local_storage::create_directory_beneath(trusted_base, &relative)
-        .map_err(|error| error.to_string())?;
     Ok(trusted_base.join(relative))
 }
 #[derive(Deserialize)]
@@ -1975,13 +2025,13 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        bootstrap_cleanup_decision, bootstrap_succeeded,
-        cleanup_bootstrap_after_audit_failure_with, disabled_service, finish_bootstrap,
-        gave_up_retry, installed_generation, matches_reconciled_gateway, prepare_data_directory,
-        publish_definition, registered_agent_path, retire_then_unload, run_bootstrap,
-        run_planned_effect_with_cleanup, runtime_fingerprint, service_environment, service_matches,
-        startup, unavailable_service, unreadable_process_identity, BootstrapCleanupDecision,
-        BootstrapFailure, SearchPath,
+        artifact_presence, bootstrap_cleanup_decision, bootstrap_recovery_decision,
+        bootstrap_succeeded, cleanup_bootstrap_after_audit_failure_with, disabled_service,
+        finish_bootstrap, gave_up_retry, installed_generation, matches_reconciled_gateway,
+        prepare_data_directory, publish_definition, registered_agent_path, retire_then_unload,
+        run_bootstrap, run_planned_effect_with_cleanup, runtime_fingerprint, service_environment,
+        service_matches, startup, unavailable_service, unreadable_process_identity,
+        BootstrapCleanupDecision, BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
@@ -2396,6 +2446,49 @@ mod tests {
             bootstrap_cleanup_decision(false, None, &target),
             BootstrapCleanupDecision::AlreadyAbsent
         );
+    }
+
+    #[test]
+    fn bootstrap_recovery_adopts_only_the_exact_loaded_healthy_process() {
+        let target = bootstrap_target();
+        let exact = bootstrap_incarnation(&target);
+        let replacement_target = ReconciliationTarget::new(
+            target.service().to_owned(),
+            "c".repeat(64),
+            target.service_generation().to_owned(),
+        )
+        .unwrap();
+        let replacement = bootstrap_incarnation(&replacement_target);
+
+        assert_eq!(
+            bootstrap_recovery_decision(true, Some(42), Some(&exact), &target),
+            BootstrapRecoveryDecision::Adopt(exact)
+        );
+        assert_eq!(
+            bootstrap_recovery_decision(true, None, None, &target),
+            BootstrapRecoveryDecision::Refuse
+        );
+        assert_eq!(
+            bootstrap_recovery_decision(true, Some(42), Some(&replacement), &target),
+            BootstrapRecoveryDecision::Refuse
+        );
+        assert_eq!(
+            bootstrap_recovery_decision(false, None, None, &target),
+            BootstrapRecoveryDecision::Refuse
+        );
+    }
+
+    #[test]
+    fn prune_observation_distinguishes_absence_replacement_and_unknown_state() {
+        let root = tempfile::tempdir().unwrap();
+        let artifact = root.path().join("artifact");
+        assert_eq!(artifact_presence(&artifact), Ok(false));
+
+        fs::write(&artifact, b"replacement").unwrap();
+        assert_eq!(artifact_presence(&artifact), Ok(true));
+
+        let unreadable_name = "x".repeat(300);
+        assert!(artifact_presence(&root.path().join(unreadable_name)).is_err());
     }
 
     #[test]

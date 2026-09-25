@@ -190,6 +190,9 @@ the predeclared bootout. A replacement is preserved. The host retries an
 unacknowledged observation as the identical record before appending the cleanup
 completion and its fresh post-command observation; persistent journal failure
 leaves the history unresolved while still retaining the physical cleanup result.
+Restart recovery adopts a bootstrap only when fresh health and launchd PID prove
+the exact planned target. Absence, a PID-less registration, unhealthy state, and
+a replacement all leave the original attempt unresolved without replay or cleanup.
 A retry may unload an unambiguously PID-less unavailable registration only when that
 host-owned record, the desired definition and the complete on-disk definition all
 agree. Missing, malformed or contradictory evidence preserves the service. This

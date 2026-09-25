@@ -108,23 +108,6 @@ pub enum LifecycleEffect {
     },
 }
 
-impl LifecycleEffect {
-    pub fn target(&self) -> Option<&ReconciliationTarget> {
-        match self {
-            Self::RequestRetirement { incarnation } | Self::StopAgents { incarnation } => {
-                Some(incarnation.target())
-            }
-            Self::PublishServiceDefinition { target }
-            | Self::BootstrapService { target }
-            | Self::AdoptReadyIncarnation { target } => Some(target),
-            Self::StageRuntime { .. }
-            | Self::UnloadService { .. }
-            | Self::PruneRuntime { .. }
-            | Self::RemoveStagingRuntime { .. } => None,
-        }
-    }
-}
-
 /// Condition under which a preplanned contingency may execute.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LifecycleEffectPredicate {
@@ -480,6 +463,12 @@ impl LifecycleHistory {
                 if !matches!(primary.predicate(), LifecycleEffectPredicate::Always) {
                     return Err(LifecycleJournalError::InvalidPlan);
                 }
+                validate_primary_effect(
+                    primary.effect(),
+                    expected_before.as_ref(),
+                    target,
+                    &self.namespace,
+                )?;
                 let mut steps = BTreeMap::new();
                 for step in std::iter::once(primary).chain(cleanup) {
                     if steps
@@ -488,12 +477,13 @@ impl LifecycleHistory {
                     {
                         return Err(LifecycleJournalError::DuplicateStep);
                     }
-                    if step
-                        .effect()
-                        .target()
-                        .is_some_and(|target| target != &self.target)
-                    {
-                        return Err(LifecycleJournalError::TargetMismatch);
+                    if step.id() != primary.id() {
+                        validate_cleanup_effect(
+                            primary.effect(),
+                            step.effect(),
+                            target,
+                            &self.namespace,
+                        )?;
                     }
                 }
                 self.plans.insert(
@@ -588,17 +578,25 @@ impl LifecycleHistory {
             LifecycleRecordPayload::Outcome {
                 physical,
                 last_confirmed,
-                ..
+                cleanup,
             } => {
                 if self.pending_observation.is_some() {
                     return Err(LifecycleJournalError::MissingObservation);
+                }
+                if self
+                    .plans
+                    .values()
+                    .any(|plan| !plan.completed.contains_key(&plan.primary_id))
+                {
+                    return Err(LifecycleJournalError::MissingCompletion);
                 }
                 if last_confirmed != &self.latest_observation {
                     return Err(LifecycleJournalError::StateMismatch);
                 }
                 match physical {
                     LifecyclePhysicalOutcome::Confirmed(after) => {
-                        if after.target() != &self.target
+                        if *cleanup != ReconciliationCleanupDecision::AdoptClaimed
+                            || after.target() != &self.target
                             || self
                                 .latest_observation
                                 .as_ref()
@@ -611,11 +609,17 @@ impl LifecycleHistory {
                     LifecyclePhysicalOutcome::StopAgentsSettled {
                         intended, observed, ..
                     } => {
-                        if intended != self.before.as_ref().unwrap_or(intended)
+                        if *cleanup != ReconciliationCleanupDecision::RetainPrior
+                            || intended != self.before.as_ref().unwrap_or(intended)
                             || Some(observed) != self.latest_observation.as_ref()
                         {
                             return Err(LifecycleJournalError::StateMismatch);
                         }
+                    }
+                    LifecyclePhysicalOutcome::Failed { .. }
+                        if *cleanup == ReconciliationCleanupDecision::AdoptClaimed =>
+                    {
+                        return Err(LifecycleJournalError::StateMismatch)
                     }
                     LifecyclePhysicalOutcome::Failed { .. } if self.plans.is_empty() => {
                         let observation = self
@@ -666,6 +670,55 @@ impl LifecycleHistory {
     }
 }
 
+fn validate_primary_effect(
+    effect: &LifecycleEffect,
+    expected_before: Option<&ReconciliationIncarnation>,
+    target: &ReconciliationTarget,
+    namespace: &str,
+) -> Result<(), LifecycleJournalError> {
+    let agrees = match effect {
+        LifecycleEffect::StageRuntime { fingerprint } => {
+            fingerprint == target.runtime_fingerprint()
+        }
+        LifecycleEffect::RequestRetirement { incarnation }
+        | LifecycleEffect::StopAgents { incarnation } => expected_before == Some(incarnation),
+        LifecycleEffect::UnloadService { service } => service == namespace,
+        LifecycleEffect::PublishServiceDefinition { target: planned }
+        | LifecycleEffect::BootstrapService { target: planned }
+        | LifecycleEffect::AdoptReadyIncarnation { target: planned } => planned == target,
+        LifecycleEffect::PruneRuntime { .. } | LifecycleEffect::RemoveStagingRuntime { .. } => true,
+    };
+    agrees
+        .then_some(())
+        .ok_or(LifecycleJournalError::TargetMismatch)
+}
+
+fn validate_cleanup_effect(
+    primary: &LifecycleEffect,
+    cleanup: &LifecycleEffect,
+    target: &ReconciliationTarget,
+    namespace: &str,
+) -> Result<(), LifecycleJournalError> {
+    let agrees = match (primary, cleanup) {
+        (
+            LifecycleEffect::StageRuntime {
+                fingerprint: staged,
+            },
+            LifecycleEffect::PruneRuntime {
+                fingerprint: removed,
+            },
+        ) => staged == removed && staged == target.runtime_fingerprint(),
+        (
+            LifecycleEffect::BootstrapService { target: planned },
+            LifecycleEffect::UnloadService { service },
+        ) => planned == target && service == namespace,
+        _ => false,
+    };
+    agrees
+        .then_some(())
+        .ok_or(LifecycleJournalError::TargetMismatch)
+}
+
 /// A journal chain violated its protocol or contradicted another field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LifecycleJournalError {
@@ -687,6 +740,7 @@ pub enum LifecycleJournalError {
     UnknownOrCompletedStep,
     ObservationBeforeCompletion,
     MissingObservation,
+    MissingCompletion,
     PredicateNotSatisfied,
     ObservationVersionRegression,
     NoEffectProofAfterPlan,
@@ -722,6 +776,9 @@ impl Display for LifecycleJournalError {
             }
             Self::MissingObservation => {
                 "gateway lifecycle command completion lacks a fresh observation"
+            }
+            Self::MissingCompletion => {
+                "gateway lifecycle effect plan lacks a primary command completion"
             }
             Self::PredicateNotSatisfied => "gateway lifecycle cleanup predicate is not satisfied",
             Self::ObservationVersionRegression => {
@@ -945,6 +1002,229 @@ mod tests {
             LifecycleHistory::restore(&records).unwrap_err(),
             LifecycleJournalError::MissingObservation
         );
+    }
+
+    #[test]
+    fn failed_outcome_cannot_settle_a_plan_without_its_primary_completion() {
+        let records = vec![
+            intent(Some(incarnation(10))),
+            plan(1),
+            record(
+                2,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::Failed {
+                        phase: LifecycleFailedPhase::NativeCompletionDelivery,
+                        message: "completion acknowledgement failed".into(),
+                    },
+                    last_confirmed: None,
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+        assert_eq!(
+            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleJournalError::MissingCompletion
+        );
+    }
+
+    #[test]
+    fn effect_plans_reject_cross_field_identity_contradictions() {
+        let wrong_target =
+            ReconciliationTarget::new("other-service".into(), "c".repeat(64), "d".repeat(64))
+                .unwrap();
+        let cases = [
+            LifecycleEffect::UnloadService {
+                service: "other-service".into(),
+            },
+            LifecycleEffect::StageRuntime {
+                fingerprint: "c".repeat(64),
+            },
+            LifecycleEffect::RequestRetirement {
+                incarnation: ReconciliationIncarnation::new(
+                    wrong_target,
+                    "550e8400-e29b-41d4-a716-446655440000".into(),
+                    10,
+                    7420,
+                )
+                .unwrap(),
+            },
+        ];
+        for effect in cases {
+            let plan = record(
+                1,
+                LifecycleRecordPayload::EffectPlan {
+                    plan_id: "contradiction".into(),
+                    expected_before: Some(incarnation(10)),
+                    target: target(),
+                    primary: LifecyclePlanStep::new(
+                        "primary".into(),
+                        effect,
+                        LifecycleEffectPredicate::Always,
+                    )
+                    .unwrap(),
+                    cleanup: vec![],
+                },
+            );
+            assert_eq!(
+                LifecycleHistory::restore(&[intent(Some(incarnation(10))), plan]).unwrap_err(),
+                LifecycleJournalError::TargetMismatch
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_cleanup_must_agree_with_the_physical_result() {
+        let records = vec![
+            intent(None),
+            record(
+                1,
+                LifecycleRecordPayload::EffectPlan {
+                    plan_id: "adopt".into(),
+                    expected_before: None,
+                    target: target(),
+                    primary: LifecyclePlanStep::new(
+                        "primary".into(),
+                        LifecycleEffect::AdoptReadyIncarnation { target: target() },
+                        LifecycleEffectPredicate::Always,
+                    )
+                    .unwrap(),
+                    cleanup: vec![],
+                },
+            ),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "adopt".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "adopt".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: LifecycleObservation::new(1, Some(incarnation(11)), true),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::Confirmed(incarnation(11)),
+                    last_confirmed: Some(LifecycleObservation::new(1, Some(incarnation(11)), true)),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+        assert_eq!(
+            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleJournalError::UnobservedOutcome
+        );
+    }
+
+    #[test]
+    fn a_complete_stale_replacement_chain_accepts_old_and_new_identities_in_their_roles() {
+        let old_target =
+            ReconciliationTarget::new("service".into(), "c".repeat(64), "d".repeat(64)).unwrap();
+        let old = ReconciliationIncarnation::new(
+            old_target,
+            "00000000-0000-4000-8000-000000000010".into(),
+            10,
+            7420,
+        )
+        .unwrap();
+        let new = incarnation(11);
+        let mut records = vec![intent(Some(old.clone()))];
+        let operations = [
+            (
+                "retire",
+                LifecycleEffect::RequestRetirement {
+                    incarnation: old.clone(),
+                },
+                Some(old.clone()),
+            ),
+            (
+                "unload",
+                LifecycleEffect::UnloadService {
+                    service: "service".into(),
+                },
+                None,
+            ),
+            (
+                "publish",
+                LifecycleEffect::PublishServiceDefinition { target: target() },
+                None,
+            ),
+            (
+                "bootstrap",
+                LifecycleEffect::BootstrapService { target: target() },
+                Some(new.clone()),
+            ),
+            (
+                "adopt",
+                LifecycleEffect::AdoptReadyIncarnation { target: target() },
+                Some(new.clone()),
+            ),
+        ];
+        for (index, (plan_id, effect, observed)) in operations.into_iter().enumerate() {
+            let sequence = records.len() as u64;
+            let expected_before = records
+                .iter()
+                .rev()
+                .find_map(|record| match record.payload() {
+                    LifecycleRecordPayload::Observation { state, .. } => {
+                        Some(state.incarnation().cloned())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| Some(old.clone()));
+            records.push(record(
+                sequence,
+                LifecycleRecordPayload::EffectPlan {
+                    plan_id: plan_id.into(),
+                    expected_before,
+                    target: target(),
+                    primary: LifecyclePlanStep::new(
+                        "primary".into(),
+                        effect,
+                        LifecycleEffectPredicate::Always,
+                    )
+                    .unwrap(),
+                    cleanup: vec![],
+                },
+            ));
+            records.push(record(
+                sequence + 1,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: plan_id.into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ));
+            records.push(record(
+                sequence + 2,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: plan_id.into(),
+                        step_id: "primary".into(),
+                    },
+                    state: LifecycleObservation::new(index as u64 + 1, observed, index >= 2),
+                },
+            ));
+        }
+        let final_observation = LifecycleObservation::new(5, Some(new.clone()), true);
+        records.push(record(
+            records.len() as u64,
+            LifecycleRecordPayload::Outcome {
+                physical: LifecyclePhysicalOutcome::Confirmed(new),
+                last_confirmed: Some(final_observation),
+                cleanup: ReconciliationCleanupDecision::AdoptClaimed,
+            },
+        ));
+
+        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
     }
 
     #[test]

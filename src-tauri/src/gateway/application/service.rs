@@ -545,6 +545,9 @@ impl GatewayReconciliationProgress for StartupProgress {
         }
         state.pending_observation = None;
         state.latest_observation = Some(observation.clone());
+        if state.failed_phase == Some(LifecycleFailedPhase::Observation) {
+            state.failed_phase = None;
+        }
         Ok(Some(observation))
     }
 }
@@ -962,10 +965,10 @@ fn execute_stop_request(
             Ok(())
         }
         Err(error) => {
-            let last_confirmed = session
-                .settlement()
-                .ok()
-                .map(|(_, observation)| observation);
+            session.expire_at_deadline();
+            let Ok((_, last_confirmed)) = session.settlement() else {
+                return Err(error);
+            };
             let physical = LifecyclePhysicalOutcome::Failed {
                 phase: LifecycleFailedPhase::NativeDispatch,
                 message: error.to_string(),
@@ -973,11 +976,10 @@ fn execute_stop_request(
             let outcome = retry_delivery(|| {
                 journal.physical_outcome(
                     &physical,
-                    last_confirmed.as_ref(),
+                    Some(&last_confirmed),
                     ReconciliationCleanupDecision::RetainPrior,
                 )
             });
-            session.expire_at_deadline();
             match outcome {
                 Ok(_) => Err(error),
                 Err(audit) => Err(GatewayError::Audit {
@@ -1302,6 +1304,26 @@ fn execute_attempt(
             (intent, GatewayReconciliationIntentDelivery::Failed(error))
         }
     };
+    if matches!(
+        failed_phase,
+        LifecycleFailedPhase::Planning
+            | LifecycleFailedPhase::NativeCompletionDelivery
+            | LifecycleFailedPhase::Observation
+    ) {
+        let error = physical
+            .clone()
+            .err()
+            .unwrap_or_else(|| GatewayError::Audit {
+                audit: "gateway lifecycle delivery failed with an unresolved effect".into(),
+                physical: Some(GatewayPhysicalResult::Succeeded),
+            });
+        return AttemptExecution {
+            physical,
+            reported: Err(error),
+            cleanup: CleanupUpdate::Keep,
+            ready_gateway: None,
+        };
+    }
     let identity = physical
         .as_ref()
         .map_err(Clone::clone)

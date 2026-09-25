@@ -236,12 +236,13 @@ fn claimed_blocked_stop_becomes_indeterminate_and_starts_no_later_cleanup() {
         returned: returned_tx,
         later_cleanup: AtomicUsize::new(0),
     });
+    let audit = Arc::new(RecordingAudit::default());
     let gateway = Arc::new(Gateway::bootstrap(
         host.clone(),
         login_shell("/usr/bin"),
         testing::discard_startup_events(),
         testing::sequential_reconciliation_ids(),
-        testing::discard_reconciliation_audit(),
+        audit.clone(),
         "/runtime".into(),
         "ci".into(),
     ));
@@ -267,6 +268,9 @@ fn claimed_blocked_stop_becomes_indeterminate_and_starts_no_later_cleanup() {
         .is_err());
     stop.join().unwrap();
     assert_eq!(host.later_cleanup.load(Ordering::SeqCst), 0);
+    assert_eq!(audit.effect_completions.load(Ordering::SeqCst), 0);
+    assert_eq!(audit.observations.load(Ordering::SeqCst), 0);
+    assert_eq!(audit.physical_outcomes.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -599,6 +603,24 @@ trait TestAuditBehavior: Send + Sync {
     ) -> Result<(), GatewayError> {
         Ok(())
     }
+
+    fn effect_completion(
+        &self,
+        _: &str,
+        _: &str,
+        _: &LifecycleCommandResult,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn physical_outcome(
+        &self,
+        _: &LifecyclePhysicalOutcome,
+        _: Option<&LifecycleObservation>,
+        _: ReconciliationCleanupDecision,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
 }
 
 struct TestJournal<T> {
@@ -647,10 +669,11 @@ impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T
 
     fn effect_completion(
         &self,
-        _: &str,
-        _: &str,
-        _: &LifecycleCommandResult,
+        plan_id: &str,
+        step_id: &str,
+        result: &LifecycleCommandResult,
     ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        self.audit.effect_completion(plan_id, step_id, result)?;
         Ok(self.receipt(LifecycleRecordKind::EffectCompletion))
     }
 
@@ -665,10 +688,12 @@ impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T
 
     fn physical_outcome(
         &self,
-        _: &LifecyclePhysicalOutcome,
-        _: Option<&LifecycleObservation>,
-        _: ReconciliationCleanupDecision,
+        physical: &LifecyclePhysicalOutcome,
+        last_confirmed: Option<&LifecycleObservation>,
+        cleanup: ReconciliationCleanupDecision,
     ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        self.audit
+            .physical_outcome(physical, last_confirmed, cleanup)?;
         Ok(self.receipt(LifecycleRecordKind::Outcome))
     }
 }
@@ -820,6 +845,9 @@ struct RecordingAudit {
     fail_outcome: bool,
     fail_joined: bool,
     panic_outcome: bool,
+    effect_completions: AtomicUsize,
+    observations: AtomicUsize,
+    physical_outcomes: AtomicUsize,
 }
 
 impl RecordingAudit {
@@ -931,6 +959,35 @@ impl TestAuditBehavior for RecordingAudit {
         } else {
             Ok(())
         }
+    }
+
+    fn physical_outcome(
+        &self,
+        _: &LifecyclePhysicalOutcome,
+        _: Option<&LifecycleObservation>,
+        _: ReconciliationCleanupDecision,
+    ) -> Result<(), GatewayError> {
+        self.physical_outcomes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn effect_completion(
+        &self,
+        _: &str,
+        _: &str,
+        _: &LifecycleCommandResult,
+    ) -> Result<(), GatewayError> {
+        self.effect_completions.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn observation(
+        &self,
+        _: &LifecycleObservationSource,
+        _: &LifecycleObservation,
+    ) -> Result<(), GatewayError> {
+        self.observations.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -1094,6 +1151,7 @@ fn exact_delivery_retry_recovers_published_intent_and_outcome() {
 struct ObservationRetryAudit {
     attempts: Mutex<Vec<(LifecycleObservationSource, LifecycleObservation)>>,
     failures_remaining: AtomicUsize,
+    outcomes: AtomicUsize,
 }
 
 impl TestAuditBehavior for ObservationRetryAudit {
@@ -1102,6 +1160,7 @@ impl TestAuditBehavior for ObservationRetryAudit {
     }
 
     fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        self.outcomes.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -1176,6 +1235,7 @@ fn an_unacknowledged_observation_retries_the_identical_record_before_progressing
     let audit = Arc::new(ObservationRetryAudit {
         attempts: Mutex::new(Vec::new()),
         failures_remaining: AtomicUsize::new(2),
+        outcomes: AtomicUsize::new(0),
     });
     let gateway = Gateway::bootstrap(
         Arc::new(ObservationRetryHost),
@@ -1194,6 +1254,104 @@ fn an_unacknowledged_observation_retries_the_identical_record_before_progressing
     let attempts = audit.attempts.lock().unwrap();
     assert_eq!(attempts.len(), 3);
     assert!(attempts.windows(2).all(|pair| pair[0] == pair[1]));
+    drop(attempts);
+    assert_eq!(audit.outcomes.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Default)]
+struct PersistentCompletionFailureAudit {
+    completions: AtomicUsize,
+    outcomes: AtomicUsize,
+}
+
+impl TestAuditBehavior for PersistentCompletionFailureAudit {
+    fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        self.outcomes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn joined(
+        &self,
+        _: &GatewayReconciliationAttempt,
+        _: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn effect_completion(
+        &self,
+        _: &str,
+        _: &str,
+        _: &LifecycleCommandResult,
+    ) -> Result<(), GatewayError> {
+        self.completions.fetch_add(1, Ordering::SeqCst);
+        Err(GatewayError::Registration(
+            "completion acknowledgement unavailable".into(),
+        ))
+    }
+}
+
+struct PersistentCompletionFailureHost;
+
+impl GatewayHost for PersistentCompletionFailureHost {
+    fn register(
+        &self,
+        _: &Path,
+        _: &str,
+        _: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        let gateway = reconciled("completion-failure");
+        let target = gateway.audit_identity()?.target().clone();
+        let intent = GatewayReconciliationIntent::new(attempt.clone(), target.clone(), None)?;
+        progress.intent_admitted(intent)?;
+        let step = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::AdoptReadyIncarnation { target },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        progress.effect_planned("adopt", &step, &[])?;
+        progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionPublished);
+        progress.effect_completed("adopt", "primary", &LifecycleCommandResult::Accepted)?;
+        Ok(gateway)
+    }
+
+    fn stop_agents(
+        &self,
+        _: &GatewayStopSession,
+        _: &dyn GatewayReconciliationJournalSession,
+        _: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        unreachable!()
+    }
+}
+
+#[test]
+fn persistent_completion_failure_never_attempts_a_terminal_outcome() {
+    let audit = Arc::new(PersistentCompletionFailureAudit::default());
+    let gateway = Gateway::bootstrap(
+        Arc::new(PersistentCompletionFailureHost),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    assert!(matches!(
+        tauri::async_runtime::block_on(gateway.start()),
+        Err(GatewayError::Registration(message))
+            if message.contains("completion acknowledgement unavailable")
+    ));
+    assert_eq!(audit.completions.load(Ordering::SeqCst), 2);
+    assert_eq!(audit.outcomes.load(Ordering::SeqCst), 0);
 }
 
 #[test]

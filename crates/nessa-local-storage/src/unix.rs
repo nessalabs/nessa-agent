@@ -161,6 +161,14 @@ fn open_child_locator_directory(parent: &File, component: &CString) -> io::Resul
 /// Create an absolute private leaf without requiring system locator ancestry
 /// such as `/Users` and `Application Support` to use private modes.
 pub fn create_private_directory_path(path: &Path) -> io::Result<()> {
+    create_private_directory_path_with(path, open_child_locator_directory, File::sync_all)
+}
+
+fn create_private_directory_path_with(
+    path: &Path,
+    mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
+    mut sync: impl FnMut(&File) -> io::Result<()>,
+) -> io::Result<()> {
     if !path.is_absolute() {
         return Err(unsafe_file());
     }
@@ -182,25 +190,131 @@ pub fn create_private_directory_path(path: &Path) -> io::Result<()> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
         .open(Path::new("/"))?;
     verify_locator_directory_file(&parent)?;
-    for (index, component) in components.iter().enumerate() {
-        let last = index + 1 == components.len();
-        let child = match open_child_locator_directory(&parent, component) {
-            Ok(child) => child,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if unsafe { libc::mkdirat(parent.as_raw_fd(), component.as_ptr(), 0o700) } != 0 {
-                    return Err(io::Error::last_os_error());
+    let mut created = Vec::new();
+    let result = (|| {
+        for (index, component) in components.iter().enumerate() {
+            let last = index + 1 == components.len();
+            let (child, was_created) = match open_child(&parent, component) {
+                Ok(child) => (child, false),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if unsafe { libc::mkdirat(parent.as_raw_fd(), component.as_ptr(), 0o700) } != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let (device, inode) = directory_identity_at(&parent, component)?;
+                    created.push(CreatedPrivateDirectory {
+                        parent: parent.try_clone()?,
+                        name: component.clone(),
+                        device,
+                        inode,
+                    });
+                    let child = open_child(&parent, component)?;
+                    (child, true)
                 }
-                parent.sync_all()?;
-                open_child_locator_directory(&parent, component)?
+                Err(error) => return Err(error),
+            };
+            if was_created {
+                let metadata = child.metadata()?;
+                let created = created.last().expect("created directory identity");
+                if metadata.dev() != created.device || metadata.ino() != created.inode {
+                    return Err(unsafe_file());
+                }
+                sync(&parent)?;
             }
-            Err(error) => return Err(error),
-        };
-        if last {
-            verify_directory_file(&child)?;
+            if last {
+                verify_directory_file(&child)?;
+            }
+            parent = child;
         }
-        parent = child;
+        sync(&parent)
+    })();
+    let Err(primary) = result else {
+        return Ok(());
+    };
+    let cleanup_failures = rollback_created_directories(created);
+    if cleanup_failures.is_empty() {
+        Err(primary)
+    } else {
+        Err(io::Error::new(
+            primary.kind(),
+            format!(
+                "{primary}; private directory rollback failed: {}",
+                cleanup_failures.join("; ")
+            ),
+        ))
     }
-    parent.sync_all()
+}
+
+struct CreatedPrivateDirectory {
+    parent: File,
+    name: CString,
+    device: u64,
+    inode: u64,
+}
+
+fn directory_identity_at(parent: &File, name: &CString) -> io::Result<(u64, u64)> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(unsafe_file());
+    }
+    #[cfg(target_vendor = "apple")]
+    let device = stat.st_dev as u64;
+    #[cfg(target_os = "linux")]
+    let device = stat.st_dev;
+    Ok((device, stat.st_ino))
+}
+
+fn rollback_created_directories(created: Vec<CreatedPrivateDirectory>) -> Vec<String> {
+    let mut failures = Vec::new();
+    for created in created.into_iter().rev() {
+        let current = match open_child_locator_directory(&created.parent, &created.name) {
+            Ok(current) => current,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        };
+        let metadata = match current.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        };
+        if metadata.dev() != created.device || metadata.ino() != created.inode {
+            failures.push("created private directory was replaced before rollback".into());
+            continue;
+        }
+        drop(current);
+        if unsafe {
+            libc::unlinkat(
+                created.parent.as_raw_fd(),
+                created.name.as_ptr(),
+                libc::AT_REMOVEDIR,
+            )
+        } != 0
+        {
+            failures.push(io::Error::last_os_error().to_string());
+            continue;
+        }
+        if let Err(error) = created.parent.sync_all() {
+            failures.push(error.to_string());
+        }
+    }
+    failures
 }
 fn open_parent_beneath(root: &Path, relative: &Path) -> io::Result<(File, CString)> {
     let mut components = relative_components(relative)?;
@@ -416,4 +530,100 @@ pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn created_directory(parent_path: &Path, name: &str) -> CreatedPrivateDirectory {
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(parent_path)
+            .unwrap();
+        let name = CString::new(name).unwrap();
+        let child = open_child_locator_directory(&parent, &name).unwrap();
+        let metadata = child.metadata().unwrap();
+        CreatedPrivateDirectory {
+            parent,
+            name,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+
+    #[test]
+    fn rollback_preserves_a_replacement_at_the_created_name() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let child = root.path().join("child");
+        create_directory(&child).unwrap();
+        let created = created_directory(root.path(), "child");
+        fs::remove_dir(&child).unwrap();
+        create_directory(&child).unwrap();
+
+        let failures = rollback_created_directories(vec![created]);
+        assert_eq!(
+            failures,
+            ["created private directory was replaced before rollback"]
+        );
+        assert!(child.is_dir());
+    }
+
+    #[test]
+    fn sync_failure_rolls_back_the_exact_new_leaf() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let child = root.path().join("child");
+        let mut failed = false;
+        let error =
+            create_private_directory_path_with(&child, open_child_locator_directory, |_| {
+                if failed {
+                    Ok(())
+                } else {
+                    failed = true;
+                    Err(io::Error::other("injected sync failure"))
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected sync failure");
+        assert!(!child.exists());
+    }
+
+    #[test]
+    fn reopen_failure_after_creation_rolls_back_the_exact_new_leaf() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let child = root.path().join("child");
+        let mut target_opens = 0;
+        let error = create_private_directory_path_with(
+            &child,
+            |parent, name| {
+                if name.as_bytes() == b"child" {
+                    target_opens += 1;
+                    if target_opens == 2 {
+                        return Err(io::Error::other("injected reopen failure"));
+                    }
+                }
+                open_child_locator_directory(parent, name)
+            },
+            File::sync_all,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected reopen failure");
+        assert!(!child.exists());
+    }
+
+    #[test]
+    fn rollback_reports_a_created_directory_that_became_nonempty() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let child = root.path().join("child");
+        create_directory(&child).unwrap();
+        let created = created_directory(root.path(), "child");
+        fs::write(child.join("later"), b"occupied").unwrap();
+
+        let failures = rollback_created_directories(vec![created]);
+        assert_eq!(failures.len(), 1);
+        assert!(child.join("later").is_file());
+    }
 }
