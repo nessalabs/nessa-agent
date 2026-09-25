@@ -17,10 +17,10 @@ and what Nessa cannot reach.
 a summary for — one somebody said something in, whose summary was written:
 those are the conversations the list shows, so archiving one without a summary
 (nothing was said in it, or its summary was never written) changes nothing
-(`applied: false`). A conversation
-whose summary cannot be read had something said in it, so it is listed — bare,
-and in the default list, since whether it was archived cannot be read; showing
-it where people look first never loses it from view. The conversation
+(`applied: false`). A conversation whose stored summary cannot be read back
+is left out of the list its archived flag files it under, and that list says
+it is not `complete` ([196](196-conversation-metadata-database.md), row L5).
+The conversation
 is untouched: its history, its uploads and its agent stay exactly as they
 were, and `conversation.list`
 simply stops showing it unless archived conversations are asked for. It is
@@ -41,8 +41,9 @@ and it is decided here in that light.
    before anything is stopped or removed. From then on every command naming it
    — including `conversation.create`, which surfaces send before every other
    command and which would otherwise recreate the conversation under the same
-   identity — is refused with `conversation_deleted`. The tombstone is a file
-   of its own beside the ownership record (`metadata/deleted/<id>.json`), and
+   identity — is refused with `conversation_deleted`. The tombstone is a row
+   of its own beside the ownership record (the `deletions` table,
+   [196](196-conversation-metadata-database.md)), and
    both are kept for good: an identity is minted once and never reused
    ([gate 12](../../../CODING_STANDARDS.md#gates)). The tombstone holds the first
    decision — who deleted it, from which surface, in answer to which request,
@@ -182,27 +183,16 @@ gateway start records the deletion with no provider session and
 would claim the history named none — and finishes. The moved-aside file is
 then the only link to the agent's own transcript.
 
-**A conversation record that cannot be read.** Such a record is skipped
-wherever records are read: by every list, and by the startup finish, which
-counts it in its summary since it may be a deletion that cannot even be seen.
-That covers a damaged record, a damaged or contradicting tombstone, a record
-whose file is not private to its owner (mode `0600`), and a record written
-before records named their agent, which is refused rather than read in an old
-shape. Whose it is cannot be read either, so while one is there no list is
-`complete` — for every caller on the gateway, not only its owner, and until it
-is repaired.
-
-A tombstone whose record is gone — moved aside, say, as below — is counted
-apart. It is a deleted conversation, which no list shows anyway, so it leaves
-every list as complete as it was; but its deletion can be neither read nor
-finished, so the startup finish counts it, and the log names its file. The operator's remedy: run
-`node scripts/retrofit-conversation-agents.mjs` once, with the gateway stopped,
-for records from before agents were named; for a damaged record, repair it or
-move it out of the conversations directory (a deleted one's tombstone then
-stands alone, and is counted as above). A damaged tombstone is repaired,
-or moved aside together with its record — never alone, which would bring the
-deleted conversation back; what that deletion had not erased yet is then the
-operator's to remove. The gateway's log names each such file.
+**A conversation record that cannot be read.** Conversation metadata is one
+database ([196](196-conversation-metadata-database.md)). A record, tombstone or
+summary row that cannot be read back — a hand edit that breaks a domain rule, or
+a tombstone that contradicts its record — is refused where it is read and never
+repaired. A list meets only its caller's own rows, so such a row makes its
+owner's list not `complete`, and nobody else's. The startup finish reads only
+unfinished deletions; one whose conversation cannot even be named is counted in
+its summary, and one whose rows cannot be read is left unfinished with its
+typed failure. A tombstone cannot outlive its record: the database's foreign key
+refuses it. The operator's remedy is to repair the row.
 
 ### The lifecycle, as a table
 
@@ -249,9 +239,9 @@ finishes it.
 | 8 | `fenced` | Agent's stop not confirmed within `stopMs` | unfinished | `fenced` | nothing: not even uploads | `ForRelease` |
 | 8b | `fenced` | The agent's stop fails outright: its close fails, or its launch's cleanup cannot be confirmed | unfinished | `fenced` | nothing: not even uploads | left |
 | 8c | `fenced` | Its opening failed and may still hold what it launched (whatever cleanup it carries) | unfinished | `fenced` | nothing: not even uploads | left |
-| 9a | `fenced` or `read·session` | History lease still held after `historyLeaseMs` | unfinished | unchanged | uploads let go; history, summary kept; no deletion record; agent not asked | `ForRelease` |
-| 9b | `read·none`, `read·unknown` or `settled` | History lease still held after `historyLeaseMs` | unfinished | unchanged | deletion record written; uploads let go; summary erased; history kept | `ForRelease` |
-| 9c | any after `fenced` | The history's lease cannot be opened at all (storage failing, not held elsewhere) | unfinished | unchanged | as row 9a or 9b, by state | left |
+| 9a | `fenced` or `read·session` | History still leased elsewhere after `historyLeaseMs` (only this delete's wait for its own lease says so) | unfinished | unchanged | uploads let go; history, summary kept; no deletion record; agent not asked | `ForRelease` |
+| 9b | `read·none`, `read·unknown` or `settled` | History still leased elsewhere after `historyLeaseMs` | unfinished | unchanged | deletion record written; uploads let go; summary erased; history kept | `ForRelease` |
+| 9c | any after `fenced` | The history's lease cannot be opened at all (storage failing, not leased elsewhere), or storage answers `Busy` to reading or erasing the history under this deletion's own lease | unfinished | unchanged | as row 9a or 9b, by state | left |
 | 10 | `ForRelease(g, n<2)` | Its own timer fires; still held | — | unchanged | nothing | `ForRelease(g, n+1)`, due only on its own timer |
 | 11 | `ForRelease(g, 2)` | Third timed try still held | — | unchanged | nothing | left (logged) |
 | 12 | `read·session` | Both agent slots taken (the gateway's own bound; an eraser's error never counts as this) | unfinished | unchanged | uploads let go; history, summary kept; no deletion record | `ForSlot`, due at once: tried as soon as the worker runs, since a slot may have freed before the wait was recorded |
@@ -272,7 +262,8 @@ finishes it.
 | 27 | `fenced`…`settled` | Any repeat delete by the owner | as the attempt goes; `applied` by row 26's rule | carried on from where it stands; the first decision stays | nothing written down is read or asked again (row 39 is what was not written down) | as the attempt goes |
 | 28 | any | Delete arrives while another attempt holds it | from the tombstone the other leaves: `applied` by row 26's rule if `erased`, else unfinished; if the other never fenced it, this delete fences it and runs its own attempt, answering as that goes | unchanged by this delete, unless it fences | nothing more, unless it runs its own attempt | — |
 | 29 | any | Caller goes away mid-delete | — | the attempt continues to its end | as the attempt goes | as the attempt goes |
-| 30 | `fenced`…`settled` | Gateway starts | — (logged) | each tried up to 3 times, 1 s then 2 s apart | as the tries go | slot and release waits handed to the worker; unreadable records and tombstones without a record counted in the log |
+| 30 | `fenced`…`settled` | Gateway starts | — (logged) | each tried up to 3 times, 1 s then 2 s apart | as the tries go | slot and release waits handed to the worker; an unfinished tombstone whose conversation cannot be named is counted in the log |
+| 30b | `fenced`…`settled` | A background try — the start's, or the worker's — cannot read the conversation's record: the repository fails or panics | — (logged) | unchanged | nothing | the start tries again as row 30's tries go, then leaves it; the worker leaves it. Of the repository's error, only what its contract lets a read say (agent unsupported, `Metadata`) is kept, so no error it returns is taken for a reason to wait |
 | 31a | `fenced` | Retirement while waiting for the stop | unfinished | `fenced` | nothing: not even uploads | left |
 | 31b | `fenced` or read | Retirement while waiting for the lease | unfinished | unchanged | as row 9a or 9b, by state | left |
 | 32 | `read·session` | Retirement while the agent is asked | unfinished | unchanged | as row 19 | left; the SDK still stops the agent's process, and retirement waits for that |
@@ -281,10 +272,14 @@ finishes it.
 | 35 | any | Desktop stop (admission closes; not retirement) | as the attempt goes | as the attempt goes | as the attempt goes | the ask is not ended |
 | 36 | waiting | The worker itself panics | — | unchanged | nothing | replaced after one delay with every waiting deletion due, unless retired |
 | 37 | past the fence | Any port panics (deletion record's sink, uploads, session storage, summaries, repository) | unfinished | as far as it got before the panic | as far as it got | left |
-| 38 | any | The delete fails before its own tombstone write succeeds: the conversation cannot be read, the write fails, the repository panics, or, having waited behind another attempt, it cannot read what that left | that failure's own code (`conversation_storage_unavailable`, `temporarily_unavailable`, …): not known whether the conversation is fenced | as it stands | nothing | — |
+| 38 | any | The delete fails before its own tombstone write succeeds: the conversation cannot be read, the write fails, the repository panics, or, having waited behind another attempt, it cannot read what that left | that failure's own code: `conversation_not_found` or `agent_unsupported` where the repository's contract lets that call say so, `conversation_storage_unavailable` for any other repository failure (whatever error a substituted repository returns), `temporarily_unavailable` for a panic; never one of the two that promise a deletion, since it is not known whether the conversation is fenced | as it stands | nothing | — |
 | 38b | `fenced` | The history was read, but the tombstone cannot keep what was read | unfinished | `fenced` | uploads let go; history, summary kept; no deletion record | left |
 | 39 | `read·session` | Agent answered, but the tombstone cannot record the answer | unfinished | `read·session` | uploads let go; history, summary kept; no deletion record | left; the next attempt asks the agent again |
-| 40 | any | Delete refused at the socket: its own pool (8 deletes at once) is full, or the socket already has 16 requests in flight | `temporarily_unavailable`: not known | none written by this delete | nothing | — |
+| 40 | any | Delete refused at the socket: its own pool (8 deletes at once) is full | `temporarily_unavailable`: not known | none written by this delete | nothing | — |
+
+A delete is also one of the requests the socket bounds per connection; that
+bound is the socket's rule for every request, not a deletion's, and is not
+specified here.
 
 **Each row's tests** (in `crates/nessa-server/tests/conversation/deletion.rs`
 unless named otherwise; SDK tests in
@@ -302,7 +297,7 @@ unless named otherwise; SDK tests in
 8c. `a_failed_opening_holding_what_it_launched_leaves_the_delete_unfinished` (`application.rs`)
 9a. `the_agent_is_not_asked_while_the_history_is_leased_elsewhere`, `a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`, `a_history_still_leased_elsewhere_is_left_and_a_repeat_finishes`
 9b. `a_lease_held_once_the_answer_is_settled_keeps_only_the_history`
-9c. `a_history_that_cannot_be_opened_at_all_is_left_not_carried_on`
+9c. `a_history_that_cannot_be_opened_at_all_is_left_not_carried_on`, `busy_under_the_deletion_s_own_lease_is_left_not_carried_on`
 10. `a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`, `a_lease_wait_is_not_spent_by_slots_freeing`, `a_try_that_turns_to_waiting_on_the_lease_waits_for_its_own_timer`
 11. `a_lease_held_past_every_timed_try_is_left_for_the_next_start`
 12. `agents_asked_at_once_never_exceed_the_bound_and_the_rest_are_left_unfinished`, `a_delete_turned_away_for_want_of_an_agent_slot_is_finished_once_one_frees`, `an_eraser_answering_capacity_is_a_failure_not_a_slot_wait`, `a_worker_that_panics_is_replaced_with_every_waiting_deletion_due` (a slot wait is due at once)
@@ -318,12 +313,13 @@ unless named otherwise; SDK tests in
 22. `an_unavailable_deletion_record_keeps_the_history_but_still_lets_uploads_go`, `a_deletion_that_still_cannot_finish_is_tried_a_bounded_number_of_times_and_reported`; `a_deleted_conversation_and_an_unfinished_deletion_have_their_own_codes` (`wire_errors.rs`)
 23. `an_unavailable_record_and_an_unfinished_release_are_both_reported`; `a_deleted_conversation_and_an_unfinished_deletion_have_their_own_codes` (`wire_errors.rs`)
 24. `a_summary_that_cannot_be_erased_is_reported_and_a_repeat_erases_it`
-25. `a_finished_tombstone_that_cannot_be_written_is_reported_and_a_repeat_writes_it`
+25. `a_finished_tombstone_that_cannot_be_written_is_reported_and_a_repeat_writes_it`, `a_repository_error_past_the_fence_is_never_a_reason_to_wait`
 26. `the_same_request_from_another_surface_is_not_the_deciding_request`; `the_deciding_request_is_the_same_caller_on_the_same_surface_asking_again`, `the_first_decision_stands_whatever_the_repository_does` (`domain.rs`)
 27. `an_unconfirmed_stop_erases_nothing_and_a_repeat_finishes`, `a_history_still_leased_elsewhere_is_left_and_a_repeat_finishes`, `a_summary_that_cannot_be_erased_is_reported_and_a_repeat_erases_it`; `a_tombstone_keeps_the_first_decision_and_reads_its_history_once`, `every_restored_tombstone_state_is_accepted_or_refused_by_the_rule` (`domain.rs`)
 28. `a_delete_queued_behind_another_attempt_answers_from_its_tombstone`, `a_repeat_of_the_deciding_request_queued_behind_it_answers_applied`, `concurrent_deletes_of_one_conversation_run_one_after_the_other`, `a_delete_whose_predecessor_never_fenced_fences_it_itself`
 29. `a_delete_whose_caller_goes_away_still_finishes`
-30. `an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`, `a_deletion_that_still_cannot_finish_is_tried_a_bounded_number_of_times_and_reported`, `a_startup_finish_that_finds_every_slot_taken_is_finished_once_one_frees`; `an_unreadable_record_makes_every_list_incomplete` (`listing.rs`); `a_tombstone_whose_record_was_moved_aside_is_counted_not_listed` (`repository.rs`)
+30. `an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`, `a_deletion_that_still_cannot_finish_is_tried_a_bounded_number_of_times_and_reported`, `a_startup_finish_that_finds_every_slot_taken_is_finished_once_one_frees`; `an_unreadable_row_makes_its_owners_list_incomplete_and_nobody_elses` (`listing.rs`); `unfinished_deletions_are_read_by_their_index_and_an_unnamed_one_is_counted`, `nothing_stands_without_its_record` (`store.rs`)
+30b. `a_repository_error_in_a_background_try_is_never_a_reason_to_wait`
 31a, 31b. `a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished`
 32. `a_shutdown_ends_an_agent_that_is_being_asked_and_a_later_start_finishes`, `retirement_waits_for_abandoned_agent_deletions_to_settle`; SDK: `a_deletion_abandoned_mid_exchange_still_stops_its_agent_and_releases_its_home`, `a_binding_settles_once_an_abandoned_deletion_has_released_its_home`
 33. `nothing_is_asked_once_retirement_has_begun`
@@ -331,9 +327,9 @@ unless named otherwise; SDK tests in
 35. `a_desktop_stop_leaves_a_delete_asking_its_agent_alone`
 36. `a_worker_that_panics_is_replaced_with_every_waiting_deletion_due`
 37. One catch, around every step of `finish_deletion` past the fence, covers all five ports; `a_port_that_panics_after_the_fence_leaves_the_deletion_unfinished` drives it with the deletion record's sink, and `a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting` with the eraser's own catch; `a_deleted_conversation_and_an_unfinished_deletion_have_their_own_codes` (`wire_errors.rs`)
-38. `a_delete_that_fails_before_its_fence_answers_only_its_own_error`, `a_delete_after_retirement_has_begun_is_refused_and_fences_nothing`
-38b. `a_history_read_that_cannot_be_kept_is_the_tombstone_s_failure`
-39. `an_answer_that_cannot_be_written_down_is_asked_for_again`
+38. `a_delete_that_fails_before_its_fence_answers_only_its_own_error`, `a_repository_failure_before_the_fence_is_answered_only_as_its_own_error`, `a_repository_that_panics_before_the_fence_is_answered_temporarily_unavailable`, `a_delete_that_waited_and_cannot_read_what_was_left_answers_only_its_own_error`, `a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`, `a_delete_after_retirement_has_begun_is_refused_and_fences_nothing`
+38b. `a_history_read_that_cannot_be_kept_is_the_tombstone_s_failure`, `a_repository_error_past_the_fence_is_never_a_reason_to_wait`
+39. `an_answer_that_cannot_be_written_down_is_asked_for_again`, `a_repository_error_past_the_fence_is_never_a_reason_to_wait`
 40. `deletes_and_controls_never_take_each_others_place` (`gateway.rs`)
 
 Row 39 asks the agent twice on purpose: what the agent answered cannot be

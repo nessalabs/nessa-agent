@@ -6,18 +6,17 @@ use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationCreation, ConversationCreationAuditRecord,
         ConversationCreationCause, ConversationDeletionBudgets, ConversationDeletionCause,
-        ConversationFuture, ConversationRecords, ProviderSessionEraser, SubmittedFile,
+        ConversationFuture, ProviderSessionEraser, SubmittedFile, UnfinishedDeletions,
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationRepository,
-        LocalConversationSummaries,
+        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationStore,
     },
 };
 use crate::conversation_test_support::{
-    claude_erasers, only, AcceptingCreationAudit, MemoryAttachments, MemoryRepository,
-    MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit, RecordingFileLinkAudit,
-    TestClock, DELETION_BUDGETS,
+    claude_erasers, only, AcceptingCreationAudit, MemoryAttachments, MemoryListing,
+    MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit,
+    RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_sdk::{
     application::agent_execution::sessions::StorageFuture,
@@ -139,12 +138,16 @@ fn service_over(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider))),
             storage,
-            metadata: repository,
+            metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: audit,
             attachments: Some(attachments),
-            summaries,
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository,
+                summaries,
+            }),
             provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -620,8 +623,8 @@ impl ConversationRepository for Unfenceable {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.0.load(id)
     }
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
-        self.0.list()
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        self.0.unfinished_deletions()
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.0.create(conversation)
@@ -640,24 +643,11 @@ async fn a_delete_that_fails_before_its_fence_answers_only_its_own_error() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     fixture.service.shutdown().await.unwrap();
-    let service = ConversationService::new(
-        ConversationDependencies {
-            agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
-            storage: fixture.storage.clone(),
-            metadata: Arc::new(Unfenceable(fixture.repository.clone())),
-            creation_audit: Arc::new(AcceptingCreationAudit),
-            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
-            deletion_audit: fixture.audit.clone(),
-            attachments: Some(fixture.attachments.clone()),
-            summaries: fixture.summaries.clone(),
-            provider_sessions: claude_erasers(),
-            deletion_budgets: DELETION_BUDGETS,
-            clock: Arc::new(TestClock),
-        },
-        ConversationLimits::default(),
-        None,
-    )
-    .unwrap();
+    let service = service_with(
+        &fixture,
+        Arc::new(Unfenceable(fixture.repository.clone())),
+        fixture.storage.clone(),
+    );
     // Not one of the two answers that promise a deletion: only its error.
     assert!(matches!(
         service.delete(id.clone(), caller("delete-1")).await,
@@ -667,6 +657,510 @@ async fn a_delete_that_fails_before_its_fence_answers_only_its_own_error() {
         .deletion()
         .is_none());
     service.shutdown().await.unwrap();
+}
+
+/// A service over `fixture`'s stores but for the repository and session
+/// storage given.
+fn service_with(
+    fixture: &Deleting,
+    metadata: Arc<dyn ConversationRepository>,
+    storage: Arc<dyn SessionStorage>,
+) -> ConversationService {
+    ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
+            storage,
+            metadata,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: fixture.audit.clone(),
+            attachments: Some(fixture.attachments.clone()),
+            summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap()
+}
+
+/// What a [`Faulty`] repository does when next asked, instead of answering.
+enum Fault {
+    Fail(ConversationError),
+    Panic,
+}
+/// A repository that answers its next loads and tombstone writes with the
+/// faults it was given, in order — `None` passing one through — and passes
+/// everything through once they run out. Besides the errors the repository's
+/// contract lets each call answer, it can answer ones the contract never
+/// allows, or panic: those deliberately break it.
+struct Faulty {
+    repository: Arc<MemoryRepository>,
+    loads: StdMutex<VecDeque<Option<Fault>>>,
+    writes: StdMutex<VecDeque<Option<Fault>>>,
+}
+impl Faulty {
+    fn over(repository: Arc<MemoryRepository>) -> Arc<Self> {
+        Arc::new(Self {
+            repository,
+            loads: StdMutex::default(),
+            writes: StdMutex::default(),
+        })
+    }
+    fn answer<T: Send + 'static>(fault: Fault) -> ConversationFuture<'static, T> {
+        match fault {
+            Fault::Fail(error) => Box::pin(async move { Err(error) }),
+            Fault::Panic => Box::pin(async { panic!("the repository panics") }),
+        }
+    }
+}
+impl ConversationRepository for Faulty {
+    fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
+        match self.loads.lock().unwrap().pop_front().flatten() {
+            Some(fault) => Self::answer(fault),
+            None => self.repository.load(id),
+        }
+    }
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        self.repository.unfinished_deletions()
+    }
+    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
+        self.repository.create(conversation)
+    }
+    fn record_deletion(
+        &self,
+        id: &ConversationId,
+        deletion: ConversationDeletion,
+    ) -> ConversationFuture<'_, Conversation> {
+        match self.writes.lock().unwrap().pop_front().flatten() {
+            Some(fault) => Self::answer(fault),
+            None => self.repository.record_deletion(id, deletion),
+        }
+    }
+}
+/// A conversation created through `service`, over `fixture`'s repository.
+async fn created(service: &ConversationService) -> ConversationId {
+    let id = new_id();
+    service
+        .create(id.clone(), caller("create"), None)
+        .await
+        .unwrap();
+    id
+}
+fn unfenced(fixture: &Deleting, id: &ConversationId) -> bool {
+    fixture.repository.records.lock().unwrap()[id]
+        .deletion()
+        .is_none()
+}
+/// A delete of `id` that finds another attempt holding the conversation, and
+/// is let through once it has read the conversation the first time.
+async fn delete_behind_another(
+    service: &ConversationService,
+    repository: &Faulty,
+    id: &ConversationId,
+) -> Result<bool, ConversationError> {
+    let queued = repository.loads.lock().unwrap().len();
+    let held = service.inner.deletions.lock(id).await;
+    let waiting = tokio::spawn({
+        let service = service.clone();
+        let id = id.clone();
+        async move { service.delete(id, caller("delete-2")).await }
+    });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while repository.loads.lock().unwrap().len() == queued {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the delete reads the conversation before it waits");
+    drop(held);
+    waiting.await.unwrap()
+}
+
+#[tokio::test]
+async fn a_repository_failure_before_the_fence_is_answered_only_as_its_own_error() {
+    let fixture = deleting();
+    let repository = Faulty::over(fixture.repository.clone());
+    let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
+    let id = created(&service).await;
+    // What the repository's contract lets each call answer is what the delete
+    // says; anything else is storage failing. Never one of the two answers
+    // that promise a deletion.
+    for (faults, given, expected) in [
+        (
+            &repository.loads,
+            ConversationError::Metadata,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.loads,
+            ConversationError::AgentUnsupported,
+            ConversationError::AgentUnsupported,
+        ),
+        // A missing record is `Ok(None)` from a read, never `NotFound`.
+        (
+            &repository.loads,
+            ConversationError::NotFound,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::Metadata,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::AgentUnsupported,
+            ConversationError::AgentUnsupported,
+        ),
+        (
+            &repository.writes,
+            ConversationError::NotFound,
+            ConversationError::NotFound,
+        ),
+        // Outside the contract, and promising nothing: storage failing still.
+        (
+            &repository.loads,
+            ConversationError::Unavailable,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.loads,
+            ConversationError::InvalidInput,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::Unavailable,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::InvalidInput,
+            ConversationError::Metadata,
+        ),
+    ] {
+        faults
+            .lock()
+            .unwrap()
+            .push_back(Some(Fault::Fail(given.clone())));
+        let error = service
+            .delete(id.clone(), caller("delete-1"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&expected),
+            "{given:?} was answered {error:?}"
+        );
+        assert!(unfenced(&fixture, &id));
+    }
+    // The read after waiting behind another attempt is a read too.
+    for (given, expected) in [
+        (ConversationError::NotFound, ConversationError::Metadata),
+        (ConversationError::Unavailable, ConversationError::Metadata),
+        (ConversationError::InvalidInput, ConversationError::Metadata),
+        (
+            ConversationError::AgentUnsupported,
+            ConversationError::AgentUnsupported,
+        ),
+    ] {
+        repository
+            .loads
+            .lock()
+            .unwrap()
+            .extend([None, Some(Fault::Fail(given.clone()))]);
+        let error = delete_behind_another(&service, &repository, &id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&expected),
+            "{given:?} after waiting was answered {error:?}"
+        );
+        assert!(unfenced(&fixture, &id));
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_repository_that_panics_before_the_fence_is_answered_temporarily_unavailable() {
+    let fixture = deleting();
+    let repository = Faulty::over(fixture.repository.clone());
+    let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
+    let id = created(&service).await;
+    for panics_on_write in [false, true] {
+        let faults = if panics_on_write {
+            &repository.writes
+        } else {
+            &repository.loads
+        };
+        faults.lock().unwrap().push_back(Some(Fault::Panic));
+        // `supervised` answers the panic: `temporarily_unavailable`, not a
+        // deletion, and nothing is fenced.
+        assert!(matches!(
+            service.delete(id.clone(), caller("delete-1")).await,
+            Err(ConversationError::Unavailable)
+        ));
+        assert!(unfenced(&fixture, &id));
+    }
+    // Nothing the panics held is still held: the next delete fences and
+    // finishes it.
+    assert!(service
+        .delete(id.clone(), caller("delete-1"))
+        .await
+        .unwrap());
+    assert!(tombstone(&fixture, &id).erased());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_delete_that_waited_and_cannot_read_what_was_left_answers_only_its_own_error() {
+    let fixture = deleting();
+    let repository = Faulty::over(fixture.repository.clone());
+    let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
+    let id = created(&service).await;
+    for (fault, unavailable) in [
+        (Fault::Fail(ConversationError::Metadata), false),
+        (Fault::Panic, true),
+    ] {
+        // Its first read passes; the read of what the other attempt left
+        // does not.
+        repository.loads.lock().unwrap().extend([None, Some(fault)]);
+        let answered = delete_behind_another(&service, &repository, &id).await;
+        if unavailable {
+            assert!(matches!(answered, Err(ConversationError::Unavailable)));
+        } else {
+            assert!(matches!(answered, Err(ConversationError::Metadata)));
+        }
+        assert!(unfenced(&fixture, &id));
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion() {
+    let fixture = deleting();
+    let repository = Faulty::over(fixture.repository.clone());
+    let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
+    let id = created(&service).await;
+    // Each of these would be answered `audit_unavailable`,
+    // `conversation_erasure_incomplete` or `conversation_deleted` if it
+    // reached the wire as it is.
+    let promising_a_deletion = || {
+        [
+            ConversationError::Audit,
+            ConversationError::DeletionIncomplete(Box::default()),
+            ConversationError::AttachmentCleanup {
+                storage_failures: 0,
+                audit_failures: 1,
+            },
+            ConversationError::Agent(AgentError::AuditFailure),
+            ConversationError::AdmissionEvidence {
+                audit: Some(AgentError::AuditFailure),
+                storage: None,
+            },
+            ConversationError::Deleted,
+        ]
+    };
+    // Read before the lock, the tombstone write, and the read after waiting
+    // behind another attempt: the repository calls `fence` makes. Any it
+    // made besides would still answer only a `FenceFailure`, its return type.
+    for error in promising_a_deletion() {
+        repository
+            .loads
+            .lock()
+            .unwrap()
+            .push_back(Some(Fault::Fail(error)));
+        assert!(matches!(
+            service.delete(id.clone(), caller("delete-1")).await,
+            Err(ConversationError::Metadata)
+        ));
+    }
+    for error in promising_a_deletion() {
+        repository
+            .writes
+            .lock()
+            .unwrap()
+            .push_back(Some(Fault::Fail(error)));
+        assert!(matches!(
+            service.delete(id.clone(), caller("delete-1")).await,
+            Err(ConversationError::Metadata)
+        ));
+    }
+    for error in promising_a_deletion() {
+        repository
+            .loads
+            .lock()
+            .unwrap()
+            .extend([None, Some(Fault::Fail(error))]);
+        assert!(matches!(
+            delete_behind_another(&service, &repository, &id).await,
+            Err(ConversationError::Metadata)
+        ));
+    }
+    assert!(unfenced(&fixture, &id));
+    service.shutdown().await.unwrap();
+}
+
+/// A deletion left unfinished by a deletion record the sink refused (row 22),
+/// with the sink taking records again, and a service over a [`Faulty`]
+/// repository that its background tries can be given faults through.
+async fn left_for_the_background(
+    fixture: &Deleting,
+) -> (ConversationId, Arc<Faulty>, ConversationService) {
+    let id = never_opened(fixture);
+    fixture.audit.refuses.store(true, Ordering::SeqCst);
+    incomplete(fixture.service.delete(id.clone(), caller("delete-1")).await);
+    fixture.audit.refuses.store(false, Ordering::SeqCst);
+    let repository = Faulty::over(fixture.repository.clone());
+    let service = service_with(fixture, repository.clone(), fixture.storage.clone());
+    (id, repository, service)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_repository_error_in_a_background_try_is_never_a_reason_to_wait() {
+    // What `waiting_for` would take for a slot or a release to wait for, had
+    // they come from `finish_deletion` rather than the repository, and a
+    // repository that panics. Built afresh for each read, as `Fault` is used
+    // up by it.
+    let fault = |kind: usize| match kind {
+        0 => Fault::Fail(ConversationError::DeletionIncomplete(Box::new(
+            DeletionFailures {
+                no_agent_slot: true,
+                ..DeletionFailures::default()
+            },
+        ))),
+        1 => Fault::Fail(ConversationError::DeletionIncomplete(Box::new(
+            DeletionFailures {
+                history_leased_elsewhere: true,
+                ..DeletionFailures::default()
+            },
+        ))),
+        _ => Fault::Panic,
+    };
+    let panics = |kind: usize| kind == 2;
+    // Long enough for the worker to try a release wait the error could have
+    // been taken for again, and finish the deletion once the faults run out;
+    // a slot wait is never woken here, since no agent is asked, and shows as
+    // still waiting.
+    let every_retry = DELETION_RETRY_DELAY * 30;
+
+    // The start's finish: each of its tries reads a fault, and the deletion
+    // is reported left with the repository's error as storage (or a panic as
+    // unavailable), not carried on.
+    for kind in 0..3 {
+        let fixture = deleting();
+        let (id, repository, service) = left_for_the_background(&fixture).await;
+        repository
+            .loads
+            .lock()
+            .unwrap()
+            .extend((0..DELETION_ATTEMPTS).map(|_| Some(fault(kind))));
+        let unfinished = service.finish_deletions().await.unwrap().unfinished;
+        // Every one of its tries was spent reading a fault.
+        assert!(repository.loads.lock().unwrap().is_empty());
+        assert_eq!(unfinished.len(), 1);
+        assert_eq!(unfinished[0].0, id);
+        if panics(kind) {
+            assert!(matches!(unfinished[0].1, ConversationError::Unavailable));
+        } else {
+            assert!(matches!(unfinished[0].1, ConversationError::Metadata));
+        }
+        // Reported unfinished is already not carried on — the start does one
+        // or the other — so this only says the same thing directly.
+        assert_eq!(service.inner.retries.waiting_for(&id), None);
+        assert!(!tombstone(&fixture, &id).erased());
+        service.shutdown().await.unwrap();
+    }
+
+    // The worker: a deletion it carries for a slot reads a fault, and is
+    // left rather than waiting again.
+    for kind in 0..3 {
+        let fixture = deleting();
+        let (id, repository, service) = left_for_the_background(&fixture).await;
+        repository
+            .loads
+            .lock()
+            .unwrap()
+            .push_back(Some(fault(kind)));
+        assert!(service.carry_on_if_it_can_finish(
+            &id,
+            &ConversationError::DeletionIncomplete(Box::new(DeletionFailures {
+                no_agent_slot: true,
+                ..DeletionFailures::default()
+            })),
+        ));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !repository.loads.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the worker tries it");
+        tokio::time::sleep(every_retry).await;
+        assert_eq!(service.inner.retries.waiting_for(&id), None);
+        assert!(!tombstone(&fixture, &id).erased());
+        service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_repository_error_past_the_fence_is_never_a_reason_to_wait() {
+    // Past the fence a delete writes its tombstone three more times: what it
+    // read of the history, what the agent settled, and that it is erased.
+    // Whatever the repository answers to any of them is kept whole as the
+    // tombstone's failure, and only `DeletionFailures`' own fields decide a
+    // wait — even an error shaped like one.
+    for faulted in 1..=3 {
+        for waiting in [
+            DeletionFailures {
+                no_agent_slot: true,
+                ..DeletionFailures::default()
+            },
+            DeletionFailures {
+                history_leased_elsewhere: true,
+                ..DeletionFailures::default()
+            },
+        ] {
+            let fixture = deleting();
+            let id = talked_in(&fixture).await;
+            fixture.service.shutdown().await.unwrap();
+            let repository = Faulty::over(fixture.repository.clone());
+            let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
+            // The fence's own write and those before the faulted one pass.
+            repository
+                .writes
+                .lock()
+                .unwrap()
+                .extend((0..faulted).map(|_| None).chain([Some(Fault::Fail(
+                    ConversationError::DeletionIncomplete(Box::new(waiting)),
+                ))]));
+            let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+            assert!(repository.writes.lock().unwrap().is_empty());
+            assert!(
+                matches!(
+                    &failures.tombstone,
+                    Some(ConversationError::DeletionIncomplete(_))
+                ),
+                "write {faulted} past the fence: {failures:?}"
+            );
+            assert!(!failures.no_agent_slot && !failures.history_leased_elsewhere);
+            assert_eq!(service.inner.retries.waiting_for(&id), None);
+            // A slot wait is due at once, and a worker started by the delete's
+            // own task runs its try before this test resumes: a deletion
+            // wrongly carried on is then either still waiting, above, or
+            // already finished by the worker. Nothing may be.
+            assert!(!tombstone(&fixture, &id).erased());
+            service.shutdown().await.unwrap();
+        }
+    }
 }
 
 #[tokio::test]
@@ -721,6 +1215,10 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -747,6 +1245,90 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
         .any(|release| release.cause == AttachmentReleaseCause::ConversationDeleted));
     assert_eq!(service.inner.retries.waiting_for(&id), None);
     service.shutdown().await.unwrap();
+}
+
+/// Session storage whose leases open, and then answer `Busy` to reading or
+/// to erasing the history under the deletion's own lease.
+struct BusyUnderLease {
+    storage: Arc<InMemoryStorage>,
+    load: bool,
+    erase: bool,
+}
+struct BusyLease {
+    lease: Box<dyn SessionStorageLease>,
+    load: bool,
+    erase: bool,
+}
+impl SessionStorage for BusyUnderLease {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.storage.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move {
+            Ok(self.storage.open_existing(id).await?.map(|lease| {
+                Box::new(BusyLease {
+                    lease,
+                    load: self.load,
+                    erase: self.erase,
+                }) as Box<dyn SessionStorageLease>
+            }))
+        })
+    }
+}
+impl SessionStorageLease for BusyLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        if self.load {
+            return Box::pin(async { Err(StorageError::Busy) });
+        }
+        self.lease.load()
+    }
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        self.lease.save(snapshot)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        if self.erase {
+            return Box::pin(async { Err(StorageError::Busy) });
+        }
+        self.lease.erase()
+    }
+}
+
+#[tokio::test]
+async fn busy_under_the_deletion_s_own_lease_is_left_not_carried_on() {
+    for (load, erase) in [(true, false), (false, true)] {
+        let fixture = deleting();
+        let id = talked_in(&fixture).await;
+        fixture.service.shutdown().await.unwrap();
+        let service = service_with(
+            &fixture,
+            fixture.repository.clone(),
+            Arc::new(BusyUnderLease {
+                storage: fixture.storage.clone(),
+                load,
+                erase,
+            }),
+        );
+        let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+        // The deletion holds the lease, so `Busy` here is storage failing, not
+        // a history leased elsewhere: row 9c, not 9a or 9b.
+        assert!(!failures.history_leased_elsewhere);
+        assert!(matches!(
+            failures.history,
+            Some(ConversationError::Storage(StorageError::Busy))
+        ));
+        assert_eq!(service.inner.retries.waiting_for(&id), None);
+        // As row 9a by state when the read fails, as 9b once it is settled.
+        assert_eq!(
+            fixture.audit.records.lock().unwrap().len(),
+            usize::from(erase)
+        );
+        assert_eq!(summary(&fixture, &id).is_none(), erase);
+        assert!(history(&fixture.storage, &id).await.is_some());
+        service.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -840,10 +1422,7 @@ async fn a_history_still_leased_elsewhere_is_left_and_a_repeat_finishes() {
     // Another writer holds the history. Erasing under it would be two writers.
     let held = fixture.storage.open(session(&id)).await.unwrap();
     let failures = incomplete(fixture.service.delete(id.clone(), caller("delete-1")).await);
-    assert!(matches!(
-        failures.history,
-        Some(ConversationError::Storage(StorageError::Busy))
-    ));
+    assert!(failures.history_leased_elsewhere && failures.history.is_none());
     assert!(failures.audit.is_none() && failures.summary.is_none());
     // Unread, so unrecorded, so nothing of what the record is for was erased.
     assert!(fixture.audit.records.lock().unwrap().is_empty());
@@ -897,10 +1476,7 @@ async fn a_lease_held_once_the_answer_is_settled_keeps_only_the_history() {
     // Now another writer holds the history when the repeat comes.
     let held = fixture.storage.open(session(&id)).await.unwrap();
     let failures = incomplete(fixture.service.delete(id.clone(), caller("delete-1")).await);
-    assert!(matches!(
-        failures.history,
-        Some(ConversationError::Storage(StorageError::Busy))
-    ));
+    assert!(failures.history_leased_elsewhere && failures.history.is_none());
     // The record needs no history, nor does the summary: both go. Only the
     // history waits for its lease.
     assert_eq!(fixture.audit.records.lock().unwrap().len(), 1);
@@ -1008,8 +1584,8 @@ impl ConversationRepository for PausingRepository {
             found
         })
     }
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
-        self.inner.list()
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        self.inner.unfinished_deletions()
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.inner.create(conversation)
@@ -1033,6 +1609,7 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
         pause: StdMutex::new(None),
     });
     let storage = Arc::new(InMemoryStorage::new());
+    let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider.clone()))),
@@ -1042,7 +1619,11 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(RecordingDeletionAudit::default()),
             attachments: None,
-            summaries: Arc::new(MemorySummaries::default()),
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: memory.clone(),
+                summaries,
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -1140,11 +1721,14 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         AgentId::Claude,
     )
     .unwrap();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let database = root.join("conversations").join("metadata.sqlite3");
+    let metadata = Arc::new(LocalConversationStore::open(&database).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
             agents,
             storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
-            metadata: Arc::new(LocalConversationRepository::new(root.join("metadata")).unwrap()),
+            metadata: metadata.clone(),
             creation_audit: Arc::new(
                 DurableConversationCreationAudit::new(root.join("audit").join("creation")).unwrap(),
             ),
@@ -1160,7 +1744,8 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
                 .unwrap(),
             ),
             attachments: None,
-            summaries: Arc::new(LocalConversationSummaries::new(root.join("summaries")).unwrap()),
+            summaries: metadata.clone(),
+            listing: metadata.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock,
@@ -1197,7 +1782,11 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !root.join("summaries").join(format!("{id}.json")).exists() {
+        while ConversationSummaries::load(metadata.as_ref(), &id)
+            .await
+            .unwrap()
+            .is_none()
+        {
             tokio::task::yield_now().await;
         }
     })
@@ -1228,20 +1817,30 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             .join("deletion")
             .join(format!("conversation-deleted-{id}.json"))]
     );
-    // The summary and the history are gone; the history's lock stays, empty.
-    assert!(!root.join("summaries").join(format!("{id}.json")).exists());
+    // The summary and the history are gone — the summary's words from the
+    // database file too, not only from its rows — and the history's lock
+    // stays, empty.
+    assert_eq!(
+        ConversationSummaries::load(metadata.as_ref(), &id)
+            .await
+            .unwrap(),
+        None
+    );
+    let database = std::fs::read(&database).unwrap();
+    assert!(!database
+        .windows("read this".len())
+        .any(|window| window == b"read this"));
     let sessions = files(&root.join("sessions"));
     assert_eq!(sessions.len(), 1, "{:?}", sessions.keys());
     let (lock, bytes) = sessions.iter().next().unwrap();
     assert_eq!(lock.extension().unwrap(), "lock");
     assert!(bytes.is_empty());
     // Ownership stays, and so does the tombstone that refuses it.
-    assert!(root.join("metadata").join(format!("{id}.json")).exists());
-    assert!(root
-        .join("metadata")
-        .join("deleted")
-        .join(format!("{id}.json"))
-        .exists());
+    let kept = ConversationRepository::load(metadata.as_ref(), &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(kept.deletion().is_some_and(|deletion| deletion.erased()));
     deleted(service.create(id.clone(), caller("create"), None).await);
     service.shutdown().await.unwrap();
 }
@@ -1786,6 +2385,10 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
             deletion_audit: audit.clone(),
             attachments: None,
             summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: repository.clone(),
+                summaries: summaries.clone(),
+            }),
             provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -1901,7 +2504,10 @@ async fn a_conversation_naming_an_unknown_agent_is_listed_and_deleted_but_not_op
 async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
-    let repository = Arc::new(LocalConversationRepository::new(root.join("metadata")).unwrap());
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let repository = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let service = ConversationService::new(
         ConversationDependencies {
@@ -1917,7 +2523,8 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
                     .unwrap(),
             ),
             attachments: None,
-            summaries: Arc::new(LocalConversationSummaries::new(root.join("summaries")).unwrap()),
+            summaries: repository.clone(),
+            listing: repository.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock,
@@ -2236,10 +2843,7 @@ async fn the_agent_is_not_asked_while_the_history_is_leased_elsewhere() {
     // Another writer now holds the history, which may be running the session.
     let held = fixture.storage.open(session(&id)).await.unwrap();
     let failures = incomplete(fixture.service.delete(id.clone(), caller("delete-1")).await);
-    assert!(matches!(
-        failures.history,
-        Some(ConversationError::Storage(StorageError::Busy))
-    ));
+    assert!(failures.history_leased_elsewhere && failures.history.is_none());
     assert!(failures.provider.is_none());
     assert_eq!(fixture.store.asked().len(), 1);
     // Let go, and the next try asks and finishes.
@@ -2303,6 +2907,7 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
             deletion_audit: deletions.clone(),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -2432,6 +3037,10 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: short,
             clock: Arc::new(TestClock),
@@ -2468,10 +3077,7 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
             .delete(never_opened.clone(), caller("delete-1"))
             .await,
     );
-    assert!(matches!(
-        failures.history,
-        Some(ConversationError::Storage(StorageError::Busy))
-    ));
+    assert!(failures.history_leased_elsewhere && failures.history.is_none());
     let spent = started.elapsed();
     assert!(
         spent >= short.history_lease && spent < Duration::from_secs(2),
@@ -2498,6 +3104,10 @@ fn over_with(
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions,
             deletion_budgets: budgets,
             clock: Arc::new(TestClock),
@@ -2612,7 +3222,7 @@ async fn a_desktop_stop_leaves_a_delete_asking_its_agent_alone() {
 }
 
 #[tokio::test]
-async fn a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased() {
+async fn a_list_waiting_on_its_listing_does_not_keep_a_deleted_history_leased() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     let (entered_tx, entered) = oneshot::channel();
@@ -2623,9 +3233,9 @@ async fn a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased() {
         async move { service.list(caller("list"), false).await }
     });
     entered.await.unwrap();
-    // The list has read whether the conversation is running and is waiting
-    // on its summary: it holds nothing of the live agent, so a delete gets
-    // the history's lease once the agent is stopped.
+    // The list is waiting on its summaries, before it has asked what is
+    // running: it holds nothing of the live agent, so a delete gets the
+    // history's lease once the agent is stopped.
     assert!(fixture
         .service
         .delete(id.clone(), caller("delete-1"))
@@ -3119,10 +3729,7 @@ async fn left_for_a_held_lease(
     let held = fixture.storage.open(session(&id)).await.unwrap();
     let service = over_with(fixture, fixture.store.clone(), SHORT_LEASE);
     let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
-    assert!(matches!(
-        failures.history,
-        Some(ConversationError::Storage(StorageError::Busy))
-    ));
+    assert!(failures.history_leased_elsewhere && failures.history.is_none());
     assert_eq!(
         service.inner.retries.waiting_for(&id),
         Some((Waiting::ForRelease, 0))
@@ -3781,7 +4388,7 @@ async fn a_slot_wait_that_turns_to_a_release_wait_spends_no_release_try() {
         &claimed[0],
         Err(ConversationError::DeletionIncomplete(Box::new(
             DeletionFailures {
-                history: Some(ConversationError::Storage(StorageError::Busy)),
+                history_leased_elsewhere: true,
                 ..DeletionFailures::default()
             },
         ))),

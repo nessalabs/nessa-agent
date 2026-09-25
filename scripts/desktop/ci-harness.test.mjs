@@ -57,6 +57,14 @@ test("local and CI aggregate the same named frontend and native checks", () => {
     workflow,
     /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings/,
   )
+  // The database opener's privacy checks answer differently on each OS, so
+  // they run in the matrix, as `pnpm check` runs them locally.
+  assert.match(root.scripts.check, /pnpm database:check/)
+  assert.match(workflow, /run: cargo test -p nessa-local-database/)
+  assert.match(
+    workflow,
+    /run: cargo clippy -p nessa-local-database --all-targets -- -D warnings/,
+  )
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
 

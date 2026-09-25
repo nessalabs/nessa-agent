@@ -86,8 +86,8 @@ export type SubmissionReceipt = { executionId: string; disposition: string }
 
 /**
  * One read of the list: its rows, and whether the gateway says they are every
- * conversation under that filter — not so past its bound of 500, or while it
- * cannot read one of its records.
+ * conversation under that filter — not so past its bound of 500, or while one
+ * of the caller's own records or summaries cannot be read back.
  */
 export type ConversationListing = {
   conversations: ConversationSummary[]

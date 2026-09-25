@@ -10,7 +10,7 @@ use crate::{
     conversation::{domain::ConversationId, infrastructure::DurableConversationFileLinkAudit},
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
-        Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -58,6 +58,7 @@ async fn conversation() -> (
             file_link_audit: audit.clone(),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
@@ -463,6 +464,7 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
             ),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,

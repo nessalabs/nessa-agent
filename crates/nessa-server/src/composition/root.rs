@@ -216,17 +216,13 @@ impl CompositionRoot {
         if let Some(service) = conversations.clone() {
             tokio::spawn(async move {
                 match service.finish_deletions().await {
-                    Ok(left)
-                        if left.unfinished.is_empty()
-                            && left.unreadable == 0
-                            && left.orphaned_tombstones == 0 => {}
-                    // A record that could not be read may be a deletion that
+                    Ok(left) if left.unfinished.is_empty() && left.unreadable == 0 => {}
+                    // A tombstone that could not be read is a deletion that
                     // cannot even be seen, so it is counted here too.
                     Ok(left) => tracing::warn!(
                         unfinished = left.unfinished.len(),
                         unreadable = left.unreadable,
-                        orphaned_tombstones = left.orphaned_tombstones,
-                        "some deleted conversations are still not fully erased, or conversation records could not be read"
+                        "some deleted conversations are still not fully erased, or their tombstones could not be read"
                     ),
                     Err(error) => tracing::error!(
                         %error,

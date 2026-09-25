@@ -176,7 +176,7 @@ is available for future integration. See [local setup](../adr/done/0010-local-au
 
 Composition optionally loads the private namespace's `agents` configuration and
 constructs a provider for every agent it names — CredentialedClaudeProvider,
-CodexAcpProvider — alongside LocalFileStorage, LocalConversationRepository and
+CodexAcpProvider — alongside LocalFileStorage, LocalConversationStore and
 DurableExecutionAudit. Every configured agent is built, not only the one a
 creation that names none runs on, because a conversation records the agent it
 was created on and is reopened on that same agent. ProductRouteState shares ConversationService across sockets;

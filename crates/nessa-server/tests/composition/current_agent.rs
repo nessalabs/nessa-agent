@@ -43,7 +43,7 @@ use crate::{
     conversation::domain::ConversationId,
     conversation_test_support::{
         AcceptingAudit, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository,
-        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
+        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted,
         DELETION_BUDGETS,
     },
 };
@@ -979,6 +979,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),

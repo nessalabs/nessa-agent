@@ -323,6 +323,15 @@ current user and are not group/other writable; the private leaf remains owned by
 the current user at mode `0700`. Creation, parent synchronization, traversal, and
 later binding checks all use directory handles without following links.
 
+`crates/nessa-local-database` opens one private SQLite file for one context and
+nothing else: a private directory and file through `nessa-local-storage`,
+foreign keys, a rollback journal synced in full, `secure_delete`, and the
+context's schema at the one version its definition states, refusing any other.
+It has no tables of its own and no migrations; each context owns its schema, and
+a schema change ships its own move. See the
+[local-database crate](../crates/nessa-local-database/README.md) and
+[ADR 196](adr/todo/196-conversation-metadata-database.md).
+
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
 Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
@@ -411,15 +420,20 @@ delivered. The record is evidence of the naming, which is intent: not a read,
 not a delivery, not even an admission. A sink that cannot take it refuses the
 send, and a sink already holding different paths for that submission refuses it
 too. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
-A list of conversations is read without opening one: `conversation.list` joins the
-ownership records to a `ConversationSummaries` store (`infrastructure/summaries.rs`,
-`conversations/summaries/<id>.json`) holding each conversation's title, last line
-said and time, derived by `domain/value_objects/conversation_summary.rs` — the one
+A list of conversations is read without opening one, and without reading anybody
+else's: `conversation.list` asks `ConversationListing` for the caller's own
+conversations, newest first and one past the bound. `LocalConversationStore`
+(`infrastructure/store.rs`) answers it, and is the repository and the
+`ConversationSummaries` store too: ownership records, tombstones and summaries are
+three tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
+once in `infrastructure/schema.sql` and opened by `crates/nessa-local-database`
+([ADR 196](adr/todo/196-conversation-metadata-database.md)). A summary holds each
+conversation's title, last line said and time, derived by `domain/value_objects/conversation_summary.rs` — the one
 owner of those rules — when a message is accepted and when a reply completes. A
 summary is a projection, so a failed write is logged and the command stands; the
 `archived` flag it also carries is a person's decision, so `archive`/`unarchive`
 fail visibly instead. `delete` is a consequential transition: a tombstone the
-repository owns (`metadata/deleted/<id>.json`) fences the identity before the agent
+repository owns (a `deletions` row) fences the identity before the agent
 is stopped, a `ConversationDeletionAudit` record (`infrastructure/deletion_audit.rs`,
 `audit/deletion/`) is committed before history is erased, and the SDK journal is
 erased under a lease the delete holds. Before that, the agent is asked to delete
@@ -699,7 +713,7 @@ macros, fully qualified expressions, transitive re-exports, lifecycle ownership,
 and semantic DTO relationships still require compilation and review.
 
 `scripts/check-runtime-dependencies.mjs` separately follows Cargo's resolved
-package IDs from the server, SDK, auth, local-storage, images, and MCP packages.
+package IDs from the server, SDK, auth, local-storage, local-database, images, and MCP packages.
 It rejects reachable Tauri desktop-framework packages under the default and
 all-feature workspace configurations, including renamed and transitive edges,
 while allowing the unrelated desktop application graph. Cargo metadata includes

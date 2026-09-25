@@ -112,25 +112,17 @@ no adapter for fails startup by name, rather than being skipped.
 
 A conversation records the agent it was created on and is reopened on that same
 agent for the rest of its life, so changing `selected` moves new conversations
-only. Records written before this server knew a second agent name no agent, and
-are refused rather than read as Claude's: the reader that assumed an agent is
-what "One current contract" forbids. Bring them to the current shape once, with
-the gateway stopped:
+only.
 
-```bash
-node scripts/retrofit-conversation-agents.mjs            # --dry-run to look first
-node scripts/retrofit-conversation-agents.mjs --help     # what it takes
-```
-
-It names Claude, which is honest rather than a guess — Claude was the only agent
-that could have written a record without the field — and it leaves every record
-that already states its agent exactly as it is. Until it has been run, such a
-conversation is refused as `agent_unsupported`.
-
-An entry it cannot read or write is reported by name and the rest are converted,
-so a directory is never left half migrated with nothing saying which half. It
-exits non-zero when that happens; running it again once the obstruction is gone
-is a no-op on everything already done.
+Conversation metadata is one private database, `conversations/metadata.sqlite3`
+([ADR 196](../adr/todo/196-conversation-metadata-database.md)). Nessa is in
+alpha and keeps no migrations. A namespace an earlier build wrote
+conversations into has them deleted once, with the gateway stopped: its whole
+`conversations/` directory and its `attachments/`. The JSON directories alone
+are not enough — audit records, histories and uploads are keyed by the same
+conversation identities, and an identity created again beside its old creation
+record is refused. Panel tabs saved before then name conversations
+that are gone.
 
 Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
@@ -483,21 +475,17 @@ submission can be retried with the same immutable input and identities; the SDK
 recovers its saved receipt instead of running it twice. Changed input is a new
 submission, not an edit to a running operation. Pending input can be removed.
 
-The gateway stores conversation ownership separately from SDK JSONL sessions.
-A conversation's owner record is written and synced under a private temporary
-name and only then published under its conversation ID, and publication never
-replaces a name another owner already holds. An interrupted creation therefore
-leaves either no record, so the same ID can still be created, or a complete
-record whose original creator owns it. On Unix an interruption between
-publishing the record and releasing the writer's own name leaves two links to
-that complete record, which fails private-file verification until the next
-gateway start releases the leftover temporary. A genuinely corrupt owner record
-still fails closed and is never repaired; recovering that conversation ID
-requires archiving the offending file outside the running gateway.
-
-Beside the owner records the gateway keeps `summaries/<id>.json` (title, last line
-said, time, archived) for `conversation.list`, `metadata/deleted/<id>.json` for a
-deleted conversation, and `audit/deletion/` for who deleted it. A deleted
+The gateway stores conversation ownership separately from SDK JSONL sessions, in
+`conversations/metadata.sqlite3`: a private SQLite file whose three tables hold
+each conversation's owner record, its summary (title, last line said, time,
+archived) for `conversation.list`, and a deleted conversation's tombstone
+([ADR 196](../adr/todo/196-conversation-metadata-database.md)). An owner record
+is created in one transaction that first looks for the ID, so an interrupted
+creation leaves either no record, and the same ID can still be created, or a
+complete record whose original creator owns it; creating it again never changes
+its owner. A row that cannot be read back still fails closed and is never
+repaired; recovering that conversation means repairing the row with the gateway
+stopped. Who deleted a conversation is kept apart, in `audit/deletion/`. A deleted
 conversation keeps its owner record and its tombstone for good: its identity is
 never reused, and every command its owner sends on it — `create` included —
 answers `conversation_deleted`, except deleting it again (see ADR 182);

@@ -11,7 +11,7 @@ use crate::{
     conversation_test_support::{
         image_fixture, image_fixture_with_model, only, AcceptingCreationAudit,
         AcceptingDeletionAudit, MemoryAttachments, MemoryRepository, MemorySummaries, Provider,
-        ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -265,6 +265,7 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: Some(attachments),
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
@@ -379,6 +380,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: Some(attachments.clone()),
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
