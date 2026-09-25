@@ -817,6 +817,27 @@ async fn a_repository_failure_before_the_fence_is_answered_only_as_its_own_error
             ConversationError::NotFound,
             ConversationError::NotFound,
         ),
+        // Outside the contract, and promising nothing: storage failing still.
+        (
+            &repository.loads,
+            ConversationError::Unavailable,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.loads,
+            ConversationError::InvalidInput,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::Unavailable,
+            ConversationError::Metadata,
+        ),
+        (
+            &repository.writes,
+            ConversationError::InvalidInput,
+            ConversationError::Metadata,
+        ),
     ] {
         faults
             .lock()
@@ -836,6 +857,8 @@ async fn a_repository_failure_before_the_fence_is_answered_only_as_its_own_error
     // The read after waiting behind another attempt is a read too.
     for (given, expected) in [
         (ConversationError::NotFound, ConversationError::Metadata),
+        (ConversationError::Unavailable, ConversationError::Metadata),
+        (ConversationError::InvalidInput, ConversationError::Metadata),
         (
             ConversationError::AgentUnsupported,
             ConversationError::AgentUnsupported,
