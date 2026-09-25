@@ -1,12 +1,13 @@
 /**
  * Give conversation records written before this build the agent they ran on.
  *
- * A conversation record now states its agent, and the server refuses one that
- * does not rather than reading it as Claude's — a reader for data written by an
- * older build is what CODING_STANDARDS.md's "One current contract" forbids. The
- * same rule asks for the data to be brought to the current shape instead, and
- * this is the tool that does it. Run once, after upgrading; it is a no-op every
- * time after that.
+ * A conversation record now states its agent, and a record that does not is
+ * never read as Claude's — a reader for data written by an older build is what
+ * CODING_STANDARDS.md's "One current contract" forbids. The same rule asks for
+ * the data to be brought to the current shape instead, and this is the tool
+ * that does it, on the record files an earlier build kept. Run it once, before
+ * `scripts/move-conversation-metadata.mjs`, which refuses a record that names no
+ * agent; it is a no-op every time after that.
  *
  * Naming Claude is honest rather than a guess. A record without the field was
  * published while Claude was the only agent this server could start, so Claude
@@ -19,7 +20,7 @@
  *
  * With no directory it retrofits this machine's own namespace, resolved exactly
  * as the dev loop resolves it, including NESSA_STAGE, NESSA_INSTANCE and
- * NESSA_DATA_DIR. The gateway must not be running: it holds these records.
+ * NESSA_DATA_DIR. The gateway must not be running.
  */
 
 import { readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"

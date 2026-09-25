@@ -126,7 +126,7 @@ export function parse(bytes, fields, id) {
   if (bytes.length > MAX_BYTES) return { why: `it is longer than ${MAX_BYTES} bytes` }
   let text
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
   } catch {
     return { why: "it is not UTF-8" }
   }
@@ -137,10 +137,12 @@ export function parse(bytes, fields, id) {
     return { why: `it is not JSON (${error.message})` }
   }
   if (!fits(value, "object")) return { why: "it is not a JSON object" }
-  // Written by the server (compact) or by the retrofit (two-space, a final
-  // newline), and by nothing else. Any other spelling — a key twice, a number
-  // as `1.0e2`, an escape standing for half a character — is one the
-  // server's parser refused, and taking it would move a meaning it never had.
+  // Moved only as the server (compact) or the retrofit (two-space, a final
+  // newline) wrote it. That refuses every spelling the server's parser
+  // refused — a key twice, a number as `1.0e2`, an escape standing for half a
+  // character, a byte-order mark — which taking would move a meaning it never
+  // had. It also refuses some the parser read, such as other spacing, which
+  // only a hand edit writes; those are named for the operator like the rest.
   const spelled = [JSON.stringify(value), `${JSON.stringify(value, null, 2)}\n`]
   if (!spelled.includes(text) || Object.values(value).some(malformed))
     return { why: "it is not spelled as this server or the retrofit wrote it" }
@@ -369,10 +371,12 @@ async function database(conversations, { dryRun = false } = {}) {
 export function statedVersion(definition) {
   const versions = definition
     .split("\n")
-    .map((line) => /^PRAGMA user_version = (\d+);$/.exec(line.trim()))
+    .map((line) => /^PRAGMA user_version = (.*);$/.exec(line.trim()))
     .filter(Boolean)
-  const version = versions.length === 1 ? Number(versions[0][1]) : 0
-  if (!(version > 0)) throw new Error(`${SCHEMA} does not state one version above 0`)
+  const stated = versions.length === 1 ? versions[0][1] : ""
+  const version = /^\d+$/.test(stated) ? Number(stated) : 0
+  if (!(version > 0 && version <= 0xffffffff))
+    throw new Error(`${SCHEMA} does not state one version above 0`)
   return version
 }
 

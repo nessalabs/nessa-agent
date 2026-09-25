@@ -17,7 +17,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 
-import { SCHEMA, move } from "./move-conversation-metadata.mjs"
+import { SCHEMA, move, statedVersion } from "./move-conversation-metadata.mjs"
 
 /** Files as the build before this one wrote them. */
 const record = (id, extra = {}) => ({
@@ -240,6 +240,14 @@ test("M3, M4: a file that cannot be moved is named, and nothing is committed", a
     ],
     [`summaries/${one}.json`, Buffer.from([0x7b, 0xff, 0x7d]), /not UTF-8/],
     [
+      `summaries/${one}.json`,
+      Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from(JSON.stringify(summary(one))),
+      ]),
+      /not JSON/,
+    ],
+    [
       `metadata/${two}.json`,
       JSON.stringify(record(two)) + " ".repeat(4096),
       /longer than 4096/,
@@ -421,4 +429,17 @@ test("a directory by a temporary's name is refused before anything is committed"
   assert.equal(result.state, "refused")
   assert.equal(result.refused[0].path, temporary)
   assert.ok(!existsSync(join(root, "metadata.sqlite3")))
+})
+
+test("a schema's version is read as the server reads it", () => {
+  assert.ok(statedVersion(readFileSync(SCHEMA, "utf8")) > 0)
+  for (const definition of [
+    "CREATE TABLE t (id TEXT);",
+    "PRAGMA user_version = 0;",
+    "PRAGMA user_version = +1;",
+    "PRAGMA user_version = 4294967296;",
+    "PRAGMA user_version = 1;\nPRAGMA user_version = x;",
+  ])
+    assert.throws(() => statedVersion(definition), /one version above 0/, definition)
+  assert.equal(statedVersion("  PRAGMA user_version = 7;  "), 7)
 })
