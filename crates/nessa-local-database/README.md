@@ -2,7 +2,8 @@
 
 Opens one private SQLite file for one context. The context owns its tables and
 its schema; this crate owns only how the file is opened and at which version.
-Decided in [ADR 196](../../docs/adr/todo/196-conversation-metadata-database.md).
+Decided in [ADR 196](../../docs/adr/todo/196-conversation-metadata-database.md)
+and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
 
 - The directory must already be private and owned by this OS user, and the file
   is created private (through `nessa-local-storage`, never through a link)
@@ -14,8 +15,11 @@ Decided in [ADR 196](../../docs/adr/todo/196-conversation-metadata-database.md).
 - A `Schema` states its version once, as the one `PRAGMA user_version = N;` its
   definition runs. An empty file is given the schema in one transaction; a file
   at that version is opened; any other version, or tables without a version, are
-  refused as `OpenError::Version` and left untouched. There are no in-place
-  migrations: a schema change ships its own move.
+  refused as `OpenError::Version` and left untouched. A file that is not a
+  database, or is damaged, is `OpenError::Unreadable`. Both describe the file,
+  not the moment, so a caller can refuse them for good
+  ([ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md)). There are no
+  in-place migrations during alpha.
 
 ## Module map
 

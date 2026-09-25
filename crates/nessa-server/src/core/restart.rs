@@ -64,6 +64,8 @@ pub(super) fn restart(error: &RunError) -> Restart {
         // registration was fingerprinted against. Only a new registration
         // changes any of that.
         RunError::Runtime(_) => Restart::Pointless,
+        // Another version, or not a database: the same bytes next time.
+        RunError::Dataset(_) => Restart::Pointless,
         // The command line named nothing this build can run. Under launchd
         // that command line is this installation's own plist, which the next
         // attempt reads unchanged, so retrying is the relaunch loop and not a
@@ -100,6 +102,15 @@ mod tests {
             // The command line is read again unchanged, so the next attempt
             // fails on the same words.
             RunError::Usage("unknown command".into()),
+            // A store this build cannot read is the same file next time.
+            RunError::opening(
+                crate::core::Dataset::ConversationMetadata,
+                std::path::Path::new("metadata.sqlite3"),
+                nessa_local_database::OpenError::Version {
+                    found: 2,
+                    expected: 1,
+                },
+            ),
         ] {
             assert_eq!(restart(&error), Restart::Pointless, "{error}");
         }

@@ -65,6 +65,7 @@ pub(super) fn reason(error: &RunError) -> &'static str {
             "credentialRegistryInvalid"
         }
         RunError::Registry(_) => "credentialRegistry",
+        RunError::Dataset(_) => "datasetRefused",
         // The command line named nothing this binary can run. Under launchd
         // that is this installation's own plist being wrong, not anything the
         // person did, so it is told apart from the reasons they can act on
@@ -129,6 +130,14 @@ mod tests {
                 None,
             ),
             RunError::Usage("unknown command".into()),
+            RunError::opening(
+                crate::core::Dataset::ConversationMetadata,
+                std::path::Path::new("metadata.sqlite3"),
+                nessa_local_database::OpenError::Version {
+                    found: 2,
+                    expected: 1,
+                },
+            ),
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
             RunError::Runtime("missing bundled runtime file".into()),

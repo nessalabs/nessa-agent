@@ -194,7 +194,7 @@ fn a_file_that_is_not_a_database_is_refused_and_left_as_it_was() {
     drop(file);
     assert!(matches!(
         open(&path, &schema()),
-        Err(OpenError::Database(_))
+        Err(OpenError::Unreadable(_))
     ));
     assert_eq!(std::fs::read(&path).unwrap(), [7; 4096]);
 }

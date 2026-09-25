@@ -11,8 +11,10 @@ use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
+use nessa_local_database::OpenError;
 use std::fmt;
 use std::io::{self, ErrorKind};
+use std::path::{Path, PathBuf};
 
 /// Fatal errors that stop the server process.
 #[derive(Debug)]
@@ -27,6 +29,11 @@ pub enum RunError {
     /// failure the desktop host reports in its own words, and it learns which
     /// failure this was from the exit code this variant chooses.
     Registry(RegistryFailure),
+    /// A store the gateway cannot serve without holds something this build
+    /// cannot read: another version, or a file that is not a database.
+    /// Starting again reads the same file
+    /// (docs/adr/todo/202-versioned-local-datasets.md).
+    Dataset(DatasetRefusal),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
     /// Invalid or unavailable configured agent provider.
@@ -49,11 +56,65 @@ pub enum RunError {
 }
 
 impl RunError {
+    /// A gateway-scope store that did not open. What the file holds is a
+    /// [`RunError::Dataset`]; anything that can clear — a directory, I/O, a
+    /// lock — stays `Agent`, which is retried.
+    pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
+        match cause {
+            OpenError::Version { .. } | OpenError::Unreadable(_) => Self::Dataset(DatasetRefusal {
+                dataset,
+                path: path.to_path_buf(),
+                cause,
+            }),
+            cause => Self::Agent(format!("{dataset} at {}: {cause}", path.display())),
+        }
+    }
+
     pub(crate) fn registry(
         primary: LocalStoreError,
         audit: Option<CredentialRegistryAuditError>,
     ) -> Self {
         Self::Registry(RegistryFailure::new(primary, audit))
+    }
+}
+
+/// The stores whose refusal refuses the gateway, named for the sentence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dataset {
+    ConversationMetadata,
+}
+
+impl fmt::Display for Dataset {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ConversationMetadata => "conversation metadata",
+        })
+    }
+}
+
+/// Which store refused, where it is, and what the opener found.
+#[derive(Debug)]
+pub struct DatasetRefusal {
+    dataset: Dataset,
+    path: PathBuf,
+    cause: OpenError,
+}
+
+impl DatasetRefusal {
+    pub fn dataset(&self) -> Dataset {
+        self.dataset
+    }
+}
+
+impl fmt::Display for DatasetRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} at {} cannot be read by this build: {}",
+            self.dataset,
+            self.path.display(),
+            self.cause
+        )
     }
 }
 
@@ -117,6 +178,7 @@ impl fmt::Display for RunError {
             // Same sentence a flattened registry error used to produce: this
             // is still what authentication setup failed on.
             Self::Registry(error) => write!(f, "authentication setup failed: {error}"),
+            Self::Dataset(refusal) => write!(f, "stored data refused: {refusal}"),
             Self::Authentication(message) => write!(f, "authentication setup failed: {message}"),
             Self::Environment(error) => write!(f, "invalid configuration: {error}"),
             Self::Bind { addr, source } => match source.kind() {
@@ -142,6 +204,7 @@ impl std::error::Error for RunError {
         match self {
             Self::Environment(error) => Some(error),
             Self::Registry(error) => Some(error),
+            Self::Dataset(refusal) => Some(&refusal.cause),
             Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
@@ -165,6 +228,7 @@ impl From<io::Error> for RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::infrastructure::LocalConversationStore;
     use crate::env::{EnvironmentError, HOST};
 
     #[test]
@@ -178,6 +242,87 @@ mod tests {
         assert!(silent.to_string().contains("never reported"));
         // Nothing was reported, so there is nothing to be the source.
         assert!(std::error::Error::source(&silent).is_none());
+    }
+
+    /// Opens `metadata.sqlite3` in a private directory, after `prepare` has
+    /// left something there, and says what composition would end with.
+    fn opening_metadata(prepare: impl FnOnce(&Path)) -> RunError {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&root).unwrap();
+        let path = root.join("metadata.sqlite3");
+        prepare(&path);
+        let before = std::fs::read(&path).ok();
+        let Err(cause) = LocalConversationStore::open(&path) else {
+            panic!("the store opened");
+        };
+        // Refused, and never rewritten: the file is whatever it was.
+        assert_eq!(std::fs::read(&path).ok(), before);
+        RunError::opening(Dataset::ConversationMetadata, &path, cause)
+    }
+
+    fn assert_refused_for_good(error: &RunError) {
+        assert!(
+            matches!(error, RunError::Dataset(refusal)
+                if refusal.dataset() == Dataset::ConversationMetadata),
+            "{error}"
+        );
+        assert_eq!(super::super::exit_code::reason(error), "datasetRefused");
+        assert_eq!(
+            super::super::restart::restart(error),
+            super::super::restart::Restart::Pointless
+        );
+        assert!(error.to_string().contains("conversation metadata"));
+    }
+
+    /// Row G3 of ADR 202: a newer build's file, and a file with tables and
+    /// no version, are both another version.
+    #[test]
+    fn a_metadata_database_at_another_version_refuses_the_gateway_for_good() {
+        for definition in [
+            "CREATE TABLE later (id TEXT) STRICT;\nPRAGMA user_version = 99;\n",
+            "CREATE TABLE unversioned (id TEXT) STRICT;\n",
+        ] {
+            let error = opening_metadata(|path| {
+                // Private first, as the opener would make it, so that it is
+                // the version and not the privacy check that refuses it.
+                drop(
+                    nessa_local_storage::open(path, nessa_local_storage::OpenMode::CreateNew)
+                        .unwrap(),
+                );
+                let connection = nessa_local_database::rusqlite::Connection::open(path).unwrap();
+                connection.execute_batch(definition).unwrap();
+            });
+            assert_refused_for_good(&error);
+        }
+    }
+
+    /// Row G4 of ADR 202.
+    #[test]
+    fn a_file_that_is_not_a_database_refuses_the_gateway_for_good() {
+        let error = opening_metadata(|path| {
+            let mut file =
+                nessa_local_storage::open(path, nessa_local_storage::OpenMode::CreateNew).unwrap();
+            std::io::Write::write_all(&mut file, &[7; 4096]).unwrap();
+        });
+        assert_refused_for_good(&error);
+    }
+
+    /// Row G5 of ADR 202: a directory that is missing, or not private, can
+    /// be put right, so it stays a failure launchd retries.
+    #[test]
+    fn a_metadata_directory_that_cannot_be_used_is_still_retried() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("absent").join("metadata.sqlite3");
+        let Err(cause) = LocalConversationStore::open(&path) else {
+            panic!("the store opened");
+        };
+        let error = RunError::opening(Dataset::ConversationMetadata, &path, cause);
+        assert!(matches!(error, RunError::Agent(_)), "{error}");
+        assert_eq!(
+            super::super::restart::restart(&error),
+            super::super::restart::Restart::Worthwhile
+        );
     }
 
     #[test]

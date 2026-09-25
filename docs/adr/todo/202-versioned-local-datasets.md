@@ -1,246 +1,130 @@
-# 202. Local datasets are versioned, classed, and migrated forward only
+# 202. A store refuses what it cannot read at the smallest scope that owns it
 
 ## Purpose
 
-Every store the gateway and the desktop host keep on disk states the version of
-its shape and a class. The class decides what happens when the store is older,
-newer, or damaged: the gateway refuses to start, one record is refused, or the
-store is discarded and rebuilt. This record also says how migrations ship once
-Nessa leaves alpha. It generalizes the refusal in
-[196](196-conversation-metadata-database.md) and changes nothing that 196
-decided about conversation metadata's tables.
+Every store Nessa keeps on disk states the version of its shape. When it meets
+data it cannot read, the refusal covers the smallest thing that owns that data:
+the whole gateway for gateway-wide records, one conversation for one
+conversation's records, nothing at all for a cache. This record also says how
+migrations ship once Nessa leaves alpha. It generalizes the refusal
+[196](196-conversation-metadata-database.md) introduced, and changes none of
+196's tables.
 
 - **Date:** 2026-09-25
-- **Status:** proposed — draft, awaiting the owner's answers under
-  [Open questions](#open-questions); nothing is implemented
+- **Status:** accepted
 - **Issue:** [#202](https://github.com/nessalabs/nessa-agent/issues/202)
 
 ## Context
 
-Each store settled on its own reaction to data it cannot read, and the
-reactions disagree:
+Each store settled its own reaction to data it cannot read. Two of those
+reactions are wrong:
 
-- **Conversation metadata.** `nessa-local-database` refuses any `user_version`
-  but its own (`OpenError::Version`). Composition turns that into
-  `RunError::Agent` (`composition/local_auth.rs`), and `restart()` classes that
-  as `Worthwhile`. The result is that launchd relaunches a gateway that will
-  never read that file, and nothing is written to
-  `logs/gateway-startup-failure.json`. Gate 7 is broken today: the failure is
-  loud in the log and silent to the person.
-- **The credential registry** carries `schemaVersion` and refuses as
-  `InvalidRegistry`: exit 28, `Pointless`, recorded, with a refusal audit. That
-  is the honest path, but only this one store has it.
-- **Stores that ignore and rebuild.** Warm-up records, `installed.json` and
-  `shortcuts.json` treat what they cannot read as absent and rebuild it.
-- **Stores that refuse one record.** Session journals refuse one conversation
-  (`ConversationStateUnreadable`), and a bad attachment hold refuses one request.
-- **The browser-session journal** fails the whole gateway as `Authentication`,
-  which is retryable, so it too is a relaunch loop.
-- **Most stores have no marker at all**, so they cannot tell older, newer and
-  damaged apart.
+- **Conversation metadata.** `nessa-local-database` refuses a `user_version`
+  that is not its own. Composition turns that into `RunError::Agent`, which
+  `restart()` classes as `Worthwhile`. launchd therefore relaunches, forever, a
+  gateway that will never read that file, and no startup-failure record tells
+  the host why.
+- **The browser-session journal** fails the same way, as `Authentication`.
 
-"One current contract" forbids a reader for an old shape unless one is
-explicitly requested. The owner asked for this record (#202): datasets are
-versioned, the gateway does not fail wholesale over a store it can live
-without, and the stores it cannot live without are named.
-
-## Inventory
-
-`N` is the gateway namespace (`<base>[/<stage>][/instances/<instance>]`,
-`env/paths.rs`), and `H` is the host's config root (`src-tauri/src/local_data.rs`).
-Both follow [0005](../done/0005-stage-scoped-local-data.md).
-
-### Datasets this policy governs
-
-| # | Store | Path, format | Marker today | Truth or derived | Class | Why that class |
-| --- | --- | --- | --- | --- | --- | --- |
-| D1 | Credential registry (`nessa-auth`) | `N/auth/credentials.v1.json`, JSON | `schemaVersion` 2 | Truth | **Critical** | A reset reopens owner bootstrap: it grants access. It holds revocations and the credential transition audit. "Never silently reset a registry." |
-| D2 | Browser-session journal | `N/auth/browser-sessions.jsonl`, JSONL | none | Truth | **Critical** (Q1) | Authorizes cookie sessions and carries their transition evidence |
-| D3 | Conversation metadata | `N/conversations/metadata.sqlite3`, SQLite | `user_version` 1 | Truth: `conversations`, `deletions`, and `summaries.archived`. Derived: summary title, preview, updated | **Critical** (Q2) | Ownership authorizes every conversation call. A lost tombstone resurrects a deleted conversation. The archived flag is a user decision held nowhere else. |
-| D4 | Session journals (`nessa-sdk`) | `N/conversations/sessions/s-<id>.jsonl`, JSONL per conversation | none | Truth | **Record-scoped** | The only copy of a conversation's history, and 182 blocks deletion on a damaged one. One conversation's failure is that conversation's. |
-| D5 | Attachment blobs and holds | `N/attachments/{blobs,holds}/…`, binary and JSON | none | Truth | **Record-scoped** | `uploadedBy` and hold state have no other copy. The root itself stays a startup requirement (Q6). |
-| D6 | Audit sinks: execution, creation, file-link, deletion, attachment, warm-up, registry refusal, retirement, agent install, delivery and reclamation journals, MCP process audit (`N/process-audit`), host credential-save audit and reconciliation journal (`H/…`) | one JSON file per record | none | Truth (evidence) | **Critical, never migrated** | Evidence is kept as written. "Reject impossible histories without repairing or erasing the original data." |
-| D7 | Managed-runtime coordination: `reclamation.json`, use markers, locks | `N/agents/<agent>/…`, JSON | none | Truth | **Record-scoped** (the install operation) | A misread could reclaim a runtime that is in use. It fails the install or launch, never the gateway. |
-| D8 | Summary title and preview, if split from D3 (Q2) | — | — | Derived from D4 | **Degradable** | Rebuildable by rereading journals |
-| D9 | Agent warm-up records | `N/conversations/warm-up/<hash>.json` | none | Cache | **Degradable** | Rebuilt by warming again. Already ignored when unreadable. |
-| D10 | Managed runtime `installed.json` and binaries | `N/agents/<agent>/…` | none (the release version is data) | Cache, checked against the pinned digest | **Degradable** | Already treated as "not installed" and reinstalled |
-| D11 | Host `settings.json` | `H/settings.json`, JSON | none | Truth (user choices and service selection) | **Critical to the host** | Writing defaults over it would lose choices silently. Its two readers already disagree: `load` falls back to defaults, `load_service` refuses. |
-| D12 | Host `shortcuts.json` | `H/shortcuts.json` | `version` 1 | Cache of the server's bindings ([0004](../done/0004-server-owned-keybindings.md)) | **Degradable** | Already falls back and leaves the file alone |
-| D13 | Browser `localStorage` (tabs, surface) | per origin | none | Cache | **Degradable** | Already ignored when unreadable. Per viewer, and never read by the gateway. |
-
-### Outside this policy, and why
-
-- **Inter-process files.** The endpoint record, `gateway-startup-failure.json`,
-  and `gateway-upgrade/{request,result}.json` are contracts between two running
-  processes that can be different builds during an upgrade. They are versioned
-  with the host–gateway protocol, not as datasets. `result.json` refusing
-  startup as `Agent` is the same relaunch-loop defect, fixed by the typed
-  refusal below.
-- **Secrets.** `owner.token`, the surface tokens, and the keychain entries are
-  opaque values. A change to a token's format is an authentication protocol
-  change.
-- **Operator configuration.** `config.json` is written by a person, never by
-  Nessa, so there is nothing to migrate. An invalid file refuses startup, and it
-  moves to the typed, recorded refusal as well.
-- **Derived artifacts and diagnostics.** Host-staged runtimes, the plist, and
-  `gateway.log` are rebuilt from the bundle and checked by fingerprint, or they
-  are only a log.
+The rest are already right. The credential registry refuses as
+`credentialRegistryInvalid`: not retried, recorded. Session journals refuse one
+conversation. Warm-up records, `installed.json` and `shortcuts.json` ignore what
+they cannot read and write it again. The owner asked for the right ones to be
+the rule, and for the stores the gateway cannot live without to be named.
 
 ## Decision
 
-**Every dataset declares `{ name, version, class }` beside its shape.** For
-SQLite the version is `user_version`. For a single JSON file it is a top-level
-`schemaVersion`, as D1 already has. For a JSONL journal it is a header record on
-the first line. For a directory of records it is a `schemaVersion` on each
-record, so each record can be judged alone. The version is one integer that
-starts at 1. It is bumped only when the on-disk shape changes, never because
-code changed ("One current contract", second paragraph). A store that has no
-marker today is at version 1 as it is written today. The migration that
-introduces a marker is the only code that knows "unmarked" (Q4).
+**1. One version per stored shape.** It is SQLite's `user_version`, or a
+`schemaVersion` field in JSON, and it starts at 1. It is bumped only when the
+on-disk shape changes ("One current contract"). A store that has no marker
+today is version 1 as written today. The change that first alters its shape
+adds the marker. Nothing is added now, and nothing is deleted by hand.
 
-**The class is the only thing that decides the outcome.** Composition maps an
-open outcome to behaviour through one function keyed on class (gate 13). Stores
-do not decide per store.
+**2. Three scopes, decided by what the data is.**
 
-- **Critical.** The gateway (for the host's stores, the host) refuses to start.
-  It refuses as `RunError::Dataset { dataset, refusal }`, with a new exit reason
-  `datasetRefused` in `protocol/defaults/gateway-exit-codes.json`. A refusal
-  from anything but a lock is `Pointless` and is recorded in
-  `gateway-startup-failure.json`, so the host can say which dataset refused and
-  why. The file is left exactly as found.
-- **Record-scoped.** That record's operations fail with a typed wire error:
-  written by a newer Nessa, too old, or unreadable. Every other record, and the
-  gateway, carry on. The record is left exactly as found.
-- **Degradable.** Any version other than the current one, or an unreadable file,
-  is discarded and rebuilt. Degradable datasets never ship migrations, because
-  rebuilding is their migration. The discard is recorded in the dataset audit
-  before anything is deleted, with the dataset, the version found, the cause,
-  and the build that discarded it. While the rebuild runs, the capability
-  answers "unavailable" explicitly, never with an empty result (gate 7).
-  Discarded rather than set aside: a copy set aside would hold conversation
-  titles that a permanent delete must reach
-  ([182](182-conversation-deletion.md), 196 § Erasure), and nothing would read
-  it (Q5).
-
-**Migrations ship with the build, forward only, one version at a time.** They
-live in the owning context's `infrastructure/migrations/`, one step per target
-version. For SQLite each step is `NNNN.sql` ending in its
-`PRAGMA user_version = NNNN;`, and a fresh file is created by applying every
-step from empty. The steps are therefore the one definition of the schema, not
-a second one beside `schema.sql` (gate 13). For JSON stores a step is a function
-over the stored document. A migration is the only code in the build that reads
-an old shape. After it runs, nothing else does.
-
-A migration runs:
-
-- at open, under the store's existing exclusion (SQLite's `IMMEDIATE`
-  transaction, the registry and journal locks);
-- all or nothing: one transaction, or write-new-then-atomic-replace;
-- between an intent record and an outcome record in `N/audit/datasets/`. If that
-  sink is unusable, nothing is migrated and the class decides the outcome.
-
-There is no down-migration and no backup copy. A backup would keep erased
-conversations readable, and a newer file is refused rather than guessed at.
-
-**The support floor.** Each build supports opening every version from the floor
-to the current one. **During alpha the floor is the current version**, so no
-build ships migrations. This is 196's decision, now stated for every dataset.
-When Nessa leaves alpha the owner sets the floor (Q3), and raising it is
-recorded as a decision because it deletes migrations.
-
-## Opening a dataset (gate 15)
-
-"Refuse" means for critical datasets the gateway refuses to start
-(`datasetRefused`, `Pointless`, recorded); for record-scoped datasets the record
-is refused with a typed error. Tests are written from each row when the policy
-is implemented. Their names are given in the implementing PR, not invented here.
-
-| Row | Found | Critical | Record-scoped | Degradable |
-| --- | --- | --- | --- | --- |
-| O1 | No file | Created at the current version, except where absence has its own meaning: D1's is "not initialized", unchanged | The record does not exist (`NotFound`) | Created empty |
-| O2 | Empty file (SQLite: no tables and version 0) | Created at current | Created at current | Created at current |
-| O3 | The current version | Opened | Opened | Opened |
-| O4 | At or above the floor, below current | Migrated, then O3. On failure, M2. | Migrated under the record's lease, then O3 | Discarded and rebuilt |
-| O5 | Below the floor | Refused: `TooOld { found, floor }` | Refused: `TooOld` | Discarded and rebuilt |
-| O6 | Above current (a newer build wrote it) | Refused: `Newer { found, current }`. Untouched. | Refused: `Newer`. Untouched. | Discarded and rebuilt |
-| O7 | Marker unreadable, negative, or 0 with tables. Content unparseable. | Refused: `Unreadable` | Refused: `Unreadable` (today's `Corrupt`) | Discarded and rebuilt |
-| O8 | Directory or file not private, or not this user's | Refused: `Unsafe` | Refused: `Unsafe` | Capability off, file **not** deleted: an unsafe directory is not ours to delete in |
-| O9 | Held by another opener | Waits, or `Busy` where the store already says so. The registry's `Locked` stays `Worthwhile`. | `Busy` (the journal lease) | Waits, or the capability answers "unavailable" |
-
-### Migrating and discarding
-
-| Row | Ordering | Result |
+| Scope | Stores | What it cannot read |
 | --- | --- | --- |
-| M1 | Intent recorded, migration committed, outcome recorded | Opens at current |
-| M2 | A step fails (SQL error, a record the step refuses, disk full) | Rolled back: the store is still at the version found. Outcome recorded as failed. Then O5's column for its class. |
-| M3 | The process dies mid-migration | SQLite's rollback journal, or the unpublished temporary file, leaves the old version intact. The next open is O4 again. The earlier intent has no outcome, which reads "not confirmed". |
-| M4 | The process dies after commit, before the outcome record | The next open is O3. The intent stays without an outcome and is not repaired (gate 16): the store's version answers what happened. |
-| M5 | The dataset audit is unusable before a migration or discard | Nothing is migrated or deleted. Critical and record-scoped: refused. Degradable: capability off. |
-| M6 | Two openers at once (a gateway and `nessa install-agent`) | The store's exclusion orders them. The second finds O3. |
-| M7 | A build older than the data is started after a migration (downgrade) | O6 |
-| M8 | Discarded, then the process dies before the rebuild | The next open is O1 |
+| **Gateway** — truth that decides who may do what for everyone | credential registry; browser-session journal; conversation metadata (ownership, tombstones, archived flag, summaries) | The gateway refuses to start |
+| **Record** — truth about one conversation or one upload | session journals; attachment holds and blobs; managed-runtime reclamation and use markers | That record's operations fail, typed. Everything else carries on. |
+| **Cache** — rebuilt from truth or from outside | warm-up records; `installed.json` and runtime binaries; host `shortcuts.json`; browser `localStorage` | Ignored, and overwritten when next written |
+
+Audit sinks are write-only evidence. They are never migrated and never read for
+meaning. Their existing rule holds: an audit that cannot be written fails the
+audited operation. A deterministic record found at another shape is a mismatch
+and is refused, as it is today.
+
+Files one process writes for another (the endpoint record, the startup-failure
+record, `gateway-upgrade/*`), secrets (tokens, keychain entries), and
+configuration a person writes (`config.json`, the host's `settings.json`) are
+not datasets. Their formats change with the protocol or the configuration they
+belong to.
+
+**3. A gateway-scope refusal says what it is.** It is
+`RunError::Dataset(DatasetRefusal)`, with the exit reason `datasetRefused` in
+`protocol/defaults/gateway-exit-codes.json`. The reason is not retried, and it
+is recorded in `gateway-startup-failure.json` so the desktop host can say it in
+its own words. Only content the build cannot read gets this reason: another
+version, or a file that is not a readable database. A failure that can clear on
+its own (I/O, a lock) keeps its current, retried reason. The registry keeps its
+own reasons, which already work this way.
+
+**4. Migrations.** During alpha, none ship. A gateway-scope store at another
+version is refused under rule 3, and the owner resets that namespace by hand,
+as for 196. After alpha, each build carries forward-only migrations in the
+owning context, from every version any 1.x release wrote. They run at open,
+under the store's own lock, all or nothing. A newer version is refused, and
+there is no downgrade. The first migration to ship brings its own record, with
+the ordering table gate 15 asks for (crash mid-step, two openers, failure). No
+migration code exists before then.
+
+## Opening a gateway-scope store (gate 15)
+
+| Row | Found | Result | Test |
+| --- | --- | --- | --- |
+| G1 | No file, or an empty one | Created at the current version | `nessa-local-database`: `an_empty_file_is_given_the_schema_at_its_version_and_reopened_as_it_is` |
+| G2 | The current version | Opened | same, and every store test that reopens |
+| G3 | Any other version, including tables with none | `datasetRefused`, not retried, recorded. File untouched. | `a_metadata_database_at_another_version_refuses_the_gateway_for_good` |
+| G4 | Not a database, or corrupt | `datasetRefused`, not retried, recorded. File untouched. | `a_file_that_is_not_a_database_refuses_the_gateway_for_good` |
+| G5 | Directory missing or not private, file not private, I/O failure, busy | Today's reason (`agent`), retried | `a_metadata_directory_that_cannot_be_used_is_still_retried` |
+
+The browser-session journal gets the same rows once its open says "unreadable"
+apart from "unavailable". Today it has one untyped error for both.
+
+## Decisions taken for the owner
+
+The owner asked on 2026-09-25 for the simplest design, and delegated these
+choices:
+
+- **Browser sessions** are gateway scope. Discarding them would be fail-closed,
+  but it would lose their transition evidence.
+- **Conversation metadata is not split.** Moving the archived flag out of
+  `summaries` would let listings degrade, but that precision was not asked for
+  (gate 16).
+- **The support floor** after alpha is every version since 1.0.
+- **Nothing is quarantined.** A cache is overwritten, and a truth store is left
+  exactly as found.
+- **The attachments root** unchanged: a root that cannot be opened stays a
+  retried startup failure.
 
 ## Alternatives considered
 
-- **Keep refusing everything that is not current (196 as is).** It is honest
-  per store, but a stale warm-up record or projection would cost the whole
-  gateway, which is what the owner asked to stop. It also leaves the relaunch
-  loop in place.
-- **In-place readers of old shapes** (serde defaults, `Option` for new fields).
-  Every old shape stays in the domain forever, which is the dual path "One
-  current contract" forbids. Migrations confine it to one place that runs once.
-- **Down-migrations.** They double the code, and a projection would silently
-  lose columns. Refusing a newer file is simpler and says what happened.
-- **Moving degradable stores into a quarantine directory.** Nothing reads it,
-  and erasure would have to reach it. The audit record plus the log carry the
-  diagnosis (Q5).
-- **One gateway-wide dataset version.** Every context's change would bump every
-  store, and one stale cache would refuse them all. A version per dataset
-  follows context ownership.
-- **Degradation per context** (for example, attachments unavailable while chat
-  works). This adds a fourth outcome with its own health and wire states.
-  Deferred until the owner asks (gate 16, Q6).
+- **Keep 196's refusal as it is.** It is honest per store, but it leaves the
+  relaunch loop.
+- **Readers for old shapes** (serde defaults, optional fields). Every old shape
+  would live in the domain forever, which "One current contract" forbids.
+- **Down-migrations and backups.** Twice the code, and a backup would keep
+  erased conversations readable.
+- **Quarantining degradable stores.** Nothing reads the quarantine, and erasure
+  would have to reach it too.
+- **A per-context "unavailable" state** (attachments down, chat up). That is a
+  fourth outcome with its own health and wire states, not asked for.
 
 ## Consequences
 
-- The relaunch loop on an unreadable or other-version store ends. The host can
-  say which dataset refused and why.
-- A cache or projection never costs the gateway. Its rebuild is visible as
-  "unavailable", not as empty.
-- Each shape change carries a migration, a fixture of the old version checked
-  in by the release that wrote it, and a test that migrates the fixture and
-  reads it. That work is accepted, and it starts only once the floor is below
-  current.
-- Adding a marker to the stores that have none is itself a shape change
-  (D2, D4–D7, D9, D11). It lands as each store next changes, or all at once
-  (Q4).
-- What to watch: a critical dataset refusing in the field more than rarely. That
-  would mean something classed critical should have been record-scoped or split
-  (Q2).
-
-## Open questions
-
-These are for the owner. Nothing is built until they are answered.
-
-1. **Browser sessions (D2).** Should D2 stay critical, or become degradable and
-   fail closed? Discarding D2 only removes access: everyone signs in again with
-   a token, and the discard is audited. The transition evidence it holds would
-   then be lost unless it moves to an audit sink first.
-2. **Split D3.** Should the archived flag move into an authoritative table, and
-   title, preview and updated move into a projection (D8) rebuilt from the
-   journals? That would let a list degrade instead of the gateway refusing.
-   Both are 196's tables, so this would be a schema change in its own record.
-3. **The floor after alpha.** Should it be every version since 1.0, or the last
-   N releases?
-4. **Markers for today's unmarked stores.** Should "unmarked = version 1" hold
-   until each store's next change? Or should markers be added now, in alpha,
-   with the namespace deleted by hand once more, as for 196?
-5. **Discard or set aside.** Discard is proposed for degradable stores. Should
-   a set-aside copy be kept for diagnosis, limited to stores holding no user
-   content?
-6. **Attachments root and D11.** Should an unopenable attachments root refuse
-   the gateway (today) or degrade the context? Should the two readers of
-   `settings.json` be made to agree now?
-7. **Audit record shape changes (D6).** Records are never migrated. When their
-   shape changes, should the idempotency read-back for creation and deletion
-   IDs compare a record of an older shape, or treat it as already present?
+- A store this build cannot read stops the gateway once, says which store and
+  why, and is not retried.
+- A cache never costs the gateway.
+- After alpha, every shape change carries a migration and a checked-in fixture
+  of the version it migrates from.
+- Remaining: give the browser-session journal's open a typed "unreadable"
+  result, and give it rule 3.
