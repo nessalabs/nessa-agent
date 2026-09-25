@@ -867,7 +867,49 @@ pub struct GatewayLifecycleRecovery {
     before: Option<ReconciliationIncarnation>,
     has_effect_plan: bool,
     latest_observation: Option<LifecycleObservation>,
+    pending_step: Option<GatewayLifecycleRecoveryStep>,
     pending_observation_source: Option<LifecycleObservationSource>,
+}
+
+/// Exact persisted effect boundary awaiting completion or observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayLifecycleRecoveryStep {
+    plan_id: String,
+    step: LifecyclePlanStep,
+    completion: Option<LifecycleCommandResult>,
+}
+
+impl GatewayLifecycleRecoveryStep {
+    pub(crate) fn new(
+        plan_id: String,
+        step: LifecyclePlanStep,
+        completion: Option<LifecycleCommandResult>,
+    ) -> Self {
+        Self {
+            plan_id,
+            step,
+            completion,
+        }
+    }
+
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    pub fn step(&self) -> &LifecyclePlanStep {
+        &self.step
+    }
+
+    pub fn completion(&self) -> Option<&LifecycleCommandResult> {
+        self.completion.as_ref()
+    }
+
+    pub fn source(&self) -> LifecycleObservationSource {
+        LifecycleObservationSource::Effect {
+            plan_id: self.plan_id.clone(),
+            step_id: self.step.id().to_owned(),
+        }
+    }
 }
 
 impl GatewayLifecycleRecovery {
@@ -877,6 +919,7 @@ impl GatewayLifecycleRecovery {
         before: Option<ReconciliationIncarnation>,
         has_effect_plan: bool,
         latest_observation: Option<LifecycleObservation>,
+        pending_step: Option<GatewayLifecycleRecoveryStep>,
         pending_observation_source: Option<LifecycleObservationSource>,
     ) -> Self {
         Self {
@@ -885,6 +928,7 @@ impl GatewayLifecycleRecovery {
             before,
             has_effect_plan,
             latest_observation,
+            pending_step,
             pending_observation_source,
         }
     }
@@ -907,6 +951,10 @@ impl GatewayLifecycleRecovery {
 
     pub fn latest_observation(&self) -> Option<&LifecycleObservation> {
         self.latest_observation.as_ref()
+    }
+
+    pub fn pending_step(&self) -> Option<&GatewayLifecycleRecoveryStep> {
+        self.pending_step.as_ref()
     }
 
     pub fn pending_observation_source(&self) -> Option<&LifecycleObservationSource> {

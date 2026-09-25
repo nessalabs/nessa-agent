@@ -7,10 +7,10 @@
 //! holds its lock, and orders every record for its attempt.
 use crate::gateway::{
     application::{
-        GatewayError, GatewayLifecycleRecovery, GatewayReconciliationAttempt,
-        GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationIntent,
-        GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-        GatewayReconciliationRequest, MonotonicClock,
+        GatewayError, GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep,
+        GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
+        GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+        GatewayReconciliationOutcome, GatewayReconciliationRequest, MonotonicClock,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -808,6 +808,7 @@ fn unresolved_recovery(
         let has_effect_plan = chain
             .iter()
             .any(|record| record.kind() == LifecycleRecordKind::EffectPlan);
+        let pending_step = recovery_step(&chain, history.pending_observation_source().as_ref())?;
         return Ok(Some((
             GatewayLifecycleRecovery::new(
                 attempt,
@@ -815,12 +816,82 @@ fn unresolved_recovery(
                 before.clone(),
                 has_effect_plan,
                 history.latest_observation().cloned(),
+                pending_step,
                 history.pending_observation_source(),
             ),
             history,
         )));
     }
     Ok(None)
+}
+
+fn recovery_step(
+    records: &[LifecycleRecord],
+    pending_observation: Option<&LifecycleObservationSource>,
+) -> Result<Option<GatewayLifecycleRecoveryStep>, GatewayError> {
+    let mut primary_steps = Vec::new();
+    let mut all_steps = Vec::new();
+    let mut completions = Vec::new();
+    for record in records {
+        match record.payload() {
+            LifecycleRecordPayload::EffectPlan {
+                plan_id,
+                primary,
+                cleanup,
+                ..
+            } => {
+                primary_steps.push((plan_id.clone(), primary.clone()));
+                all_steps.push((plan_id.clone(), primary.clone()));
+                all_steps.extend(cleanup.iter().cloned().map(|step| (plan_id.clone(), step)));
+            }
+            LifecycleRecordPayload::EffectCompletion {
+                plan_id,
+                step_id,
+                result,
+            } => completions.push((plan_id.clone(), step_id.clone(), result.clone())),
+            _ => {}
+        }
+    }
+    if let Some(LifecycleObservationSource::Effect { plan_id, step_id }) = pending_observation {
+        let step = all_steps
+            .iter()
+            .find(|(candidate_plan, step)| candidate_plan == plan_id && step.id() == step_id)
+            .map(|(_, step)| step.clone())
+            .ok_or_else(|| invalid_record("pending observation has no primary plan step"))?;
+        let completion = completions
+            .iter()
+            .find(|(candidate_plan, candidate_step, _)| {
+                candidate_plan == plan_id && candidate_step == step_id
+            })
+            .map(|(_, _, result)| result.clone())
+            .ok_or_else(|| invalid_record("pending observation has no completion"))?;
+        return Ok(Some(GatewayLifecycleRecoveryStep::new(
+            plan_id.clone(),
+            step,
+            Some(completion),
+        )));
+    }
+    let incomplete = primary_steps
+        .into_iter()
+        .filter(|(plan_id, step)| {
+            !completions
+                .iter()
+                .any(|(candidate_plan, candidate_step, _)| {
+                    candidate_plan == plan_id && candidate_step == step.id()
+                })
+        })
+        .collect::<Vec<_>>();
+    match incomplete.as_slice() {
+        [] => Ok(None),
+        [(plan_id, step)] => Ok(Some(GatewayLifecycleRecoveryStep::new(
+            plan_id.clone(),
+            step.clone(),
+            None,
+        ))),
+        _ => Err(GatewayError::Registration(
+            "Gateway lifecycle recovery has multiple uncompleted primary effects".into(),
+        )),
+    }
 }
 
 fn acknowledge_final_record(
@@ -1487,6 +1558,26 @@ mod tests {
                 },
                 "before":null,
             }),
+            LifecycleRecordKind::EffectPlan => json!({
+                "planId":"stage-runtime",
+                "expectedBefore":null,
+                "target":{
+                    "service":"gui/501/so.nessa.gateway.prod",
+                    "runtimeFingerprint":"a".repeat(64),
+                    "serviceGeneration":"b".repeat(64),
+                },
+                "primary":{
+                    "id":"primary",
+                    "effect":{"kind":"stage_runtime", "fingerprint":"a".repeat(64)},
+                    "predicate":{"kind":"always"},
+                },
+                "cleanup":[],
+            }),
+            LifecycleRecordKind::EffectCompletion => json!({
+                "planId":"stage-runtime",
+                "stepId":"primary",
+                "result":{"kind":"accepted"},
+            }),
             LifecycleRecordKind::Observation => json!({
                 "source":{"kind":"intent"},
                 "state":observation,
@@ -1496,7 +1587,7 @@ mod tests {
                 "lastConfirmed":observation,
                 "cleanup":"retain_prior",
             }),
-            _ => panic!("fixture supports intent, observation, and outcome"),
+            _ => panic!("unsupported stored-record fixture kind"),
         };
         StoredRecord {
             service_namespace: "gui/501/so.nessa.gateway.prod".into(),
@@ -1536,6 +1627,32 @@ mod tests {
         assert_eq!(recovery.target().service(), "gui/501/so.nessa.gateway.prod");
         assert!(!recovery.has_effect_plan());
         assert_eq!(history.next_sequence(), 1);
+    }
+
+    #[test]
+    fn recovery_retains_the_exact_step_before_and_after_completion() {
+        let attempt = "00000000-0000-4000-8000-000000000002";
+        let planned = vec![
+            stored(attempt, 0, LifecycleRecordKind::Intent),
+            stored(attempt, 1, LifecycleRecordKind::EffectPlan),
+        ];
+        let completed = vec![
+            planned[0].clone(),
+            planned[1].clone(),
+            stored(attempt, 2, LifecycleRecordKind::EffectCompletion),
+        ];
+
+        let (planned_recovery, _) = unresolved_recovery(&planned).unwrap().unwrap();
+        let planned_step = planned_recovery.pending_step().unwrap();
+        assert_eq!(planned_step.plan_id(), "stage-runtime");
+        assert_eq!(planned_step.step().id(), "primary");
+        assert_eq!(planned_step.completion(), None);
+
+        let (completed_recovery, _) = unresolved_recovery(&completed).unwrap().unwrap();
+        assert_eq!(
+            completed_recovery.pending_step().unwrap().completion(),
+            Some(&LifecycleCommandResult::Accepted)
+        );
     }
 
     #[test]

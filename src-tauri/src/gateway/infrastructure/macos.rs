@@ -42,7 +42,7 @@ use control::{
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
 pub(in crate::gateway::infrastructure) use reconciliation_audit::FileReconciliationAudit;
-use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
+use staging::{launch_settings, stage_runtime_cached, validate_runtime, ValidatedRuntimes};
 
 pub(super) struct Launchd {
     validated_runtimes: ValidatedRuntimes,
@@ -117,6 +117,259 @@ impl GatewayHost for Launchd {
                 .join(format!("{label}.plist")),
         )
         .ok();
+        if let Some(step) = recovery.pending_step() {
+            match step.step().effect() {
+                LifecycleEffect::StageRuntime { fingerprint } => {
+                    let runtime = self
+                        .home
+                        .join("Library/Application Support/Nessa/gateway-runtimes")
+                        .join(label)
+                        .join(fingerprint);
+                    validate_runtime(&runtime, fingerprint).map_err(|error| {
+                        GatewayError::Registration(format!(
+                            "The unresolved staged runtime cannot be recovered exactly: {error}"
+                        ))
+                    })?;
+                    let command = step.completion().cloned().unwrap_or_else(|| {
+                        LifecycleCommandResult::Indeterminate(
+                            "The host restarted before runtime staging returned".into(),
+                        )
+                    });
+                    if step.completion().is_none() {
+                        retry_journal_delivery(|| {
+                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
+                        })?;
+                    }
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        observed.clone(),
+                        true,
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &LifecyclePhysicalOutcome::Failed {
+                                phase: LifecycleFailedPhase::NativeDispatch,
+                                message: "Recovered the exact durable staged runtime after restart"
+                                    .into(),
+                            },
+                            Some(&observation),
+                            ReconciliationCleanupDecision::RetainPrior,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                LifecycleEffect::AdoptReadyIncarnation { target: planned } => {
+                    let exact = observed
+                        .as_ref()
+                        .is_some_and(|incarnation| incarnation.target() == planned);
+                    let command = step.completion().cloned().unwrap_or_else(|| {
+                        if exact {
+                            LifecycleCommandResult::Accepted
+                        } else {
+                            LifecycleCommandResult::Failed(
+                                "The planned gateway incarnation is not ready after restart".into(),
+                            )
+                        }
+                    });
+                    if step.completion().is_none() {
+                        retry_journal_delivery(|| {
+                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
+                        })?;
+                    }
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        observed.clone(),
+                        exact,
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    let physical = match observed.clone().filter(|_| exact) {
+                        Some(incarnation) => LifecyclePhysicalOutcome::Confirmed(incarnation),
+                        None => LifecyclePhysicalOutcome::Failed {
+                            phase: LifecycleFailedPhase::Observation,
+                            message: "Recovered readiness plan did not find its exact incarnation"
+                                .into(),
+                        },
+                    };
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &physical,
+                            Some(&observation),
+                            if exact {
+                                ReconciliationCleanupDecision::AdoptClaimed
+                            } else {
+                                ReconciliationCleanupDecision::RetainPrior
+                            },
+                        )
+                    })?;
+                    return Ok(());
+                }
+                LifecycleEffect::StopAgents { incarnation } => {
+                    let command = step.completion().cloned().unwrap_or_else(|| {
+                        LifecycleCommandResult::Indeterminate(
+                            "The desktop restarted before stop dispatch returned".into(),
+                        )
+                    });
+                    if step.completion().is_none() {
+                        retry_journal_delivery(|| {
+                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
+                        })?;
+                    }
+                    let target_present = observed
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.target() == incarnation.target());
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        observed.clone(),
+                        target_present,
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &LifecyclePhysicalOutcome::StopAgentsSettled {
+                                intended: incarnation.clone(),
+                                command: command.clone(),
+                                observed: observation.clone(),
+                            },
+                            Some(&observation),
+                            ReconciliationCleanupDecision::RetainPrior,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                LifecycleEffect::UnloadService { service } => {
+                    let expected = recovery
+                        .latest_observation()
+                        .and_then(LifecycleObservation::incarnation)
+                        .or_else(|| recovery.before());
+                    if observed.as_ref() != expected && (status.loaded || observed.is_some()) {
+                        return Err(GatewayError::Registration(
+                            "The unresolved unload target was replaced before recovery".into(),
+                        ));
+                    }
+                    let command = match step.completion() {
+                        Some(command) => command.clone(),
+                        None if status.loaded => {
+                            let result = match launchctl(&["bootout", service]) {
+                                Ok(()) => LifecycleCommandResult::Accepted,
+                                Err(error) => LifecycleCommandResult::Failed(error),
+                            };
+                            retry_journal_delivery(|| {
+                                journal.effect_completion(step.plan_id(), step.step().id(), &result)
+                            })?;
+                            result
+                        }
+                        None => {
+                            let result = LifecycleCommandResult::Indeterminate(
+                                "The service was already absent when unload recovery began".into(),
+                            );
+                            retry_journal_delivery(|| {
+                                journal.effect_completion(step.plan_id(), step.step().id(), &result)
+                            })?;
+                            result
+                        }
+                    };
+                    let refreshed = service_status(service).map_err(GatewayError::Registration)?;
+                    let refreshed_incarnation =
+                        observed_incarnation(service, port, &refreshed, health(port));
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        refreshed_incarnation,
+                        fs::symlink_metadata(
+                            self.home
+                                .join("Library/LaunchAgents")
+                                .join(format!("{label}.plist")),
+                        )
+                        .is_ok(),
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &LifecyclePhysicalOutcome::Failed {
+                                phase: LifecycleFailedPhase::NativeDispatch,
+                                message: format!(
+                                    "Recovered exact unload after restart with command result {command:?}"
+                                ),
+                            },
+                            Some(&observation),
+                            ReconciliationCleanupDecision::RetainPrior,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                LifecycleEffect::PruneRuntime { fingerprint } if step.completion().is_some() => {
+                    let artifact = self
+                        .home
+                        .join("Library/Application Support/Nessa/gateway-runtimes")
+                        .join(label)
+                        .join(fingerprint);
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        observed.clone(),
+                        fs::symlink_metadata(artifact).is_ok(),
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &LifecyclePhysicalOutcome::Failed {
+                                phase: LifecycleFailedPhase::Observation,
+                                message:
+                                    "Recovered exact runtime-pruning observation after restart"
+                                        .into(),
+                            },
+                            Some(&observation),
+                            ReconciliationCleanupDecision::RetainPrior,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                LifecycleEffect::RemoveStagingRuntime { generation }
+                    if step.completion().is_some() =>
+                {
+                    let artifact = self
+                        .home
+                        .join("Library/Application Support/Nessa/gateway-runtimes")
+                        .join(label)
+                        .join(format!(".staging-{generation}"));
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        observed.clone(),
+                        fs::symlink_metadata(artifact).is_ok(),
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &LifecyclePhysicalOutcome::Failed {
+                                phase: LifecycleFailedPhase::Observation,
+                                message: "Recovered exact staging-prune observation after restart"
+                                    .into(),
+                            },
+                            Some(&observation),
+                            ReconciliationCleanupDecision::RetainPrior,
+                        )
+                    })?;
+                    return Ok(());
+                }
+                _ => {
+                    return Err(GatewayError::Registration(
+                        "The unresolved gateway effect requires exact typed recovery that is not safely available"
+                            .into(),
+                    ));
+                }
+            }
+        }
         let agrees_with_prior = observed.as_ref() == recovery.before();
         let target_is_present = observed
             .as_ref()
