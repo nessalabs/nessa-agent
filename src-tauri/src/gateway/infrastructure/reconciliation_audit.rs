@@ -2203,11 +2203,77 @@ mod tests {
             .unwrap();
         drop(session);
 
-        let restored = audit.open(&attempt, None).unwrap();
+        let restored = audit.clone().open(&attempt, None).unwrap();
         let recovery = restored.recovery().expect("publication plan must restore");
         assert!(matches!(
             recovery.pending_step().unwrap().step().effect(),
             LifecycleEffect::PublishSystemdServiceDefinition { .. }
+        ));
+        restored
+            .effect_completion("publish", "primary", &LifecycleCommandResult::Accepted)
+            .unwrap();
+        restored
+            .observation(
+                &LifecycleObservationSource::Effect {
+                    plan_id: "publish".into(),
+                    step_id: "primary".into(),
+                },
+                &LifecycleObservation::new(1, None, true),
+            )
+            .unwrap();
+        restored
+            .effect_completion(
+                "publish",
+                "settle-transaction",
+                &LifecycleCommandResult::Accepted,
+            )
+            .unwrap();
+        restored
+            .observation(
+                &LifecycleObservationSource::Effect {
+                    plan_id: "publish".into(),
+                    step_id: "settle-transaction".into(),
+                },
+                &LifecycleObservation::new(2, None, false),
+            )
+            .unwrap();
+        let wants_primary = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::PublishSystemdWantsLink {
+                target: target.clone(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let wants_cleanup = LifecyclePlanStep::new(
+            "settle-transaction".into(),
+            LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                target: target.clone(),
+            },
+            LifecycleEffectPredicate::PrimaryReturned,
+        )
+        .unwrap();
+        restored
+            .effect_plan(
+                "publish-wants",
+                None,
+                &target,
+                &wants_primary,
+                &[wants_cleanup],
+            )
+            .unwrap();
+        drop(restored);
+
+        let restored = audit.open(&attempt, None).unwrap();
+        assert!(matches!(
+            restored
+                .recovery()
+                .expect("wants-link plan must restore")
+                .pending_step()
+                .unwrap()
+                .step()
+                .effect(),
+            LifecycleEffect::PublishSystemdWantsLink { .. }
         ));
     }
 

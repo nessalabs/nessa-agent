@@ -1123,12 +1123,19 @@ pub(super) fn settle_owned_directory_transaction(
     {
         return Err("Created gateway directory marker changed before cleanup".into());
     }
-    fs::remove_file(&marker).map_err(|error| error.to_string())?;
     if !retain {
-        let mut entries = fs::read_dir(&transaction.path).map_err(|error| error.to_string())?;
-        if entries.next().is_some() {
+        let has_other_entry = fs::read_dir(&transaction.path)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .any(|entry| entry.path() != marker);
+        if has_other_entry {
             return Err("Created gateway directory is no longer empty; it was retained".into());
         }
+    }
+    fs::remove_file(&marker).map_err(|error| error.to_string())?;
+    if !retain {
         fs::remove_dir(&transaction.path).map_err(|error| error.to_string())?;
     }
     sync_directory(
@@ -1860,6 +1867,7 @@ mod tests {
         fs::write(retained.join("foreign"), b"keep").unwrap();
         assert!(settle_owned_directory_transaction(Some(&transaction), false).is_err());
         assert_eq!(fs::read(retained.join("foreign")).unwrap(), b"keep");
+        assert!(owned_directory_transaction_present(&retained, &generation).unwrap());
 
         let recovered = root.join("recovered");
         create_owned_directory_transaction(&recovered, &generation)

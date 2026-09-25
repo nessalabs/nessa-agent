@@ -492,9 +492,9 @@ pub(super) fn verify_linger(expected_uid: u32) -> Result<(), String> {
     if uid != expected_uid {
         return Err("The logind user record has another UID".into());
     }
-    linger.then_some(()).ok_or_else(|| {
-        "Linger is disabled for this account; Nessa made no service or linger change".into()
-    })
+    linger
+        .then_some(())
+        .ok_or_else(|| "Linger is disabled for this account".into())
 }
 
 fn manager_identity(connection: &Connection) -> Result<SystemdManagerIdentity, String> {
