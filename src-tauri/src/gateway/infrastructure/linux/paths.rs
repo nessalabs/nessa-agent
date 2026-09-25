@@ -6,6 +6,8 @@ use std::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LinuxGatewayPaths {
+    pub config_root: PathBuf,
+    pub data_root: PathBuf,
     pub unit_root: PathBuf,
     pub unit_file: PathBuf,
     pub wants_directory: PathBuf,
@@ -31,6 +33,8 @@ impl LinuxGatewayPaths {
         let unit_root = config.join("systemd/user");
         let wants_directory = unit_root.join("default.target.wants");
         Ok(Self {
+            config_root: config.clone(),
+            data_root: data.clone(),
             unit_file: unit_root.join(unit.as_str()),
             wants_link: wants_directory.join(unit.as_str()),
             runtime_root: data.join("nessa/gateway-runtimes").join(unit.as_str()),

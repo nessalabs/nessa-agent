@@ -159,11 +159,13 @@ enum StopDispatchAuthority {
 /// adapters may move it into a platform proof guard, but cannot clone or
 /// construct another token for a different witness.
 pub struct GatewayStopProofToken {
+    session: Arc<()>,
     token: u64,
 }
 
 /// One application-owned proof-to-dispatch authority for automatic quit.
 pub struct GatewayStopSession {
+    session: Arc<()>,
     request: GatewayStopRequest,
     state: Mutex<StopDispatchAuthority>,
     latest_observation_version: AtomicU64,
@@ -173,6 +175,7 @@ pub struct GatewayStopSession {
 impl GatewayStopSession {
     pub(crate) fn new(request: GatewayStopRequest, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
+            session: Arc::new(()),
             request,
             state: Mutex::new(StopDispatchAuthority::AvailableUnproved),
             latest_observation_version: AtomicU64::new(0),
@@ -210,7 +213,10 @@ impl GatewayStopSession {
         }
         let token = 1;
         *state = StopDispatchAuthority::Proving { token };
-        Ok(GatewayStopProofToken { token })
+        Ok(GatewayStopProofToken {
+            session: self.session.clone(),
+            token,
+        })
     }
 
     pub fn prove(
@@ -230,7 +236,8 @@ impl GatewayStopSession {
                 "Gateway stop recipient proof arrived after its deadline".into(),
             ));
         }
-        if !matches!(&*state, StopDispatchAuthority::Proving { token: expected } if *expected == token.token)
+        if !Arc::ptr_eq(&token.session, &self.session)
+            || !matches!(&*state, StopDispatchAuthority::Proving { token: expected } if *expected == token.token)
             || candidate != intended
         {
             return Err(GatewayError::Stop(
@@ -275,17 +282,18 @@ impl GatewayStopSession {
             && plan.sequence() == 1
             && plan.record_kind()
                 == crate::gateway::domain::value_objects::LifecycleRecordKind::EffectPlan;
-        let matches_proof = matches!(
-            &*state,
-            StopDispatchAuthority::Proved {
-                token: expected_token,
-                candidate: proved,
-                observation_version: proved_version,
-            } if *expected_token == token.token
-                && proved == candidate
-                && *proved_version == observation_version
-        ) && self.latest_observation_version.load(Ordering::SeqCst)
-            == observation_version;
+        let matches_proof = Arc::ptr_eq(&token.session, &self.session)
+            && matches!(
+                &*state,
+                StopDispatchAuthority::Proved {
+                    token: expected_token,
+                    candidate: proved,
+                    observation_version: proved_version,
+                } if *expected_token == token.token
+                    && proved == candidate
+                    && *proved_version == observation_version
+            )
+            && self.latest_observation_version.load(Ordering::SeqCst) == observation_version;
         if !valid_plan || !matches_proof {
             return Err(GatewayError::Stop(
                 "Gateway stop proof, plan, or observation version changed before dispatch".into(),
@@ -1616,6 +1624,21 @@ mod tests {
         session.prove(&proof_token, intended.clone(), 7).unwrap();
         session.claim(proof_token, &receipt, &intended, 7).unwrap();
         assert!(session.begin_proof().is_err());
+    }
+
+    #[test]
+    fn stop_proof_tokens_cannot_cross_sessions_for_the_same_incarnation() {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let (first, intended, _) = stop_session(deadline);
+        let (second, second_intended, second_receipt) = stop_session(deadline);
+        assert_eq!(intended, second_intended);
+        let first_token = first.begin_proof().unwrap();
+        let second_token = second.begin_proof().unwrap();
+        assert!(second.prove(&first_token, intended.clone(), 1).is_err());
+        second.prove(&second_token, intended.clone(), 1).unwrap();
+        assert!(second
+            .claim(first_token, &second_receipt, &intended, 1)
+            .is_err());
     }
 
     #[test]

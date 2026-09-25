@@ -20,6 +20,7 @@ use zbus::{
 const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_PATH: &str = "/org/freedesktop/systemd1";
 const SYSTEMD_MANAGER: &str = "org.freedesktop.systemd1.Manager";
+const NO_SUCH_UNIT: &str = "org.freedesktop.systemd1.NoSuchUnit";
 const DBUS_METHOD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +35,10 @@ pub(super) struct UnitSnapshot {
     pub sub_state: String,
     pub invocation: Option<SystemdInvocationId>,
     pub main_process_id: u32,
+    pub service_type: String,
+    pub restart: String,
+    pub restart_microseconds: u64,
+    pub timeout_stop_microseconds: u64,
     pub working_directory: String,
     pub environment: Vec<String>,
     pub exec_start_ex: Vec<ExecStartEx>,
@@ -115,6 +120,13 @@ impl UserManager {
             .map_err(|error| error.to_string())
     }
 
+    pub fn environment(&self) -> Result<Vec<String>, String> {
+        self.recheck_identity()?;
+        manager_proxy(&self.connection, self.identity.unique_name())?
+            .get_property("Environment")
+            .map_err(|error| error.to_string())
+    }
+
     pub fn reload(&self) -> Result<(), String> {
         self.recheck_identity()?;
         manager_proxy(&self.connection, self.identity.unique_name())?
@@ -142,7 +154,9 @@ impl UserManager {
         let manager = manager_proxy(&self.connection, self.identity.unique_name())?;
         let path: OwnedObjectPath = match manager.call("GetUnit", &(unit.as_str(),)) {
             Ok(path) => path,
-            Err(error) if error.to_string().contains("NoSuchUnit") => return Ok(None),
+            Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == NO_SUCH_UNIT => {
+                return Ok(None);
+            }
             Err(error) => return Err(error.to_string()),
         };
         let path_string = path.to_string();
@@ -191,6 +205,18 @@ impl UserManager {
             },
             main_process_id: service_proxy
                 .get_property("MainPID")
+                .map_err(|error| error.to_string())?,
+            service_type: service_proxy
+                .get_property("Type")
+                .map_err(|error| error.to_string())?,
+            restart: service_proxy
+                .get_property("Restart")
+                .map_err(|error| error.to_string())?,
+            restart_microseconds: service_proxy
+                .get_property("RestartUSec")
+                .map_err(|error| error.to_string())?,
+            timeout_stop_microseconds: service_proxy
+                .get_property("TimeoutStopUSec")
                 .map_err(|error| error.to_string())?,
             working_directory: service_proxy
                 .get_property("WorkingDirectory")

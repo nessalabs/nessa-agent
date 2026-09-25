@@ -1,6 +1,7 @@
 //! Desktop runtime identity and acknowledged gateway retirement.
 //! Domain requests -> application retirement -> private infrastructure records.
-//! The server remains alive after retirement; launchd owns process replacement.
+//! The server remains alive after retirement; the desktop's native service
+//! manager owns process replacement.
 //! Runtime content, installed service generation and process incarnation have
 //! separate validated identities. Admitted retirement result files fence their
 //! generation before startup admits product work, including when cleanup or

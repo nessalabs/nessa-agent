@@ -1,6 +1,6 @@
 use crate::cli::entrypoint::{Command, LocalProvisioning, HELP};
 use crate::conversation::application::ConversationError;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
     infrastructure::RetirementFiles,
@@ -105,7 +105,7 @@ impl CompositionRoot {
             warm_ups,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
         let conversations = product.conversations.clone();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let retirement_clock = product.clock.clone();
         let desktop_identity = if let Some(bundle) = bundle {
             let configured = std::env::var("NESSA_RUNTIME_FINGERPRINT")
@@ -122,7 +122,7 @@ impl CompositionRoot {
         } else {
             None
         };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let retirement_files = if let Some(identity) = &desktop_identity {
             let root = config
                 .auth_directory
@@ -236,7 +236,7 @@ impl CompositionRoot {
             });
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if bundle.is_some() {
             if let Some(service) = conversations.clone() {
                 let mut requests = signal(SignalKind::user_defined1()).map_err(RunError::Serve)?;
@@ -249,7 +249,7 @@ impl CompositionRoot {
                 });
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(identity) = desktop_identity {
             let files = retirement_files.expect("desktop files initialized before admission");
             let service = conversations.clone();
@@ -412,6 +412,25 @@ mod tests {
             .unwrap();
             assert_eq!(runtime_dependencies(&config).clock.elapsed_ms(), 123);
         }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[tokio::test]
+    async fn desktop_runtime_signals_are_caught_by_the_server_process() {
+        let mut stop_agents = signal(SignalKind::user_defined1()).unwrap();
+        let mut retire = signal(SignalKind::user_defined2()).unwrap();
+
+        assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) }, 0);
+        tokio::time::timeout(std::time::Duration::from_secs(1), stop_agents.recv())
+            .await
+            .expect("USR1 handler did not receive the process signal")
+            .expect("USR1 signal stream closed");
+
+        assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGUSR2) }, 0);
+        tokio::time::timeout(std::time::Duration::from_secs(1), retire.recv())
+            .await
+            .expect("USR2 handler did not receive the process signal")
+            .expect("USR2 signal stream closed");
     }
     #[test]
     fn a_completed_serve_still_fails_when_shutdown_did_not_confirm_cleanup() {

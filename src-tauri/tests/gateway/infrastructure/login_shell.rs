@@ -1,7 +1,7 @@
 //! The adapter against real shells: stand-ins that run what they are given the
 //! way a shell does, a real zsh with a real profile, and the profiles that
 //! misbehave — the ones that never return, and the ones that never stop talking.
-use super::unix::{between, carried_environment, LoginShell};
+use super::unix::{between, carried_environment, LoginShell, Probe};
 use crate::gateway::application::{LoginShellError, LoginShellPath};
 use crate::gateway::domain::value_objects::{SearchPath, SearchPathError};
 use std::{
@@ -11,6 +11,14 @@ use std::{
     process::Command,
     time::{Duration, Instant},
 };
+
+#[test]
+fn path_precedence_matches_the_platform_terminal_policy() {
+    #[cfg(target_os = "linux")]
+    assert!(Probe::Interactive.precedence() < Probe::InteractiveLogin.precedence());
+    #[cfg(not(target_os = "linux"))]
+    assert!(Probe::InteractiveLogin.precedence() < Probe::Interactive.precedence());
+}
 
 /// Long enough that a loaded machine does not fail a test about something else.
 const PATIENT: Duration = Duration::from_millis(5_000);
