@@ -1,5 +1,5 @@
 #![cfg_attr(
-    not(target_os = "macos"),
+    not(any(target_os = "macos", target_os = "linux")),
     allow(
         dead_code,
         reason = "durable lifecycle journals are implemented only by the macOS adapter"
@@ -18,7 +18,9 @@
 use super::{
     ReconciliationCause, ReconciliationCleanupDecision, ReconciliationCorrelation,
     ReconciliationEvidence, ReconciliationIncarnation, ReconciliationInitiator,
-    ReconciliationTarget,
+    ReconciliationTarget, SystemdEvidenceError, SystemdJobAttempt, SystemdJobMode,
+    SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName,
+    SystemdUnitState,
 };
 use std::{
     collections::BTreeMap,
@@ -32,6 +34,7 @@ pub enum LifecycleRecordKind {
     Intent,
     JoinedRequest,
     EffectPlan,
+    NativeAttempt,
     EffectCompletion,
     Observation,
     Outcome,
@@ -43,6 +46,7 @@ impl LifecycleRecordKind {
             Self::Intent => "intent",
             Self::JoinedRequest => "joined-request",
             Self::EffectPlan => "effect-plan",
+            Self::NativeAttempt => "native-attempt",
             Self::EffectCompletion => "effect-completion",
             Self::Observation => "observation",
             Self::Outcome => "outcome",
@@ -93,11 +97,57 @@ pub enum LifecycleEffect {
     RequestRetirement {
         incarnation: ReconciliationIncarnation,
     },
+    RequestSystemdRetirement {
+        incarnation: ReconciliationIncarnation,
+        request_id: String,
+    },
     UnloadService {
         service: String,
     },
     PublishServiceDefinition {
         target: ReconciliationTarget,
+    },
+    PublishSystemdServiceDefinition {
+        target: ReconciliationTarget,
+        definition_digest: String,
+    },
+    SettleSystemdDefinitionTransaction {
+        target: ReconciliationTarget,
+        definition_digest: String,
+    },
+    CreateGatewayDataDirectory {
+        target: ReconciliationTarget,
+    },
+    SettleGatewayDataDirectoryTransaction {
+        target: ReconciliationTarget,
+        generation: String,
+    },
+    ReloadSystemdManager {
+        manager: SystemdManagerIdentity,
+        unit: SystemdUnitName,
+    },
+    CreateSystemdWantsDirectory {
+        target: ReconciliationTarget,
+    },
+    SettleSystemdWantsDirectoryTransaction {
+        target: ReconciliationTarget,
+        generation: String,
+    },
+    PublishSystemdWantsLink {
+        target: ReconciliationTarget,
+    },
+    SettleSystemdWantsLinkTransaction {
+        target: ReconciliationTarget,
+    },
+    StartSystemdUnit {
+        manager: SystemdManagerIdentity,
+        unit: SystemdUnitName,
+        mode: SystemdJobMode,
+    },
+    StopSystemdUnit {
+        manager: SystemdManagerIdentity,
+        unit: SystemdUnitName,
+        mode: SystemdJobMode,
     },
     BootstrapService {
         target: ReconciliationTarget,
@@ -146,6 +196,13 @@ impl LifecyclePlanStep {
             LifecycleEffect::StageRuntime { fingerprint }
             | LifecycleEffect::PruneRuntime { fingerprint } => sha256_hex(fingerprint),
             LifecycleEffect::RemoveStagingRuntime { generation } => sha256_hex(generation),
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction { generation, .. }
+            | LifecycleEffect::SettleSystemdWantsDirectoryTransaction { generation, .. } => {
+                sha256_hex(generation)
+            }
+            LifecycleEffect::RequestSystemdRetirement { request_id, .. } => {
+                canonical_uuid(request_id)
+            }
             LifecycleEffect::UnloadService { service } => !service.trim().is_empty(),
             _ => true,
         };
@@ -187,6 +244,8 @@ pub struct LifecycleObservation {
     version: u64,
     incarnation: Option<ReconciliationIncarnation>,
     target_artifact_present: bool,
+    systemd: Option<Box<SystemdRuntimeObservation>>,
+    systemd_state: Option<SystemdUnitState>,
 }
 
 impl LifecycleObservation {
@@ -199,7 +258,46 @@ impl LifecycleObservation {
             version,
             incarnation,
             target_artifact_present,
+            systemd: None,
+            systemd_state: None,
         }
+    }
+
+    pub fn with_systemd_state(
+        version: u64,
+        target_artifact_present: bool,
+        state: SystemdUnitState,
+    ) -> Result<Self, SystemdEvidenceError> {
+        if state == SystemdUnitState::Active {
+            return Err(SystemdEvidenceError::ContradictoryRuntime);
+        }
+        Ok(Self {
+            version,
+            incarnation: None,
+            target_artifact_present,
+            systemd: None,
+            systemd_state: Some(state),
+        })
+    }
+
+    pub fn with_systemd(
+        version: u64,
+        incarnation: ReconciliationIncarnation,
+        target_artifact_present: bool,
+        systemd: SystemdRuntimeObservation,
+    ) -> Result<Self, SystemdEvidenceError> {
+        if systemd.target() != incarnation.target()
+            || systemd.main_process_id() != incarnation.process_id()
+        {
+            return Err(SystemdEvidenceError::ContradictoryRuntime);
+        }
+        Ok(Self {
+            version,
+            incarnation: Some(incarnation),
+            target_artifact_present,
+            systemd: Some(Box::new(systemd)),
+            systemd_state: Some(SystemdUnitState::Active),
+        })
     }
 
     pub fn version(&self) -> u64 {
@@ -212,6 +310,14 @@ impl LifecycleObservation {
 
     pub fn target_artifact_present(&self) -> bool {
         self.target_artifact_present
+    }
+
+    pub fn systemd(&self) -> Option<&SystemdRuntimeObservation> {
+        self.systemd.as_deref()
+    }
+
+    pub fn systemd_state(&self) -> Option<SystemdUnitState> {
+        self.systemd_state
     }
 }
 
@@ -277,6 +383,11 @@ pub enum LifecycleRecordPayload {
         step_id: String,
         result: LifecycleCommandResult,
     },
+    NativeAttempt {
+        plan_id: String,
+        step_id: String,
+        attempt: SystemdJobAttempt,
+    },
     Observation {
         source: LifecycleObservationSource,
         state: LifecycleObservation,
@@ -294,6 +405,7 @@ impl LifecycleRecordPayload {
             Self::Intent { .. } => LifecycleRecordKind::Intent,
             Self::JoinedRequest { .. } => LifecycleRecordKind::JoinedRequest,
             Self::EffectPlan { .. } => LifecycleRecordKind::EffectPlan,
+            Self::NativeAttempt { .. } => LifecycleRecordKind::NativeAttempt,
             Self::EffectCompletion { .. } => LifecycleRecordKind::EffectCompletion,
             Self::Observation { .. } => LifecycleRecordKind::Observation,
             Self::Outcome { .. } => LifecycleRecordKind::Outcome,
@@ -353,8 +465,41 @@ impl LifecycleRecord {
 struct PlanState {
     primary_id: String,
     primary_effect: LifecycleEffect,
-    steps: BTreeMap<String, LifecycleEffectPredicate>,
+    steps: BTreeMap<String, LifecyclePlanStep>,
     completed: BTreeMap<String, LifecycleCommandResult>,
+    native_attempts: BTreeMap<String, SystemdJobAttempt>,
+}
+
+/// The one acknowledged effect boundary that still requires settlement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LifecyclePendingStep {
+    plan_id: String,
+    step: LifecyclePlanStep,
+    contingencies: Vec<LifecyclePlanStep>,
+    completion: Option<LifecycleCommandResult>,
+    native_attempt: Option<SystemdJobAttempt>,
+}
+
+impl LifecyclePendingStep {
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    pub fn step(&self) -> &LifecyclePlanStep {
+        &self.step
+    }
+
+    pub fn contingencies(&self) -> &[LifecyclePlanStep] {
+        &self.contingencies
+    }
+
+    pub fn completion(&self) -> Option<&LifecycleCommandResult> {
+        self.completion.as_ref()
+    }
+
+    pub fn native_attempt(&self) -> Option<&SystemdJobAttempt> {
+        self.native_attempt.as_ref()
+    }
 }
 
 /// State rebuilt from acknowledged records and advanced by the live writer.
@@ -366,6 +511,7 @@ pub struct LifecycleHistory {
     before: Option<ReconciliationIncarnation>,
     next_sequence: u64,
     plans: BTreeMap<String, PlanState>,
+    plan_order: Vec<String>,
     pending_observation: Option<(String, String)>,
     latest_observation_source: Option<LifecycleObservationSource>,
     latest_observation: Option<LifecycleObservation>,
@@ -411,6 +557,7 @@ impl LifecycleHistory {
             before: before.clone(),
             next_sequence: 1,
             plans: BTreeMap::new(),
+            plan_order: Vec::new(),
             pending_observation: None,
             latest_observation_source: None,
             latest_observation: None,
@@ -469,6 +616,9 @@ impl LifecycleHistory {
                 if self.pending_observation.is_some() {
                     return Err(LifecycleJournalError::MissingObservation);
                 }
+                if self.pending_step().is_some() {
+                    return Err(LifecycleJournalError::MissingCompletion);
+                }
                 if plan_id.trim().is_empty() || self.plans.contains_key(plan_id) {
                     return Err(LifecycleJournalError::InvalidPlan);
                 }
@@ -486,10 +636,7 @@ impl LifecycleHistory {
                 )?;
                 let mut steps = BTreeMap::new();
                 for step in std::iter::once(primary).chain(cleanup) {
-                    if steps
-                        .insert(step.id().to_owned(), step.predicate().clone())
-                        .is_some()
-                    {
+                    if steps.insert(step.id().to_owned(), step.clone()).is_some() {
                         return Err(LifecycleJournalError::DuplicateStep);
                     }
                     if step.id() != primary.id() {
@@ -508,8 +655,36 @@ impl LifecycleHistory {
                         primary_effect: primary.effect().clone(),
                         steps,
                         completed: BTreeMap::new(),
+                        native_attempts: BTreeMap::new(),
                     },
                 );
+                self.plan_order.push(plan_id.clone());
+            }
+            LifecycleRecordPayload::NativeAttempt {
+                plan_id,
+                step_id,
+                attempt,
+            } => {
+                if self.pending_observation.is_some() {
+                    return Err(LifecycleJournalError::MissingObservation);
+                }
+                let plan = self
+                    .plans
+                    .get_mut(plan_id)
+                    .ok_or(LifecycleJournalError::UnknownPlan)?;
+                if plan.completed.contains_key(step_id)
+                    || plan.native_attempts.contains_key(step_id)
+                    || !native_attempt_matches(
+                        &plan.primary_effect,
+                        step_id,
+                        &plan.primary_id,
+                        attempt,
+                    )
+                {
+                    return Err(LifecycleJournalError::NativeAttemptMismatch);
+                }
+                plan.native_attempts
+                    .insert(step_id.clone(), attempt.clone());
             }
             LifecycleRecordPayload::EffectCompletion {
                 plan_id,
@@ -526,9 +701,20 @@ impl LifecycleHistory {
                 let predicate = plan
                     .steps
                     .get(step_id)
-                    .ok_or(LifecycleJournalError::UnknownOrCompletedStep)?;
+                    .ok_or(LifecycleJournalError::UnknownOrCompletedStep)?
+                    .predicate();
                 if plan.completed.contains_key(step_id) {
                     return Err(LifecycleJournalError::UnknownOrCompletedStep);
+                }
+                if matches!(result, LifecycleCommandResult::Accepted)
+                    && matches!(
+                        plan.primary_effect,
+                        LifecycleEffect::StartSystemdUnit { .. }
+                            | LifecycleEffect::StopSystemdUnit { .. }
+                    )
+                    && !plan.native_attempts.contains_key(step_id)
+                {
+                    return Err(LifecycleJournalError::NativeAttemptMismatch);
                 }
                 let allowed = if step_id == &plan.primary_id {
                     true
@@ -606,11 +792,7 @@ impl LifecycleHistory {
                 if self.pending_observation.is_some() {
                     return Err(LifecycleJournalError::MissingObservation);
                 }
-                if self
-                    .plans
-                    .values()
-                    .any(|plan| !plan.completed.contains_key(&plan.primary_id))
-                {
+                if self.pending_step().is_some() {
                     return Err(LifecycleJournalError::MissingCompletion);
                 }
                 if last_confirmed != &self.latest_observation {
@@ -700,6 +882,10 @@ impl LifecycleHistory {
         self.latest_observation.as_ref()
     }
 
+    pub fn has_effect_plan(&self) -> bool {
+        !self.plans.is_empty()
+    }
+
     pub fn pending_observation_source(&self) -> Option<LifecycleObservationSource> {
         self.pending_observation.as_ref().map(|(plan_id, step_id)| {
             LifecycleObservationSource::Effect {
@@ -707,6 +893,57 @@ impl LifecycleHistory {
                 step_id: step_id.clone(),
             }
         })
+    }
+
+    pub fn pending_step(&self) -> Option<LifecyclePendingStep> {
+        if let Some((plan_id, step_id)) = &self.pending_observation {
+            let plan = self.plans.get(plan_id)?;
+            return Some(self.pending(plan_id, plan, step_id));
+        }
+        for plan_id in &self.plan_order {
+            let plan = self.plans.get(plan_id)?;
+            if !plan.completed.contains_key(&plan.primary_id) {
+                return Some(self.pending(plan_id, plan, &plan.primary_id));
+            }
+            for (step_id, step) in &plan.steps {
+                if step_id == &plan.primary_id || plan.completed.contains_key(step_id) {
+                    continue;
+                }
+                let eligible = match step.predicate() {
+                    LifecycleEffectPredicate::Always
+                    | LifecycleEffectPredicate::PrimaryReturned => true,
+                    LifecycleEffectPredicate::PrimaryAccepted => matches!(
+                        plan.completed.get(&plan.primary_id),
+                        Some(LifecycleCommandResult::Accepted)
+                    ),
+                    LifecycleEffectPredicate::ObservationMatches(expected) => {
+                        self.latest_observation
+                            .as_ref()
+                            .and_then(LifecycleObservation::incarnation)
+                            == Some(expected)
+                    }
+                };
+                if eligible {
+                    return Some(self.pending(plan_id, plan, step_id));
+                }
+            }
+        }
+        None
+    }
+
+    fn pending(&self, plan_id: &str, plan: &PlanState, step_id: &str) -> LifecyclePendingStep {
+        LifecyclePendingStep {
+            plan_id: plan_id.into(),
+            step: plan.steps[step_id].clone(),
+            contingencies: plan
+                .steps
+                .iter()
+                .filter(|(candidate, _)| *candidate != &plan.primary_id)
+                .map(|(_, step)| step.clone())
+                .collect(),
+            completion: plan.completed.get(step_id).cloned(),
+            native_attempt: plan.native_attempts.get(step_id).cloned(),
+        }
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -732,16 +969,79 @@ fn validate_primary_effect(
             fingerprint == target.runtime_fingerprint()
         }
         LifecycleEffect::RequestRetirement { incarnation }
+        | LifecycleEffect::RequestSystemdRetirement { incarnation, .. }
         | LifecycleEffect::StopAgents { incarnation } => expected_before == Some(incarnation),
         LifecycleEffect::UnloadService { service } => service == namespace,
         LifecycleEffect::PublishServiceDefinition { target: planned }
+        | LifecycleEffect::CreateGatewayDataDirectory { target: planned }
+        | LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+            target: planned, ..
+        }
+        | LifecycleEffect::CreateSystemdWantsDirectory { target: planned }
+        | LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+            target: planned, ..
+        }
+        | LifecycleEffect::PublishSystemdWantsLink { target: planned }
+        | LifecycleEffect::SettleSystemdWantsLinkTransaction { target: planned }
         | LifecycleEffect::BootstrapService { target: planned }
         | LifecycleEffect::AdoptReadyIncarnation { target: planned } => planned == target,
+        LifecycleEffect::PublishSystemdServiceDefinition {
+            target: planned,
+            definition_digest,
+        }
+        | LifecycleEffect::SettleSystemdDefinitionTransaction {
+            target: planned,
+            definition_digest,
+        } => planned == target && valid_digest(definition_digest),
+        LifecycleEffect::ReloadSystemdManager { unit, .. }
+        | LifecycleEffect::StartSystemdUnit { unit, .. }
+        | LifecycleEffect::StopSystemdUnit { unit, .. } => unit.as_str() == target.service(),
         LifecycleEffect::PruneRuntime { .. } | LifecycleEffect::RemoveStagingRuntime { .. } => true,
     };
     agrees
         .then_some(())
         .ok_or(LifecycleJournalError::TargetMismatch)
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn native_attempt_matches(
+    effect: &LifecycleEffect,
+    step_id: &str,
+    primary_id: &str,
+    attempt: &SystemdJobAttempt,
+) -> bool {
+    if step_id != primary_id {
+        return false;
+    }
+    match effect {
+        LifecycleEffect::StartSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => {
+            attempt.manager() == manager
+                && attempt.unit() == unit
+                && attempt.mode() == *mode
+                && attempt.operation() == SystemdJobOperation::Start
+        }
+        LifecycleEffect::StopSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => {
+            attempt.manager() == manager
+                && attempt.unit() == unit
+                && attempt.mode() == *mode
+                && attempt.operation() == SystemdJobOperation::Stop
+        }
+        _ => false,
+    }
 }
 
 fn validate_cleanup_effect(
@@ -760,9 +1060,46 @@ fn validate_cleanup_effect(
             },
         ) => staged == removed && staged == target.runtime_fingerprint(),
         (
+            LifecycleEffect::StageRuntime { fingerprint },
+            LifecycleEffect::RemoveStagingRuntime { generation },
+        ) => fingerprint == target.runtime_fingerprint() && sha256_hex(generation),
+        (
             LifecycleEffect::BootstrapService { target: planned },
             LifecycleEffect::UnloadService { service },
         ) => planned == target && service == namespace,
+        (
+            LifecycleEffect::CreateGatewayDataDirectory { target: created },
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                target: settled,
+                generation,
+            },
+        )
+        | (
+            LifecycleEffect::CreateSystemdWantsDirectory { target: created },
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target: settled,
+                generation,
+            },
+        ) => created == target && settled == target && valid_digest(generation),
+        (
+            LifecycleEffect::PublishSystemdServiceDefinition {
+                target: published,
+                definition_digest: published_digest,
+            },
+            LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: settled,
+                definition_digest: settled_digest,
+            },
+        ) => {
+            published == target
+                && settled == target
+                && published_digest == settled_digest
+                && valid_digest(published_digest)
+        }
+        (
+            LifecycleEffect::PublishSystemdWantsLink { target: published },
+            LifecycleEffect::SettleSystemdWantsLinkTransaction { target: settled },
+        ) => published == target && settled == target,
         _ => false,
     };
     agrees
@@ -789,6 +1126,7 @@ pub enum LifecycleJournalError {
     StateMismatch,
     UnknownPlan,
     UnknownOrCompletedStep,
+    NativeAttemptMismatch,
     ObservationBeforeCompletion,
     MissingObservation,
     MissingCompletion,
@@ -821,6 +1159,9 @@ impl Display for LifecycleJournalError {
             Self::UnknownPlan => "gateway lifecycle record references an unknown plan",
             Self::UnknownOrCompletedStep => {
                 "gateway lifecycle completion references an unknown or completed step"
+            }
+            Self::NativeAttemptMismatch => {
+                "gateway native attempt disagrees with its planned manager, operation, mode, unit, or step"
             }
             Self::ObservationBeforeCompletion => {
                 "gateway lifecycle observation precedes effect completion"
@@ -861,9 +1202,85 @@ fn sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn systemd_manager(serial: u32) -> SystemdManagerIdentity {
+        SystemdManagerIdentity::new(format!(":1.{serial}"), serial, 501).unwrap()
+    }
+
+    fn systemd_unit() -> SystemdUnitName {
+        SystemdUnitName::parse("nessa-gateway-prod.service".into()).unwrap()
+    }
+
+    fn systemd_target() -> ReconciliationTarget {
+        ReconciliationTarget::new(
+            systemd_unit().as_str().into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap()
+    }
+
+    fn systemd_record(sequence: u64, payload: LifecycleRecordPayload) -> LifecycleRecord {
+        LifecycleRecord::new(
+            systemd_unit().as_str().into(),
+            correlation(),
+            sequence,
+            payload,
+        )
+        .unwrap()
+    }
+
+    fn systemd_intent() -> LifecycleRecord {
+        systemd_record(
+            0,
+            LifecycleRecordPayload::Intent {
+                request_correlation: ReconciliationCorrelation::parse(
+                    "00000000-0000-4000-8000-000000000099".into(),
+                )
+                .unwrap(),
+                cause: ReconciliationCause::Startup,
+                initiator: ReconciliationInitiator::DesktopHost,
+                target: systemd_target(),
+                before: None,
+            },
+        )
+    }
+
+    fn systemd_plan(manager: SystemdManagerIdentity) -> LifecycleRecord {
+        systemd_record(
+            1,
+            LifecycleRecordPayload::EffectPlan {
+                plan_id: "start".into(),
+                expected_before: None,
+                target: systemd_target(),
+                primary: LifecyclePlanStep::new(
+                    "primary".into(),
+                    LifecycleEffect::StartSystemdUnit {
+                        manager,
+                        unit: systemd_unit(),
+                        mode: SystemdJobMode::Fail,
+                    },
+                    LifecycleEffectPredicate::Always,
+                )
+                .unwrap(),
+                cleanup: vec![],
+            },
+        )
+    }
 
     fn correlation() -> ReconciliationCorrelation {
         ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000001".into()).unwrap()
@@ -993,6 +1410,160 @@ mod tests {
     }
 
     #[test]
+    fn accepted_systemd_completion_requires_the_exact_recorded_job_attempt() {
+        let manager = systemd_manager(41);
+        let prefix = [systemd_intent(), systemd_plan(manager.clone())];
+        let accepted = systemd_record(
+            2,
+            LifecycleRecordPayload::EffectCompletion {
+                plan_id: "start".into(),
+                step_id: "primary".into(),
+                result: LifecycleCommandResult::Accepted,
+            },
+        );
+        assert_eq!(
+            LifecycleHistory::restore(&[prefix[0].clone(), prefix[1].clone(), accepted.clone()])
+                .unwrap_err(),
+            LifecycleJournalError::NativeAttemptMismatch
+        );
+
+        let attempt = SystemdJobAttempt::new(
+            manager,
+            SystemdJobOperation::Start,
+            SystemdJobMode::Fail,
+            systemd_unit(),
+            "/org/freedesktop/systemd1/job/7".into(),
+            7,
+        )
+        .unwrap();
+        let records = [
+            prefix[0].clone(),
+            prefix[1].clone(),
+            systemd_record(
+                2,
+                LifecycleRecordPayload::NativeAttempt {
+                    plan_id: "start".into(),
+                    step_id: "primary".into(),
+                    attempt,
+                },
+            ),
+            systemd_record(
+                3,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "start".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+        ];
+        assert_eq!(
+            LifecycleHistory::restore(&records).unwrap().next_sequence(),
+            4
+        );
+    }
+
+    #[test]
+    fn every_systemd_enqueue_and_terminal_publication_prefix_restores() {
+        let manager = systemd_manager(41);
+        let attempt = SystemdJobAttempt::new(
+            manager.clone(),
+            SystemdJobOperation::Start,
+            SystemdJobMode::Fail,
+            systemd_unit(),
+            "/org/freedesktop/systemd1/job/7".into(),
+            7,
+        )
+        .unwrap();
+        let records = [
+            systemd_intent(),
+            systemd_plan(manager),
+            systemd_record(
+                2,
+                LifecycleRecordPayload::NativeAttempt {
+                    plan_id: "start".into(),
+                    step_id: "primary".into(),
+                    attempt,
+                },
+            ),
+            systemd_record(
+                3,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "start".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            systemd_record(
+                4,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "start".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: LifecycleObservation::new(1, None, true),
+                },
+            ),
+        ];
+        for length in 1..=records.len() {
+            let restored = LifecycleHistory::restore(&records[..length]).unwrap();
+            assert_eq!(restored.next_sequence(), length as u64);
+            assert!(!restored.is_terminal());
+        }
+    }
+
+    #[test]
+    fn restored_systemd_attempt_rejects_manager_operation_unit_and_job_disagreement() {
+        let manager = systemd_manager(41);
+        let cases = [
+            SystemdJobAttempt::new(
+                systemd_manager(42),
+                SystemdJobOperation::Start,
+                SystemdJobMode::Fail,
+                systemd_unit(),
+                "/org/freedesktop/systemd1/job/7".into(),
+                7,
+            )
+            .unwrap(),
+            SystemdJobAttempt::new(
+                manager.clone(),
+                SystemdJobOperation::Stop,
+                SystemdJobMode::Fail,
+                systemd_unit(),
+                "/org/freedesktop/systemd1/job/7".into(),
+                7,
+            )
+            .unwrap(),
+            SystemdJobAttempt::new(
+                manager.clone(),
+                SystemdJobOperation::Start,
+                SystemdJobMode::Fail,
+                SystemdUnitName::parse("other.service".into()).unwrap(),
+                "/org/freedesktop/systemd1/job/7".into(),
+                7,
+            )
+            .unwrap(),
+        ];
+        for attempt in cases {
+            let records = [
+                systemd_intent(),
+                systemd_plan(manager.clone()),
+                systemd_record(
+                    2,
+                    LifecycleRecordPayload::NativeAttempt {
+                        plan_id: "start".into(),
+                        step_id: "primary".into(),
+                        attempt,
+                    },
+                ),
+            ];
+            assert_eq!(
+                LifecycleHistory::restore(&records).unwrap_err(),
+                LifecycleJournalError::NativeAttemptMismatch
+            );
+        }
+    }
+
+    #[test]
     fn predeclared_bootstrap_cleanup_has_a_valid_chain_at_every_record_boundary() {
         let bootstrap = LifecyclePlanStep::new(
             "primary".into(),
@@ -1063,6 +1634,157 @@ mod tests {
             assert_eq!(restored.next_sequence(), length as u64);
             assert!(!restored.is_terminal());
         }
+    }
+
+    #[test]
+    fn systemd_publication_cleanup_requires_exact_target_and_digest_agreement() {
+        let target = systemd_target();
+        let digest = "c".repeat(64);
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdServiceDefinition {
+                target: target.clone(),
+                definition_digest: digest.clone(),
+            },
+            &LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: digest.clone(),
+            },
+            &target,
+            target.service(),
+        )
+        .is_ok());
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdServiceDefinition {
+                target: target.clone(),
+                definition_digest: digest,
+            },
+            &LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: "d".repeat(64),
+            },
+            &target,
+            target.service(),
+        )
+        .is_err());
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdWantsLink {
+                target: target.clone(),
+            },
+            &LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                target: target.clone(),
+            },
+            &target,
+            target.service(),
+        )
+        .is_ok());
+        let other =
+            ReconciliationTarget::new(target.service().into(), "e".repeat(64), "f".repeat(64))
+                .unwrap();
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdWantsLink {
+                target: target.clone(),
+            },
+            &LifecycleEffect::SettleSystemdWantsLinkTransaction { target: other },
+            &target,
+            target.service(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn directory_cleanup_requires_the_exact_target_and_a_valid_transaction() {
+        let target = systemd_target();
+        let cleanup = LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+            target: target.clone(),
+            generation: "7".repeat(64),
+        };
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::CreateGatewayDataDirectory {
+                target: target.clone(),
+            },
+            &cleanup,
+            &target,
+            target.service(),
+        )
+        .is_ok());
+        assert!(LifecyclePlanStep::new(
+            "cleanup".into(),
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target,
+                generation: "not-a-digest".into(),
+            },
+            LifecycleEffectPredicate::PrimaryReturned,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn eligible_cleanup_is_the_domain_owned_pending_step_and_blocks_outcome() {
+        let target = systemd_target();
+        let records = vec![
+            systemd_intent(),
+            systemd_record(
+                1,
+                LifecycleRecordPayload::EffectPlan {
+                    plan_id: "publish".into(),
+                    expected_before: None,
+                    target: target.clone(),
+                    primary: LifecyclePlanStep::new(
+                        "primary".into(),
+                        LifecycleEffect::PublishSystemdWantsLink {
+                            target: target.clone(),
+                        },
+                        LifecycleEffectPredicate::Always,
+                    )
+                    .unwrap(),
+                    cleanup: vec![LifecyclePlanStep::new(
+                        "settle".into(),
+                        LifecycleEffect::SettleSystemdWantsLinkTransaction { target },
+                        LifecycleEffectPredicate::PrimaryReturned,
+                    )
+                    .unwrap()],
+                },
+            ),
+            systemd_record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "publish".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            systemd_record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "publish".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: LifecycleObservation::new(1, None, true),
+                },
+            ),
+        ];
+        let mut history = LifecycleHistory::restore(&records).unwrap();
+        let pending = history.pending_step().expect("cleanup must remain pending");
+        assert_eq!(pending.plan_id(), "publish");
+        assert_eq!(pending.step().id(), "settle");
+        assert!(pending.completion().is_none());
+        let outcome = systemd_record(
+            4,
+            LifecycleRecordPayload::Outcome {
+                physical: LifecyclePhysicalOutcome::Failed {
+                    phase: LifecycleFailedPhase::Cleanup,
+                    message: "cleanup unavailable".into(),
+                },
+                last_confirmed: Some(LifecycleObservation::new(1, None, true)),
+                cleanup: ReconciliationCleanupDecision::RetainPrior,
+            },
+        );
+        assert_eq!(
+            history.append(&outcome),
+            Err(LifecycleJournalError::MissingCompletion)
+        );
+        assert!(!history.is_terminal());
     }
 
     #[test]
@@ -1344,6 +2066,21 @@ mod tests {
                 LifecycleJournalError::TargetMismatch
             );
         }
+    }
+
+    #[test]
+    fn systemd_retirement_plan_requires_a_canonical_request_identity() {
+        assert_eq!(
+            LifecyclePlanStep::new(
+                "retire".into(),
+                LifecycleEffect::RequestSystemdRetirement {
+                    incarnation: incarnation(10),
+                    request_id: "not-a-uuid".into(),
+                },
+                LifecycleEffectPredicate::Always,
+            ),
+            Err(LifecycleJournalError::InvalidEffect)
+        );
     }
 
     #[test]

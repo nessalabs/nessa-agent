@@ -1,10 +1,12 @@
-const acceptedMacosCfg = new Set([
+const acceptedDesktopCfg = new Set([
   '#[cfg(target_os = "macos")]',
   '#[cfg(any(target_os = "macos", test))]',
+  '#[cfg(any(target_os = "macos", target_os = "linux"))]',
+  '#[cfg(any(target_os = "macos", target_os = "linux", test))]',
 ])
 
-export function hasImmediateCfg(source, declaration) {
-  return acceptedMacosCfg.has(immediateCfg(source, declaration))
+export function hasImmediateDesktopCfg(source, declaration) {
+  return acceptedDesktopCfg.has(immediateCfg(source, declaration))
 }
 
 export function hasNoImmediateCfg(source, declaration) {

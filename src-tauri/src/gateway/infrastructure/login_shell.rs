@@ -42,10 +42,10 @@
 //! other gets a *successful* probe carrying an incomplete `PATH` — nothing
 //! fails, so nothing falls back and nothing is logged, and the agent simply
 //! cannot find their tools. So bash is asked both ways and the answers are
-//! combined: everything the login shell reported, then anything only the
-//! interactive shell adds. Login first because that is the shell a terminal
-//! opens on the platform this ships on, so where the two disagree about which
-//! `node` comes first, the agent agrees with the user's terminal. Where
+//! combined. On macOS, the login answer comes first because Terminal opens a
+//! login shell. On Linux, the interactive non-login answer comes first because
+//! graphical terminals ordinarily open that shell and version managers commonly
+//! live in `.bashrc`. Where
 //! `.bash_profile` sources `.bashrc` — the common arrangement — the first
 //! answer already contains the second and the combination changes nothing,
 //! which is also why `-i` matters there: a sourced `.bashrc` opens with
@@ -58,14 +58,8 @@
 //! is between them is read — a profile cannot print a convincing answer because
 //! it cannot know what to print, and noise around it does not matter.
 //!
-//! One thing to know before a second host arrives: an entry only the
-//! interactive non-login shell reports lands last, after `/usr/bin` and
-//! `/opt/homebrew/bin`. On this platform that is right — a terminal opens a
-//! login shell, so the agent agrees with what the user sees — but the whole
-//! reason `-i -c` exists is the arrangement a Linux terminal starts, where the
-//! same user's `node` would come from the nvm block in `.bashrc` rather than
-//! from Homebrew. Whoever brings up the Linux host (#70) should decide
-//! precedence for it rather than inherit this one.
+//! The order is an explicit platform policy rather than an accidental result of
+//! probe order, so another host must choose its own terminal semantics.
 //!
 //! Two things an interactive profile makes likelier, and what is done about
 //! them. It may background something — `ssh-agent`, `gpg-agent`, occasionally an
@@ -216,12 +210,18 @@ mod unix {
 
         /// Where this probe's entries belong in a combined answer.
         ///
-        /// What a login shell reported comes first, because that is the shell a
-        /// terminal opens on this platform; what only an interactive non-login
-        /// shell reported comes last. Between the two login-reading probes the
-        /// interactive one is preferred, since it read everything the other
+        /// macOS gives the login answer priority; Linux gives the interactive
+        /// non-login answer priority. Between two login-reading probes, the
+        /// interactive one is preferred because it read everything the other
         /// did and more.
-        fn precedence(self) -> u8 {
+        pub(super) fn precedence(self) -> u8 {
+            #[cfg(target_os = "linux")]
+            return match self {
+                Self::Interactive => 0,
+                Self::InteractiveLogin => 1,
+                Self::Login => 2,
+            };
+            #[cfg(not(target_os = "linux"))]
             match self {
                 Self::InteractiveLogin => 0,
                 Self::Login => 1,

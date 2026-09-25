@@ -60,10 +60,10 @@ fn complete_stop(
     plan: &AuditDeliveryReceipt,
     run: impl FnOnce() -> Result<(), GatewayError>,
 ) -> Result<LifecycleObservation, GatewayError> {
-    session.begin_proof()?;
+    let proof_token = session.begin_proof()?;
     let candidate = session.request().intended().audit_identity()?;
-    session.prove(candidate.clone(), 1)?;
-    session.claim(plan, &candidate, 1)?;
+    session.prove(&proof_token, candidate.clone(), 1)?;
+    session.claim(proof_token, plan, &candidate, 1)?;
     let physical = run();
     let command = match &physical {
         Ok(()) => LifecycleCommandResult::Accepted,
@@ -223,10 +223,10 @@ fn claimed_blocked_stop_becomes_indeterminate_and_starts_no_later_cleanup() {
             _: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            session.begin_proof()?;
+            let proof_token = session.begin_proof()?;
             let candidate = session.request().intended().audit_identity()?;
-            session.prove(candidate.clone(), 1)?;
-            session.claim(plan, &candidate, 1)?;
+            session.prove(&proof_token, candidate.clone(), 1)?;
+            session.claim(proof_token, plan, &candidate, 1)?;
             self.entered
                 .lock()
                 .unwrap()
@@ -319,7 +319,7 @@ fn proof_blocked_across_quit_deadline_never_claims_or_dispatches() {
             _: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            session.begin_proof()?;
+            let proof_token = session.begin_proof()?;
             self.entered
                 .lock()
                 .unwrap()
@@ -329,10 +329,10 @@ fn proof_blocked_across_quit_deadline_never_claims_or_dispatches() {
                 .unwrap();
             self.release.lock().unwrap().recv().unwrap();
             let candidate = session.request().intended().audit_identity()?;
-            let proof = session.prove(candidate.clone(), 1);
+            let proof = session.prove(&proof_token, candidate.clone(), 1);
             self.proof_returned.send(proof.clone()).unwrap();
             proof?;
-            session.claim(plan, &candidate, 1)?;
+            session.claim(proof_token, plan, &candidate, 1)?;
             self.dispatches.fetch_add(1, Ordering::SeqCst);
             Err(GatewayError::Stop(
                 "dispatch should not start after deadline revocation".into(),
@@ -1049,10 +1049,10 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
             let result = if self.indeterminate {
-                session.begin_proof()?;
+                let proof_token = session.begin_proof()?;
                 let candidate = session.request().intended().audit_identity()?;
-                session.prove(candidate.clone(), 1)?;
-                session.claim(plan, &candidate, 1)?;
+                session.prove(&proof_token, candidate.clone(), 1)?;
+                session.claim(proof_token, plan, &candidate, 1)?;
                 let command = LifecycleCommandResult::Indeterminate(
                     "native stop result remained unknown".into(),
                 );
@@ -1267,10 +1267,10 @@ fn stop_outcome_delivery_preserves_attempt_retry_and_physical_facts() {
                     Err(GatewayError::Stop("native stop rejected".into()))
                 }),
                 StopCommandBehavior::Indeterminate => {
-                    session.begin_proof()?;
+                    let proof_token = session.begin_proof()?;
                     let candidate = session.request().intended().audit_identity()?;
-                    session.prove(candidate.clone(), 1)?;
-                    session.claim(plan, &candidate, 1)?;
+                    session.prove(&proof_token, candidate.clone(), 1)?;
+                    session.claim(proof_token, plan, &candidate, 1)?;
                     let command = LifecycleCommandResult::Indeterminate(
                         "native stop result remained unknown".into(),
                     );
@@ -1553,9 +1553,9 @@ fn stop_outcome_retry_returns_only_the_acknowledged_receipt() {
         1,
         LifecycleRecordKind::EffectPlan,
     );
-    session.begin_proof().unwrap();
-    session.prove(intended.clone(), 1).unwrap();
-    session.claim(&plan, &intended, 1).unwrap();
+    let proof_token = session.begin_proof().unwrap();
+    session.prove(&proof_token, intended.clone(), 1).unwrap();
+    session.claim(proof_token, &plan, &intended, 1).unwrap();
     session
         .command_result(LifecycleCommandResult::Accepted)
         .unwrap();

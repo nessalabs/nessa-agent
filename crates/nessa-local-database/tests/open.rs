@@ -51,7 +51,21 @@ fn another_version_is_refused_and_left_as_it_was() {
             expected: 4
         })
     ));
-    // Untouched: the version it had, and none of the refused schema.
+    // Untouched: the version it had, and none of the refused schema — nor a
+    // write-ahead journal mode it was left in.
+    let other = rusqlite_connection(&path);
+    let _: String = other
+        .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
+        .unwrap();
+    drop(other);
+    assert!(matches!(
+        open(&path, &later),
+        Err(OpenError::Version { .. })
+    ));
+    let journal: String = rusqlite_connection(&path)
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal");
     let connection = open(&path, &schema()).unwrap();
     let other: u32 = connection
         .query_row(

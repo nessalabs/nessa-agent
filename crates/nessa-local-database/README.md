@@ -7,7 +7,12 @@ and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
 
 - The directory must already be private and owned by this OS user, and the file
   is created private (through `nessa-local-storage`, never through a link)
-  before SQLite opens it. SQLite is not allowed to create it.
+  before SQLite opens it. SQLite is not allowed to create it. SQLite then opens
+  it by name, so a process running as this same user could swap the name in
+  between; that is not guarded against, since such a process can read the file
+  anyway. What this keeps out is every other user.
+- A file at another version is refused before anything persistent in it
+  changes, its journal mode included.
 - Every connection enforces foreign keys, keeps a rollback journal synced in
   full, and overwrites deleted rows (`secure_delete`). It uses a rollback journal
   rather than a write-ahead log so that erased data leaves no readable page

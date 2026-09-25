@@ -80,6 +80,53 @@ test("the existing Linux matrix leg uniquely owns real runtime assembly", () => 
   assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
 })
 
+test("the disposable user manager proves the same session bus and cleans its exact runtime", () => {
+  const script = readFileSync("scripts/desktop/check-systemd-user-service.sh", "utf8")
+  assert.match(script, /systemctl --user show-environment/)
+  assert.match(script, /systemd-run --user --pipe --wait --collect --quiet/)
+  assert.match(script, /--unit="\$transient_unit"/)
+  assert.match(script, /-p Delegate=yes -p Type=exec -d/)
+  assert.match(script, /export XDG_RUNTIME_DIR="\$RUN_DIR"/)
+  assert.match(script, /export XDG_CONFIG_HOME="\$RUN_DIR\/config"/)
+  assert.match(script, /export XDG_DATA_HOME="\$RUN_DIR\/data"/)
+  assert.match(script, /export XDG_STATE_HOME="\$RUN_DIR\/state"/)
+  assert.match(script, /export XDG_CACHE_HOME="\$RUN_DIR\/cache"/)
+  assert.match(
+    script,
+    /export SYSTEMD_ENVIRONMENT_GENERATOR_PATH="\$RUN_DIR\/empty-environment-generators"/,
+  )
+  assert.match(script, /export SYSTEMD_GENERATOR_PATH="\$RUN_DIR\/empty-generators"/)
+  assert.match(script, /export SYSTEMD_UNIT_PATH="\$RUN_DIR\/systemd\/user:/)
+  assert.match(script, /systemd --user --unit=basic\.target/)
+  assert.match(script, /unset DBUS_SESSION_BUS_ADDRESS/)
+  assert.match(script, /systemctl --user start dbus\.socket/)
+  assert.match(
+    script,
+    /export DBUS_SESSION_BUS_ADDRESS="unix:path=\$XDG_RUNTIME_DIR\/bus"/,
+  )
+  assert.doesNotMatch(script, /dbus-run-session/)
+  assert.match(script, /disposable systemd user manager ready at/)
+  assert.match(script, /disposable systemd gateway lifecycle completed/)
+  assert.match(script, /SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console/)
+  assert.match(script, /kill -0 "\$manager_pid"/)
+  assert.match(script, /manager exited before readiness with status \$manager_status/)
+  assert.match(script, /-S "\$XDG_RUNTIME_DIR\/systemd\/private"/)
+  assert.match(script, /busctl --address="\$DBUS_SESSION_BUS_ADDRESS"/)
+  assert.match(script, /status org\.freedesktop\.systemd1/)
+  assert.match(script, /2>"\$bus_error"/)
+  assert.doesNotMatch(script, /busctl --user/)
+  assert.doesNotMatch(script, /loginctl|enable-linger/)
+  assert.match(
+    script,
+    /inaccessible_directory="\$runtime_directory\/systemd\/inaccessible\/dir"/,
+  )
+  assert.match(script, /chmod 700 "\$inaccessible_directory"/)
+  assert.doesNotMatch(script, /chmod -R|find .* -delete/)
+  assert.match(script, /primary_status=\$\?/)
+  assert.match(script, /if \[ "\$primary_status" -eq 0 \]/)
+  assert.equal(script.match(/print_manager_diagnostics/g)?.length, 5)
+})
+
 test("the frontend job owns top-level script tests and their just dependency", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")

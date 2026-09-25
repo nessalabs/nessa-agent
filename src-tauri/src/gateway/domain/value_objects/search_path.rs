@@ -1,7 +1,7 @@
 use std::{error::Error, fmt};
 // Named only by `excluding`, which is gated with the host that has a directory
 // to exclude.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
 
 /// A `PATH` value: colon-separated absolute directories, in the order they are
@@ -113,7 +113,7 @@ impl SearchPath {
     /// Gated like the only thing that stages a runtime and registers a service
     /// to run it: the launchd adapter. A host that has no such directory has
     /// nothing to take out, and the gate moves when a second host grows one.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn excluding(&self, directory: &Path) -> Option<Self> {
         // A directory this host cannot spell in UTF-8 is not an entry of a path
         // that is one, so there is nothing to take out.

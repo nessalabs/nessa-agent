@@ -89,6 +89,12 @@ block2 = "0.6"
 # back after reparenting — GtkFixed would otherwise paint the panel opaque.
 gtk = "0.18"
 webkit2gtk = "2.0"
+# Typed blocking access to the user systemd and system logind D-Bus APIs. The
+# adapter keeps native DTOs at this infrastructure boundary.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+async-channel = "2"
+async-io = "2"
+futures-lite = "2"
 
 # Test-only, and it must stay that way: nothing in the shipped binary verifies a
 # signature itself. `tests/updater_key_pairing.rs` asks whether the public key in

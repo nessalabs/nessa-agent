@@ -20,6 +20,8 @@ use crate::gateway::{
         LifecycleRecordKind, LifecycleRecordPayload, ReconciliationCause,
         ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
         ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget,
+        SystemdJobAttempt, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
+        SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
@@ -231,6 +233,7 @@ fn validate_payload_shape(kind: &str, payload: &Value) -> Result<(), GatewayErro
         Some(LifecycleRecordKind::EffectPlan) => {
             &["planId", "expectedBefore", "target", "primary", "cleanup"]
         }
+        Some(LifecycleRecordKind::NativeAttempt) => &["planId", "stepId", "attempt"],
         Some(LifecycleRecordKind::EffectCompletion) => &["planId", "stepId", "result"],
         Some(LifecycleRecordKind::Observation) => &["source", "state"],
         Some(LifecycleRecordKind::Outcome) => &["physical", "lastConfirmed", "cleanup"],
@@ -396,6 +399,13 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 LifecycleEffect::StopAgents { incarnation }
             })
         }
+        "request_systemd_retirement" => {
+            object_exact(object, &["kind", "incarnation", "requestId"])?;
+            Ok(LifecycleEffect::RequestSystemdRetirement {
+                incarnation: parse_identity(&object["incarnation"])?,
+                request_id: string(object, "requestId")?,
+            })
+        }
         "unload_service" => {
             object_exact(object, &["kind", "service"])?;
             Ok(LifecycleEffect::UnloadService {
@@ -413,6 +423,77 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 _ => LifecycleEffect::AdoptReadyIncarnation { target },
             })
         }
+        "publish_systemd_service_definition" | "settle_systemd_definition_transaction" => {
+            object_exact(object, &["kind", "target", "definitionDigest"])?;
+            let target = parse_target(&object["target"])?;
+            let definition_digest = string(object, "definitionDigest")?;
+            Ok(if kind == "publish_systemd_service_definition" {
+                LifecycleEffect::PublishSystemdServiceDefinition {
+                    target,
+                    definition_digest,
+                }
+            } else {
+                LifecycleEffect::SettleSystemdDefinitionTransaction {
+                    target,
+                    definition_digest,
+                }
+            })
+        }
+        "create_gateway_data_directory"
+        | "create_systemd_wants_directory"
+        | "publish_systemd_wants_link"
+        | "settle_systemd_wants_link_transaction" => {
+            object_exact(object, &["kind", "target"])?;
+            let target = parse_target(&object["target"])?;
+            Ok(match kind.as_str() {
+                "create_gateway_data_directory" => {
+                    LifecycleEffect::CreateGatewayDataDirectory { target }
+                }
+                "create_systemd_wants_directory" => {
+                    LifecycleEffect::CreateSystemdWantsDirectory { target }
+                }
+                "publish_systemd_wants_link" => LifecycleEffect::PublishSystemdWantsLink { target },
+                _ => LifecycleEffect::SettleSystemdWantsLinkTransaction { target },
+            })
+        }
+        "settle_gateway_data_directory_transaction"
+        | "settle_systemd_wants_directory_transaction" => {
+            object_exact(object, &["kind", "target", "generation"])?;
+            let target = parse_target(&object["target"])?;
+            let generation = string(object, "generation")?;
+            Ok(if kind == "settle_gateway_data_directory_transaction" {
+                LifecycleEffect::SettleGatewayDataDirectoryTransaction { target, generation }
+            } else {
+                LifecycleEffect::SettleSystemdWantsDirectoryTransaction { target, generation }
+            })
+        }
+        "reload_systemd_manager" | "start_systemd_unit" | "stop_systemd_unit" => {
+            let has_mode = kind != "reload_systemd_manager";
+            object_exact(
+                object,
+                if has_mode {
+                    &["kind", "manager", "unit", "mode"]
+                } else {
+                    &["kind", "manager", "unit"]
+                },
+            )?;
+            let manager = parse_systemd_manager(&object["manager"])?;
+            let unit = SystemdUnitName::parse(string(object, "unit")?)
+                .map_err(|error| invalid_record(&error.to_string()))?;
+            Ok(match kind.as_str() {
+                "reload_systemd_manager" => LifecycleEffect::ReloadSystemdManager { manager, unit },
+                "start_systemd_unit" => LifecycleEffect::StartSystemdUnit {
+                    manager,
+                    unit,
+                    mode: parse_systemd_job_mode(&string(object, "mode")?)?,
+                },
+                _ => LifecycleEffect::StopSystemdUnit {
+                    manager,
+                    unit,
+                    mode: parse_systemd_job_mode(&string(object, "mode")?)?,
+                },
+            })
+        }
         "prune_runtime" => {
             object_exact(object, &["kind", "fingerprint"])?;
             Ok(LifecycleEffect::PruneRuntime {
@@ -427,6 +508,61 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
         }
         _ => Err(invalid_record("unknown lifecycle effect")),
     }
+}
+
+fn parse_systemd_manager(value: &Value) -> Result<SystemdManagerIdentity, GatewayError> {
+    let value = object(value, &["uniqueName", "processId", "userId"])?;
+    let process_id = value["processId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("invalid systemd manager process ID"))?;
+    let user_id = value["userId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("invalid systemd manager user ID"))?;
+    SystemdManagerIdentity::new(string(value, "uniqueName")?, process_id, user_id)
+        .map_err(|error| invalid_record(&error.to_string()))
+}
+
+fn parse_systemd_job_mode(value: &str) -> Result<SystemdJobMode, GatewayError> {
+    match value {
+        "fail" => Ok(SystemdJobMode::Fail),
+        _ => Err(invalid_record("unknown systemd job mode")),
+    }
+}
+
+fn parse_systemd_job_attempt(value: &Value) -> Result<SystemdJobAttempt, GatewayError> {
+    let value = object(
+        value,
+        &[
+            "manager",
+            "operation",
+            "mode",
+            "unit",
+            "objectPath",
+            "jobId",
+        ],
+    )?;
+    let operation = match string(value, "operation")?.as_str() {
+        "start" => SystemdJobOperation::Start,
+        "stop" => SystemdJobOperation::Stop,
+        _ => return Err(invalid_record("unknown systemd job operation")),
+    };
+    let unit = SystemdUnitName::parse(string(value, "unit")?)
+        .map_err(|error| invalid_record(&error.to_string()))?;
+    let job_id = value["jobId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("invalid systemd job ID"))?;
+    SystemdJobAttempt::new(
+        parse_systemd_manager(&value["manager"])?,
+        operation,
+        parse_systemd_job_mode(&string(value, "mode")?)?,
+        unit,
+        string(value, "objectPath")?,
+        job_id,
+    )
+    .map_err(|error| invalid_record(&error.to_string()))
 }
 
 fn object_exact(
@@ -494,18 +630,97 @@ fn parse_command_result(value: &Value) -> Result<LifecycleCommandResult, Gateway
 }
 
 fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError> {
-    let value = object(value, &["version", "incarnation", "targetArtifactPresent"])?;
+    let value = object(
+        value,
+        &[
+            "version",
+            "incarnation",
+            "targetArtifactPresent",
+            "systemd",
+            "systemdState",
+        ],
+    )?;
     let version = value["version"]
         .as_u64()
         .ok_or_else(|| invalid_record("invalid observation version"))?;
     let artifact = value["targetArtifactPresent"]
         .as_bool()
         .ok_or_else(|| invalid_record("invalid target artifact fact"))?;
-    Ok(LifecycleObservation::new(
+    let incarnation = optional_identity(&value["incarnation"])?;
+    let systemd_state = if value["systemdState"].is_null() {
+        None
+    } else {
+        Some(
+            SystemdUnitState::parse(&string(value, "systemdState")?)
+                .map_err(|error| invalid_record(&error.to_string()))?,
+        )
+    };
+    if value["systemd"].is_null() {
+        return match systemd_state {
+            Some(state) => LifecycleObservation::with_systemd_state(version, artifact, state)
+                .map_err(|error| invalid_record(&error.to_string())),
+            None if incarnation.is_none() => Ok(LifecycleObservation::new(version, None, artifact)),
+            None => Err(invalid_record(
+                "portable observation has no native platform evidence",
+            )),
+        };
+    }
+    if systemd_state != Some(SystemdUnitState::Active) {
+        return Err(invalid_record(
+            "active systemd runtime disagrees with its physical state",
+        ));
+    }
+    let incarnation = incarnation
+        .ok_or_else(|| invalid_record("systemd observation has no portable incarnation"))?;
+    LifecycleObservation::with_systemd(
         version,
-        optional_identity(&value["incarnation"])?,
+        incarnation,
         artifact,
-    ))
+        parse_systemd_runtime(&value["systemd"])?,
+    )
+    .map_err(|error| invalid_record(&error.to_string()))
+}
+
+fn parse_systemd_runtime(value: &Value) -> Result<SystemdRuntimeObservation, GatewayError> {
+    let value = object(
+        value,
+        &[
+            "target",
+            "manager",
+            "unit",
+            "invocation",
+            "mainProcessId",
+            "enabled",
+        ],
+    )?;
+    let invocation = value["invocation"]
+        .as_array()
+        .ok_or_else(|| invalid_record("systemd invocation must be a byte array"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| invalid_record("systemd invocation byte is invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let process_id = value["mainProcessId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("systemd main process ID is invalid"))?;
+    SystemdRuntimeObservation::new(
+        parse_target(&value["target"])?,
+        parse_systemd_manager(&value["manager"])?,
+        SystemdUnitName::parse(string(value, "unit")?)
+            .map_err(|error| invalid_record(&error.to_string()))?,
+        crate::gateway::domain::value_objects::SystemdInvocationId::new(invocation)
+            .map_err(|error| invalid_record(&error.to_string()))?,
+        process_id,
+        value["enabled"]
+            .as_bool()
+            .ok_or_else(|| invalid_record("systemd enabled state is invalid"))?,
+    )
+    .map_err(|error| invalid_record(&error.to_string()))
 }
 
 fn parse_observation_source(value: &Value) -> Result<LifecycleObservationSource, GatewayError> {
@@ -595,6 +810,7 @@ fn domain_record(stored: &StoredRecord) -> Result<LifecycleRecord, GatewayError>
             Some(LifecycleRecordKind::EffectPlan) => {
                 &["planId", "expectedBefore", "target", "primary", "cleanup"]
             }
+            Some(LifecycleRecordKind::NativeAttempt) => &["planId", "stepId", "attempt"],
             Some(LifecycleRecordKind::EffectCompletion) => &["planId", "stepId", "result"],
             Some(LifecycleRecordKind::Observation) => &["source", "state"],
             Some(LifecycleRecordKind::Outcome) => &["physical", "lastConfirmed", "cleanup"],
@@ -637,6 +853,11 @@ fn domain_record(stored: &StoredRecord) -> Result<LifecycleRecord, GatewayError>
                 .map(parse_step)
                 .collect::<Result<Vec<_>, _>>()?,
         },
+        LifecycleRecordKind::NativeAttempt => LifecycleRecordPayload::NativeAttempt {
+            plan_id: string(payload, "planId")?,
+            step_id: string(payload, "stepId")?,
+            attempt: parse_systemd_job_attempt(&payload["attempt"])?,
+        },
         LifecycleRecordKind::EffectCompletion => LifecycleRecordPayload::EffectCompletion {
             plan_id: string(payload, "planId")?,
             step_id: string(payload, "stepId")?,
@@ -670,6 +891,7 @@ fn record_kind(kind: &str) -> Option<LifecycleRecordKind> {
         LifecycleRecordKind::Intent,
         LifecycleRecordKind::JoinedRequest,
         LifecycleRecordKind::EffectPlan,
+        LifecycleRecordKind::NativeAttempt,
         LifecycleRecordKind::EffectCompletion,
         LifecycleRecordKind::Observation,
         LifecycleRecordKind::Outcome,
@@ -815,10 +1037,16 @@ fn unresolved_recovery(
         let request = GatewayReconciliationRequest::new(request_correlation.clone(), evidence);
         let attempt =
             GatewayReconciliationAttempt::new(chain[0].attempt_correlation().clone(), request)?;
-        let has_effect_plan = chain
-            .iter()
-            .any(|record| record.kind() == LifecycleRecordKind::EffectPlan);
-        let pending_step = recovery_step(&chain, history.pending_observation_source().as_ref())?;
+        let has_effect_plan = history.has_effect_plan();
+        let pending_step = history.pending_step().map(|pending| {
+            GatewayLifecycleRecoveryStep::new(
+                pending.plan_id().into(),
+                pending.step().clone(),
+                pending.contingencies().to_vec(),
+                pending.completion().cloned(),
+                pending.native_attempt().cloned(),
+            )
+        });
         return Ok(Some((
             GatewayLifecycleRecovery::new(
                 attempt,
@@ -833,75 +1061,6 @@ fn unresolved_recovery(
         )));
     }
     Ok(None)
-}
-
-fn recovery_step(
-    records: &[LifecycleRecord],
-    pending_observation: Option<&LifecycleObservationSource>,
-) -> Result<Option<GatewayLifecycleRecoveryStep>, GatewayError> {
-    let mut primary_steps = Vec::new();
-    let mut all_steps = Vec::new();
-    let mut completions = Vec::new();
-    for record in records {
-        match record.payload() {
-            LifecycleRecordPayload::EffectPlan {
-                plan_id,
-                primary,
-                cleanup,
-                ..
-            } => {
-                primary_steps.push((plan_id.clone(), primary.clone()));
-                all_steps.push((plan_id.clone(), primary.clone()));
-                all_steps.extend(cleanup.iter().cloned().map(|step| (plan_id.clone(), step)));
-            }
-            LifecycleRecordPayload::EffectCompletion {
-                plan_id,
-                step_id,
-                result,
-            } => completions.push((plan_id.clone(), step_id.clone(), result.clone())),
-            _ => {}
-        }
-    }
-    if let Some(LifecycleObservationSource::Effect { plan_id, step_id }) = pending_observation {
-        let step = all_steps
-            .iter()
-            .find(|(candidate_plan, step)| candidate_plan == plan_id && step.id() == step_id)
-            .map(|(_, step)| step.clone())
-            .ok_or_else(|| invalid_record("pending observation has no primary plan step"))?;
-        let completion = completions
-            .iter()
-            .find(|(candidate_plan, candidate_step, _)| {
-                candidate_plan == plan_id && candidate_step == step_id
-            })
-            .map(|(_, _, result)| result.clone())
-            .ok_or_else(|| invalid_record("pending observation has no completion"))?;
-        return Ok(Some(GatewayLifecycleRecoveryStep::new(
-            plan_id.clone(),
-            step,
-            Some(completion),
-        )));
-    }
-    let incomplete = primary_steps
-        .into_iter()
-        .filter(|(plan_id, step)| {
-            !completions
-                .iter()
-                .any(|(candidate_plan, candidate_step, _)| {
-                    candidate_plan == plan_id && candidate_step == step.id()
-                })
-        })
-        .collect::<Vec<_>>();
-    match incomplete.as_slice() {
-        [] => Ok(None),
-        [(plan_id, step)] => Ok(Some(GatewayLifecycleRecoveryStep::new(
-            plan_id.clone(),
-            step.clone(),
-            None,
-        ))),
-        _ => Err(GatewayError::Registration(
-            "Gateway lifecycle recovery has multiple uncompleted primary effects".into(),
-        )),
-    }
 }
 
 fn acknowledge_final_record(
@@ -1353,6 +1512,28 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
         .map_err(JournalAppendError::into_gateway_error)
     }
 
+    fn native_attempt(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        attempt: &SystemdJobAttempt,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        self.append(
+            self.namespace()?,
+            LifecycleRecordPayload::NativeAttempt {
+                plan_id: plan_id.into(),
+                step_id: step_id.into(),
+                attempt: attempt.clone(),
+            },
+            json!({
+                "planId":plan_id,
+                "stepId":step_id,
+                "attempt":systemd_job_attempt(attempt),
+            }),
+        )
+        .map_err(JournalAppendError::into_gateway_error)
+    }
+
     fn observation(
         &self,
         source: &LifecycleObservationSource,
@@ -1408,12 +1589,83 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         LifecycleEffect::RequestRetirement { incarnation } => {
             json!({"kind":"request_retirement", "incarnation":identity(incarnation)})
         }
+        LifecycleEffect::RequestSystemdRetirement {
+            incarnation,
+            request_id,
+        } => json!({
+            "kind":"request_systemd_retirement",
+            "incarnation":identity(incarnation),
+            "requestId":request_id,
+        }),
         LifecycleEffect::UnloadService { service } => {
             json!({"kind":"unload_service", "service":service})
         }
         LifecycleEffect::PublishServiceDefinition { target } => {
             json!({"kind":"publish_service_definition", "target":self::target(target)})
         }
+        LifecycleEffect::PublishSystemdServiceDefinition {
+            target,
+            definition_digest,
+        } => json!({
+            "kind":"publish_systemd_service_definition",
+            "target":self::target(target),
+            "definitionDigest":definition_digest,
+        }),
+        LifecycleEffect::SettleSystemdDefinitionTransaction {
+            target,
+            definition_digest,
+        } => json!({
+            "kind":"settle_systemd_definition_transaction",
+            "target":self::target(target),
+            "definitionDigest":definition_digest,
+        }),
+        LifecycleEffect::CreateGatewayDataDirectory { target } => {
+            json!({"kind":"create_gateway_data_directory", "target":self::target(target)})
+        }
+        LifecycleEffect::SettleGatewayDataDirectoryTransaction { target, generation } => json!({
+            "kind":"settle_gateway_data_directory_transaction",
+            "target":self::target(target),
+            "generation":generation,
+        }),
+        LifecycleEffect::ReloadSystemdManager { manager, unit } => json!({
+            "kind":"reload_systemd_manager",
+            "manager":systemd_manager(manager),
+            "unit":unit.as_str(),
+        }),
+        LifecycleEffect::CreateSystemdWantsDirectory { target } => {
+            json!({"kind":"create_systemd_wants_directory", "target":self::target(target)})
+        }
+        LifecycleEffect::SettleSystemdWantsDirectoryTransaction { target, generation } => json!({
+            "kind":"settle_systemd_wants_directory_transaction",
+            "target":self::target(target),
+            "generation":generation,
+        }),
+        LifecycleEffect::PublishSystemdWantsLink { target } => {
+            json!({"kind":"publish_systemd_wants_link", "target":self::target(target)})
+        }
+        LifecycleEffect::SettleSystemdWantsLinkTransaction { target } => {
+            json!({"kind":"settle_systemd_wants_link_transaction", "target":self::target(target)})
+        }
+        LifecycleEffect::StartSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => json!({
+            "kind":"start_systemd_unit",
+            "manager":systemd_manager(manager),
+            "unit":unit.as_str(),
+            "mode":mode.as_str(),
+        }),
+        LifecycleEffect::StopSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => json!({
+            "kind":"stop_systemd_unit",
+            "manager":systemd_manager(manager),
+            "unit":unit.as_str(),
+            "mode":mode.as_str(),
+        }),
         LifecycleEffect::BootstrapService { target } => {
             json!({"kind":"bootstrap_service", "target":self::target(target)})
         }
@@ -1430,6 +1682,29 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
             json!({"kind":"stop_agents", "incarnation":identity(incarnation)})
         }
     }
+}
+
+fn systemd_manager(manager: &SystemdManagerIdentity) -> Value {
+    json!({
+        "uniqueName":manager.unique_name(),
+        "processId":manager.process_id(),
+        "userId":manager.user_id(),
+    })
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn systemd_job_attempt(attempt: &SystemdJobAttempt) -> Value {
+    json!({
+        "manager":systemd_manager(attempt.manager()),
+        "operation":match attempt.operation() {
+            SystemdJobOperation::Start => "start",
+            SystemdJobOperation::Stop => "stop",
+        },
+        "mode":attempt.mode().as_str(),
+        "unit":attempt.unit().as_str(),
+        "objectPath":attempt.object_path(),
+        "jobId":attempt.job_id(),
+    })
 }
 
 fn effect_predicate(predicate: &LifecycleEffectPredicate) -> Value {
@@ -1470,6 +1745,19 @@ fn observation(state: &LifecycleObservation) -> Value {
         "version":state.version(),
         "incarnation":state.incarnation().map(identity),
         "targetArtifactPresent":state.target_artifact_present(),
+        "systemd":state.systemd().map(systemd_runtime),
+        "systemdState":state.systemd_state().map(SystemdUnitState::as_str),
+    })
+}
+
+fn systemd_runtime(state: &SystemdRuntimeObservation) -> Value {
+    json!({
+        "target":target(state.target()),
+        "manager":systemd_manager(state.manager()),
+        "unit":state.unit().as_str(),
+        "invocation":state.invocation().bytes(),
+        "mainProcessId":state.main_process_id(),
+        "enabled":state.enabled(),
     })
 }
 
@@ -1564,7 +1852,7 @@ mod tests {
     use super::*;
     use crate::gateway::{
         application::{GatewayReconciliationEffectTiming, GatewayReconciliationIntentDelivery},
-        domain::value_objects::ReconciliationHistoryFact,
+        domain::value_objects::{ReconciliationHistoryFact, SystemdInvocationId},
     };
     use std::{
         cell::Cell,
@@ -1594,6 +1882,8 @@ mod tests {
             "version":1,
             "incarnation":null,
             "targetArtifactPresent":false,
+            "systemd":null,
+            "systemdState":null,
         });
         let payload = match kind {
             LifecycleRecordKind::Intent => json!({
@@ -1646,6 +1936,412 @@ mod tests {
             sequence,
             kind: kind.file_name().into(),
             payload,
+        }
+    }
+
+    #[test]
+    fn systemd_job_and_runtime_evidence_round_trip_without_dropping_identity_fields() {
+        let unit = SystemdUnitName::parse("nessa-gateway-prod.service".into()).unwrap();
+        let manager = SystemdManagerIdentity::new(":1.42".into(), 42, 501).unwrap();
+        let attempt = SystemdJobAttempt::new(
+            manager.clone(),
+            SystemdJobOperation::Start,
+            SystemdJobMode::Fail,
+            unit.clone(),
+            "/org/freedesktop/systemd1/job/19".into(),
+            19,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_systemd_job_attempt(&systemd_job_attempt(&attempt)).unwrap(),
+            attempt
+        );
+
+        let target =
+            ReconciliationTarget::new(unit.as_str().into(), "a".repeat(64), "b".repeat(64))
+                .unwrap();
+        let runtime = SystemdRuntimeObservation::new(
+            target,
+            manager,
+            unit,
+            SystemdInvocationId::new(vec![7; 16]).unwrap(),
+            99,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_systemd_runtime(&systemd_runtime(&runtime)).unwrap(),
+            runtime
+        );
+
+        for state in [
+            SystemdUnitState::Absent,
+            SystemdUnitState::Inactive,
+            SystemdUnitState::Activating,
+            SystemdUnitState::Deactivating,
+            SystemdUnitState::Failed,
+            SystemdUnitState::Unknown,
+        ] {
+            let observed = LifecycleObservation::with_systemd_state(1, false, state).unwrap();
+            assert_eq!(
+                parse_observation(&observation(&observed)).unwrap(),
+                observed
+            );
+        }
+    }
+
+    #[test]
+    fn systemd_retirement_effect_round_trips_its_request_correlation() {
+        let value = json!({
+            "kind":"request_systemd_retirement",
+            "incarnation":{
+                "service":"nessa-gateway-prod.service",
+                "runtimeFingerprint":"a".repeat(64),
+                "runtimeInstance":"550e8400-e29b-41d4-a716-446655440001",
+                "serviceGeneration":"b".repeat(64),
+                "processId":41,
+                "port":7420,
+            },
+            "requestId":"550e8400-e29b-41d4-a716-446655440000",
+        });
+        let effect = parse_effect(&value).unwrap();
+        assert_eq!(lifecycle_effect(&effect), value);
+    }
+
+    #[test]
+    fn systemd_publication_cleanup_effects_round_trip_exact_targets() {
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        for effect in [
+            LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: "c".repeat(64),
+            },
+            LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                target: target.clone(),
+            },
+        ] {
+            let value = lifecycle_effect(&effect);
+            assert_eq!(parse_effect(&value).unwrap(), effect);
+        }
+    }
+
+    #[test]
+    fn systemd_directory_cleanup_effects_round_trip_exact_transactions() {
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        for effect in [
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                target: target.clone(),
+                generation: "c".repeat(64),
+            },
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target,
+                generation: "d".repeat(64),
+            },
+        ] {
+            let value = lifecycle_effect(&effect);
+            assert_eq!(parse_effect(&value).unwrap(), effect);
+        }
+    }
+
+    #[test]
+    fn real_file_journal_accepts_and_restores_exact_systemd_publication_cleanup() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let clock = Arc::new(AdvancingClock {
+            now: Mutex::new(Instant::now()),
+            waits: AtomicUsize::new(0),
+        });
+        let request = GatewayReconciliationRequest::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000501".into())
+                .unwrap(),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let attempt = GatewayReconciliationAttempt::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000502".into())
+                .unwrap(),
+            request,
+        )
+        .unwrap();
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let audit = Arc::new(FileReconciliationAudit::new(Some(root), clock));
+        let session = audit.clone().open(&attempt, None).unwrap();
+        session
+            .intent(
+                &GatewayReconciliationIntent::new(attempt.clone(), target.clone(), None).unwrap(),
+            )
+            .unwrap();
+        let primary = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::PublishSystemdServiceDefinition {
+                target: target.clone(),
+                definition_digest: "c".repeat(64),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let cleanup = LifecyclePlanStep::new(
+            "settle-transaction".into(),
+            LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: "c".repeat(64),
+            },
+            LifecycleEffectPredicate::PrimaryReturned,
+        )
+        .unwrap();
+        session
+            .effect_plan("publish", None, &target, &primary, &[cleanup])
+            .unwrap();
+        drop(session);
+
+        let restored = audit.clone().open(&attempt, None).unwrap();
+        let recovery = restored.recovery().expect("publication plan must restore");
+        assert!(matches!(
+            recovery.pending_step().unwrap().step().effect(),
+            LifecycleEffect::PublishSystemdServiceDefinition { .. }
+        ));
+        restored
+            .effect_completion("publish", "primary", &LifecycleCommandResult::Accepted)
+            .unwrap();
+        restored
+            .observation(
+                &LifecycleObservationSource::Effect {
+                    plan_id: "publish".into(),
+                    step_id: "primary".into(),
+                },
+                &LifecycleObservation::new(1, None, true),
+            )
+            .unwrap();
+        restored
+            .effect_completion(
+                "publish",
+                "settle-transaction",
+                &LifecycleCommandResult::Accepted,
+            )
+            .unwrap();
+        restored
+            .observation(
+                &LifecycleObservationSource::Effect {
+                    plan_id: "publish".into(),
+                    step_id: "settle-transaction".into(),
+                },
+                &LifecycleObservation::new(2, None, false),
+            )
+            .unwrap();
+        let wants_primary = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::PublishSystemdWantsLink {
+                target: target.clone(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let wants_cleanup = LifecyclePlanStep::new(
+            "settle-transaction".into(),
+            LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                target: target.clone(),
+            },
+            LifecycleEffectPredicate::PrimaryReturned,
+        )
+        .unwrap();
+        restored
+            .effect_plan(
+                "publish-wants",
+                None,
+                &target,
+                &wants_primary,
+                &[wants_cleanup],
+            )
+            .unwrap();
+        drop(restored);
+
+        let restored = audit.open(&attempt, None).unwrap();
+        assert!(matches!(
+            restored
+                .recovery()
+                .expect("wants-link plan must restore")
+                .pending_step()
+                .unwrap()
+                .step()
+                .effect(),
+            LifecycleEffect::PublishSystemdWantsLink { .. }
+        ));
+    }
+
+    #[test]
+    fn real_file_journal_restores_every_eligible_systemd_cleanup_boundary() {
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let cases = [
+            (
+                LifecycleEffect::StageRuntime {
+                    fingerprint: "a".repeat(64),
+                },
+                LifecycleEffect::RemoveStagingRuntime {
+                    generation: "1".repeat(64),
+                },
+            ),
+            (
+                LifecycleEffect::PublishSystemdServiceDefinition {
+                    target: target.clone(),
+                    definition_digest: "2".repeat(64),
+                },
+                LifecycleEffect::SettleSystemdDefinitionTransaction {
+                    target: target.clone(),
+                    definition_digest: "2".repeat(64),
+                },
+            ),
+            (
+                LifecycleEffect::PublishSystemdWantsLink {
+                    target: target.clone(),
+                },
+                LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                    target: target.clone(),
+                },
+            ),
+            (
+                LifecycleEffect::CreateGatewayDataDirectory {
+                    target: target.clone(),
+                },
+                LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                    target: target.clone(),
+                    generation: "3".repeat(64),
+                },
+            ),
+            (
+                LifecycleEffect::CreateSystemdWantsDirectory {
+                    target: target.clone(),
+                },
+                LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                    target: target.clone(),
+                    generation: "4".repeat(64),
+                },
+            ),
+        ];
+        let mut serial = 600_u64;
+        for (primary_effect, cleanup_effect) in cases {
+            for cleanup_result in [
+                LifecycleCommandResult::Accepted,
+                LifecycleCommandResult::Failed("cleanup failed".into()),
+            ] {
+                serial += 1;
+                let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+                let audit = Arc::new(FileReconciliationAudit::new(
+                    Some(temporary.path().join("Nessa")),
+                    Arc::new(AdvancingClock {
+                        now: Mutex::new(Instant::now()),
+                        waits: AtomicUsize::new(0),
+                    }),
+                ));
+                let request = GatewayReconciliationRequest::new(
+                    ReconciliationCorrelation::parse(format!(
+                        "00000000-0000-4000-8000-{serial:012x}"
+                    ))
+                    .unwrap(),
+                    ReconciliationEvidence::new(
+                        ReconciliationCause::Startup,
+                        ReconciliationInitiator::DesktopHost,
+                    )
+                    .unwrap(),
+                );
+                serial += 1;
+                let attempt = GatewayReconciliationAttempt::new(
+                    ReconciliationCorrelation::parse(format!(
+                        "00000000-0000-4000-8000-{serial:012x}"
+                    ))
+                    .unwrap(),
+                    request,
+                )
+                .unwrap();
+                let session = audit.clone().open(&attempt, None).unwrap();
+                session
+                    .intent(
+                        &GatewayReconciliationIntent::new(attempt.clone(), target.clone(), None)
+                            .unwrap(),
+                    )
+                    .unwrap();
+                let primary = LifecyclePlanStep::new(
+                    "primary".into(),
+                    primary_effect.clone(),
+                    LifecycleEffectPredicate::Always,
+                )
+                .unwrap();
+                let cleanup = LifecyclePlanStep::new(
+                    "cleanup".into(),
+                    cleanup_effect.clone(),
+                    LifecycleEffectPredicate::PrimaryReturned,
+                )
+                .unwrap();
+                session
+                    .effect_plan(
+                        "effect",
+                        None,
+                        &target,
+                        &primary,
+                        std::slice::from_ref(&cleanup),
+                    )
+                    .unwrap();
+                session
+                    .effect_completion("effect", "primary", &LifecycleCommandResult::Accepted)
+                    .unwrap();
+                session
+                    .observation(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: "effect".into(),
+                            step_id: "primary".into(),
+                        },
+                        &LifecycleObservation::new(1, None, true),
+                    )
+                    .unwrap();
+                drop(session);
+
+                let session = audit.clone().open(&attempt, None).unwrap();
+                let recovery = session.recovery().unwrap();
+                let pending = recovery.pending_step().unwrap();
+                assert_eq!(pending.step(), &cleanup);
+                assert!(pending.completion().is_none());
+                session
+                    .effect_completion("effect", "cleanup", &cleanup_result)
+                    .unwrap();
+                drop(session);
+
+                let session = audit.clone().open(&attempt, None).unwrap();
+                let recovery = session.recovery().unwrap();
+                let pending = recovery.pending_step().unwrap();
+                assert_eq!(pending.step(), &cleanup);
+                assert_eq!(pending.completion(), Some(&cleanup_result));
+                session
+                    .observation(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: "effect".into(),
+                            step_id: "cleanup".into(),
+                        },
+                        &LifecycleObservation::new(2, None, false),
+                    )
+                    .unwrap();
+            }
         }
     }
 

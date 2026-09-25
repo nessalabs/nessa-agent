@@ -1,5 +1,5 @@
 #![cfg_attr(
-    not(target_os = "macos"),
+    not(any(target_os = "macos", target_os = "linux")),
     allow(
         dead_code,
         reason = "native gateway lifecycle state is exercised only by the macOS adapter"
@@ -327,23 +327,35 @@ impl AttemptReceipt {
 
 struct StartupProgress {
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        expect(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     lifecycle: Arc<Mutex<Lifecycle>>,
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        expect(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     attempt: Arc<AttemptReceipt>,
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        expect(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     events: Arc<dyn GatewayStartupEvents>,
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        expect(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
@@ -501,6 +513,22 @@ impl GatewayReconciliationProgress for StartupProgress {
         delivery
     }
 
+    fn native_attempt_recorded(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        attempt: &crate::gateway::domain::value_objects::SystemdJobAttempt,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        let delivery = retry_delivery(|| self.journal.native_attempt(plan_id, step_id, attempt));
+        if delivery.is_err() {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::NativeCompletionDelivery);
+        }
+        delivery
+    }
+
     fn physical_observed(
         &self,
         source: &LifecycleObservationSource,
@@ -520,6 +548,80 @@ impl GatewayReconciliationProgress for StartupProgress {
                 incarnation,
                 target_artifact_present,
             );
+            state.pending_observation = Some((source.clone(), observation.clone()));
+            observation
+        };
+        if let Err(error) = retry_delivery(|| self.journal.observation(source, &observation)) {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::Observation);
+            return Err(error);
+        }
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        Ok(observation)
+    }
+
+    fn systemd_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        incarnation: ReconciliationIncarnation,
+        target_artifact_present: bool,
+        native: crate::gateway::domain::value_objects::SystemdRuntimeObservation,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let observation = {
+            let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+            if state.pending_observation.is_some() {
+                return Err(GatewayError::Registration(
+                    "A gateway lifecycle observation still awaits exact acknowledgement".into(),
+                ));
+            }
+            state.observation_version = state.observation_version.saturating_add(1);
+            let observation = LifecycleObservation::with_systemd(
+                state.observation_version,
+                incarnation,
+                target_artifact_present,
+                native,
+            )
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            state.pending_observation = Some((source.clone(), observation.clone()));
+            observation
+        };
+        if let Err(error) = retry_delivery(|| self.journal.observation(source, &observation)) {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::Observation);
+            return Err(error);
+        }
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        Ok(observation)
+    }
+
+    fn systemd_state_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        target_artifact_present: bool,
+        systemd_state: crate::gateway::domain::value_objects::SystemdUnitState,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let observation = {
+            let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+            if state.pending_observation.is_some() {
+                return Err(GatewayError::Registration(
+                    "A gateway lifecycle observation still awaits exact acknowledgement".into(),
+                ));
+            }
+            state.observation_version = state.observation_version.saturating_add(1);
+            let observation = LifecycleObservation::with_systemd_state(
+                state.observation_version,
+                target_artifact_present,
+                systemd_state,
+            )
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
             state.pending_observation = Some((source.clone(), observation.clone()));
             observation
         };

@@ -112,7 +112,7 @@ Facts that matter for the design:
 
 - Host: about 67 `eprintln!("[nessa] ...")` calls, no `tracing`, no `log`
   crate. In a packaged app that stderr is lost. The only structured evidence
-  is the reconciliation audit (`src-tauri/src/gateway/infrastructure/macos/reconciliation_audit.rs`)
+  is the reconciliation audit (`src-tauri/src/gateway/infrastructure/reconciliation_audit.rs`)
   and the credential-save audit, both JSON files under the config root.
 - Shell: `console.warn/error` with a `[nessa]` prefix; a dev-only bridge
   forwards warn/error to the terminal (`src-tauri/src/diagnostics.rs`,
