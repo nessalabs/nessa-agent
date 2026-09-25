@@ -497,6 +497,12 @@ pub trait GatewayReconciliationProgress: Send + Sync {
         incarnation: Option<ReconciliationIncarnation>,
         target_artifact_present: bool,
     ) -> Result<LifecycleObservation, GatewayError>;
+
+    /// Retry the exact observation whose publication may have succeeded before
+    /// acknowledgement. Returns `None` when no observation is pending.
+    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
+        Ok(None)
+    }
 }
 
 /// One caller's immutable request to the serialized reconciliation owner.

@@ -357,6 +357,7 @@ struct ProgressState {
     effect_timing: GatewayReconciliationEffectTiming,
     observation_version: u64,
     latest_observation: Option<LifecycleObservation>,
+    pending_observation: Option<(LifecycleObservationSource, LifecycleObservation)>,
     failed_phase: Option<LifecycleFailedPhase>,
 }
 
@@ -498,12 +499,19 @@ impl GatewayReconciliationProgress for StartupProgress {
     ) -> Result<LifecycleObservation, GatewayError> {
         let observation = {
             let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+            if state.pending_observation.is_some() {
+                return Err(GatewayError::Registration(
+                    "A gateway lifecycle observation still awaits exact acknowledgement".into(),
+                ));
+            }
             state.observation_version = state.observation_version.saturating_add(1);
-            LifecycleObservation::new(
+            let observation = LifecycleObservation::new(
                 state.observation_version,
                 incarnation,
                 target_artifact_present,
-            )
+            );
+            state.pending_observation = Some((source.clone(), observation.clone()));
+            observation
         };
         if let Err(error) = retry_delivery(|| self.journal.observation(source, &observation)) {
             self.state
@@ -512,11 +520,32 @@ impl GatewayReconciliationProgress for StartupProgress {
                 .failed_phase = Some(LifecycleFailedPhase::Observation);
             return Err(error);
         }
-        self.state
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        Ok(observation)
+    }
+
+    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
+        let pending = self
+            .state
             .lock()
             .map_err(|_| state_unavailable())?
-            .latest_observation = Some(observation.clone());
-        Ok(observation)
+            .pending_observation
+            .clone();
+        let Some((source, observation)) = pending else {
+            return Ok(None);
+        };
+        retry_delivery(|| self.journal.observation(&source, &observation))?;
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        if state.pending_observation.as_ref() != Some(&(source, observation.clone())) {
+            return Err(GatewayError::Registration(
+                "Gateway lifecycle pending observation changed during retry".into(),
+            ));
+        }
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        Ok(Some(observation))
     }
 }
 
@@ -1199,6 +1228,7 @@ fn execute_attempt(
             effect_timing: GatewayReconciliationEffectTiming::NoEffectsObserved,
             observation_version: 0,
             latest_observation: None,
+            pending_observation: None,
             failed_phase: None,
         })),
     };

@@ -591,6 +591,14 @@ trait TestAuditBehavior: Send + Sync {
     fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
         None
     }
+
+    fn observation(
+        &self,
+        _: &LifecycleObservationSource,
+        _: &LifecycleObservation,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
 }
 
 struct TestJournal<T> {
@@ -648,9 +656,10 @@ impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T
 
     fn observation(
         &self,
-        _: &LifecycleObservationSource,
-        _: &LifecycleObservation,
+        source: &LifecycleObservationSource,
+        observation: &LifecycleObservation,
     ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        self.audit.observation(source, observation)?;
         Ok(self.receipt(LifecycleRecordKind::Observation))
     }
 
@@ -1079,6 +1088,112 @@ fn exact_delivery_retry_recovers_published_intent_and_outcome() {
         gateway.startup().unwrap().phase(),
         &GatewayStartupPhase::Ready
     );
+}
+
+#[derive(Default)]
+struct ObservationRetryAudit {
+    attempts: Mutex<Vec<(LifecycleObservationSource, LifecycleObservation)>>,
+    failures_remaining: AtomicUsize,
+}
+
+impl TestAuditBehavior for ObservationRetryAudit {
+    fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn joined(
+        &self,
+        _: &GatewayReconciliationAttempt,
+        _: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
+    fn observation(
+        &self,
+        source: &LifecycleObservationSource,
+        observation: &LifecycleObservation,
+    ) -> Result<(), GatewayError> {
+        self.attempts
+            .lock()
+            .unwrap()
+            .push((source.clone(), observation.clone()));
+        if self
+            .failures_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            Err(GatewayError::Registration(
+                "observation acknowledgement unavailable".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct ObservationRetryHost;
+
+impl GatewayHost for ObservationRetryHost {
+    fn register(
+        &self,
+        _: &Path,
+        _: &str,
+        _: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        admit_fresh(
+            attempt,
+            progress,
+            "gui/501/so.nessa.gateway.observation-retry",
+        );
+        let first = progress.physical_observed(&LifecycleObservationSource::Intent, None, false);
+        assert!(matches!(first, Err(GatewayError::Registration(_))));
+        let retried = progress.retry_pending_observation()?.unwrap();
+        assert_eq!(retried.version(), 1);
+        Err(GatewayError::Registration("test finished".into()))
+    }
+
+    fn stop_agents(
+        &self,
+        _: &GatewayStopSession,
+        _: &dyn GatewayReconciliationJournalSession,
+        _: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        unreachable!()
+    }
+}
+
+#[test]
+fn an_unacknowledged_observation_retries_the_identical_record_before_progressing() {
+    let audit = Arc::new(ObservationRetryAudit {
+        attempts: Mutex::new(Vec::new()),
+        failures_remaining: AtomicUsize::new(2),
+    });
+    let gateway = Gateway::bootstrap(
+        Arc::new(ObservationRetryHost),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    assert_eq!(
+        tauri::async_runtime::block_on(gateway.start()),
+        Err(GatewayError::Registration("test finished".into()))
+    );
+    let attempts = audit.attempts.lock().unwrap();
+    assert_eq!(attempts.len(), 3);
+    assert!(attempts.windows(2).all(|pair| pair[0] == pair[1]));
 }
 
 #[test]

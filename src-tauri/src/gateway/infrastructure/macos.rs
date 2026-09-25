@@ -161,6 +161,44 @@ impl GatewayHost for Launchd {
                     })?;
                     return Ok(());
                 }
+                LifecycleEffect::BootstrapService { target: planned } => {
+                    let command = step.completion().cloned().unwrap_or_else(|| {
+                        LifecycleCommandResult::Indeterminate(
+                            "The host restarted before bootstrap returned".into(),
+                        )
+                    });
+                    if step.completion().is_none() {
+                        retry_journal_delivery(|| {
+                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
+                        })?;
+                    }
+                    let exact_target_present = observed
+                        .as_ref()
+                        .is_some_and(|incarnation| incarnation.target() == planned)
+                        || installed_generation(definition.as_ref())
+                            == Some(planned.service_generation());
+                    let observation = LifecycleObservation::new(
+                        recovery
+                            .latest_observation()
+                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        observed.clone(),
+                        exact_target_present,
+                    );
+                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    retry_journal_delivery(|| {
+                        journal.physical_outcome(
+                            &LifecyclePhysicalOutcome::Failed {
+                                phase: LifecycleFailedPhase::Observation,
+                                message: format!(
+                                    "Recovered bootstrap state after restart with command result {command:?}"
+                                ),
+                            },
+                            Some(&observation),
+                            ReconciliationCleanupDecision::RetainPrior,
+                        )
+                    })?;
+                    return Ok(());
+                }
                 LifecycleEffect::AdoptReadyIncarnation { target: planned } => {
                     let exact = observed
                         .as_ref()
@@ -614,6 +652,100 @@ fn run_bootstrap<T, E>(
 
 fn bootstrap_succeeded(progress: &dyn GatewayReconciliationProgress) {
     progress.history_observed(ReconciliationHistoryFact::BootstrapCommandSucceeded);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BootstrapCleanupDecision {
+    UnloadExactTarget,
+    AlreadyAbsent,
+    RefuseReplacement,
+}
+
+fn bootstrap_cleanup_decision(
+    loaded: bool,
+    observed: Option<&ReconciliationIncarnation>,
+    target: &ReconciliationTarget,
+) -> BootstrapCleanupDecision {
+    if observed.is_some_and(|incarnation| incarnation.target() == target) {
+        BootstrapCleanupDecision::UnloadExactTarget
+    } else if loaded {
+        BootstrapCleanupDecision::RefuseReplacement
+    } else {
+        BootstrapCleanupDecision::AlreadyAbsent
+    }
+}
+
+fn cleanup_bootstrap_after_audit_failure(
+    progress: &dyn GatewayReconciliationProgress,
+    cleanup_step: &LifecyclePlanStep,
+    service: &str,
+    port: u16,
+    target: &ReconciliationTarget,
+) -> Result<(), String> {
+    cleanup_bootstrap_after_audit_failure_with(
+        progress,
+        cleanup_step,
+        target,
+        || {
+            let status = service_status(service)?;
+            let observed = observed_incarnation(service, port, &status, health(port));
+            Ok((status.loaded, observed))
+        },
+        || launchctl(&["bootout", service]),
+        || {
+            let status = service_status(service)?;
+            let observed = observed_incarnation(service, port, &status, health(port));
+            Ok((status.loaded, observed))
+        },
+    )
+}
+
+fn cleanup_bootstrap_after_audit_failure_with(
+    progress: &dyn GatewayReconciliationProgress,
+    cleanup_step: &LifecyclePlanStep,
+    target: &ReconciliationTarget,
+    observe_before: impl FnOnce() -> Result<(bool, Option<ReconciliationIncarnation>), String>,
+    unload: impl FnOnce() -> Result<(), String>,
+    observe_after: impl FnOnce() -> Result<(bool, Option<ReconciliationIncarnation>), String>,
+) -> Result<(), String> {
+    let (loaded, observed) = observe_before()?;
+    let decision = bootstrap_cleanup_decision(loaded, observed.as_ref(), target);
+    let cleanup_result = match decision {
+        BootstrapCleanupDecision::UnloadExactTarget => unload(),
+        BootstrapCleanupDecision::AlreadyAbsent => Ok(()),
+        BootstrapCleanupDecision::RefuseReplacement => {
+            return Err("replacement occupied the service label; cleanup refused".into())
+        }
+    };
+    let command = match &cleanup_result {
+        Ok(()) if decision == BootstrapCleanupDecision::UnloadExactTarget => {
+            LifecycleCommandResult::Accepted
+        }
+        Ok(()) => LifecycleCommandResult::Indeterminate(
+            "The exact bootstrap target was already absent during cleanup".into(),
+        ),
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+
+    progress
+        .retry_pending_observation()
+        .map_err(|error| format!("{error}; cleanup command result was {command:?}"))?;
+    progress
+        .effect_completed("bootstrap-service", cleanup_step.id(), &command)
+        .map_err(|error| format!("{error}; cleanup command result was {command:?}"))?;
+    let (refreshed_loaded, refreshed_incarnation) = observe_after()
+        .map_err(|error| format!("{error}; cleanup command result was {command:?}"))?;
+    progress
+        .physical_observed(
+            &LifecycleObservationSource::Effect {
+                plan_id: "bootstrap-service".into(),
+                step_id: cleanup_step.id().into(),
+            },
+            refreshed_incarnation,
+            refreshed_loaded,
+        )
+        .map_err(|error| format!("{error}; cleanup command result was {command:?}"))?;
+    cleanup_result
 }
 
 fn run_planned_effect<T>(
@@ -1250,8 +1382,20 @@ fn register(
             LifecycleEffectPredicate::Always,
         )
         .map_err(|error| error.to_string())?;
+        let bootstrap_cleanup = LifecyclePlanStep::new(
+            "unload-bootstrapped-service".into(),
+            LifecycleEffect::UnloadService {
+                service: service.clone(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .map_err(|error| error.to_string())?;
         progress
-            .effect_planned("bootstrap-service", &bootstrap_step, &[])
+            .effect_planned(
+                "bootstrap-service",
+                &bootstrap_step,
+                std::slice::from_ref(&bootstrap_cleanup),
+            )
             .map_err(RegisterFailure::Audit)?;
         let bootstrap = run_bootstrap(progress, || {
             Command::new("/bin/launchctl")
@@ -1270,7 +1414,21 @@ fn register(
             bootstrap_step.id(),
             &bootstrap_completion,
         ) {
-            return Err(audit_after_physical(audit, &bootstrap));
+            let cleanup = cleanup_bootstrap_after_audit_failure(
+                progress,
+                &bootstrap_cleanup,
+                &service,
+                port,
+                &target,
+            );
+            let detail = cleanup
+                .err()
+                .map(|error| format!("; predeclared bootstrap cleanup: {error}"))
+                .unwrap_or_default();
+            return Err(audit_after_physical(
+                GatewayError::Registration(format!("{audit}{detail}")),
+                &bootstrap,
+            ));
         }
         let status_after_bootstrap = service_status(&service)?;
         let running_after_bootstrap = health(port);
@@ -1287,7 +1445,21 @@ fn register(
             ),
             status_after_bootstrap.loaded,
         ) {
-            return Err(audit_after_physical(audit, &bootstrap));
+            let cleanup = cleanup_bootstrap_after_audit_failure(
+                progress,
+                &bootstrap_cleanup,
+                &service,
+                port,
+                &target,
+            );
+            let detail = cleanup
+                .err()
+                .map(|error| format!("; predeclared bootstrap cleanup: {error}"))
+                .unwrap_or_default();
+            return Err(audit_after_physical(
+                GatewayError::Registration(format!("{audit}{detail}")),
+                &bootstrap,
+            ));
         }
         finish_bootstrap(
             bootstrap,
@@ -1803,11 +1975,13 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        bootstrap_succeeded, disabled_service, finish_bootstrap, gave_up_retry,
-        installed_generation, matches_reconciled_gateway, prepare_data_directory,
+        bootstrap_cleanup_decision, bootstrap_succeeded,
+        cleanup_bootstrap_after_audit_failure_with, disabled_service, finish_bootstrap,
+        gave_up_retry, installed_generation, matches_reconciled_gateway, prepare_data_directory,
         publish_definition, registered_agent_path, retire_then_unload, run_bootstrap,
         run_planned_effect_with_cleanup, runtime_fingerprint, service_environment, service_matches,
-        startup, unavailable_service, unreadable_process_identity, BootstrapFailure, SearchPath,
+        startup, unavailable_service, unreadable_process_identity, BootstrapCleanupDecision,
+        BootstrapFailure, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
@@ -1816,7 +1990,8 @@ mod tests {
     use crate::gateway::domain::value_objects::{
         AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
         LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
-        ReconciliationCorrelation, ReconciliationIncarnation, ServiceConfiguration,
+        ReconciliationCorrelation, ReconciliationIncarnation, ReconciliationTarget,
+        ServiceConfiguration,
     };
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
     use crate::gateway::infrastructure::macos::staging::launch_settings;
@@ -1827,7 +2002,7 @@ mod tests {
         path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, Ordering},
-            Mutex,
+            Arc, Mutex,
         },
     };
 
@@ -1875,6 +2050,112 @@ mod tests {
                 target_artifact_present,
             ))
         }
+    }
+
+    struct BootstrapCleanupProgress {
+        events: Arc<Mutex<Vec<String>>>,
+        retry_failure: bool,
+        completion_failure: bool,
+        observation_failure: bool,
+    }
+
+    impl GatewayReconciliationProgress for BootstrapCleanupProgress {
+        fn readiness_invalidated(&self) {}
+
+        fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn history_observed(&self, _: ReconciliationHistoryFact) {}
+
+        fn effect_planned(
+            &self,
+            _: &str,
+            _: &LifecyclePlanStep,
+            _: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(test_receipt(1, LifecycleRecordKind::EffectPlan))
+        }
+
+        fn effect_completed(
+            &self,
+            _: &str,
+            step_id: &str,
+            _: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("complete:{step_id}"));
+            if self.completion_failure {
+                Err(GatewayError::Registration(
+                    "cleanup completion unavailable".into(),
+                ))
+            } else {
+                Ok(test_receipt(2, LifecycleRecordKind::EffectCompletion))
+            }
+        }
+
+        fn physical_observed(
+            &self,
+            _: &LifecycleObservationSource,
+            incarnation: Option<ReconciliationIncarnation>,
+            target_artifact_present: bool,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            self.events.lock().unwrap().push("observe-cleanup".into());
+            if self.observation_failure {
+                Err(GatewayError::Registration(
+                    "cleanup observation unavailable".into(),
+                ))
+            } else {
+                Ok(LifecycleObservation::new(
+                    2,
+                    incarnation,
+                    target_artifact_present,
+                ))
+            }
+        }
+
+        fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
+            self.events.lock().unwrap().push("retry-primary".into());
+            if self.retry_failure {
+                Err(GatewayError::Registration(
+                    "primary observation remains unacknowledged".into(),
+                ))
+            } else {
+                Ok(Some(LifecycleObservation::new(1, None, false)))
+            }
+        }
+    }
+
+    fn bootstrap_cleanup_step() -> LifecyclePlanStep {
+        LifecyclePlanStep::new(
+            "unload-bootstrapped-service".into(),
+            LifecycleEffect::UnloadService {
+                service: "gui/501/so.nessa.gateway.prod".into(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap()
+    }
+
+    fn bootstrap_target() -> ReconciliationTarget {
+        ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap()
+    }
+
+    fn bootstrap_incarnation(target: &ReconciliationTarget) -> ReconciliationIncarnation {
+        ReconciliationIncarnation::new(
+            target.clone(),
+            "550e8400-e29b-41d4-a716-446655440000".into(),
+            42,
+            7420,
+        )
+        .unwrap()
     }
 
     fn test_receipt(sequence: u64, kind: LifecycleRecordKind) -> AuditDeliveryReceipt {
@@ -2021,6 +2302,177 @@ mod tests {
                 "plan",
                 "complete:primary",
                 "complete:remove-published-runtime",
+                "observe-cleanup",
+            ]
+        );
+    }
+
+    #[test]
+    fn bootstrap_cleanup_retries_the_exact_primary_observation_before_its_own_records() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let progress = BootstrapCleanupProgress {
+            events: events.clone(),
+            retry_failure: false,
+            completion_failure: false,
+            observation_failure: false,
+        };
+        let target = bootstrap_target();
+        let incarnation = bootstrap_incarnation(&target);
+        let result = cleanup_bootstrap_after_audit_failure_with(
+            &progress,
+            &bootstrap_cleanup_step(),
+            &target,
+            {
+                let events = events.clone();
+                move || {
+                    events.lock().unwrap().push("prove-target".into());
+                    Ok((true, Some(incarnation)))
+                }
+            },
+            {
+                let events = events.clone();
+                move || {
+                    events.lock().unwrap().push("unload".into());
+                    Ok(())
+                }
+            },
+            {
+                let events = events.clone();
+                move || {
+                    events.lock().unwrap().push("observe-after".into());
+                    Ok((false, None))
+                }
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "prove-target",
+                "unload",
+                "retry-primary",
+                "complete:unload-bootstrapped-service",
+                "observe-after",
+                "observe-cleanup",
+            ]
+        );
+    }
+
+    #[test]
+    fn bootstrap_cleanup_refuses_a_loaded_replacement() {
+        let target = bootstrap_target();
+        let replacement_target = ReconciliationTarget::new(
+            target.service().to_owned(),
+            "c".repeat(64),
+            target.service_generation().to_owned(),
+        )
+        .unwrap();
+        let unloaded = AtomicBool::new(false);
+        let progress = BootstrapCleanupProgress {
+            events: Arc::new(Mutex::new(Vec::new())),
+            retry_failure: false,
+            completion_failure: false,
+            observation_failure: false,
+        };
+        let result = cleanup_bootstrap_after_audit_failure_with(
+            &progress,
+            &bootstrap_cleanup_step(),
+            &target,
+            || Ok((true, Some(bootstrap_incarnation(&replacement_target)))),
+            || {
+                unloaded.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            || Ok((false, None)),
+        );
+
+        assert_eq!(
+            result,
+            Err("replacement occupied the service label; cleanup refused".into())
+        );
+        assert!(!unloaded.load(Ordering::SeqCst));
+        assert_eq!(
+            bootstrap_cleanup_decision(false, None, &target),
+            BootstrapCleanupDecision::AlreadyAbsent
+        );
+    }
+
+    #[test]
+    fn bootstrap_cleanup_preserves_physical_result_when_audit_remains_unavailable() {
+        for (retry_failure, completion_failure, observation_failure, expected) in [
+            (
+                true,
+                false,
+                false,
+                "primary observation remains unacknowledged",
+            ),
+            (false, true, false, "cleanup completion unavailable"),
+            (false, false, true, "cleanup observation unavailable"),
+        ] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let progress = BootstrapCleanupProgress {
+                events: events.clone(),
+                retry_failure,
+                completion_failure,
+                observation_failure,
+            };
+            let target = bootstrap_target();
+            let result = cleanup_bootstrap_after_audit_failure_with(
+                &progress,
+                &bootstrap_cleanup_step(),
+                &target,
+                || Ok((true, Some(bootstrap_incarnation(&target)))),
+                {
+                    let events = events.clone();
+                    move || {
+                        events.lock().unwrap().push("unload".into());
+                        Ok(())
+                    }
+                },
+                || Ok((false, None)),
+            );
+
+            let error = result.unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            assert!(
+                error.contains("cleanup command result was Accepted"),
+                "{error}"
+            );
+            assert_eq!(
+                events.lock().unwrap().first().map(String::as_str),
+                Some("unload")
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_cleanup_records_a_failed_unload_and_fresh_state() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let progress = BootstrapCleanupProgress {
+            events: events.clone(),
+            retry_failure: false,
+            completion_failure: false,
+            observation_failure: false,
+        };
+        let target = bootstrap_target();
+        let incarnation = bootstrap_incarnation(&target);
+        let incarnation_after = incarnation.clone();
+        let result = cleanup_bootstrap_after_audit_failure_with(
+            &progress,
+            &bootstrap_cleanup_step(),
+            &target,
+            || Ok((true, Some(incarnation.clone()))),
+            || Err("bootout failed".into()),
+            || Ok((true, Some(incarnation_after))),
+        );
+
+        assert_eq!(result, Err("bootout failed".into()));
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "retry-primary",
+                "complete:unload-bootstrapped-service",
                 "observe-cleanup",
             ]
         );

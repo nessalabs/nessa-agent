@@ -182,8 +182,15 @@ This one-time recovery limitation concerns direct-app registrations already brok
 before migration. Once staged, app replacement leaves the registered runtime
 intact so its normal managed retirement boundary remains available.
 Before bootstrap, the host durably records the exact service, definition, runtime
-fingerprint and generation under the service-label lock; it retains that record
-until readiness succeeds. A retry may unload an unambiguously PID-less unavailable registration only when that
+fingerprint and generation under the service-label lock, together with an exact
+bootout contingency for only that target; it retains the registration record
+until readiness succeeds. If bootstrap completion or observation delivery fails,
+the host freshly proves that the same target still owns the label before executing
+the predeclared bootout. A replacement is preserved. The host retries an
+unacknowledged observation as the identical record before appending the cleanup
+completion and its fresh post-command observation; persistent journal failure
+leaves the history unresolved while still retaining the physical cleanup result.
+A retry may unload an unambiguously PID-less unavailable registration only when that
 host-owned record, the desired definition and the complete on-disk definition all
 agree. Missing, malformed or contradictory evidence preserves the service. This
 lets a failed readiness check retry the host's own new registration without using

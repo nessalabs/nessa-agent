@@ -847,6 +847,79 @@ mod tests {
     }
 
     #[test]
+    fn predeclared_bootstrap_cleanup_has_a_valid_chain_at_every_record_boundary() {
+        let bootstrap = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::BootstrapService { target: target() },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let cleanup = LifecyclePlanStep::new(
+            "unload-bootstrapped-service".into(),
+            LifecycleEffect::UnloadService {
+                service: "service".into(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let records = [
+            intent(Some(incarnation(10))),
+            record(
+                1,
+                LifecycleRecordPayload::EffectPlan {
+                    plan_id: "bootstrap-service".into(),
+                    expected_before: Some(incarnation(10)),
+                    target: target(),
+                    primary: bootstrap,
+                    cleanup: vec![cleanup],
+                },
+            ),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "bootstrap-service".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "bootstrap-service".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: LifecycleObservation::new(1, Some(incarnation(11)), true),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "bootstrap-service".into(),
+                    step_id: "unload-bootstrapped-service".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                5,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "bootstrap-service".into(),
+                        step_id: "unload-bootstrapped-service".into(),
+                    },
+                    state: LifecycleObservation::new(2, None, false),
+                },
+            ),
+        ];
+
+        for length in 1..=records.len() {
+            let restored = LifecycleHistory::restore(&records[..length]).unwrap();
+            assert_eq!(restored.next_sequence(), length as u64);
+            assert!(!restored.is_terminal());
+        }
+    }
+
+    #[test]
     fn effect_completion_is_not_a_physical_observation() {
         let records = vec![
             intent(Some(incarnation(10))),
