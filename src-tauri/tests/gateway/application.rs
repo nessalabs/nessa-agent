@@ -648,7 +648,6 @@ impl GatewayHost for ConfigurationChangedHost {
         journal: &dyn GatewayReconciliationJournalSession,
         plan: &AuditDeliveryReceipt,
     ) -> Result<LifecycleObservation, GatewayError> {
-        let gateway = session.request().intended();
         complete_stop(session, journal, plan, || Ok(()))
     }
 }
@@ -1387,7 +1386,6 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -1677,7 +1675,6 @@ fn joined_audit_failure_rejects_only_the_joiner_and_does_not_cancel_the_owner() 
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -1816,7 +1813,6 @@ impl GatewayHost for InterleavedHost {
         journal: &dyn GatewayReconciliationJournalSession,
         plan: &AuditDeliveryReceipt,
     ) -> Result<LifecycleObservation, GatewayError> {
-        let gateway = session.request().intended();
         complete_stop(session, journal, plan, || Ok(()))
     }
 }
@@ -1996,7 +1992,6 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2208,7 +2203,6 @@ fn a_later_credential_load_retries_failed_startup_with_revisioned_events() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2354,7 +2348,6 @@ fn native_restart_progress_transitions_ready_through_starting() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2466,7 +2459,6 @@ fn panicking_host_and_event_adapters_cannot_strand_startup() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2537,7 +2529,6 @@ fn panicking_predecessor_settles_and_promotes_the_exact_pending_receipt() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2611,7 +2602,6 @@ fn concurrent_waiters_run_one_registration_and_share_its_ready_identity() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2691,7 +2681,6 @@ fn caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_re
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -2954,7 +2943,6 @@ fn partial_outcomes_preserve_each_confirmed_native_boundary() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }
@@ -3110,7 +3098,6 @@ fn invalid_history_cannot_hide_an_ineligible_claimed_identity() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let gateway = session.request().intended();
             complete_stop(session, journal, plan, || Ok(()))
         }
     }

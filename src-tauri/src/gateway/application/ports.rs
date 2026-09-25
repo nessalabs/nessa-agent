@@ -1,9 +1,10 @@
 use crate::gateway::domain::value_objects::{
-    AuditDeliveryReceipt, LifecycleCommandResult, LifecycleObservation, LifecycleObservationSource,
-    LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationAttemptRecord, ReconciliationCause,
-    ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEffectTimingRecord,
-    ReconciliationEvidence, ReconciliationHistory, ReconciliationHistoryFact,
-    ReconciliationIncarnation, ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
+    AuditDeliveryReceipt, LifecycleCommandResult, LifecycleFailedPhase, LifecycleObservation,
+    LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep,
+    ReconciliationAttemptRecord, ReconciliationCause, ReconciliationCleanupDecision,
+    ReconciliationCorrelation, ReconciliationEffectTimingRecord, ReconciliationEvidence,
+    ReconciliationHistory, ReconciliationHistoryFact, ReconciliationIncarnation,
+    ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
     ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
     ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget,
     ReconciliationValidationFacts, SearchPath, SearchPathError,
@@ -933,9 +934,12 @@ pub(crate) mod testing {
         LifecyclePlanStep, LoginShellError, LoginShellPath, ReconciliationCleanupDecision,
         ReconciliationCorrelation, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     };
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
+    use std::{
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
+        time::Instant,
     };
 
     /// A login shell with a fixed answer — the path it reports, or the reason

@@ -608,7 +608,8 @@ fn load_records(directory: &PrivateDirectory) -> Result<Vec<StoredRecord>, Gatew
             ));
         }
         let record = acknowledge_final_record(directory, entry.name(), None, None)?.0;
-        if record.file_name() != entry.name() {
+        let expected_name = record.file_name();
+        if entry.name().to_str() != Some(expected_name.as_str()) {
             return Err(GatewayError::Registration(
                 "Gateway lifecycle journal filename disagrees with its record".into(),
             ));
@@ -683,7 +684,8 @@ fn acknowledge_final_record(
     file.seek(SeekFrom::Start(0))
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
     let mut bytes = Vec::new();
-    file.take(MAX_RECORD_BYTES + 1)
+    (&mut file)
+        .take(MAX_RECORD_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {

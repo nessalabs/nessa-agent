@@ -514,7 +514,7 @@ fn register(
     progress
         .intent_admitted(intent)
         .map_err(RegisterFailure::Audit)?;
-    let staged_runtime = run_planned_effect(
+    let _staged_runtime = run_planned_effect(
         progress,
         "stage-runtime",
         LifecycleEffect::StageRuntime {
@@ -536,7 +536,6 @@ fn register(
             ))
         },
     )?;
-    let runtime = staged_runtime.as_path();
     match state {
         ServiceState::ManagedCurrent(running) => {
             // The loaded service already advertises the staged runtime, so the
@@ -878,6 +877,12 @@ fn register(
     let running = installation?;
     // An installation that failed leaves the old registration, and possibly an
     // old process, alive for a retry.
+    let retained = retained_runtimes(
+        &fingerprint,
+        &running.fingerprint,
+        pending.as_ref(),
+        fence.as_ref(),
+    );
     let gateway = ReconciledGateway::new(
         service,
         running.fingerprint,
@@ -889,12 +894,7 @@ fn register(
     prune_planned(
         progress,
         &installations,
-        &retained_runtimes(
-            &fingerprint,
-            &running.fingerprint,
-            pending.as_ref(),
-            fence.as_ref(),
-        ),
+        &retained,
         &gateway.audit_identity().map_err(RegisterFailure::Audit)?,
     )?;
     Ok(gateway)
