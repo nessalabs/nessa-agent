@@ -130,9 +130,10 @@ pub struct DeletionFailures {
     /// The history's lease was still held elsewhere once the delete's wait
     /// for it ran out, so the history was neither read nor erased. Only that
     /// wait sets this — storage answering `Busy` under the deletion's own
-    /// lease does not — and it is what a deletion is carried on for until the
-    /// lease is let go
-    /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`).
+    /// lease does not
+    /// (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`) — and
+    /// it is what a deletion is carried on for until the lease is let go
+    /// (`a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`).
     pub history_held: bool,
     /// The agent could not be asked to delete its own record of the provider
     /// session, or refused: `ConversationError::Agent` with the typed cause.
