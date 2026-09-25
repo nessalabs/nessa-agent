@@ -215,7 +215,9 @@ impl LinuxSystemdJob for super::user_manager::JobHandle {
 }
 
 struct NativeLinuxManagerFactory;
-struct NativeLinuxRuntimeContext;
+struct NativeLinuxRuntimeContext {
+    xdg_paths: (Option<OsString>, Option<OsString>, Option<OsString>),
+}
 
 impl LinuxManagerFactory for NativeLinuxManagerFactory {
     fn verify_prerequisites(&self, expected_uid: u32) -> Result<(), String> {
@@ -236,11 +238,7 @@ impl LinuxRuntimeContext for NativeLinuxRuntimeContext {
     }
 
     fn xdg_paths(&self) -> (Option<OsString>, Option<OsString>, Option<OsString>) {
-        (
-            std::env::var_os("XDG_CONFIG_HOME"),
-            std::env::var_os("XDG_DATA_HOME"),
-            std::env::var_os("XDG_STATE_HOME"),
-        )
+        self.xdg_paths.clone()
     }
 
     fn discover_endpoint(
@@ -288,6 +286,7 @@ impl SystemdGateway {
     pub fn new(
         configuration: ServiceConfiguration,
         home: PathBuf,
+        xdg_paths: (Option<OsString>, Option<OsString>, Option<OsString>),
         clock: Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
@@ -295,7 +294,7 @@ impl SystemdGateway {
             home,
             clock,
             manager_factory: Arc::new(NativeLinuxManagerFactory),
-            runtime_context: Arc::new(NativeLinuxRuntimeContext),
+            runtime_context: Arc::new(NativeLinuxRuntimeContext { xdg_paths }),
             process_factory: Arc::new(NativeLinuxProcessFactory),
         }
     }
@@ -1083,25 +1082,49 @@ impl GatewayHost for SystemdGateway {
         verify_systemd_authority(manager.as_ref(), &paths, &unit).map_err(GatewayError::Stop)?;
         let command = LinuxSignalAuthority::corroborate(process, token, native, portable, 1)?
             .dispatch(session, plan, libc::SIGUSR1)?;
-        session.command_result(command.clone())?;
-        retry(|| {
-            journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)
-        })?;
-        let observed = observe_systemd_state(
+        let command_record = session.command_result(command.clone());
+        let observation = observe_systemd_state(
             manager.as_ref(),
             &unit,
             &data,
             self.runtime_context.as_ref(),
         )
-        .map_err(GatewayError::Stop)?;
-        let observation = observed
-            .lifecycle_observation(
-                2,
-                wants_link_matches(&paths.wants_link, &paths.unit_file)
-                    .map_err(GatewayError::Stop)?,
-            )
-            .map_err(|error| GatewayError::Stop(error.to_string()))?;
-        retry(|| {
+        .and_then(|observed| {
+            observed
+                .lifecycle_observation(2, wants_link_matches(&paths.wants_link, &paths.unit_file)?)
+                .map_err(|error| error.to_string())
+        });
+        let fresh_observation = observation
+            .as_ref()
+            .map_err(|error| error.clone())
+            .and_then(|observation| {
+                session
+                    .fresh_observation(observation.clone())
+                    .map_err(|error| error.to_string())
+            });
+        let completion_delivery = retry(|| {
+            journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)
+        });
+        let physical_failures = command_failure(&command)
+            .into_iter()
+            .chain(observation.as_ref().err().cloned())
+            .chain(fresh_observation.as_ref().err().cloned())
+            .collect::<Vec<_>>();
+        if let Err(error) = command_record {
+            return Err(audit_with_physical(
+                error,
+                physical_failures.clone().into_iter(),
+            ));
+        }
+        if let Err(audit) = completion_delivery {
+            return Err(audit_with_physical(
+                audit,
+                physical_failures.clone().into_iter(),
+            ));
+        }
+        let observation = observation.map_err(GatewayError::Stop)?;
+        fresh_observation.map_err(GatewayError::Stop)?;
+        if let Err(audit) = retry(|| {
             journal.observation(
                 &LifecycleObservationSource::Effect {
                     plan_id: "stop-agents-on-desktop-quit".into(),
@@ -1109,14 +1132,24 @@ impl GatewayHost for SystemdGateway {
                 },
                 &observation,
             )
-        })?;
-        session.fresh_observation(observation.clone())?;
+        }) {
+            return Err(audit_with_physical(audit, physical_failures.into_iter()));
+        }
         match command {
             LifecycleCommandResult::Accepted => Ok(observation),
             LifecycleCommandResult::Rejected(message)
             | LifecycleCommandResult::Failed(message)
             | LifecycleCommandResult::Indeterminate(message) => Err(GatewayError::Stop(message)),
         }
+    }
+}
+
+fn command_failure(result: &LifecycleCommandResult) -> Option<String> {
+    match result {
+        LifecycleCommandResult::Accepted => None,
+        LifecycleCommandResult::Rejected(error)
+        | LifecycleCommandResult::Failed(error)
+        | LifecycleCommandResult::Indeterminate(error) => Some(error.clone()),
     }
 }
 
@@ -1147,26 +1180,46 @@ fn stage_runtime(
     let plan_id = "stage-systemd-runtime";
     progress.effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup))?;
     let result = publish_runtime(source, root, fingerprint, &staging_generation).map(|_| ());
+    let primary_present = runtime_artifact_present(destination, fingerprint);
+    let cleanup_result = remove_staging_runtime(root, &staging_generation);
+    let cleanup_present = staging_runtime_present(root, &staging_generation);
     let completion = match &result {
         Ok(()) => LifecycleCommandResult::Accepted,
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
-    if let Err(error) = progress.effect_completed(plan_id, primary.id(), &completion) {
-        let _ = remove_staging_runtime(root, &staging_generation);
-        return Err(error);
+    if let Err(audit) = progress.effect_completed(plan_id, primary.id(), &completion) {
+        return Err(audit_with_physical(
+            audit,
+            result
+                .as_ref()
+                .err()
+                .into_iter()
+                .chain(primary_present.as_ref().err())
+                .chain(cleanup_result.as_ref().err())
+                .chain(cleanup_present.as_ref().err())
+                .cloned(),
+        ));
     }
-    if let Err(error) = progress.physical_observed(
+    let primary_present = primary_present.map_err(GatewayError::Registration)?;
+    if let Err(audit) = progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: plan_id.into(),
             step_id: primary.id().into(),
         },
         None,
-        runtime_artifact_present(destination, fingerprint).map_err(GatewayError::Registration)?,
+        primary_present,
     ) {
-        let _ = remove_staging_runtime(root, &staging_generation);
-        return Err(error);
+        return Err(audit_with_physical(
+            audit,
+            result
+                .as_ref()
+                .err()
+                .into_iter()
+                .chain(cleanup_result.as_ref().err())
+                .chain(cleanup_present.as_ref().err())
+                .cloned(),
+        ));
     }
-    let cleanup_result = remove_staging_runtime(root, &staging_generation);
     let cleanup_completion = match &cleanup_result {
         Ok(true) => LifecycleCommandResult::Accepted,
         Ok(false) => LifecycleCommandResult::Indeterminate(
@@ -1174,15 +1227,37 @@ fn stage_runtime(
         ),
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
-    progress.effect_completed(plan_id, cleanup.id(), &cleanup_completion)?;
-    progress.physical_observed(
+    if let Err(audit) = progress.effect_completed(plan_id, cleanup.id(), &cleanup_completion) {
+        return Err(audit_with_physical(
+            audit,
+            result
+                .as_ref()
+                .err()
+                .into_iter()
+                .chain(cleanup_result.as_ref().err())
+                .chain(cleanup_present.as_ref().err())
+                .cloned(),
+        ));
+    }
+    let cleanup_present = cleanup_present.map_err(GatewayError::Registration)?;
+    if let Err(audit) = progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: plan_id.into(),
             step_id: cleanup.id().into(),
         },
         None,
-        staging_runtime_present(root, &staging_generation).map_err(GatewayError::Registration)?,
-    )?;
+        cleanup_present,
+    ) {
+        return Err(audit_with_physical(
+            audit,
+            result
+                .as_ref()
+                .err()
+                .into_iter()
+                .chain(cleanup_result.as_ref().err())
+                .cloned(),
+        ));
+    }
     cleanup_result.map_err(GatewayError::Registration)?;
     result.map_err(GatewayError::Registration)
 }
@@ -1199,19 +1274,36 @@ fn planned_physical(
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
     progress.effect_planned(plan_id, &step, &[])?;
     let result = authorize().and_then(|()| run());
+    let observed = present();
     let completion = match &result {
         Ok(()) => LifecycleCommandResult::Accepted,
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
-    progress.effect_completed(plan_id, step.id(), &completion)?;
-    progress.physical_observed(
+    if let Err(audit) = progress.effect_completed(plan_id, step.id(), &completion) {
+        return Err(audit_with_physical(
+            audit,
+            result
+                .as_ref()
+                .err()
+                .into_iter()
+                .chain(observed.as_ref().err())
+                .cloned(),
+        ));
+    }
+    let observed = observed.map_err(GatewayError::Registration)?;
+    if let Err(audit) = progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: plan_id.into(),
             step_id: step.id().into(),
         },
         None,
-        present().map_err(GatewayError::Registration)?,
-    )?;
+        observed,
+    ) {
+        return Err(audit_with_physical(
+            audit,
+            result.as_ref().err().into_iter().cloned(),
+        ));
+    }
     result.map_err(GatewayError::Registration)
 }
 
@@ -1255,61 +1347,85 @@ where
     .map_err(|error| GatewayError::Registration(error.to_string()))?;
     progress.effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup))?;
     let result = (actions.authorize)().and_then(|()| (actions.run)());
+    let primary_present = (actions.present)();
+    let cleanup_result = (actions.cleanup_run)();
+    let cleanup_present = (actions.cleanup_present)();
     let completion = match &result {
         Ok(()) => LifecycleCommandResult::Accepted,
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
-    let completion_delivery = progress.effect_completed(plan_id, primary.id(), &completion);
-    let cleanup_result = (actions.cleanup_run)();
-    if let Err(audit) = completion_delivery {
-        return Err(cleanup_result
-            .as_ref()
-            .err()
-            .map_or(audit.clone(), |cleanup| GatewayError::Audit {
-                audit: audit.to_string(),
-                physical: Some(GatewayPhysicalResult::Failed(Box::new(
-                    GatewayError::Registration(format!(
-                        "publication contingency cleanup also failed: {cleanup}"
-                    )),
-                ))),
-            }));
+    let physical_failures = result
+        .as_ref()
+        .err()
+        .into_iter()
+        .chain(primary_present.as_ref().err())
+        .chain(cleanup_result.as_ref().err())
+        .chain(cleanup_present.as_ref().err())
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Err(audit) = progress.effect_completed(plan_id, primary.id(), &completion) {
+        return Err(audit_with_physical(
+            audit,
+            physical_failures.clone().into_iter(),
+        ));
     }
-    let primary_observation = progress.physical_observed(
+    let primary_present = primary_present.map_err(GatewayError::Registration)?;
+    if let Err(audit) = progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: plan_id.into(),
             step_id: primary.id().into(),
         },
         None,
-        (actions.present)().map_err(GatewayError::Registration)?,
-    );
-    if let Err(audit) = primary_observation {
-        return Err(cleanup_result
-            .as_ref()
-            .err()
-            .map_or(audit.clone(), |cleanup| GatewayError::Audit {
-                audit: audit.to_string(),
-                physical: Some(GatewayPhysicalResult::Failed(Box::new(
-                    GatewayError::Registration(format!(
-                        "publication contingency cleanup also failed: {cleanup}"
-                    )),
-                ))),
-            }));
+        primary_present,
+    ) {
+        return Err(audit_with_physical(
+            audit,
+            physical_failures.clone().into_iter(),
+        ));
     }
     let cleanup_completion = match &cleanup_result {
         Ok(()) => LifecycleCommandResult::Accepted,
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
-    progress.effect_completed(plan_id, cleanup.id(), &cleanup_completion)?;
-    progress.physical_observed(
+    if let Err(audit) = progress.effect_completed(plan_id, cleanup.id(), &cleanup_completion) {
+        return Err(audit_with_physical(
+            audit,
+            physical_failures.clone().into_iter(),
+        ));
+    }
+    let cleanup_present = cleanup_present.map_err(GatewayError::Registration)?;
+    if let Err(audit) = progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: plan_id.into(),
             step_id: cleanup.id().into(),
         },
         None,
-        (actions.cleanup_present)().map_err(GatewayError::Registration)?,
-    )?;
+        cleanup_present,
+    ) {
+        return Err(audit_with_physical(audit, physical_failures.into_iter()));
+    }
     cleanup_result.map_err(GatewayError::Registration)?;
     result.map_err(GatewayError::Registration)
+}
+
+fn audit_with_physical(
+    audit: GatewayError,
+    failures: impl Iterator<Item = String>,
+) -> GatewayError {
+    let failures = failures.collect::<Vec<_>>();
+    let audit = match audit {
+        GatewayError::Audit { audit, .. } => audit,
+        error => error.to_string(),
+    };
+    let physical = if failures.is_empty() {
+        GatewayPhysicalResult::Succeeded
+    } else {
+        GatewayPhysicalResult::Failed(Box::new(GatewayError::Registration(failures.join("; "))))
+    };
+    GatewayError::Audit {
+        audit,
+        physical: Some(physical),
+    }
 }
 
 fn recovery_artifact_present(
@@ -2468,25 +2584,48 @@ fn retire_prior(
         Ok(()) => LifecycleCommandResult::Accepted,
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
-    progress.effect_completed("request-systemd-retirement", step.id(), &completion)?;
-    let observed = observe_systemd_state(runtime.manager, unit, authority.data, runtime.context)
-        .map_err(GatewayError::Registration)?;
-    let artifact_present = retirement_artifact_present(
-        authority.data,
-        &request_id,
-        prior,
-        target,
-        observed.incarnation.as_ref(),
-    )
-    .map_err(GatewayError::Registration)?;
-    observed.record(
+    let observed = observe_systemd_state(runtime.manager, unit, authority.data, runtime.context);
+    let artifact_present = observed
+        .as_ref()
+        .map_err(|error| error.clone())
+        .and_then(|observed| {
+            retirement_artifact_present(
+                authority.data,
+                &request_id,
+                prior,
+                target,
+                observed.incarnation.as_ref(),
+            )
+        });
+    if let Err(audit) =
+        progress.effect_completed("request-systemd-retirement", step.id(), &completion)
+    {
+        return Err(audit_with_physical(
+            audit,
+            result
+                .as_ref()
+                .err()
+                .into_iter()
+                .chain(observed.as_ref().err())
+                .chain(artifact_present.as_ref().err())
+                .cloned(),
+        ));
+    }
+    let observed = observed.map_err(GatewayError::Registration)?;
+    let artifact_present = artifact_present.map_err(GatewayError::Registration)?;
+    if let Err(audit) = observed.record(
         progress,
         &LifecycleObservationSource::Effect {
             plan_id: "request-systemd-retirement".into(),
             step_id: step.id().into(),
         },
         artifact_present,
-    )?;
+    ) {
+        return Err(audit_with_physical(
+            audit,
+            result.as_ref().err().into_iter().cloned(),
+        ));
+    }
     result.map_err(GatewayError::Registration)
 }
 
@@ -3188,6 +3327,7 @@ mod tests {
         let progress = FailingCompletionProgress {
             planned_cleanup: AtomicUsize::new(0),
             physical_cleanup: AtomicUsize::new(0),
+            physical_observations: AtomicUsize::new(0),
         };
         let result = planned_physical_with_cleanup(
             &progress,
@@ -3201,17 +3341,28 @@ mod tests {
             PhysicalActionsWithCleanup {
                 authorize: || Ok(()),
                 run: || Ok(()),
-                present: || Ok(true),
+                present: || {
+                    progress
+                        .physical_observations
+                        .fetch_add(1, Ordering::SeqCst);
+                    Ok(true)
+                },
                 cleanup_run: || {
                     progress.physical_cleanup.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 },
-                cleanup_present: || Ok(false),
+                cleanup_present: || {
+                    progress
+                        .physical_observations
+                        .fetch_add(1, Ordering::SeqCst);
+                    Ok(false)
+                },
             },
         );
         assert!(result.is_err());
         assert_eq!(progress.planned_cleanup.load(Ordering::SeqCst), 1);
         assert_eq!(progress.physical_cleanup.load(Ordering::SeqCst), 1);
+        assert_eq!(progress.physical_observations.load(Ordering::SeqCst), 2);
     }
 
     struct OwnerChangingManager {
@@ -3237,6 +3388,7 @@ mod tests {
     struct FailingCompletionProgress {
         planned_cleanup: AtomicUsize,
         physical_cleanup: AtomicUsize,
+        physical_observations: AtomicUsize,
     }
 
     impl GatewayReconciliationProgress for FailingCompletionProgress {

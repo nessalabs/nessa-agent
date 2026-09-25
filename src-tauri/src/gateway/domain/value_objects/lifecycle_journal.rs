@@ -962,6 +962,25 @@ fn validate_cleanup_effect(
             LifecycleEffect::BootstrapService { target: planned },
             LifecycleEffect::UnloadService { service },
         ) => planned == target && service == namespace,
+        (
+            LifecycleEffect::PublishSystemdServiceDefinition {
+                target: published,
+                definition_digest: published_digest,
+            },
+            LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: settled,
+                definition_digest: settled_digest,
+            },
+        ) => {
+            published == target
+                && settled == target
+                && published_digest == settled_digest
+                && valid_digest(published_digest)
+        }
+        (
+            LifecycleEffect::PublishSystemdWantsLink { target: published },
+            LifecycleEffect::SettleSystemdWantsLinkTransaction { target: settled },
+        ) => published == target && settled == target,
         _ => false,
     };
     agrees
@@ -1496,6 +1515,61 @@ mod tests {
             assert_eq!(restored.next_sequence(), length as u64);
             assert!(!restored.is_terminal());
         }
+    }
+
+    #[test]
+    fn systemd_publication_cleanup_requires_exact_target_and_digest_agreement() {
+        let target = systemd_target();
+        let digest = "c".repeat(64);
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdServiceDefinition {
+                target: target.clone(),
+                definition_digest: digest.clone(),
+            },
+            &LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: digest.clone(),
+            },
+            &target,
+            target.service(),
+        )
+        .is_ok());
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdServiceDefinition {
+                target: target.clone(),
+                definition_digest: digest,
+            },
+            &LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: "d".repeat(64),
+            },
+            &target,
+            target.service(),
+        )
+        .is_err());
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdWantsLink {
+                target: target.clone(),
+            },
+            &LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                target: target.clone(),
+            },
+            &target,
+            target.service(),
+        )
+        .is_ok());
+        let other =
+            ReconciliationTarget::new(target.service().into(), "e".repeat(64), "f".repeat(64))
+                .unwrap();
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::PublishSystemdWantsLink {
+                target: target.clone(),
+            },
+            &LifecycleEffect::SettleSystemdWantsLinkTransaction { target: other },
+            &target,
+            target.service(),
+        )
+        .is_err());
     }
 
     #[test]

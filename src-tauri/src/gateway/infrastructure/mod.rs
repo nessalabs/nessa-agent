@@ -42,4 +42,6 @@ pub use commands::{
     __tauri_command_name_retry_gateway_startup, gateway_startup, retry_gateway_startup,
     startup_events,
 };
-pub use selection::{current, login_shell_path, reconciliation_audit, reconciliation_ids};
+pub use selection::{
+    current, login_shell_path, platform_context, reconciliation_audit, reconciliation_ids,
+};

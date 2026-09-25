@@ -12,12 +12,63 @@ use super::reconciliation_audit::FileReconciliationAudit;
 use super::unsupported::{Unsupported, UnsupportedAudit};
 use super::{login_shell::LoginShell, reconciliation_ids::RandomReconciliationIds};
 use crate::gateway::domain::value_objects::ServiceConfiguration;
-use std::{path::PathBuf, sync::Arc};
+use std::{io, path::PathBuf, sync::Arc};
+
+/// One composition-time snapshot of the account paths used by the gateway.
+pub struct PlatformContext {
+    home: PathBuf,
+    #[cfg(target_os = "linux")]
+    config_home: PathBuf,
+    #[cfg(target_os = "linux")]
+    data_home: PathBuf,
+    #[cfg(target_os = "linux")]
+    state_home: PathBuf,
+}
+
+pub fn platform_context(home: PathBuf) -> io::Result<PlatformContext> {
+    #[cfg(target_os = "linux")]
+    {
+        let config_home = resolved_xdg_root("XDG_CONFIG_HOME", &home, ".config")?;
+        let data_home = resolved_xdg_root("XDG_DATA_HOME", &home, ".local/share")?;
+        let state_home = resolved_xdg_root("XDG_STATE_HOME", &home, ".local/state")?;
+        return Ok(PlatformContext {
+            home,
+            config_home,
+            data_home,
+            state_home,
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(PlatformContext { home })
+}
+
+#[cfg(target_os = "linux")]
+fn resolved_xdg_root(name: &str, home: &std::path::Path, fallback: &str) -> io::Result<PathBuf> {
+    let value = std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(fallback));
+    if value.is_absolute()
+        && value.components().all(|component| {
+            !matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        Ok(value)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} must be absolute and normalized"),
+        ))
+    }
+}
 
 /// Selects the native gateway adapter for the current build target.
 pub fn current(
     configuration: ServiceConfiguration,
-    home: PathBuf,
+    platform: &PlatformContext,
     clock: Arc<dyn MonotonicClock>,
 ) -> Arc<dyn GatewayHost> {
     #[cfg(target_os = "macos")]
@@ -26,16 +77,25 @@ pub fn current(
         Arc::new(Launchd::new(
             Arc::new(LaunchctlDisabledServiceStatus),
             configuration,
-            home,
+            platform.home.clone(),
         ))
     }
     #[cfg(target_os = "linux")]
     {
-        Arc::new(SystemdGateway::new(configuration, home, clock))
+        Arc::new(SystemdGateway::new(
+            configuration,
+            platform.home.clone(),
+            (
+                Some(platform.config_home.clone().into_os_string()),
+                Some(platform.data_home.clone().into_os_string()),
+                Some(platform.state_home.clone().into_os_string()),
+            ),
+            clock,
+        ))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (configuration, home, clock);
+        let _ = (configuration, platform, clock);
         Arc::new(Unsupported)
     }
 }
@@ -56,29 +116,25 @@ pub fn reconciliation_ids() -> Arc<dyn GatewayReconciliationIds> {
 
 pub fn reconciliation_audit(
     config_root: Option<PathBuf>,
-    home: PathBuf,
+    platform: &PlatformContext,
     clock: Arc<dyn MonotonicClock>,
 ) -> Arc<dyn GatewayReconciliationAudit> {
     #[cfg(target_os = "macos")]
     {
-        let _ = home;
+        let _ = platform;
         Arc::new(FileReconciliationAudit::new(config_root, clock))
     }
     #[cfg(target_os = "linux")]
     {
         let _ = config_root;
-        let state = std::env::var_os("XDG_STATE_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".local/state"));
         Arc::new(FileReconciliationAudit::new(
-            Some(state.join("nessa")),
+            Some(platform.state_home.join("nessa")),
             clock,
         ))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (config_root, home, clock);
+        let _ = (config_root, platform, clock);
         Arc::new(UnsupportedAudit)
     }
 }

@@ -149,7 +149,60 @@ pub struct SystemdJobTerminal {
     object_path: String,
     job_id: u32,
     unit: SystemdUnitName,
-    result: String,
+    result: SystemdJobTerminalResult,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SystemdJobTerminalResult {
+    Done,
+    Canceled,
+    Timeout,
+    Failed,
+    Dependency,
+    Skipped,
+    Invalid,
+    Assert,
+    Unsupported,
+    Collected,
+    Once,
+    Frozen,
+}
+
+impl SystemdJobTerminalResult {
+    fn parse(value: &str) -> Result<Self, SystemdEvidenceError> {
+        match value {
+            "done" => Ok(Self::Done),
+            "canceled" => Ok(Self::Canceled),
+            "timeout" => Ok(Self::Timeout),
+            "failed" => Ok(Self::Failed),
+            "dependency" => Ok(Self::Dependency),
+            "skipped" => Ok(Self::Skipped),
+            "invalid" => Ok(Self::Invalid),
+            "assert" => Ok(Self::Assert),
+            "unsupported" => Ok(Self::Unsupported),
+            "collected" => Ok(Self::Collected),
+            "once" => Ok(Self::Once),
+            "frozen" => Ok(Self::Frozen),
+            _ => Err(SystemdEvidenceError::InvalidJob),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Canceled => "canceled",
+            Self::Timeout => "timeout",
+            Self::Failed => "failed",
+            Self::Dependency => "dependency",
+            Self::Skipped => "skipped",
+            Self::Invalid => "invalid",
+            Self::Assert => "assert",
+            Self::Unsupported => "unsupported",
+            Self::Collected => "collected",
+            Self::Once => "once",
+            Self::Frozen => "frozen",
+        }
+    }
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -164,9 +217,10 @@ impl SystemdJobTerminal {
         let derived = object_path
             .strip_prefix("/org/freedesktop/systemd1/job/")
             .and_then(|value| value.parse::<u32>().ok());
-        if job_id == 0 || derived != Some(job_id) || result.trim().is_empty() {
+        if job_id == 0 || derived != Some(job_id) {
             return Err(SystemdEvidenceError::InvalidJob);
         }
+        let result = SystemdJobTerminalResult::parse(&result)?;
         Ok(Self {
             manager,
             object_path,
@@ -292,12 +346,14 @@ impl SystemdJobAttempt {
                 "systemd terminal evidence disagrees with its plan or returned attempt".into(),
             );
         }
-        if terminal.result == "done" {
+        if terminal.result == SystemdJobTerminalResult::Done {
             SystemdJobConclusion::Accepted
         } else {
             SystemdJobConclusion::Rejected(format!(
                 "job {} at {} completed with {}",
-                terminal.job_id, terminal.object_path, terminal.result
+                terminal.job_id,
+                terminal.object_path,
+                terminal.result.as_str()
             ))
         }
     }
@@ -500,6 +556,22 @@ mod tests {
             ),
             SystemdJobConclusion::Indeterminate(_)
         ));
+    }
+
+    #[test]
+    fn terminal_rejects_results_outside_systemds_closed_result_set() {
+        let manager = SystemdManagerIdentity::new(":1.7".into(), 41, 1000).unwrap();
+        let unit = SystemdUnitName::parse("nessa-gateway.service".into()).unwrap();
+        assert_eq!(
+            SystemdJobTerminal::new(
+                manager,
+                "/org/freedesktop/systemd1/job/9".into(),
+                9,
+                unit,
+                "future-result".into(),
+            ),
+            Err(SystemdEvidenceError::InvalidJob)
+        );
     }
 
     #[test]

@@ -60,6 +60,12 @@ pub(super) type ExecStartEx = (
 );
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct SnapshotIdentity {
+    invocation: Option<SystemdInvocationId>,
+    main_process_id: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct JobTerminal {
     pub manager: SystemdManagerIdentity,
     pub object_path: String,
@@ -167,10 +173,8 @@ impl UserManager {
             "org.freedesktop.systemd1.Service",
         )
         .map_err(|error| error.to_string())?;
-        let invocation: Vec<u8> = unit_proxy
-            .get_property("InvocationID")
-            .map_err(|error| error.to_string())?;
-        Ok(Some(UnitSnapshot {
+        let before = snapshot_identity(&unit_proxy, &service_proxy)?;
+        let snapshot = UnitSnapshot {
             manager: self.identity.clone(),
             object_path: path_string,
             id: unit_proxy
@@ -191,14 +195,8 @@ impl UserManager {
             sub_state: unit_proxy
                 .get_property("SubState")
                 .map_err(|error| error.to_string())?,
-            invocation: if invocation.iter().all(|byte| *byte == 0) {
-                None
-            } else {
-                Some(SystemdInvocationId::new(invocation).map_err(|error| error.to_string())?)
-            },
-            main_process_id: service_proxy
-                .get_property("MainPID")
-                .map_err(|error| error.to_string())?,
+            invocation: before.invocation,
+            main_process_id: before.main_process_id,
             service_type: service_proxy
                 .get_property("Type")
                 .map_err(|error| error.to_string())?,
@@ -226,7 +224,11 @@ impl UserManager {
             unit_path: manager
                 .get_property("UnitPath")
                 .map_err(|error| error.to_string())?,
-        }))
+        };
+        let after = snapshot_identity(&unit_proxy, &service_proxy)?;
+        ensure_snapshot_identity_unchanged(&before, &after)?;
+        self.recheck_identity()?;
+        Ok(Some(snapshot))
     }
 
     pub fn enqueue(
@@ -378,6 +380,33 @@ impl UserManager {
             cancellation: cancellation_sender,
         })
     }
+}
+
+fn snapshot_identity(unit: &Proxy<'_>, service: &Proxy<'_>) -> Result<SnapshotIdentity, String> {
+    let invocation: Vec<u8> = unit
+        .get_property("InvocationID")
+        .map_err(|error| error.to_string())?;
+    let invocation = if invocation.iter().all(|byte| *byte == 0) {
+        None
+    } else {
+        Some(SystemdInvocationId::new(invocation).map_err(|error| error.to_string())?)
+    };
+    let main_process_id = service
+        .get_property("MainPID")
+        .map_err(|error| error.to_string())?;
+    Ok(SnapshotIdentity {
+        invocation,
+        main_process_id,
+    })
+}
+
+fn ensure_snapshot_identity_unchanged(
+    before: &SnapshotIdentity,
+    after: &SnapshotIdentity,
+) -> Result<(), String> {
+    (before == after)
+        .then_some(())
+        .ok_or_else(|| "The systemd unit identity changed while its snapshot was read".into())
 }
 
 fn receive_until<T>(
@@ -558,5 +587,26 @@ mod tests {
             cancellation,
         });
         assert_eq!(cancelled.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn snapshot_identity_bookends_reject_mixed_invocation_and_process_evidence() {
+        let first = SnapshotIdentity {
+            invocation: Some(SystemdInvocationId::new(vec![1; 16]).unwrap()),
+            main_process_id: 41,
+        };
+        assert!(ensure_snapshot_identity_unchanged(&first, &first).is_ok());
+
+        let restarted = SnapshotIdentity {
+            invocation: Some(SystemdInvocationId::new(vec![2; 16]).unwrap()),
+            main_process_id: 42,
+        };
+        assert!(ensure_snapshot_identity_unchanged(&first, &restarted).is_err());
+
+        let mixed = SnapshotIdentity {
+            invocation: first.invocation,
+            main_process_id: 42,
+        };
+        assert!(ensure_snapshot_identity_unchanged(&first, &mixed).is_err());
     }
 }

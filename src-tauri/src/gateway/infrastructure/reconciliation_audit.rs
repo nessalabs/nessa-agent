@@ -2091,6 +2091,73 @@ mod tests {
     }
 
     #[test]
+    fn real_file_journal_accepts_and_restores_exact_systemd_publication_cleanup() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let clock = Arc::new(AdvancingClock {
+            now: Mutex::new(Instant::now()),
+            waits: AtomicUsize::new(0),
+        });
+        let request = GatewayReconciliationRequest::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000501".into())
+                .unwrap(),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let attempt = GatewayReconciliationAttempt::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000502".into())
+                .unwrap(),
+            request,
+        )
+        .unwrap();
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let audit = Arc::new(FileReconciliationAudit::new(Some(root), clock));
+        let session = audit.clone().open(&attempt, None).unwrap();
+        session
+            .intent(
+                &GatewayReconciliationIntent::new(attempt.clone(), target.clone(), None).unwrap(),
+            )
+            .unwrap();
+        let primary = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::PublishSystemdServiceDefinition {
+                target: target.clone(),
+                definition_digest: "c".repeat(64),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .unwrap();
+        let cleanup = LifecyclePlanStep::new(
+            "settle-transaction".into(),
+            LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: "c".repeat(64),
+            },
+            LifecycleEffectPredicate::PrimaryReturned,
+        )
+        .unwrap();
+        session
+            .effect_plan("publish", None, &target, &primary, &[cleanup])
+            .unwrap();
+        drop(session);
+
+        let restored = audit.open(&attempt, None).unwrap();
+        let recovery = restored.recovery().expect("publication plan must restore");
+        assert!(matches!(
+            recovery.pending_step().unwrap().step().effect(),
+            LifecycleEffect::PublishSystemdServiceDefinition { .. }
+        ));
+    }
+
+    #[test]
     fn stage_validation_refuses_multiple_unresolved_attempts() {
         let first = "00000000-0000-4000-8000-000000000001";
         let second = "00000000-0000-4000-8000-000000000002";
