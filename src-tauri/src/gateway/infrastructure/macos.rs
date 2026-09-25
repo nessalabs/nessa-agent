@@ -71,6 +71,41 @@ fn bootstrap_recovery_decision(
     }
 }
 
+fn installed_target_port(definition: Option<&Value>, target: &ReconciliationTarget) -> Option<u16> {
+    let environment = definition?.get("EnvironmentVariables")?;
+    if environment.get("NESSA_RUNTIME_FINGERPRINT")?.as_str()? != target.runtime_fingerprint()
+        || environment.get("NESSA_SERVICE_GENERATION")?.as_str()? != target.service_generation()
+    {
+        return None;
+    }
+    environment
+        .get("NESSA_PORT")?
+        .as_str()?
+        .parse()
+        .ok()
+        .filter(|port| *port != 0)
+}
+
+fn recovery_probe_port(
+    target: &ReconciliationTarget,
+    latest: Option<&LifecycleObservation>,
+    definition: Option<&Value>,
+    before: Option<&ReconciliationIncarnation>,
+    fallback: u16,
+) -> u16 {
+    latest
+        .and_then(LifecycleObservation::incarnation)
+        .filter(|incarnation| incarnation.target() == target)
+        .map(ReconciliationIncarnation::port)
+        .or_else(|| installed_target_port(definition, target))
+        .or_else(|| {
+            before
+                .filter(|incarnation| incarnation.target() == target)
+                .map(ReconciliationIncarnation::port)
+        })
+        .unwrap_or(fallback)
+}
+
 impl Launchd {
     pub(super) fn new(
         disabled_services: Arc<dyn DisabledServiceStatus>,
@@ -124,12 +159,6 @@ impl GatewayHost for Launchd {
                     "The unresolved gateway namespace is not owned by this desktop host".into(),
                 )
             })?;
-        let port = recovery
-            .before()
-            .map(ReconciliationIncarnation::port)
-            .unwrap_or_else(|| self.configuration.port());
-        let status = service_status(target.service()).map_err(GatewayError::Registration)?;
-        let observed = observed_incarnation(target.service(), port, &status, health(port));
         let definition = read_definition(
             &self
                 .home
@@ -137,6 +166,15 @@ impl GatewayHost for Launchd {
                 .join(format!("{label}.plist")),
         )
         .ok();
+        let port = recovery_probe_port(
+            target,
+            recovery.latest_observation(),
+            definition.as_ref(),
+            recovery.before(),
+            self.configuration.port(),
+        );
+        let status = service_status(target.service()).map_err(GatewayError::Registration)?;
+        let observed = observed_incarnation(target.service(), port, &status, health(port));
         if let Some(step) = recovery.pending_step() {
             match step.step().effect() {
                 LifecycleEffect::StageRuntime { fingerprint } => {
@@ -637,6 +675,7 @@ fn matches_reconciled_gateway(
     )
 }
 
+#[cfg(test)]
 fn retire_then_unload(
     progress: &dyn GatewayReconciliationProgress,
     retire: impl FnOnce() -> Result<(), String>,
@@ -2028,10 +2067,11 @@ mod tests {
         artifact_presence, bootstrap_cleanup_decision, bootstrap_recovery_decision,
         bootstrap_succeeded, cleanup_bootstrap_after_audit_failure_with, disabled_service,
         finish_bootstrap, gave_up_retry, installed_generation, matches_reconciled_gateway,
-        prepare_data_directory, publish_definition, registered_agent_path, retire_then_unload,
-        run_bootstrap, run_planned_effect_with_cleanup, runtime_fingerprint, service_environment,
-        service_matches, startup, unavailable_service, unreadable_process_identity,
-        BootstrapCleanupDecision, BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
+        prepare_data_directory, publish_definition, recovery_probe_port, registered_agent_path,
+        retire_then_unload, run_bootstrap, run_planned_effect_with_cleanup, runtime_fingerprint,
+        service_environment, service_matches, startup, unavailable_service,
+        unreadable_process_identity, BootstrapCleanupDecision, BootstrapFailure,
+        BootstrapRecoveryDecision, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
@@ -2476,6 +2516,77 @@ mod tests {
             bootstrap_recovery_decision(false, None, None, &target),
             BootstrapRecoveryDecision::Refuse
         );
+    }
+
+    #[test]
+    fn recovery_probes_the_latest_exact_target_port_before_stale_prior_state() {
+        let target = bootstrap_target();
+        let before = bootstrap_incarnation(&target);
+        let latest_incarnation = ReconciliationIncarnation::new(
+            target.clone(),
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            43,
+            7431,
+        )
+        .unwrap();
+        let latest = LifecycleObservation::new(2, Some(latest_incarnation), true);
+        let definition = json!({
+            "EnvironmentVariables": {
+                "NESSA_RUNTIME_FINGERPRINT": target.runtime_fingerprint(),
+                "NESSA_SERVICE_GENERATION": target.service_generation(),
+                "NESSA_PORT": "7442"
+            }
+        });
+
+        assert_eq!(
+            recovery_probe_port(
+                &target,
+                Some(&latest),
+                Some(&definition),
+                Some(&before),
+                7453
+            ),
+            7431
+        );
+    }
+
+    #[test]
+    fn recovery_uses_only_an_installed_definition_for_the_exact_target() {
+        let target = bootstrap_target();
+        let exact = json!({
+            "EnvironmentVariables": {
+                "NESSA_RUNTIME_FINGERPRINT": target.runtime_fingerprint(),
+                "NESSA_SERVICE_GENERATION": target.service_generation(),
+                "NESSA_PORT": "7442"
+            }
+        });
+        assert_eq!(
+            recovery_probe_port(&target, None, Some(&exact), None, 7453),
+            7442
+        );
+
+        for definition in [
+            json!({"EnvironmentVariables": {
+                "NESSA_RUNTIME_FINGERPRINT": "c".repeat(64),
+                "NESSA_SERVICE_GENERATION": target.service_generation(),
+                "NESSA_PORT": "7442"
+            }}),
+            json!({"EnvironmentVariables": {
+                "NESSA_RUNTIME_FINGERPRINT": target.runtime_fingerprint(),
+                "NESSA_SERVICE_GENERATION": "d".repeat(64),
+                "NESSA_PORT": "7442"
+            }}),
+            json!({"EnvironmentVariables": {
+                "NESSA_RUNTIME_FINGERPRINT": target.runtime_fingerprint(),
+                "NESSA_SERVICE_GENERATION": target.service_generation(),
+                "NESSA_PORT": "not-a-port"
+            }}),
+        ] {
+            assert_eq!(
+                recovery_probe_port(&target, None, Some(&definition), None, 7453),
+                7453
+            );
+        }
     }
 
     #[test]

@@ -505,50 +505,32 @@ pub struct ReconciliationValidationFacts {
 }
 
 impl ReconciliationValidationFacts {
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn rejected_history_fact(&self) -> Option<ReconciliationHistoryFact> {
         self.rejected_history_fact
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn target_matches(&self) -> bool {
         self.target_matches
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn runtime_identity(&self) -> ReconciliationRuntimeIdentity {
         self.runtime_identity
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn effect_timing_matches_history(&self) -> bool {
         self.effect_timing_matches_history
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn effects_followed_intent(&self) -> bool {
         self.effects_followed_intent
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn candidate_eligible(&self) -> bool {
         self.candidate_eligible
     }
@@ -746,6 +728,7 @@ impl ReconciliationOutcomeRecord {
         }
     }
 
+    #[cfg(test)]
     pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {
         &self.reported_history
     }
@@ -754,6 +737,7 @@ impl ReconciliationOutcomeRecord {
         &self.history
     }
 
+    #[cfg(test)]
     pub fn validation(&self) -> &ReconciliationValidationFacts {
         &self.validation
     }

@@ -268,6 +268,7 @@ impl GatewayStopSession {
 
     /// Advance the application observation version while a proof is still
     /// revocable. A later claim for an older proof is refused.
+    #[cfg(test)]
     pub fn observation_changed(&self, observation_version: u64) {
         self.latest_observation_version
             .fetch_max(observation_version, Ordering::SeqCst);
@@ -817,26 +818,17 @@ impl GatewayReconciliationOutcome {
         }
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn intent(&self) -> &GatewayReconciliationIntent {
         &self.intent
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn intent_delivery(&self) -> &GatewayReconciliationIntentDelivery {
         &self.intent_delivery
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn effect_timing(&self) -> GatewayReconciliationEffectTiming {
         self.effect_timing
     }
@@ -845,10 +837,7 @@ impl GatewayReconciliationOutcome {
         self.record.cleanup()
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {
         self.record.reported_history()
     }

@@ -174,15 +174,21 @@ impl RetainedDirectory {
         if !self.named_file_is(name, file)? {
             return Err(unsafe_file());
         }
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-        unsafe {
-            check(SetFileInformationByHandle(
-                file.as_raw_handle(),
-                FileDispositionInfo,
-                (&raw const disposition).cast(),
-                size_of::<FILE_DISPOSITION_INFO>() as u32,
-            ))
+        match mark_deleted(file) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => return Err(error),
         }
+        let deleting = open_existing(
+            &self.path(name)?,
+            DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL,
+            false,
+        )?;
+        verify_file(&deleting)?;
+        if file_identity(&deleting)? != file_identity(file)? {
+            return Err(unsafe_file());
+        }
+        mark_deleted(&deleting)
     }
 
     pub fn file_identity(&self, file: &File) -> io::Result<PrivateFileIdentity> {
@@ -202,6 +208,18 @@ impl RetainedDirectory {
             return Err(unsafe_file());
         }
         Ok(self.directory().path.join(name))
+    }
+}
+
+fn mark_deleted(file: &File) -> io::Result<()> {
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    unsafe {
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        ))
     }
 }
 

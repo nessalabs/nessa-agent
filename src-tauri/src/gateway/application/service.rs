@@ -1,3 +1,5 @@
+#[cfg(test)]
+use super::SystemMonotonicClock;
 use super::{
     GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
     GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
@@ -6,7 +8,6 @@ use super::{
     GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStartup,
     GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
     LoginShellPath, MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
-    SystemMonotonicClock,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -751,6 +752,7 @@ struct AdmittedReceipt {
     pause_caller_resume: bool,
 }
 impl Gateway {
+    #[cfg(test)]
     pub fn bootstrap(
         host: Arc<dyn GatewayHost>,
         login_shell: Arc<dyn LoginShellPath>,

@@ -228,6 +228,7 @@ fn create_private_directory_path_transaction_with<T>(
                         name: component.clone(),
                         device,
                         inode,
+                        directory: None,
                     });
                     let child = open_child(&parent, component)?;
                     (child, true)
@@ -236,10 +237,11 @@ fn create_private_directory_path_transaction_with<T>(
             };
             if was_created {
                 let metadata = child.metadata()?;
-                let created = created.last().expect("created directory identity");
+                let created = created.last_mut().expect("created directory identity");
                 if metadata.dev() != created.device || metadata.ino() != created.inode {
                     return Err(unsafe_file());
                 }
+                created.directory = Some(child.try_clone()?);
                 sync(&parent)?;
             }
             if last {
@@ -272,6 +274,7 @@ struct CreatedPrivateDirectory {
     name: CString,
     device: u64,
     inode: u64,
+    directory: Option<File>,
 }
 
 fn directory_identity_at(parent: &File, name: &CString) -> io::Result<(u64, u64)> {
@@ -301,6 +304,25 @@ fn directory_identity_at(parent: &File, name: &CString) -> io::Result<(u64, u64)
 fn rollback_created_directories(created: Vec<CreatedPrivateDirectory>) -> Vec<String> {
     let mut failures = Vec::new();
     for created in created.into_iter().rev() {
+        let Some(original) = created.directory.as_ref() else {
+            failures.push(
+                "created private directory identity was not retained; preserved before rollback"
+                    .into(),
+            );
+            continue;
+        };
+        let original_metadata = match original.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        };
+        if original_metadata.dev() != created.device || original_metadata.ino() != created.inode {
+            failures
+                .push("retained created private directory identity changed before rollback".into());
+            continue;
+        }
         let current = match open_child_locator_directory(&created.parent, &created.name) {
             Ok(current) => current,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -572,6 +594,7 @@ mod tests {
             name,
             device: metadata.dev(),
             inode: metadata.ino(),
+            directory: Some(child),
         }
     }
 
@@ -581,7 +604,7 @@ mod tests {
         let child = root.path().join("child");
         create_directory(&child).unwrap();
         let created = created_directory(root.path(), "child");
-        fs::remove_dir(&child).unwrap();
+        fs::rename(&child, root.path().join("original-child")).unwrap();
         create_directory(&child).unwrap();
 
         let failures = rollback_created_directories(vec![created]);
@@ -615,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn reopen_failure_after_creation_rolls_back_the_exact_new_leaf() {
+    fn reopen_failure_after_creation_preserves_the_unretained_leaf() {
         let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let private_root = root.path().join("private-root");
         let child = private_root.join("child");
@@ -635,9 +658,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error.to_string(), "injected reopen failure");
-        assert!(!child.exists());
-        assert!(!private_root.exists());
+        let message = error.to_string();
+        assert!(message.contains("injected reopen failure"));
+        assert!(message.contains("created private directory identity was not retained"));
+        assert!(message.contains("private directory rollback failed"));
+        assert!(child.is_dir());
+        assert!(private_root.is_dir());
     }
 
     #[test]
@@ -677,9 +703,10 @@ mod tests {
         let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let private_root = parent.path().join("private-root");
         let directory = private_root.join("journal");
+        let original = private_root.join("original-journal");
 
         let error = create_private_directory_path_and_then(&directory, || {
-            fs::remove_dir(&directory)?;
+            fs::rename(&directory, &original)?;
             create_directory(&directory)?;
             Err::<(), _>(io::Error::other("injected retained-open failure"))
         })

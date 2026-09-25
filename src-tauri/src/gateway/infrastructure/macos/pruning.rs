@@ -127,6 +127,7 @@ fn sha256(value: &str) -> bool {
 pub(super) enum Skipped {
     /// The label's directory could not be listed at all, so nothing was
     /// collected.
+    #[cfg(test)]
     Directory(String),
     /// One entry could not be read out of the directory. It has no name here,
     /// so the rule was never applied to it and no removal was attempted.

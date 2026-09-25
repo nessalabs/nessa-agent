@@ -344,6 +344,7 @@ impl LifecycleRecord {
 #[derive(Clone, Debug)]
 struct PlanState {
     primary_id: String,
+    primary_effect: LifecycleEffect,
     steps: BTreeMap<String, LifecycleEffectPredicate>,
     completed: BTreeMap<String, LifecycleCommandResult>,
 }
@@ -358,6 +359,7 @@ pub struct LifecycleHistory {
     next_sequence: u64,
     plans: BTreeMap<String, PlanState>,
     pending_observation: Option<(String, String)>,
+    latest_observation_source: Option<LifecycleObservationSource>,
     latest_observation: Option<LifecycleObservation>,
     terminal: bool,
     request_correlations: Vec<ReconciliationCorrelation>,
@@ -398,6 +400,7 @@ impl LifecycleHistory {
             next_sequence: 1,
             plans: BTreeMap::new(),
             pending_observation: None,
+            latest_observation_source: None,
             latest_observation: None,
             terminal: false,
             request_correlations: vec![request_correlation.clone()],
@@ -490,6 +493,7 @@ impl LifecycleHistory {
                     plan_id.clone(),
                     PlanState {
                         primary_id: primary.id().to_owned(),
+                        primary_effect: primary.effect().clone(),
                         steps,
                         completed: BTreeMap::new(),
                     },
@@ -573,6 +577,7 @@ impl LifecycleHistory {
                 {
                     return Err(LifecycleJournalError::ObservationVersionRegression);
                 }
+                self.latest_observation_source = Some(source.clone());
                 self.latest_observation = Some(state.clone());
             }
             LifecycleRecordPayload::Outcome {
@@ -607,11 +612,28 @@ impl LifecycleHistory {
                         }
                     }
                     LifecyclePhysicalOutcome::StopAgentsSettled {
-                        intended, observed, ..
+                        intended,
+                        command,
+                        observed,
                     } => {
+                        let matching_completion = match &self.latest_observation_source {
+                            Some(LifecycleObservationSource::Effect { plan_id, step_id }) => {
+                                self.plans.get(plan_id).is_some_and(|plan| {
+                                    step_id == &plan.primary_id
+                                        && matches!(
+                                            &plan.primary_effect,
+                                            LifecycleEffect::StopAgents { incarnation }
+                                                if incarnation == intended
+                                        )
+                                        && plan.completed.get(step_id) == Some(command)
+                                })
+                            }
+                            Some(LifecycleObservationSource::Intent) | None => false,
+                        };
                         if *cleanup != ReconciliationCleanupDecision::RetainPrior
                             || intended != self.before.as_ref().unwrap_or(intended)
                             || Some(observed) != self.latest_observation.as_ref()
+                            || !matching_completion
                         {
                             return Err(LifecycleJournalError::StateMismatch);
                         }
@@ -872,6 +894,34 @@ mod tests {
         )
     }
 
+    fn stop_plan(sequence: u64, intended: &ReconciliationIncarnation) -> LifecycleRecord {
+        named_stop_plan(sequence, "stop-agents", intended)
+    }
+
+    fn named_stop_plan(
+        sequence: u64,
+        plan_id: &str,
+        intended: &ReconciliationIncarnation,
+    ) -> LifecycleRecord {
+        record(
+            sequence,
+            LifecycleRecordPayload::EffectPlan {
+                plan_id: plan_id.into(),
+                expected_before: Some(intended.clone()),
+                target: target(),
+                primary: LifecyclePlanStep::new(
+                    "primary".into(),
+                    LifecycleEffect::StopAgents {
+                        incarnation: intended.clone(),
+                    },
+                    LifecycleEffectPredicate::Always,
+                )
+                .unwrap(),
+                cleanup: vec![],
+            },
+        )
+    }
+
     #[test]
     fn every_nonterminal_crash_prefix_restores_to_the_same_state() {
         let records = [
@@ -1024,6 +1074,191 @@ mod tests {
         assert_eq!(
             LifecycleHistory::restore(&records).unwrap_err(),
             LifecycleJournalError::MissingCompletion
+        );
+    }
+
+    #[test]
+    fn stop_settlement_requires_an_authorizing_stop_plan() {
+        let intended = incarnation(10);
+        let observation = LifecycleObservation::new(1, Some(intended.clone()), true);
+        let records = vec![
+            intent(Some(intended.clone())),
+            record(
+                1,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Intent,
+                    state: observation.clone(),
+                },
+            ),
+            record(
+                2,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::StopAgentsSettled {
+                        intended,
+                        command: LifecycleCommandResult::Accepted,
+                        observed: observation.clone(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+
+        assert_eq!(
+            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleJournalError::StateMismatch
+        );
+    }
+
+    #[test]
+    fn stop_settlement_command_must_match_the_primary_completion() {
+        let intended = incarnation(10);
+        let observation = LifecycleObservation::new(1, Some(intended.clone()), true);
+        let records = vec![
+            intent(Some(intended.clone())),
+            stop_plan(1, &intended),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "stop-agents".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "stop-agents".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: observation.clone(),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::StopAgentsSettled {
+                        intended,
+                        command: LifecycleCommandResult::Failed("dispatch failed".into()),
+                        observed: observation.clone(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+
+        assert_eq!(
+            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleJournalError::StateMismatch
+        );
+    }
+
+    #[test]
+    fn matching_stop_plan_completion_and_observation_can_settle() {
+        let intended = incarnation(10);
+        let observation = LifecycleObservation::new(1, Some(intended.clone()), true);
+        let records = vec![
+            intent(Some(intended.clone())),
+            stop_plan(1, &intended),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "stop-agents".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "stop-agents".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: observation.clone(),
+                },
+            ),
+            record(
+                4,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::StopAgentsSettled {
+                        intended,
+                        command: LifecycleCommandResult::Accepted,
+                        observed: observation.clone(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+
+        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+    }
+
+    #[test]
+    fn stop_settlement_cannot_mix_an_older_command_with_the_latest_plan_observation() {
+        let intended = incarnation(10);
+        let first_observation = LifecycleObservation::new(1, Some(intended.clone()), true);
+        let latest_observation = LifecycleObservation::new(2, Some(intended.clone()), true);
+        let records = vec![
+            intent(Some(intended.clone())),
+            named_stop_plan(1, "first-stop", &intended),
+            record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "first-stop".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "first-stop".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: first_observation,
+                },
+            ),
+            named_stop_plan(4, "second-stop", &intended),
+            record(
+                5,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "second-stop".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Failed("dispatch failed".into()),
+                },
+            ),
+            record(
+                6,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "second-stop".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: latest_observation.clone(),
+                },
+            ),
+            record(
+                7,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::StopAgentsSettled {
+                        intended,
+                        command: LifecycleCommandResult::Accepted,
+                        observed: latest_observation.clone(),
+                    },
+                    last_confirmed: Some(latest_observation),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ),
+        ];
+
+        assert_eq!(
+            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleJournalError::StateMismatch
         );
     }
 

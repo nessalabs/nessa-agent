@@ -7,7 +7,7 @@ pub use lifecycle_journal::{
     LifecycleRecordPayload,
 };
 mod reconciliation_evidence;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(test)]
 pub use reconciliation_evidence::ReconciliationRuntimeIdentity;
 pub use reconciliation_evidence::{
     BundledSurface, PendingReconciliation, ReconciliationAttemptRecord, ReconciliationCause,
