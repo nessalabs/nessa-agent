@@ -207,6 +207,13 @@ gateway-wide. Pagination was asked about and deferred; see Consequences.
   reads its database back through `LocalConversationStore`
   (`a_database_the_move_writes_is_one_this_store_reads`), so a change on
   either side fails it.
+- New questions become new schema, each with its version bump and move. A
+  fact a conversation has one of — a note for the coordinator agent, a
+  category — is a column, indexable alone or with others. A fact it has
+  many of — tags — is a table of its own, `(conversation_id, tag)` indexed on
+  the tag, since a list packed into one column cannot be indexed and asking
+  it would read every row. Searching inside note text is SQLite's full-text
+  index. Each names its conversation by a foreign key, so deletion reaches it.
 - What to watch: the `limit + 1` query's cost for an owner with a very large
   history, which is the owner's own and linear in it. A covering index on
   `summaries` would be the next step, and page tokens after that.

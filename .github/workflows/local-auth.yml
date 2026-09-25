@@ -278,7 +278,8 @@ jobs:
       # this workflow aggregate the same named checks — `check` runs
       # `server:fmt:check`, `auth:fmt:check` and `sdk:fmt:check` per crate, so
       # CI does too. Dropping it saved 28 seconds on Windows and cost that
-      # guarantee, which is not a trade worth making.
+      # guarantee, which is not a trade worth making. `database:check`'s fmt is
+      # the exception: `cargo fmt --all` in `gateway-contract` covers it.
       - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs

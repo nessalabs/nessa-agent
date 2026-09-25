@@ -204,7 +204,9 @@ export function read(conversations, held = new Set()) {
     for (const name of readdirSync(directory).sort()) {
       const path = join(directory, name)
       if (directory === metadata && name === "deleted") continue
-      if (TEMPORARY.test(name)) {
+      // A temporary is a file the server made; anything else by that name
+      // is refused below, before it could stop the removal after a commit.
+      if (TEMPORARY.test(name) && lstatSync(path).isFile()) {
         found.temporaries.push(path)
         continue
       }
@@ -324,11 +326,12 @@ const COLUMNS = {
  * The database beside the old directories: created privately from the schema
  * when absent, refused when it is at another version.
  */
-async function database(conversations) {
+async function database(conversations, { dryRun = false } = {}) {
   const { DatabaseSync } = await import("node:sqlite")
   const path = join(conversations, DATABASE)
   const definition = readFileSync(SCHEMA, "utf8")
   const version = statedVersion(definition)
+  if (dryRun) return inspected(DatabaseSync, path, version)
   let created = false
   if (!present(path)) {
     // Private before SQLite opens it, as the server creates it.
@@ -372,6 +375,31 @@ export function statedVersion(definition) {
   const version = versions.length === 1 ? Number(versions[0][1]) : 0
   if (!(version > 0)) throw new Error(`${SCHEMA} does not state one version above 0`)
   return version
+}
+
+/**
+ * For a dry run: the database as it is, to check the files against, or null
+ * when it holds nothing yet. Nothing is created and no mode is changed; a
+ * journal a killed run left is still rolled back, which only a writer can do.
+ */
+function inspected(DatabaseSync, path, version) {
+  if (!present(path)) return null
+  if (!lstatSync(path).isFile()) throw new Error(`${path} is not a regular file`)
+  const db = new DatabaseSync(path)
+  db.exec("PRAGMA foreign_keys = ON;")
+  const found = db.prepare("PRAGMA user_version").get().user_version
+  const tables = db.prepare("SELECT count(*) AS n FROM sqlite_schema").get().n
+  if (found === 0 && tables === 0) {
+    db.close()
+    return null
+  }
+  if (found !== version) {
+    db.close()
+    throw new Error(
+      `${path} is at schema version ${found}, and this move writes ${version}`,
+    )
+  }
+  return db
 }
 
 /** Insert each row the database does not hold; name each one it holds differently (M2). */
@@ -468,13 +496,14 @@ export async function move(conversations, { dryRun = false } = {}) {
     summaries: found.summaries.length,
   }
   // A dry run with no database yet has nothing to check the files against.
-  if (dryRun && !present(join(conversations, DATABASE)))
+  const db = await database(conversations, { dryRun })
+  // A dry run with no database yet has nothing to check the files against.
+  if (db === null)
     return {
       state: "would move",
       ...counts,
       inserted: found.records.length + found.tombstones.length + found.summaries.length,
     }
-  const db = await database(conversations)
   let inserted = 0
   try {
     db.exec("BEGIN IMMEDIATE")

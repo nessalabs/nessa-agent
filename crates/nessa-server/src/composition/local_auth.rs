@@ -275,10 +275,20 @@ struct BuiltConversations {
     warm_ups: Vec<StartupWarmUp>,
 }
 
-/// Refuse to start conversations while metadata an earlier build kept as
-/// files is still on disk: this build reads only the database, and starting
-/// beside the files would show nobody their conversations
+/// The conversation store under `root`, and the only way composition gets
+/// one: refused while metadata an earlier build kept as files is still on
+/// disk, since this build reads only the database and starting beside the
+/// files would show nobody their conversations. Refused before the database
+/// is opened, so none is made beside them
 /// (`metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it`).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn metadata_store(root: &Path) -> Result<Arc<LocalConversationStore>, RunError> {
+    refuse_metadata_files(root)?;
+    LocalConversationStore::open(&root.join("metadata.sqlite3"))
+        .map(Arc::new)
+        .map_err(|error| RunError::Agent(error.to_string()))
+}
+
 #[cfg_attr(not(unix), allow(dead_code))]
 fn refuse_metadata_files(root: &Path) -> Result<(), RunError> {
     for name in ["metadata", "summaries"] {
@@ -350,11 +360,7 @@ fn conversations(
     // Ownership, tombstones and summaries are one database. Metadata an
     // earlier build kept as files is refused rather than read in its old
     // shape, and the refusal names what moves it (docs/adr/todo/196-conversation-metadata-database.md).
-    refuse_metadata_files(&root)?;
-    let metadata = Arc::new(
-        LocalConversationStore::open(&root.join("metadata.sqlite3"))
-            .map_err(|error| RunError::Agent(error.to_string()))?,
-    );
+    let metadata = metadata_store(&root)?;
     let current_opencode_model = opencode
         .configured()
         .map(|profile| profile.validated().model());

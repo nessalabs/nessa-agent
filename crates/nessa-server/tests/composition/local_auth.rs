@@ -69,16 +69,22 @@ fn a_gateway_configured_with_no_agents_answers_for_none() {
 #[test]
 fn metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it() {
     let root = tempfile::tempdir().unwrap();
-    // Nothing from an earlier build: conversations start.
-    assert!(refuse_metadata_files(root.path()).is_ok());
+    nessa_local_storage::create_directory(&root.path().join("private")).unwrap();
+    let root_path = root.path().join("private");
+    let root = &root_path;
+    // Nothing from an earlier build: conversations start, over a database.
+    assert!(metadata_store(root).is_ok());
+    std::fs::remove_file(root.join("metadata.sqlite3")).unwrap();
     // Either directory, even empty — a move interrupted after its last file —
     // refuses, naming it and the script, until the move has finished.
     for name in ["metadata", "summaries"] {
-        let directory = root.path().join(name);
+        let directory = root.join(name);
         std::fs::create_dir(&directory).unwrap();
-        let Err(RunError::Agent(message)) = refuse_metadata_files(root.path()) else {
+        let Err(RunError::Agent(message)) = metadata_store(root) else {
             panic!("{name} was not refused");
         };
+        // Refused before any database is made beside the files.
+        assert!(!root.join("metadata.sqlite3").exists(), "{name}");
         assert!(
             message.contains(&directory.display().to_string()),
             "{message}"
@@ -87,11 +93,11 @@ fn metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it() {
         assert!(
             message.contains(&format!(
                 "scripts/move-conversation-metadata.mjs {}",
-                root.path().display()
+                root.display()
             )),
             "{message}"
         );
         std::fs::remove_dir(&directory).unwrap();
     }
-    assert!(refuse_metadata_files(root.path()).is_ok());
+    assert!(metadata_store(root).is_ok());
 }

@@ -401,3 +401,24 @@ test("a directory that cannot be looked at is not one with nothing to move", asy
   assert.equal(result.state, "refused")
   assert.match(result.refused[0].why, /not a directory of its own/)
 })
+
+test("a dry run beside a database file that holds nothing yet leaves it as it was", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  // As a crash between creating the file privately and committing its schema
+  // leaves it.
+  writeFileSync(join(root, "metadata.sqlite3"), "", { mode: 0o600 })
+  assert.equal((await move(root, { dryRun: true })).state, "would move")
+  assert.equal(statSync(join(root, "metadata.sqlite3")).size, 0)
+  // The real run gives it the schema and moves.
+  assert.equal((await move(root)).state, "moved")
+})
+
+test("a directory by a temporary's name is refused before anything is committed", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  const temporary = join(root, "metadata", ".nessa-0123456789abcdef0123456789abcdef.tmp")
+  mkdirSync(temporary, { mode: 0o700 })
+  const result = await move(root)
+  assert.equal(result.state, "refused")
+  assert.equal(result.refused[0].path, temporary)
+  assert.ok(!existsSync(join(root, "metadata.sqlite3")))
+})
