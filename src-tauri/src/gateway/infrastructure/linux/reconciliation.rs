@@ -941,8 +941,17 @@ fn recovery_artifact_present(
         LifecycleEffect::StopSystemdUnit { .. } | LifecycleEffect::UnloadService { .. } => {
             Ok(snapshot.is_some())
         }
-        LifecycleEffect::RequestRetirement { incarnation } => {
-            Ok(observed == Some(incarnation) && incarnation.target().service() == target.service())
+        LifecycleEffect::RequestRetirement { .. } => {
+            Err("A non-systemd retirement effect cannot be recovered by the Linux host".into())
+        }
+        LifecycleEffect::RequestSystemdRetirement {
+            incarnation,
+            request_id,
+        } => {
+            if incarnation.target().service() != target.service() {
+                return Err("Recovered retirement targets another systemd service".into());
+            }
+            retirement_artifact_present(authority.data, request_id, incarnation, target, observed)
         }
         LifecycleEffect::StopAgents { incarnation } => Ok(observed == Some(incarnation)),
     }
@@ -1776,10 +1785,12 @@ fn retire_prior(
     data: &Path,
     runtime: LinuxRuntime<'_>,
 ) -> Result<(), GatewayError> {
+    let request_id = random_uuid().map_err(GatewayError::Registration)?;
     let step = LifecyclePlanStep::new(
         "primary".into(),
-        LifecycleEffect::RequestRetirement {
+        LifecycleEffect::RequestSystemdRetirement {
             incarnation: prior.clone(),
+            request_id: request_id.clone(),
         },
         LifecycleEffectPredicate::Always,
     )
@@ -1813,7 +1824,7 @@ fn retire_prior(
             "The retiring systemd process changed after the effect plan was acknowledged".into(),
         ));
     }
-    let result = retire(data, prior, target, &descriptor, runtime.clock);
+    let result = retire(data, &request_id, prior, target, &descriptor, runtime.clock);
     let completion = match &result {
         Ok(()) => LifecycleCommandResult::Accepted,
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
@@ -1852,6 +1863,16 @@ fn gateway(value: &ReconciliationIncarnation) -> ReconciledGateway {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RetirementRequestFile {
+    request_id: String,
+    target_fingerprint: String,
+    running_instance: String,
+    running_generation: String,
+    target_generation: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RetirementResult {
     request_id: String,
     target_fingerprint: String,
@@ -1868,6 +1889,51 @@ struct RetirementResult {
     audit_error: Option<String>,
 }
 
+fn retirement_artifact_present(
+    data: &Path,
+    request_id: &str,
+    prior: &ReconciliationIncarnation,
+    target: &ReconciliationTarget,
+    observed: Option<&ReconciliationIncarnation>,
+) -> Result<bool, String> {
+    let request_path = data.join("gateway-upgrade/request.json");
+    let file = match nessa_local_storage::open(
+        &request_path,
+        nessa_local_storage::OpenMode::ReadNonblocking,
+    ) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut bytes = Vec::new();
+    (&file)
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 65_536 {
+        return Err("Gateway retirement request exceeds its limit".into());
+    }
+    let request: RetirementRequestFile = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Invalid gateway retirement request: {error}"))?;
+    let agrees = request.request_id == request_id
+        && request.target_fingerprint == target.runtime_fingerprint()
+        && request.running_instance == prior.runtime_instance()
+        && request.running_generation == prior.target().service_generation()
+        && request.target_generation == target.service_generation();
+    if !agrees {
+        return Err("Gateway retirement request disagrees with its journal plan".into());
+    }
+    if observed != Some(prior) {
+        return Err("Gateway retirement recovery lost the planned running incarnation".into());
+    }
+    retirement_acknowledged(
+        &data.join("gateway-upgrade/result.json"),
+        request_id,
+        prior,
+        target,
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RetirementCause {
@@ -1878,6 +1944,7 @@ struct RetirementCause {
 
 fn retire(
     data: &Path,
+    request_id: &str,
     prior: &ReconciliationIncarnation,
     target: &ReconciliationTarget,
     descriptor: &OwnedFd,
@@ -1886,7 +1953,6 @@ fn retire(
     let directory = data.join("gateway-upgrade");
     nessa_local_storage::create_directory_beneath(data, Path::new("gateway-upgrade"))
         .map_err(|error| error.to_string())?;
-    let request_id = random_uuid()?;
     let request = serde_json::to_vec(&serde_json::json!({
         "requestId": request_id,
         "targetFingerprint": target.runtime_fingerprint(),
@@ -1902,7 +1968,7 @@ fn retire(
     }
     let deadline = clock.now() + Duration::from_secs(75);
     while clock.now() < deadline {
-        if retirement_acknowledged(&directory.join("result.json"), &request_id, prior, target)? {
+        if retirement_acknowledged(&directory.join("result.json"), request_id, prior, target)? {
             return Ok(());
         }
         clock.wait(Duration::from_millis(100));
@@ -2249,6 +2315,75 @@ mod tests {
         };
         assert!(gateway.recover(&recovery, journal.as_ref()).is_ok());
         assert_eq!(unit.as_str(), recovery.target().service());
+    }
+
+    #[test]
+    fn retirement_recovery_requires_the_planned_request_and_result_tuple() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().canonicalize().unwrap().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        nessa_local_storage::create_directory_beneath(&data, Path::new("gateway-upgrade")).unwrap();
+        let directory = data.join("gateway-upgrade");
+        let request_id = "550e8400-e29b-41d4-a716-446655440000";
+        let (unit, old_target, _) = fixture();
+        let prior = ReconciliationIncarnation::new(
+            old_target,
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            99,
+            7420,
+        )
+        .unwrap();
+        let target =
+            ReconciliationTarget::new(unit.as_str().into(), "c".repeat(64), "d".repeat(64))
+                .unwrap();
+        let request = serde_json::to_vec(&serde_json::json!({
+            "requestId": request_id,
+            "targetFingerprint": target.runtime_fingerprint(),
+            "runningInstance": prior.runtime_instance(),
+            "runningGeneration": prior.target().service_generation(),
+            "targetGeneration": target.service_generation(),
+        }))
+        .unwrap();
+        atomic_write(&directory, Path::new("request.json"), &request).unwrap();
+        let result = serde_json::to_vec(&serde_json::json!({
+            "requestId": request_id,
+            "targetFingerprint": target.runtime_fingerprint(),
+            "runningFingerprint": prior.target().runtime_fingerprint(),
+            "runningInstance": prior.runtime_instance(),
+            "requestedInstance": prior.runtime_instance(),
+            "runningGeneration": prior.target().service_generation(),
+            "requestedRunningGeneration": prior.target().service_generation(),
+            "targetGeneration": target.service_generation(),
+            "retired": true,
+            "retirementRequestId": request_id,
+            "retirementCause": {
+                "principalId": "gateway",
+                "surfaceId": "gateway_upgrade",
+                "requestId": request_id,
+            },
+            "cleanupError": null,
+            "auditError": null,
+        }))
+        .unwrap();
+        atomic_write(&directory, Path::new("result.json"), &result).unwrap();
+
+        assert!(
+            retirement_artifact_present(&data, request_id, &prior, &target, Some(&prior),).unwrap()
+        );
+        assert!(retirement_artifact_present(
+            &data,
+            "550e8400-e29b-41d4-a716-446655440002",
+            &prior,
+            &target,
+            Some(&prior),
+        )
+        .is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_manager_factory_refuses_an_account_without_linger_authority() {
+        assert!(NativeLinuxManagerFactory.connect(u32::MAX).is_err());
     }
 
     #[test]

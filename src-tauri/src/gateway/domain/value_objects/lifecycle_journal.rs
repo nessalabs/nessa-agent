@@ -96,6 +96,10 @@ pub enum LifecycleEffect {
     RequestRetirement {
         incarnation: ReconciliationIncarnation,
     },
+    RequestSystemdRetirement {
+        incarnation: ReconciliationIncarnation,
+        request_id: String,
+    },
     UnloadService {
         service: String,
     },
@@ -169,6 +173,9 @@ impl LifecyclePlanStep {
             LifecycleEffect::StageRuntime { fingerprint }
             | LifecycleEffect::PruneRuntime { fingerprint } => sha256_hex(fingerprint),
             LifecycleEffect::RemoveStagingRuntime { generation } => sha256_hex(generation),
+            LifecycleEffect::RequestSystemdRetirement { request_id, .. } => {
+                canonical_uuid(request_id)
+            }
             LifecycleEffect::UnloadService { service } => !service.trim().is_empty(),
             _ => true,
         };
@@ -824,6 +831,7 @@ fn validate_primary_effect(
             fingerprint == target.runtime_fingerprint()
         }
         LifecycleEffect::RequestRetirement { incarnation }
+        | LifecycleEffect::RequestSystemdRetirement { incarnation, .. }
         | LifecycleEffect::StopAgents { incarnation } => expected_before == Some(incarnation),
         LifecycleEffect::UnloadService { service } => service == namespace,
         LifecycleEffect::PublishServiceDefinition { target: planned }
@@ -998,6 +1006,17 @@ fn sha256_hex(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+            }
+        })
 }
 
 #[cfg(test)]
@@ -1702,6 +1721,21 @@ mod tests {
                 LifecycleJournalError::TargetMismatch
             );
         }
+    }
+
+    #[test]
+    fn systemd_retirement_plan_requires_a_canonical_request_identity() {
+        assert_eq!(
+            LifecyclePlanStep::new(
+                "retire".into(),
+                LifecycleEffect::RequestSystemdRetirement {
+                    incarnation: incarnation(10),
+                    request_id: "not-a-uuid".into(),
+                },
+                LifecycleEffectPredicate::Always,
+            ),
+            Err(LifecycleJournalError::InvalidEffect)
+        );
     }
 
     #[test]

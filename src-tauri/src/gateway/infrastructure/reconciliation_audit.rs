@@ -399,6 +399,13 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 LifecycleEffect::StopAgents { incarnation }
             })
         }
+        "request_systemd_retirement" => {
+            object_exact(object, &["kind", "incarnation", "requestId"])?;
+            Ok(LifecycleEffect::RequestSystemdRetirement {
+                incarnation: parse_identity(&object["incarnation"])?,
+                request_id: string(object, "requestId")?,
+            })
+        }
         "unload_service" => {
             object_exact(object, &["kind", "service"])?;
             Ok(LifecycleEffect::UnloadService {
@@ -1602,6 +1609,14 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         LifecycleEffect::RequestRetirement { incarnation } => {
             json!({"kind":"request_retirement", "incarnation":identity(incarnation)})
         }
+        LifecycleEffect::RequestSystemdRetirement {
+            incarnation,
+            request_id,
+        } => json!({
+            "kind":"request_systemd_retirement",
+            "incarnation":identity(incarnation),
+            "requestId":request_id,
+        }),
         LifecycleEffect::UnloadService { service } => {
             json!({"kind":"unload_service", "service":service})
         }
@@ -1944,6 +1959,24 @@ mod tests {
             parse_systemd_runtime(&systemd_runtime(&runtime)).unwrap(),
             runtime
         );
+    }
+
+    #[test]
+    fn systemd_retirement_effect_round_trips_its_request_correlation() {
+        let value = json!({
+            "kind":"request_systemd_retirement",
+            "incarnation":{
+                "service":"nessa-gateway-prod.service",
+                "runtimeFingerprint":"a".repeat(64),
+                "runtimeInstance":"550e8400-e29b-41d4-a716-446655440001",
+                "serviceGeneration":"b".repeat(64),
+                "processId":41,
+                "port":7420,
+            },
+            "requestId":"550e8400-e29b-41d4-a716-446655440000",
+        });
+        let effect = parse_effect(&value).unwrap();
+        assert_eq!(lifecycle_effect(&effect), value);
     }
 
     #[test]

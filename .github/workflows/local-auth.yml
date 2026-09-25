@@ -201,11 +201,13 @@ jobs:
   # build, on `SIMULATED_UPDATE` being gated while its one release-profile
   # reader was not.
   #
-  # macOS because the app's gateway is macOS-only and the other targets compile
-  # a stub. `cargo check`, not a build: this is about what compiles, and the
-  # release workflow remains the only thing that produces a bundle. The
-  # frontend is built first because `generate_context!` embeds `dist/`, which
-  # has to exist before the crate can be checked at all.
+  # macOS is the one release-profile answer here. Linux compiles and exercises
+  # its systemd adapter in `local-auth` through `check-desktop.mjs`; this job
+  # catches code that disappears only when `cfg(debug_assertions)` is off.
+  # `cargo check`, not a build: this is about what compiles, and the release
+  # workflow remains the only thing that produces a bundle. The frontend is
+  # built first because `generate_context!` embeds `dist/`, which has to exist
+  # before the crate can be checked at all.
   #
   # `scripts/desktop/prepare.mjs` used to run here too, and was two thirds of
   # this job: on macOS it builds `nessa-server` and `nessa-mcp` under the
