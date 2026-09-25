@@ -24,7 +24,9 @@ reactions are wrong:
   `restart()` classes as `Worthwhile`. launchd therefore relaunches, forever, a
   gateway that will never read that file, and no startup-failure record tells
   the host why.
-- **The browser-session journal** fails the same way, as `Authentication`.
+- **The browser-session journal** fails the same way, as `Authentication`,
+  because its open has one error for "cannot be replayed" and "cannot be
+  opened".
 
 The rest are already right. The credential registry refuses as
 `credentialRegistryInvalid`: not retried, recorded. Session journals refuse one
@@ -87,8 +89,14 @@ migration code exists before then.
 | G4 | Not a database, or corrupt | `datasetRefused`, not retried, recorded. File untouched. | `a_file_that_is_not_a_database_refuses_the_gateway_for_good` |
 | G5 | Directory missing or not private, file not private, I/O failure, busy | Today's reason (`agent`), retried | `a_metadata_directory_that_cannot_be_used_is_still_retried` |
 
-The browser-session journal gets the same rows once its open says "unreadable"
-apart from "unavailable". Today it has one untyped error for both.
+The browser-session journal has the same rows. Its open returns
+`JournalOpenError`: `Unreadable { line, problem }` for anything replay refuses
+(a file or line over its bound, a last line without its newline, a line that
+is not a record, a record that is not a legal next step), and `Unavailable` for
+the rest. G3/G4 are
+`a_browser_session_journal_replay_refuses_stops_the_gateway_for_good` and
+`what_replay_refuses_is_unreadable_and_names_its_line`. G5, whose reason stays
+`authentication`, is `a_browser_session_journal_held_elsewhere_is_still_retried`.
 
 ## Decisions taken for the owner
 
@@ -126,5 +134,9 @@ choices:
 - A cache never costs the gateway.
 - After alpha, every shape change carries a migration and a checked-in fixture
   of the version it migrates from.
-- Remaining: give the browser-session journal's open a typed "unreadable"
-  result, and give it rule 3.
+- A browser-session journal whose last append was cut short by a crash
+  now stops the gateway with a sentence, where it used to relaunch forever.
+  Either way it needs a hand repair. That append was never acknowledged, so
+  truncating it at open, as the SDK's session journals already do, would be
+  safe. It is not done here.
+- Remaining: migrations, once Nessa leaves alpha.

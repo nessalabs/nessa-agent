@@ -195,13 +195,11 @@ pub(super) fn product_state(
     )
     .with_admin(admin)
     .with_settings(settings.session()?)
-    .with_browser_sessions(Arc::new(
-        PersistentSessions::open(
-            &directory.join("browser-sessions.jsonl"),
-            SystemClock.unix_seconds(),
-        )
-        .map_err(setup_error)?,
-    ));
+    .with_browser_sessions(Arc::new({
+        let path = directory.join("browser-sessions.jsonl");
+        PersistentSessions::open(&path, SystemClock.unix_seconds())
+            .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
+    }));
     product.browser_http_allowed = config.browser_http_allowed();
     if let Some((service, attachments)) = conversations {
         product = product

@@ -7,6 +7,7 @@
 //!
 //! Re-exported at `crate::core::RunError`.
 
+use crate::browser_session::adapters::JournalOpenError;
 use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
@@ -61,12 +62,22 @@ impl RunError {
     /// lock — stays `Agent`, which is retried.
     pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
         match cause {
-            OpenError::Version { .. } | OpenError::Unreadable(_) => Self::Dataset(DatasetRefusal {
-                dataset,
-                path: path.to_path_buf(),
-                cause,
-            }),
+            OpenError::Version { .. } | OpenError::Unreadable(_) => {
+                Self::Dataset(DatasetRefusal::new(dataset, path, cause))
+            }
             cause => Self::Agent(format!("{dataset} at {}: {cause}", path.display())),
+        }
+    }
+
+    /// The browser-session journal that did not open. A journal replay
+    /// refuses is a [`RunError::Dataset`]; one that could not be opened,
+    /// locked or synced stays `Authentication`, which is retried.
+    pub(crate) fn opening_browser_sessions(path: &Path, cause: JournalOpenError) -> Self {
+        match cause {
+            JournalOpenError::Unreadable { .. } => {
+                Self::Dataset(DatasetRefusal::new(Dataset::BrowserSessions, path, cause))
+            }
+            JournalOpenError::Unavailable => Self::Authentication(cause.to_string()),
         }
     }
 
@@ -82,12 +93,14 @@ impl RunError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dataset {
     ConversationMetadata,
+    BrowserSessions,
 }
 
 impl fmt::Display for Dataset {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ConversationMetadata => "conversation metadata",
+            Self::BrowserSessions => "browser sessions",
         })
     }
 }
@@ -97,10 +110,24 @@ impl fmt::Display for Dataset {
 pub struct DatasetRefusal {
     dataset: Dataset,
     path: PathBuf,
-    cause: OpenError,
+    /// The opener's own error, for the sentence and the log; nothing
+    /// branches on it.
+    cause: Box<dyn std::error::Error + Send + Sync>,
 }
 
 impl DatasetRefusal {
+    fn new(
+        dataset: Dataset,
+        path: &Path,
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            dataset,
+            path: path.to_path_buf(),
+            cause: Box::new(cause),
+        }
+    }
+
     pub fn dataset(&self) -> Dataset {
         self.dataset
     }
@@ -204,7 +231,7 @@ impl std::error::Error for RunError {
         match self {
             Self::Environment(error) => Some(error),
             Self::Registry(error) => Some(error),
-            Self::Dataset(refusal) => Some(&refusal.cause),
+            Self::Dataset(refusal) => Some(&*refusal.cause),
             Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
@@ -319,6 +346,55 @@ mod tests {
         };
         let error = RunError::opening(Dataset::ConversationMetadata, &path, cause);
         assert!(matches!(error, RunError::Agent(_)), "{error}");
+        assert_eq!(
+            super::super::restart::restart(&error),
+            super::super::restart::Restart::Worthwhile
+        );
+    }
+
+    /// Rows G3/G4 of ADR 202 for the browser-session journal: what replay
+    /// refuses is the same file next time.
+    #[test]
+    fn a_browser_session_journal_replay_refuses_stops_the_gateway_for_good() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("browser-sessions.jsonl");
+        // Private, as the journal would make it, so that replay and not the
+        // privacy check refuses it.
+        let mut file =
+            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew).unwrap();
+        std::io::Write::write_all(&mut file, b"not a record\n").unwrap();
+        drop(file);
+        let Err(cause) = crate::browser_session::adapters::PersistentSessions::open(&path, 100)
+        else {
+            panic!("the journal opened");
+        };
+        let error = RunError::opening_browser_sessions(&path, cause);
+        assert!(
+            matches!(&error, RunError::Dataset(refusal)
+                if refusal.dataset() == Dataset::BrowserSessions),
+            "{error}"
+        );
+        assert_eq!(super::super::exit_code::reason(&error), "datasetRefused");
+        assert_eq!(
+            super::super::restart::restart(&error),
+            super::super::restart::Restart::Pointless
+        );
+        assert!(error.to_string().contains("line 1"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not a record\n");
+    }
+
+    /// Row G5 for the journal: held by another opener clears when it lets go.
+    #[test]
+    fn a_browser_session_journal_held_elsewhere_is_still_retried() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("browser-sessions.jsonl");
+        let _held = crate::browser_session::adapters::PersistentSessions::open(&path, 100).unwrap();
+        let Err(cause) = crate::browser_session::adapters::PersistentSessions::open(&path, 100)
+        else {
+            panic!("the journal opened twice");
+        };
+        let error = RunError::opening_browser_sessions(&path, cause);
+        assert!(matches!(error, RunError::Authentication(_)), "{error}");
         assert_eq!(
             super::super::restart::restart(&error),
             super::super::restart::Restart::Worthwhile

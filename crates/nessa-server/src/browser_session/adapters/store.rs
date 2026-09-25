@@ -181,6 +181,47 @@ struct State {
     healthy: bool,
 }
 
+/// Why the journal was not opened.
+///
+/// What the file holds is told apart from what could clear, because opening
+/// the same bytes again refuses them again
+/// (docs/adr/todo/202-versioned-local-datasets.md).
+#[derive(Debug, PartialEq, Eq)]
+pub enum JournalOpenError {
+    /// The journal holds something replay refuses: a file or line over its
+    /// bound, a last line without its newline, JSON that does not parse, or a
+    /// record that is not a legal next step. `line` counts from 1; `None` is
+    /// the file as a whole.
+    Unreadable {
+        line: Option<u64>,
+        problem: &'static str,
+    },
+    /// The file could not be opened privately, locked, read, synced, or
+    /// written: a failure that can clear.
+    Unavailable,
+}
+impl std::fmt::Display for JournalOpenError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable {
+                line: Some(line),
+                problem,
+            } => write!(output, "browser session journal line {line}: {problem}"),
+            Self::Unreadable {
+                line: None,
+                problem,
+            } => write!(output, "browser session journal: {problem}"),
+            Self::Unavailable => output.write_str("browser session journal is unavailable"),
+        }
+    }
+}
+impl std::error::Error for JournalOpenError {}
+impl From<AccessError> for JournalOpenError {
+    fn from(_: AccessError) -> Self {
+        Self::Unavailable
+    }
+}
+
 /// Private append-only session journal. Each acknowledged write includes its audit
 /// evidence and is synced before publication. A write failure fails closed until restart.
 pub struct PersistentSessions(Arc<Mutex<State>>, Arc<Semaphore>);
@@ -188,25 +229,33 @@ impl PersistentSessions {
     /// Open the journal and reconcile what it claims about time with `now`.
     ///
     /// `now` is read from the same wall clock the store's callers use.
-    pub fn open(path: &Path, now: u64) -> Result<Self, AccessError> {
+    pub fn open(path: &Path, now: u64) -> Result<Self, JournalOpenError> {
         Self::open_bounded(path, MAX_JOURNAL_BYTES, now)
     }
 
-    fn open_bounded(path: &Path, max_journal_bytes: u64, now: u64) -> Result<Self, AccessError> {
+    fn open_bounded(
+        path: &Path,
+        max_journal_bytes: u64,
+        now: u64,
+    ) -> Result<Self, JournalOpenError> {
+        use JournalOpenError::{Unavailable, Unreadable};
         if max_journal_bytes == 0 {
-            return Err(AccessError::Unavailable);
+            return Err(Unavailable);
         }
-        let file = open(path, OpenMode::OpenOrCreate).map_err(|_| AccessError::Unavailable)?;
-        file.try_lock().map_err(|_| AccessError::Unavailable)?;
+        let file = open(path, OpenMode::OpenOrCreate).map_err(|_| Unavailable)?;
+        file.try_lock().map_err(|_| Unavailable)?;
         // Owned from the instant the lock is taken, so every path out of this
         // function — including the refusals below — releases it.
         let mut file = Journal(file);
-        if file.metadata().map_err(|_| AccessError::Unavailable)?.len() > max_journal_bytes {
-            return Err(AccessError::Unavailable);
+        if file.metadata().map_err(|_| Unavailable)?.len() > max_journal_bytes {
+            return Err(Unreadable {
+                line: None,
+                problem: "larger than a journal may grow",
+            });
         }
-        file.sync_all().map_err(|_| AccessError::Unavailable)?;
-        nessa_local_storage::sync_directory(path.parent().ok_or(AccessError::Unavailable)?)
-            .map_err(|_| AccessError::Unavailable)?;
+        file.sync_all().map_err(|_| Unavailable)?;
+        nessa_local_storage::sync_directory(path.parent().ok_or(Unavailable)?)
+            .map_err(|_| Unavailable)?;
         let mut state = State {
             sessions: BTreeMap::new(),
             login_replacements: BTreeMap::new(),
@@ -217,24 +266,38 @@ impl PersistentSessions {
         };
         let mut reader = BufReader::new(&mut *file);
         let mut line = Vec::new();
+        let mut number = 0_u64;
         loop {
             line.clear();
+            number += 1;
+            let unreadable = |problem| Unreadable {
+                line: Some(number),
+                problem,
+            };
             // A record is bounded before allocating untrusted input.
             let count = std::io::Read::take(&mut reader, 1_048_577)
                 .read_until(b'\n', &mut line)
-                .map_err(|_| AccessError::Unavailable)?;
+                .map_err(|_| Unavailable)?;
             if count == 0 {
                 break;
             }
-            if count > 1_048_576 || line.last() != Some(&b'\n') {
-                return Err(AccessError::Unavailable);
+            if count > 1_048_576 {
+                return Err(unreadable("longer than a record may be"));
+            }
+            if line.last() != Some(&b'\n') {
+                return Err(unreadable("ends without its newline"));
             }
             let record: StoredRecord =
-                serde_json::from_slice(&line).map_err(|_| AccessError::Unavailable)?;
-            state.apply(&record.try_into()?)?;
+                serde_json::from_slice(&line).map_err(|_| unreadable("is not a journal record"))?;
+            let record: Record = record
+                .try_into()
+                .map_err(|_| unreadable("holds a value that is not valid"))?;
+            state
+                .apply(&record)
+                .map_err(|_| unreadable("is not a legal next step"))?;
         }
         file.seek(SeekFrom::End(0))
-            .map_err(|_| AccessError::Unavailable)?;
+            .map_err(|_| JournalOpenError::Unavailable)?;
         state.file = Some(file);
         // A record's own instant is untrusted input: nothing in the file
         // constrains it, so a forged or clock-damaged `Renewed` chain can claim
