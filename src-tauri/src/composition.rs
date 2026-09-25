@@ -51,7 +51,10 @@ use crate::attachments::{
     self, AttachmentTickets, ChosenFiles, ContentTypes, DragBoard, FilePicker, Readiness,
 };
 use crate::gateway::domain::value_objects::ServiceConfiguration;
-use crate::gateway::{self, application::Gateway};
+use crate::gateway::{
+    self,
+    application::{Gateway, SystemMonotonicClock},
+};
 use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
@@ -197,12 +200,13 @@ impl HostDependencies {
             let runtime = app.path().resource_dir()?.join("runtime");
             let reconciliation_audit =
                 gateway::infrastructure::reconciliation_audit(config_root.clone());
-            Some(Arc::new(Gateway::bootstrap(
+            Some(Arc::new(Gateway::bootstrap_with_clock(
                 gateway::infrastructure::current(service_configuration.clone(), home),
                 gateway::infrastructure::login_shell_path(),
                 gateway::infrastructure::startup_events(app),
                 gateway::infrastructure::reconciliation_ids(),
                 reconciliation_audit,
+                Arc::new(SystemMonotonicClock),
                 runtime,
                 stage.clone(),
             )))

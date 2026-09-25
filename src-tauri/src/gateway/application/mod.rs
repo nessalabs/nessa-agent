@@ -11,6 +11,6 @@ pub use ports::{
     GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
     GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStartup,
     GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
-    LoginShellError, LoginShellPath, ReconciledGateway,
+    LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway, SystemMonotonicClock,
 };
 pub use service::Gateway;

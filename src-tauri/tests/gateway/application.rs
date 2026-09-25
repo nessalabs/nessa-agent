@@ -13,7 +13,7 @@ use crate::gateway::{
 use std::{
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Condvar, Mutex, Weak,
     },
     thread,
@@ -702,6 +702,71 @@ impl GatewayHost for AuditedHost {
     }
 }
 
+#[derive(Default)]
+struct RetryOnceAudit {
+    intent_failed: AtomicBool,
+    outcome_failed: AtomicBool,
+    intent_calls: AtomicUsize,
+    outcome_calls: AtomicUsize,
+}
+
+impl TestAuditBehavior for RetryOnceAudit {
+    fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+        self.intent_calls.fetch_add(1, Ordering::SeqCst);
+        if !self.intent_failed.swap(true, Ordering::SeqCst) {
+            Err(GatewayError::Registration(
+                "transient intent sync failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        self.outcome_calls.fetch_add(1, Ordering::SeqCst);
+        if !self.outcome_failed.swap(true, Ordering::SeqCst) {
+            Err(GatewayError::Registration(
+                "transient outcome sync failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn joined(
+        &self,
+        _: &GatewayReconciliationAttempt,
+        _: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn exact_delivery_retry_recovers_published_intent_and_outcome() {
+    let audit = Arc::new(RetryOnceAudit::default());
+    let gateway = Gateway::bootstrap(
+        Arc::new(AuditedHost {
+            result: AuditedPhysicalResult::Confirmed,
+            stopped: Mutex::new(Vec::new()),
+        }),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        audit.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert_eq!(audit.intent_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(audit.outcome_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        gateway.startup().unwrap().phase(),
+        &GatewayStartupPhase::Ready
+    );
+}
+
 #[test]
 fn confirmed_refused_and_partial_effects_are_audited_with_delivery_failures_separate() {
     for physical in [
@@ -770,7 +835,7 @@ fn confirmed_refused_and_partial_effects_are_audited_with_delivery_failures_sepa
             let intents = audit.intents.lock().unwrap();
             let outcomes = audit.outcomes.lock().unwrap();
             assert_eq!(intents.len(), 1);
-            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes.len(), if fail_outcome { 2 } else { 1 });
             assert_eq!(outcomes[0].intent(), &intents[0]);
             let attempt = intents[0].attempt();
             assert_ne!(attempt.correlation(), attempt.origin().correlation());
@@ -1236,9 +1301,12 @@ fn failed_intent_delivery_is_terminally_audited_and_cannot_be_replaced() {
             tauri::async_runtime::block_on(gateway.start()),
             Err(GatewayError::Audit { .. })
         ));
-        assert_eq!(audit.intents.lock().unwrap().len(), 1);
+        assert_eq!(
+            audit.intents.lock().unwrap().len(),
+            if panic_intent { 1 } else { 2 }
+        );
         let outcomes = audit.outcomes.lock().unwrap();
-        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes.len(), if fail_outcome { 2 } else { 1 });
         assert!(matches!(
             outcomes[0].intent_delivery(),
             GatewayReconciliationIntentDelivery::Failed(GatewayError::Audit { .. })
@@ -2745,7 +2813,7 @@ struct FailSecondAudit {
 impl TestAuditBehavior for FailSecondAudit {
     fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         let call = self.intent_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_intent && call == 2 {
+        if self.fail_intent && call >= 2 {
             Err(GatewayError::Registration(
                 "second intent audit failed".into(),
             ))
@@ -2756,7 +2824,7 @@ impl TestAuditBehavior for FailSecondAudit {
 
     fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
         let call = self.outcome_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if !self.fail_intent && call == 2 {
+        if !self.fail_intent && call >= 2 {
             Err(GatewayError::Registration(
                 "second outcome audit failed".into(),
             ))

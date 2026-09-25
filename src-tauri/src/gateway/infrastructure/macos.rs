@@ -106,15 +106,17 @@ impl GatewayHost for Launchd {
         session.claim(plan, &candidate, observation_version)?;
         // Claim and spawn are adjacent: no filesystem, lock, health, or manager
         // query can invalidate an unconsumed proof between them.
-        let command = dispatch_stop_command(gateway.service(), session.request().deadline());
+        let command = dispatch_stop_command(gateway.service(), session);
         session.command_result(command.clone())?;
-        journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)?;
+        retry_journal_delivery(|| {
+            journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)
+        })?;
         if matches!(command, LifecycleCommandResult::Indeterminate(_)) {
             return Err(GatewayError::Stop(
                 "Gateway stop command was indeterminate at the quit deadline".into(),
             ));
         }
-        if Instant::now() >= session.request().deadline() {
+        if session.deadline_passed() {
             return Err(GatewayError::Stop(
                 "Gateway stop deadline passed before fresh observation".into(),
             ));
@@ -123,13 +125,11 @@ impl GatewayHost for Launchd {
         let running = health(gateway.port());
         let observed = observed_incarnation(gateway.service(), gateway.port(), &status, running);
         let observation = LifecycleObservation::new(2, observed, status.loaded);
-        journal.observation(
-            &LifecycleObservationSource::Effect {
-                plan_id: "stop-agents-on-desktop-quit".into(),
-                step_id: "signal-agents".into(),
-            },
-            &observation,
-        )?;
+        let source = LifecycleObservationSource::Effect {
+            plan_id: "stop-agents-on-desktop-quit".into(),
+            step_id: "signal-agents".into(),
+        };
+        retry_journal_delivery(|| journal.observation(&source, &observation))?;
         session.fresh_observation(observation.clone())?;
         match command {
             LifecycleCommandResult::Accepted => Ok(observation),
@@ -141,7 +141,16 @@ impl GatewayHost for Launchd {
     }
 }
 
-fn dispatch_stop_command(service: &str, deadline: Instant) -> LifecycleCommandResult {
+fn retry_journal_delivery<T>(
+    mut deliver: impl FnMut() -> Result<T, GatewayError>,
+) -> Result<T, GatewayError> {
+    match deliver() {
+        Ok(receipt) => Ok(receipt),
+        Err(_) => deliver(),
+    }
+}
+
+fn dispatch_stop_command(service: &str, session: &GatewayStopSession) -> LifecycleCommandResult {
     let mut child = match Command::new("/bin/launchctl")
         .args(["kill", "SIGUSR1", service])
         .stdout(Stdio::null())
@@ -162,7 +171,7 @@ fn dispatch_stop_command(service: &str, deadline: Instant) -> LifecycleCommandRe
                         .unwrap_or_else(|error| error.to_string()),
                 );
             }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) if !session.deadline_passed() => thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();

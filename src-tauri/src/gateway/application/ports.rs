@@ -143,13 +143,15 @@ enum StopDispatchAuthority {
 pub struct GatewayStopSession {
     request: GatewayStopRequest,
     state: Mutex<StopDispatchAuthority>,
+    clock: Arc<dyn MonotonicClock>,
 }
 
 impl GatewayStopSession {
-    pub(crate) fn new(request: GatewayStopRequest) -> Self {
+    pub(crate) fn new(request: GatewayStopRequest, clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             request,
             state: Mutex::new(StopDispatchAuthority::AvailableUnproved),
+            clock,
         }
     }
 
@@ -157,12 +159,16 @@ impl GatewayStopSession {
         &self.request
     }
 
+    pub fn deadline_passed(&self) -> bool {
+        self.clock.now() >= self.request.deadline
+    }
+
     pub fn begin_proof(&self) -> Result<(), GatewayError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
-        if Instant::now() >= self.request.deadline {
+        if self.deadline_passed() {
             *state = StopDispatchAuthority::Revoked;
             return Err(GatewayError::Stop(
                 "Gateway stop deadline passed before recipient proof".into(),
@@ -187,7 +193,7 @@ impl GatewayStopSession {
             .state
             .lock()
             .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
-        if Instant::now() >= self.request.deadline {
+        if self.deadline_passed() {
             *state = StopDispatchAuthority::Revoked;
             return Err(GatewayError::Stop(
                 "Gateway stop recipient proof arrived after its deadline".into(),
@@ -216,7 +222,7 @@ impl GatewayStopSession {
             .state
             .lock()
             .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
-        if Instant::now() >= self.request.deadline {
+        if self.deadline_passed() {
             *state = StopDispatchAuthority::Revoked;
             return Err(GatewayError::Stop(
                 "Gateway stop deadline revoked dispatch authority".into(),
@@ -312,6 +318,20 @@ impl GatewayStopSession {
                 | StopDispatchAuthority::Revoked => {}
             }
         }
+    }
+}
+
+/// Monotonic time used to arbitrate lifecycle deadlines.
+pub trait MonotonicClock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+/// Process monotonic clock used by desktop composition.
+pub struct SystemMonotonicClock;
+
+impl MonotonicClock for SystemMonotonicClock {
+    fn now(&self) -> Instant {
+        Instant::now()
     }
 }
 
@@ -1076,7 +1096,28 @@ mod tests {
     use crate::gateway::domain::value_objects::{
         BundledSurface, ReconciliationCause, ReconciliationInitiator, ReconciliationRuntimeIdentity,
     };
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    struct ControlledClock(Mutex<Instant>);
+
+    impl ControlledClock {
+        fn new(now: Instant) -> Self {
+            Self(Mutex::new(now))
+        }
+
+        fn set(&self, now: Instant) {
+            *self.0.lock().expect("controlled clock") = now;
+        }
+    }
+
+    impl MonotonicClock for ControlledClock {
+        fn now(&self) -> Instant {
+            *self.0.lock().expect("controlled clock")
+        }
+    }
 
     fn correlation(serial: u64) -> ReconciliationCorrelation {
         ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}"))
@@ -1212,6 +1253,17 @@ mod tests {
         ReconciliationIncarnation,
         AuditDeliveryReceipt,
     ) {
+        stop_session_with_clock(deadline, Arc::new(SystemMonotonicClock))
+    }
+
+    fn stop_session_with_clock(
+        deadline: Instant,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> (
+        GatewayStopSession,
+        ReconciliationIncarnation,
+        AuditDeliveryReceipt,
+    ) {
         let evidence = ReconciliationEvidence::new(
             ReconciliationCause::DesktopQuitPolicy,
             ReconciliationInitiator::DesktopHost,
@@ -1234,7 +1286,7 @@ mod tests {
             crate::gateway::domain::value_objects::LifecycleRecordKind::EffectPlan,
         );
         (
-            GatewayStopSession::new(GatewayStopRequest::new(attempt, gateway, deadline)),
+            GatewayStopSession::new(GatewayStopRequest::new(attempt, gateway, deadline), clock),
             intended,
             receipt,
         )
@@ -1255,5 +1307,44 @@ mod tests {
         assert!(session.claim(&receipt, &intended, 8).is_err());
         session.claim(&receipt, &intended, 7).unwrap();
         assert!(session.claim(&receipt, &intended, 7).is_err());
+    }
+
+    #[test]
+    fn deadline_revokes_a_proof_that_finishes_late_without_a_dispatch_claim() {
+        let start = Instant::now();
+        let clock = Arc::new(ControlledClock::new(start));
+        let (session, intended, receipt) =
+            stop_session_with_clock(start + Duration::from_secs(1), clock.clone());
+        session.begin_proof().unwrap();
+        clock.set(start + Duration::from_secs(1));
+        assert!(session.prove(intended.clone(), 1).is_err());
+        assert!(session.claim(&receipt, &intended, 1).is_err());
+    }
+
+    #[test]
+    fn claim_and_deadline_use_one_clock_and_lock_in_either_order() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(1);
+
+        let clock = Arc::new(ControlledClock::new(start));
+        let (claimed, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
+        claimed.begin_proof().unwrap();
+        claimed.prove(intended.clone(), 1).unwrap();
+        claimed.claim(&receipt, &intended, 1).unwrap();
+        clock.set(deadline);
+        claimed.expire_at_deadline();
+        assert!(claimed
+            .command_result(LifecycleCommandResult::Accepted)
+            .is_err());
+
+        let clock = Arc::new(ControlledClock::new(start));
+        let (revoked, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
+        revoked.begin_proof().unwrap();
+        revoked.prove(intended.clone(), 1).unwrap();
+        clock.set(deadline);
+        assert!(revoked.claim(&receipt, &intended, 1).is_err());
+        assert!(revoked
+            .command_result(LifecycleCommandResult::Accepted)
+            .is_err());
     }
 }
