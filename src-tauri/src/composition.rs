@@ -203,7 +203,11 @@ impl HostDependencies {
                 gateway::infrastructure::reconciliation_audit(config_root.clone(), clock.clone());
             Some(Arc::new(Gateway::bootstrap_with_dependencies(
                 GatewayRuntimeDependencies::new(
-                    gateway::infrastructure::current(service_configuration.clone(), home),
+                    gateway::infrastructure::current(
+                        service_configuration.clone(),
+                        home,
+                        clock.clone(),
+                    ),
                     gateway::infrastructure::login_shell_path(),
                     gateway::infrastructure::startup_events(app),
                     gateway::infrastructure::reconciliation_ids(),

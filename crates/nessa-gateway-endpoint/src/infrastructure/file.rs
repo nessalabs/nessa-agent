@@ -100,10 +100,13 @@ impl FileEndpointDiscovery {
     pub fn new(root: PathBuf, directory: PathBuf) -> Self {
         Self { root, directory }
     }
-}
 
-impl EndpointDiscovery for FileEndpointDiscovery {
-    fn discover(&self) -> io::Result<Option<GatewayEndpoint>> {
+    /// Read and health-check the complete managed endpoint advertisement.
+    ///
+    /// Native service adapters use the managed identity to correlate the OS
+    /// process with the portable runtime. Ordinary clients consume the narrower
+    /// [`EndpointDiscovery`] result below.
+    pub fn discover_advertisement(&self) -> io::Result<Option<GatewayEndpointAdvertisement>> {
         let path = self.directory.join(ENDPOINT_FILE);
         let mut file = match nessa_local_storage::open_beneath(
             &self.root,
@@ -111,8 +114,6 @@ impl EndpointDiscovery for FileEndpointDiscovery {
             nessa_local_storage::OpenMode::ReadNonblocking,
         ) {
             Ok(file) => file,
-            // Absence and ordinary I/O unavailability retain today's configured
-            // address. A present object that violates private storage is terminal.
             Err(error) if nessa_local_storage::is_unsafe_file(&error) => return Err(error),
             Err(_) => return Ok(None),
         };
@@ -141,7 +142,14 @@ impl EndpointDiscovery for FileEndpointDiscovery {
                 "published gateway endpoint belongs to a different process",
             ));
         }
-        Ok(Some(advertisement.endpoint().clone()))
+        Ok(Some(advertisement))
+    }
+}
+
+impl EndpointDiscovery for FileEndpointDiscovery {
+    fn discover(&self) -> io::Result<Option<GatewayEndpoint>> {
+        self.discover_advertisement()
+            .map(|value| value.map(|advertisement| advertisement.endpoint().clone()))
     }
 }
 

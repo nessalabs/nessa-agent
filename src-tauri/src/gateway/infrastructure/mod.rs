@@ -1,5 +1,5 @@
-//! Native background service adapters. The desktop composition root selects one.
-//! macOS reconciliation holds a service-label lock through retirement, replacement,
+//! Native background service adapters. The desktop composition root selects launchd
+//! on macOS and the account's systemd user manager on Linux. macOS reconciliation holds a service-label lock through retirement, replacement,
 //! matching process readiness. Failed installation preserves the desired registration
 //! for forward recovery; it never rolls back or stops an unretired replacement. Its `control` module owns private retirement
 //! exchange files, bounded health parsing, and launchctl effects. Its `generation`
@@ -16,8 +16,9 @@
 //!
 //! ```text
 //! bundled windows -> commands -> Gateway startup snapshot / retry
-//! Gateway -> Launchd -> staging -> verified immutable runtime
+//! Gateway -> native manager -> staging -> verified immutable runtime
 //!                    -> control -> launchd / existing gateway
+//!                    -> systemd -> typed D-Bus jobs / pidfds
 //!                    -> pruning -> superseded runtime versions
 //!         -> reconciliation audit -> private atomic intent/outcome records
 //!         -> LoginShell -------> the account's login shell
@@ -25,12 +26,16 @@
 //! Arrows mean calls; commands translate only the application-owned startup
 //! contract, and only launchd owns the background process lifetime.
 mod commands;
+#[cfg(target_os = "linux")]
+mod linux;
 mod login_shell;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod reconciliation_audit;
 mod reconciliation_ids;
 mod selection;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
 pub use commands::{
     __cmd__gateway_startup, __cmd__retry_gateway_startup, __tauri_command_name_gateway_startup,

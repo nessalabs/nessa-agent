@@ -20,6 +20,8 @@ use crate::gateway::{
         LifecycleRecordKind, LifecycleRecordPayload, ReconciliationCause,
         ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
         ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget,
+        SystemdJobAttempt, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
+        SystemdRuntimeObservation, SystemdUnitName,
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
@@ -231,6 +233,7 @@ fn validate_payload_shape(kind: &str, payload: &Value) -> Result<(), GatewayErro
         Some(LifecycleRecordKind::EffectPlan) => {
             &["planId", "expectedBefore", "target", "primary", "cleanup"]
         }
+        Some(LifecycleRecordKind::NativeAttempt) => &["planId", "stepId", "attempt"],
         Some(LifecycleRecordKind::EffectCompletion) => &["planId", "stepId", "result"],
         Some(LifecycleRecordKind::Observation) => &["source", "state"],
         Some(LifecycleRecordKind::Outcome) => &["physical", "lastConfirmed", "cleanup"],
@@ -413,6 +416,42 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 _ => LifecycleEffect::AdoptReadyIncarnation { target },
             })
         }
+        "create_systemd_wants_directory" | "publish_systemd_wants_link" => {
+            object_exact(object, &["kind", "target"])?;
+            let target = parse_target(&object["target"])?;
+            Ok(if kind == "create_systemd_wants_directory" {
+                LifecycleEffect::CreateSystemdWantsDirectory { target }
+            } else {
+                LifecycleEffect::PublishSystemdWantsLink { target }
+            })
+        }
+        "reload_systemd_manager" | "start_systemd_unit" | "stop_systemd_unit" => {
+            let has_mode = kind != "reload_systemd_manager";
+            object_exact(
+                object,
+                if has_mode {
+                    &["kind", "manager", "unit", "mode"]
+                } else {
+                    &["kind", "manager", "unit"]
+                },
+            )?;
+            let manager = parse_systemd_manager(&object["manager"])?;
+            let unit = SystemdUnitName::parse(string(object, "unit")?)
+                .map_err(|error| invalid_record(&error.to_string()))?;
+            Ok(match kind.as_str() {
+                "reload_systemd_manager" => LifecycleEffect::ReloadSystemdManager { manager, unit },
+                "start_systemd_unit" => LifecycleEffect::StartSystemdUnit {
+                    manager,
+                    unit,
+                    mode: parse_systemd_job_mode(&string(object, "mode")?)?,
+                },
+                _ => LifecycleEffect::StopSystemdUnit {
+                    manager,
+                    unit,
+                    mode: parse_systemd_job_mode(&string(object, "mode")?)?,
+                },
+            })
+        }
         "prune_runtime" => {
             object_exact(object, &["kind", "fingerprint"])?;
             Ok(LifecycleEffect::PruneRuntime {
@@ -427,6 +466,61 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
         }
         _ => Err(invalid_record("unknown lifecycle effect")),
     }
+}
+
+fn parse_systemd_manager(value: &Value) -> Result<SystemdManagerIdentity, GatewayError> {
+    let value = object(value, &["uniqueName", "processId", "userId"])?;
+    let process_id = value["processId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("invalid systemd manager process ID"))?;
+    let user_id = value["userId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("invalid systemd manager user ID"))?;
+    SystemdManagerIdentity::new(string(value, "uniqueName")?, process_id, user_id)
+        .map_err(|error| invalid_record(&error.to_string()))
+}
+
+fn parse_systemd_job_mode(value: &str) -> Result<SystemdJobMode, GatewayError> {
+    match value {
+        "fail" => Ok(SystemdJobMode::Fail),
+        _ => Err(invalid_record("unknown systemd job mode")),
+    }
+}
+
+fn parse_systemd_job_attempt(value: &Value) -> Result<SystemdJobAttempt, GatewayError> {
+    let value = object(
+        value,
+        &[
+            "manager",
+            "operation",
+            "mode",
+            "unit",
+            "objectPath",
+            "jobId",
+        ],
+    )?;
+    let operation = match string(value, "operation")?.as_str() {
+        "start" => SystemdJobOperation::Start,
+        "stop" => SystemdJobOperation::Stop,
+        _ => return Err(invalid_record("unknown systemd job operation")),
+    };
+    let unit = SystemdUnitName::parse(string(value, "unit")?)
+        .map_err(|error| invalid_record(&error.to_string()))?;
+    let job_id = value["jobId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("invalid systemd job ID"))?;
+    SystemdJobAttempt::new(
+        parse_systemd_manager(&value["manager"])?,
+        operation,
+        parse_systemd_job_mode(&string(value, "mode")?)?,
+        unit,
+        string(value, "objectPath")?,
+        job_id,
+    )
+    .map_err(|error| invalid_record(&error.to_string()))
 }
 
 fn object_exact(
@@ -494,18 +588,71 @@ fn parse_command_result(value: &Value) -> Result<LifecycleCommandResult, Gateway
 }
 
 fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError> {
-    let value = object(value, &["version", "incarnation", "targetArtifactPresent"])?;
+    let value = object(
+        value,
+        &["version", "incarnation", "targetArtifactPresent", "systemd"],
+    )?;
     let version = value["version"]
         .as_u64()
         .ok_or_else(|| invalid_record("invalid observation version"))?;
     let artifact = value["targetArtifactPresent"]
         .as_bool()
         .ok_or_else(|| invalid_record("invalid target artifact fact"))?;
-    Ok(LifecycleObservation::new(
+    let incarnation = optional_identity(&value["incarnation"])?;
+    if value["systemd"].is_null() {
+        return Ok(LifecycleObservation::new(version, incarnation, artifact));
+    }
+    let incarnation = incarnation
+        .ok_or_else(|| invalid_record("systemd observation has no portable incarnation"))?;
+    LifecycleObservation::with_systemd(
         version,
-        optional_identity(&value["incarnation"])?,
+        incarnation,
         artifact,
-    ))
+        parse_systemd_runtime(&value["systemd"])?,
+    )
+    .map_err(|error| invalid_record(&error.to_string()))
+}
+
+fn parse_systemd_runtime(value: &Value) -> Result<SystemdRuntimeObservation, GatewayError> {
+    let value = object(
+        value,
+        &[
+            "target",
+            "manager",
+            "unit",
+            "invocation",
+            "mainProcessId",
+            "enabled",
+        ],
+    )?;
+    let invocation = value["invocation"]
+        .as_array()
+        .ok_or_else(|| invalid_record("systemd invocation must be a byte array"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| invalid_record("systemd invocation byte is invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let process_id = value["mainProcessId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("systemd main process ID is invalid"))?;
+    SystemdRuntimeObservation::new(
+        parse_target(&value["target"])?,
+        parse_systemd_manager(&value["manager"])?,
+        SystemdUnitName::parse(string(value, "unit")?)
+            .map_err(|error| invalid_record(&error.to_string()))?,
+        crate::gateway::domain::value_objects::SystemdInvocationId::new(invocation)
+            .map_err(|error| invalid_record(&error.to_string()))?,
+        process_id,
+        value["enabled"]
+            .as_bool()
+            .ok_or_else(|| invalid_record("systemd enabled state is invalid"))?,
+    )
+    .map_err(|error| invalid_record(&error.to_string()))
 }
 
 fn parse_observation_source(value: &Value) -> Result<LifecycleObservationSource, GatewayError> {
@@ -595,6 +742,7 @@ fn domain_record(stored: &StoredRecord) -> Result<LifecycleRecord, GatewayError>
             Some(LifecycleRecordKind::EffectPlan) => {
                 &["planId", "expectedBefore", "target", "primary", "cleanup"]
             }
+            Some(LifecycleRecordKind::NativeAttempt) => &["planId", "stepId", "attempt"],
             Some(LifecycleRecordKind::EffectCompletion) => &["planId", "stepId", "result"],
             Some(LifecycleRecordKind::Observation) => &["source", "state"],
             Some(LifecycleRecordKind::Outcome) => &["physical", "lastConfirmed", "cleanup"],
@@ -637,6 +785,11 @@ fn domain_record(stored: &StoredRecord) -> Result<LifecycleRecord, GatewayError>
                 .map(parse_step)
                 .collect::<Result<Vec<_>, _>>()?,
         },
+        LifecycleRecordKind::NativeAttempt => LifecycleRecordPayload::NativeAttempt {
+            plan_id: string(payload, "planId")?,
+            step_id: string(payload, "stepId")?,
+            attempt: parse_systemd_job_attempt(&payload["attempt"])?,
+        },
         LifecycleRecordKind::EffectCompletion => LifecycleRecordPayload::EffectCompletion {
             plan_id: string(payload, "planId")?,
             step_id: string(payload, "stepId")?,
@@ -670,6 +823,7 @@ fn record_kind(kind: &str) -> Option<LifecycleRecordKind> {
         LifecycleRecordKind::Intent,
         LifecycleRecordKind::JoinedRequest,
         LifecycleRecordKind::EffectPlan,
+        LifecycleRecordKind::NativeAttempt,
         LifecycleRecordKind::EffectCompletion,
         LifecycleRecordKind::Observation,
         LifecycleRecordKind::Outcome,
@@ -841,6 +995,7 @@ fn recovery_step(
 ) -> Result<Option<GatewayLifecycleRecoveryStep>, GatewayError> {
     let mut primary_steps = Vec::new();
     let mut all_steps = Vec::new();
+    let mut native_attempts = Vec::new();
     let mut completions = Vec::new();
     for record in records {
         match record.payload() {
@@ -859,6 +1014,11 @@ fn recovery_step(
                 step_id,
                 result,
             } => completions.push((plan_id.clone(), step_id.clone(), result.clone())),
+            LifecycleRecordPayload::NativeAttempt {
+                plan_id,
+                step_id,
+                attempt,
+            } => native_attempts.push((plan_id.clone(), step_id.clone(), attempt.clone())),
             _ => {}
         }
     }
@@ -879,6 +1039,12 @@ fn recovery_step(
             plan_id.clone(),
             step,
             Some(completion),
+            native_attempts
+                .iter()
+                .find(|(candidate_plan, candidate_step, _)| {
+                    candidate_plan == plan_id && candidate_step == step_id
+                })
+                .map(|(_, _, attempt)| attempt.clone()),
         )));
     }
     let incomplete = primary_steps
@@ -897,6 +1063,12 @@ fn recovery_step(
             plan_id.clone(),
             step.clone(),
             None,
+            native_attempts
+                .iter()
+                .find(|(candidate_plan, candidate_step, _)| {
+                    candidate_plan == plan_id && candidate_step == step.id()
+                })
+                .map(|(_, _, attempt)| attempt.clone()),
         ))),
         _ => Err(GatewayError::Registration(
             "Gateway lifecycle recovery has multiple uncompleted primary effects".into(),
@@ -1353,6 +1525,28 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
         .map_err(JournalAppendError::into_gateway_error)
     }
 
+    fn native_attempt(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        attempt: &SystemdJobAttempt,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        self.append(
+            self.namespace()?,
+            LifecycleRecordPayload::NativeAttempt {
+                plan_id: plan_id.into(),
+                step_id: step_id.into(),
+                attempt: attempt.clone(),
+            },
+            json!({
+                "planId":plan_id,
+                "stepId":step_id,
+                "attempt":systemd_job_attempt(attempt),
+            }),
+        )
+        .map_err(JournalAppendError::into_gateway_error)
+    }
+
     fn observation(
         &self,
         source: &LifecycleObservationSource,
@@ -1414,6 +1608,37 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         LifecycleEffect::PublishServiceDefinition { target } => {
             json!({"kind":"publish_service_definition", "target":self::target(target)})
         }
+        LifecycleEffect::ReloadSystemdManager { manager, unit } => json!({
+            "kind":"reload_systemd_manager",
+            "manager":systemd_manager(manager),
+            "unit":unit.as_str(),
+        }),
+        LifecycleEffect::CreateSystemdWantsDirectory { target } => {
+            json!({"kind":"create_systemd_wants_directory", "target":self::target(target)})
+        }
+        LifecycleEffect::PublishSystemdWantsLink { target } => {
+            json!({"kind":"publish_systemd_wants_link", "target":self::target(target)})
+        }
+        LifecycleEffect::StartSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => json!({
+            "kind":"start_systemd_unit",
+            "manager":systemd_manager(manager),
+            "unit":unit.as_str(),
+            "mode":mode.as_str(),
+        }),
+        LifecycleEffect::StopSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => json!({
+            "kind":"stop_systemd_unit",
+            "manager":systemd_manager(manager),
+            "unit":unit.as_str(),
+            "mode":mode.as_str(),
+        }),
         LifecycleEffect::BootstrapService { target } => {
             json!({"kind":"bootstrap_service", "target":self::target(target)})
         }
@@ -1430,6 +1655,29 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
             json!({"kind":"stop_agents", "incarnation":identity(incarnation)})
         }
     }
+}
+
+fn systemd_manager(manager: &SystemdManagerIdentity) -> Value {
+    json!({
+        "uniqueName":manager.unique_name(),
+        "processId":manager.process_id(),
+        "userId":manager.user_id(),
+    })
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn systemd_job_attempt(attempt: &SystemdJobAttempt) -> Value {
+    json!({
+        "manager":systemd_manager(attempt.manager()),
+        "operation":match attempt.operation() {
+            SystemdJobOperation::Start => "start",
+            SystemdJobOperation::Stop => "stop",
+        },
+        "mode":attempt.mode().as_str(),
+        "unit":attempt.unit().as_str(),
+        "objectPath":attempt.object_path(),
+        "jobId":attempt.job_id(),
+    })
 }
 
 fn effect_predicate(predicate: &LifecycleEffectPredicate) -> Value {
@@ -1470,6 +1718,18 @@ fn observation(state: &LifecycleObservation) -> Value {
         "version":state.version(),
         "incarnation":state.incarnation().map(identity),
         "targetArtifactPresent":state.target_artifact_present(),
+        "systemd":state.systemd().map(systemd_runtime),
+    })
+}
+
+fn systemd_runtime(state: &SystemdRuntimeObservation) -> Value {
+    json!({
+        "target":target(state.target()),
+        "manager":systemd_manager(state.manager()),
+        "unit":state.unit().as_str(),
+        "invocation":state.invocation().bytes(),
+        "mainProcessId":state.main_process_id(),
+        "enabled":state.enabled(),
     })
 }
 
@@ -1564,7 +1824,7 @@ mod tests {
     use super::*;
     use crate::gateway::{
         application::{GatewayReconciliationEffectTiming, GatewayReconciliationIntentDelivery},
-        domain::value_objects::ReconciliationHistoryFact,
+        domain::value_objects::{ReconciliationHistoryFact, SystemdInvocationId},
     };
     use std::{
         cell::Cell,
@@ -1594,6 +1854,7 @@ mod tests {
             "version":1,
             "incarnation":null,
             "targetArtifactPresent":false,
+            "systemd":null,
         });
         let payload = match kind {
             LifecycleRecordKind::Intent => json!({
@@ -1647,6 +1908,42 @@ mod tests {
             kind: kind.file_name().into(),
             payload,
         }
+    }
+
+    #[test]
+    fn systemd_job_and_runtime_evidence_round_trip_without_dropping_identity_fields() {
+        let unit = SystemdUnitName::parse("nessa-gateway-prod.service".into()).unwrap();
+        let manager = SystemdManagerIdentity::new(":1.42".into(), 42, 501).unwrap();
+        let attempt = SystemdJobAttempt::new(
+            manager.clone(),
+            SystemdJobOperation::Start,
+            SystemdJobMode::Fail,
+            unit.clone(),
+            "/org/freedesktop/systemd1/job/19".into(),
+            19,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_systemd_job_attempt(&systemd_job_attempt(&attempt)).unwrap(),
+            attempt
+        );
+
+        let target =
+            ReconciliationTarget::new(unit.as_str().into(), "a".repeat(64), "b".repeat(64))
+                .unwrap();
+        let runtime = SystemdRuntimeObservation::new(
+            target,
+            manager,
+            unit,
+            SystemdInvocationId::new(vec![7; 16]).unwrap(),
+            99,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_systemd_runtime(&systemd_runtime(&runtime)).unwrap(),
+            runtime
+        );
     }
 
     #[test]

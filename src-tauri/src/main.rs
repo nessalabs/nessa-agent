@@ -346,9 +346,9 @@ mod tests {
                 return Err(error);
             }
             let intended = session.request().intended().audit_identity()?;
-            session.begin_proof()?;
-            session.prove(intended.clone(), 1)?;
-            session.claim(plan, &intended, 1)?;
+            let proof_token = session.begin_proof()?;
+            session.prove(&proof_token, intended.clone(), 1)?;
+            session.claim(proof_token, plan, &intended, 1)?;
             let command = LifecycleCommandResult::Accepted;
             session.command_result(command.clone())?;
             journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)?;

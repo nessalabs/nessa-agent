@@ -1,5 +1,5 @@
 #![cfg_attr(
-    not(target_os = "macos"),
+    not(any(target_os = "macos", target_os = "linux")),
     allow(
         dead_code,
         reason = "native gateway lifecycle authority is exercised only by the macOS adapter"
@@ -15,7 +15,7 @@ use crate::gateway::domain::value_objects::{
     ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
     ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
     ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget, SearchPath,
-    SearchPathError,
+    SearchPathError, SystemdJobAttempt, SystemdRuntimeObservation,
 };
 use std::{
     error::Error,
@@ -44,7 +44,7 @@ pub struct ReconciledGateway {
 // The identity itself is portable evidence carried by the `GatewayHost`
 // contract on every target. Reading its parts is what one native adapter does,
 // and macOS is the only host that manages a background service today.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 impl ReconciledGateway {
     pub fn new(
         service: String,
@@ -132,8 +132,11 @@ impl GatewayStopRequest {
 #[derive(Clone, Debug)]
 enum StopDispatchAuthority {
     AvailableUnproved,
-    Proving,
+    Proving {
+        token: u64,
+    },
     Proved {
+        token: u64,
         candidate: ReconciliationIncarnation,
         observation_version: u64,
     },
@@ -148,6 +151,15 @@ enum StopDispatchAuthority {
         observation: LifecycleObservation,
     },
     Revoked,
+}
+
+/// Unforgeable, consume-once authority joining one proof to one dispatch.
+///
+/// The application mints this after checking the session deadline. Native
+/// adapters may move it into a platform proof guard, but cannot clone or
+/// construct another token for a different witness.
+pub struct GatewayStopProofToken {
+    token: u64,
 }
 
 /// One application-owned proof-to-dispatch authority for automatic quit.
@@ -180,7 +192,7 @@ impl GatewayStopSession {
         self.clock.wait(duration);
     }
 
-    pub fn begin_proof(&self) -> Result<(), GatewayError> {
+    pub fn begin_proof(&self) -> Result<GatewayStopProofToken, GatewayError> {
         let mut state = self
             .state
             .lock()
@@ -196,12 +208,14 @@ impl GatewayStopSession {
                 "Gateway stop recipient proof was already started".into(),
             ));
         }
-        *state = StopDispatchAuthority::Proving;
-        Ok(())
+        let token = 1;
+        *state = StopDispatchAuthority::Proving { token };
+        Ok(GatewayStopProofToken { token })
     }
 
     pub fn prove(
         &self,
+        token: &GatewayStopProofToken,
         candidate: ReconciliationIncarnation,
         observation_version: u64,
     ) -> Result<(), GatewayError> {
@@ -216,7 +230,9 @@ impl GatewayStopSession {
                 "Gateway stop recipient proof arrived after its deadline".into(),
             ));
         }
-        if !matches!(&*state, StopDispatchAuthority::Proving) || candidate != intended {
+        if !matches!(&*state, StopDispatchAuthority::Proving { token: expected } if *expected == token.token)
+            || candidate != intended
+        {
             return Err(GatewayError::Stop(
                 "Gateway stop recipient differs from the intended incarnation".into(),
             ));
@@ -230,6 +246,7 @@ impl GatewayStopSession {
         self.latest_observation_version
             .store(observation_version, Ordering::SeqCst);
         *state = StopDispatchAuthority::Proved {
+            token: token.token,
             candidate,
             observation_version,
         };
@@ -239,6 +256,7 @@ impl GatewayStopSession {
     /// Atomically consume the proof immediately before the native call.
     pub fn claim(
         &self,
+        token: GatewayStopProofToken,
         plan: &AuditDeliveryReceipt,
         candidate: &ReconciliationIncarnation,
         observation_version: u64,
@@ -260,9 +278,12 @@ impl GatewayStopSession {
         let matches_proof = matches!(
             &*state,
             StopDispatchAuthority::Proved {
+                token: expected_token,
                 candidate: proved,
                 observation_version: proved_version,
-            } if proved == candidate && *proved_version == observation_version
+            } if *expected_token == token.token
+                && proved == candidate
+                && *proved_version == observation_version
         ) && self.latest_observation_version.load(Ordering::SeqCst)
             == observation_version;
         if !valid_plan || !matches_proof {
@@ -377,7 +398,7 @@ impl GatewayStopSession {
         if let Ok(mut state) = self.state.lock() {
             match &*state {
                 StopDispatchAuthority::AvailableUnproved
-                | StopDispatchAuthority::Proving
+                | StopDispatchAuthority::Proving { .. }
                 | StopDispatchAuthority::Proved { .. } => {
                     *state = StopDispatchAuthority::Revoked;
                 }
@@ -517,18 +538,27 @@ pub trait GatewayStartupEvents: Send + Sync {
 /// it fences, retires, unloads, or replaces the ready process.
 pub trait GatewayReconciliationProgress: Send + Sync {
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     fn readiness_invalidated(&self);
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError>;
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     fn history_observed(&self, fact: ReconciliationHistoryFact);
 
@@ -546,12 +576,40 @@ pub trait GatewayReconciliationProgress: Send + Sync {
         result: &LifecycleCommandResult,
     ) -> Result<AuditDeliveryReceipt, GatewayError>;
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn native_attempt_recorded(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        attempt: &SystemdJobAttempt,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        let _ = (plan_id, step_id, attempt);
+        Err(GatewayError::Audit {
+            audit: "The reconciliation progress cannot record a native systemd attempt".into(),
+            physical: None,
+        })
+    }
+
     fn physical_observed(
         &self,
         source: &LifecycleObservationSource,
         incarnation: Option<ReconciliationIncarnation>,
         target_artifact_present: bool,
     ) -> Result<LifecycleObservation, GatewayError>;
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn systemd_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        incarnation: ReconciliationIncarnation,
+        target_artifact_present: bool,
+        native: SystemdRuntimeObservation,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let _ = (source, incarnation, target_artifact_present, native);
+        Err(GatewayError::Registration(
+            "This gateway progress port cannot record systemd evidence".into(),
+        ))
+    }
 
     /// Retry the exact observation whose publication may have succeeded before
     /// acknowledgement. Returns `None` when no observation is pending.
@@ -574,8 +632,11 @@ impl GatewayReconciliationRequest {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
@@ -608,8 +669,11 @@ impl GatewayReconciliationAttempt {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
@@ -638,8 +702,11 @@ pub struct GatewayReconciliationIntent {
 
 impl GatewayReconciliationIntent {
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     pub fn new(
         attempt: GatewayReconciliationAttempt,
@@ -656,24 +723,33 @@ impl GatewayReconciliationIntent {
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
         &self.attempt
     }
 
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     pub fn target(&self) -> &ReconciliationTarget {
         self.record.target()
     }
 
     #[cfg_attr(
-        not(target_os = "macos"),
-        allow(dead_code, reason = "native reconciliation is supported only on macOS")
+        not(any(target_os = "macos", target_os = "linux")),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
     )]
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.record.before()
@@ -914,6 +990,23 @@ pub trait GatewayReconciliationJournalSession: Send + Sync {
         result: &LifecycleCommandResult,
     ) -> Result<AuditDeliveryReceipt, GatewayError>;
 
+    /// Records the exact native job identity returned by a systemd enqueue.
+    /// A missing record means the call may still have taken effect and cannot
+    /// be replayed as though no native attempt existed.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn native_attempt(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        attempt: &SystemdJobAttempt,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        let _ = (plan_id, step_id, attempt);
+        Err(GatewayError::Audit {
+            audit: "The reconciliation journal cannot record a native systemd attempt".into(),
+            physical: None,
+        })
+    }
+
     fn observation(
         &self,
         source: &LifecycleObservationSource,
@@ -946,6 +1039,7 @@ pub struct GatewayLifecycleRecoveryStep {
     plan_id: String,
     step: LifecyclePlanStep,
     completion: Option<LifecycleCommandResult>,
+    native_attempt: Option<SystemdJobAttempt>,
 }
 
 impl GatewayLifecycleRecoveryStep {
@@ -953,11 +1047,13 @@ impl GatewayLifecycleRecoveryStep {
         plan_id: String,
         step: LifecyclePlanStep,
         completion: Option<LifecycleCommandResult>,
+        native_attempt: Option<SystemdJobAttempt>,
     ) -> Self {
         Self {
             plan_id,
             step,
             completion,
+            native_attempt,
         }
     }
 
@@ -971,6 +1067,11 @@ impl GatewayLifecycleRecoveryStep {
 
     pub fn completion(&self) -> Option<&LifecycleCommandResult> {
         self.completion.as_ref()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn native_attempt(&self) -> Option<&SystemdJobAttempt> {
+        self.native_attempt.as_ref()
     }
 
     pub fn source(&self) -> LifecycleObservationSource {
@@ -1493,25 +1594,28 @@ mod tests {
 
     #[test]
     fn stop_proof_arriving_after_deadline_cannot_claim_dispatch() {
-        let (session, intended, receipt) = stop_session(Instant::now());
+        let (session, _, _) = stop_session(Instant::now());
         assert!(session.begin_proof().is_err());
-        assert!(session.claim(&receipt, &intended, 1).is_err());
     }
 
     #[test]
     fn stop_claim_requires_the_proved_identity_and_observation_version() {
         let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
-        session.begin_proof().unwrap();
-        session.prove(intended.clone(), 7).unwrap();
-        assert!(session.claim(&receipt, &intended, 8).is_err());
-        session.observation_changed(8);
-        assert!(session.claim(&receipt, &intended, 7).is_err());
+        let proof_token = session.begin_proof().unwrap();
+        session.prove(&proof_token, intended.clone(), 7).unwrap();
+        assert!(session.claim(proof_token, &receipt, &intended, 8).is_err());
 
         let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
-        session.begin_proof().unwrap();
-        session.prove(intended.clone(), 7).unwrap();
-        session.claim(&receipt, &intended, 7).unwrap();
-        assert!(session.claim(&receipt, &intended, 7).is_err());
+        let proof_token = session.begin_proof().unwrap();
+        session.prove(&proof_token, intended.clone(), 7).unwrap();
+        session.observation_changed(8);
+        assert!(session.claim(proof_token, &receipt, &intended, 7).is_err());
+
+        let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
+        let proof_token = session.begin_proof().unwrap();
+        session.prove(&proof_token, intended.clone(), 7).unwrap();
+        session.claim(proof_token, &receipt, &intended, 7).unwrap();
+        assert!(session.begin_proof().is_err());
     }
 
     #[test]
@@ -1520,10 +1624,10 @@ mod tests {
         let clock = Arc::new(ControlledClock::new(start));
         let (session, intended, receipt) =
             stop_session_with_clock(start + Duration::from_secs(1), clock.clone());
-        session.begin_proof().unwrap();
+        let proof_token = session.begin_proof().unwrap();
         clock.set(start + Duration::from_secs(1));
-        assert!(session.prove(intended.clone(), 1).is_err());
-        assert!(session.claim(&receipt, &intended, 1).is_err());
+        assert!(session.prove(&proof_token, intended.clone(), 1).is_err());
+        assert!(session.claim(proof_token, &receipt, &intended, 1).is_err());
     }
 
     #[test]
@@ -1533,9 +1637,9 @@ mod tests {
 
         let clock = Arc::new(ControlledClock::new(start));
         let (claimed, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
-        claimed.begin_proof().unwrap();
-        claimed.prove(intended.clone(), 1).unwrap();
-        claimed.claim(&receipt, &intended, 1).unwrap();
+        let proof_token = claimed.begin_proof().unwrap();
+        claimed.prove(&proof_token, intended.clone(), 1).unwrap();
+        claimed.claim(proof_token, &receipt, &intended, 1).unwrap();
         clock.set(deadline);
         claimed.expire_at_deadline();
         assert!(claimed
@@ -1544,10 +1648,10 @@ mod tests {
 
         let clock = Arc::new(ControlledClock::new(start));
         let (revoked, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
-        revoked.begin_proof().unwrap();
-        revoked.prove(intended.clone(), 1).unwrap();
+        let proof_token = revoked.begin_proof().unwrap();
+        revoked.prove(&proof_token, intended.clone(), 1).unwrap();
         clock.set(deadline);
-        assert!(revoked.claim(&receipt, &intended, 1).is_err());
+        assert!(revoked.claim(proof_token, &receipt, &intended, 1).is_err());
         assert!(revoked
             .command_result(LifecycleCommandResult::Accepted)
             .is_err());
@@ -1556,9 +1660,9 @@ mod tests {
     #[test]
     fn accepted_label_command_keeps_a_replacement_observation_separate() {
         let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
-        session.begin_proof().unwrap();
-        session.prove(intended.clone(), 1).unwrap();
-        session.claim(&receipt, &intended, 1).unwrap();
+        let proof_token = session.begin_proof().unwrap();
+        session.prove(&proof_token, intended.clone(), 1).unwrap();
+        session.claim(proof_token, &receipt, &intended, 1).unwrap();
         session
             .command_result(LifecycleCommandResult::Accepted)
             .unwrap();
@@ -1582,9 +1686,9 @@ mod tests {
         let deadline = start + Duration::from_secs(1);
         let clock = Arc::new(ControlledClock::new(start));
         let (session, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
-        session.begin_proof().unwrap();
-        session.prove(intended.clone(), 1).unwrap();
-        session.claim(&receipt, &intended, 1).unwrap();
+        let proof_token = session.begin_proof().unwrap();
+        session.prove(&proof_token, intended.clone(), 1).unwrap();
+        session.claim(proof_token, &receipt, &intended, 1).unwrap();
         session
             .command_result(LifecycleCommandResult::Accepted)
             .unwrap();

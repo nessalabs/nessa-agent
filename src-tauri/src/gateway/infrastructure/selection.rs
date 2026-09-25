@@ -2,27 +2,40 @@ use super::super::application::{
     GatewayHost, GatewayReconciliationAudit, GatewayReconciliationIds, LoginShellPath,
     MonotonicClock,
 };
+#[cfg(target_os = "linux")]
+use super::linux::SystemdGateway;
 #[cfg(target_os = "macos")]
-use super::macos::{FileReconciliationAudit, LaunchctlDisabledServiceStatus, Launchd};
-#[cfg(not(target_os = "macos"))]
+use super::macos::{LaunchctlDisabledServiceStatus, Launchd};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use super::reconciliation_audit::FileReconciliationAudit;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use super::unsupported::{Unsupported, UnsupportedAudit};
 use super::{login_shell::LoginShell, reconciliation_ids::RandomReconciliationIds};
 use crate::gateway::domain::value_objects::ServiceConfiguration;
 use std::{path::PathBuf, sync::Arc};
 
 /// Selects the native gateway adapter for the current build target.
-pub fn current(configuration: ServiceConfiguration, home: PathBuf) -> Arc<dyn GatewayHost> {
+pub fn current(
+    configuration: ServiceConfiguration,
+    home: PathBuf,
+    clock: Arc<dyn MonotonicClock>,
+) -> Arc<dyn GatewayHost> {
     #[cfg(target_os = "macos")]
     {
+        let _ = clock;
         Arc::new(Launchd::new(
             Arc::new(LaunchctlDisabledServiceStatus),
             configuration,
             home,
         ))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = (configuration, home);
+        Arc::new(SystemdGateway::new(configuration, home, clock))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (configuration, home, clock);
         Arc::new(Unsupported)
     }
 }
@@ -45,11 +58,11 @@ pub fn reconciliation_audit(
     config_root: Option<PathBuf>,
     clock: Arc<dyn MonotonicClock>,
 ) -> Arc<dyn GatewayReconciliationAudit> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         Arc::new(FileReconciliationAudit::new(config_root, clock))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (config_root, clock);
         Arc::new(UnsupportedAudit)

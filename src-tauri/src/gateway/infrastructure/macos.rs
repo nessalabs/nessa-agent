@@ -31,7 +31,6 @@ use std::{
 mod control;
 mod generation;
 mod pruning;
-mod reconciliation_audit;
 mod staging;
 mod startup;
 use control::{
@@ -41,7 +40,6 @@ use control::{
 };
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
-pub(in crate::gateway::infrastructure) use reconciliation_audit::FileReconciliationAudit;
 use staging::{launch_settings, stage_runtime_cached, validate_runtime, ValidatedRuntimes};
 
 pub(super) struct Launchd {
@@ -546,7 +544,7 @@ impl GatewayHost for Launchd {
         journal: &dyn GatewayReconciliationJournalSession,
         plan: &AuditDeliveryReceipt,
     ) -> Result<LifecycleObservation, GatewayError> {
-        session.begin_proof()?;
+        let token = session.begin_proof()?;
         let gateway = session.request().intended();
         let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
         let running = health(gateway.port());
@@ -557,8 +555,8 @@ impl GatewayHost for Launchd {
         }
         let candidate = gateway.audit_identity()?;
         let observation_version = 1;
-        session.prove(candidate.clone(), observation_version)?;
-        session.claim(plan, &candidate, observation_version)?;
+        session.prove(&token, candidate.clone(), observation_version)?;
+        session.claim(token, plan, &candidate, observation_version)?;
         // Claim and spawn are adjacent: no filesystem, lock, health, or manager
         // query can invalidate an unconsumed proof between them.
         let command = dispatch_stop_command(gateway.service(), session);
