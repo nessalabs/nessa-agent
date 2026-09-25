@@ -350,16 +350,13 @@ pub struct ConversationList {
     /// [`MAX_LISTED_CONVERSATIONS`](super::MAX_LISTED_CONVERSATIONS).
     pub conversations: Vec<ConversationListEntry>,
     /// Whether these are every conversation the caller has under the list's
-    /// filter: `false` when the bound left some out, or while any conversation
-    /// record on the gateway cannot be read. Whose it is cannot be read
-    /// either, so that is gateway-wide, not per caller, and lasts until an
-    /// operator repairs or moves the record aside, or runs
-    /// `scripts/retrofit-conversation-agents.mjs` for one from before records
-    /// named their agent. A
-    /// conversation missing from a complete list is not there under that
-    /// filter: deleted, under the other filter, or one the gateway has no
-    /// summary for (nothing was said in it, or its summary was never
-    /// written).
+    /// filter: `false` when the bound left some out, or when a stored record
+    /// or summary of the caller's own could not be read back, which lasts
+    /// until an operator repairs it. Nobody else's conversations are read to
+    /// answer it, so nobody else's damage makes it `false`. A conversation
+    /// missing from a complete list is not there under that filter: deleted,
+    /// under the other filter, or one the gateway has no summary for (nothing
+    /// was said in it, or its summary was never written).
     pub complete: bool,
 }
 /// One conversation as a row in a list of them: what it is called, the last

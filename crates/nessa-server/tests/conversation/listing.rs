@@ -8,12 +8,18 @@ use super::{
 use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId, ConversationSummary},
+    conversation::{
+        application::{ConversationRepository, ConversationSummaries},
+        infrastructure::LocalConversationStore,
+    },
     conversation_test_support::{
-        only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
-        Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryListing, MemoryRepository,
+        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
+        DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_local_database::rusqlite::{params, Connection};
 use nessa_sdk::{
     application::agent_execution::sessions::{SessionStorage, SessionStorageLease, StorageFuture},
     domain::agent_execution::sessions::SessionId,
@@ -56,22 +62,24 @@ struct Listing {
     provider: Arc<ProviderFactory>,
     repository: Arc<MemoryRepository>,
     summaries: Arc<MemorySummaries>,
-    storage: Arc<CountingStorage>,
 }
 fn listing(limits: ConversationLimits) -> Listing {
     let provider = Arc::new(ProviderFactory::default());
     let repository = Arc::new(MemoryRepository::default());
     let summaries = Arc::new(MemorySummaries::default());
-    let storage = Arc::new(CountingStorage::default());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider.clone()))),
-            storage: storage.clone(),
+            storage: Arc::new(CountingStorage::default()),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: repository.clone(),
+                summaries: summaries.clone(),
+            }),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
@@ -86,8 +94,125 @@ fn listing(limits: ConversationLimits) -> Listing {
         provider,
         repository,
         summaries,
-        storage,
     }
+}
+/// A service over the store that keeps conversations for real, so what a
+/// list shows — ownership, order, the bound, and whether it is whole — is the
+/// store's answer and not a substitute's.
+struct Stored {
+    service: ConversationService,
+    provider: Arc<ProviderFactory>,
+    storage: Arc<CountingStorage>,
+    store: Arc<LocalConversationStore>,
+    path: std::path::PathBuf,
+    _directory: tempfile::TempDir,
+}
+fn stored(limits: ConversationLimits) -> Stored {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let store = Arc::new(LocalConversationStore::open(&path).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let storage = Arc::new(CountingStorage::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(provider.clone()))),
+            storage: storage.clone(),
+            metadata: store.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: store.clone(),
+            listing: store.clone(),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            clock: Arc::new(TestClock),
+        },
+        limits,
+        None,
+    )
+    .unwrap();
+    Stored {
+        service,
+        provider,
+        storage,
+        store,
+        path,
+        _directory: directory,
+    }
+}
+/// `count` conversations of `principal`'s in `organization`, each said in at
+/// `at(n)` and archived when `archived`, written in one transaction through a
+/// connection of the test's own. Returned in the order written.
+fn stored_many(
+    stored: &Stored,
+    organization: &str,
+    principal: &str,
+    count: u64,
+    archived: bool,
+    at: impl Fn(u64) -> u64,
+) -> Vec<ConversationId> {
+    let mut raw = Connection::open(&stored.path).unwrap();
+    let transaction = raw.transaction().unwrap();
+    let written = (0..count)
+        .map(|n| {
+            let conversation = id();
+            transaction
+                .execute(
+                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude')",
+                    params![conversation.to_string(), organization, principal, at(n) as i64],
+                )
+                .unwrap();
+            transaction
+                .execute(
+                    "INSERT INTO summaries VALUES (?1, 'Said', 'said', ?2, ?3)",
+                    params![conversation.to_string(), at(n) as i64, archived],
+                )
+                .unwrap();
+            conversation
+        })
+        .collect();
+    transaction.commit().unwrap();
+    written
+}
+async fn stored_put(
+    stored: &Stored,
+    id: &ConversationId,
+    organization: &str,
+    principal: &str,
+    at: u64,
+) {
+    let record = Conversation::new(
+        id.clone(),
+        OrganizationId::new(organization).unwrap(),
+        PrincipalId::new(principal).unwrap(),
+        "panel".into(),
+        "create".into(),
+        at,
+        AgentId::Claude,
+    )
+    .unwrap();
+    ConversationRepository::create(stored.store.as_ref(), record)
+        .await
+        .unwrap();
+}
+async fn stored_say(stored: &Stored, id: &ConversationId, text: &str, at: u64) {
+    ConversationSummaries::record(
+        stored.store.as_ref(),
+        id,
+        ConversationSummary::after_message(None, text, None, at),
+    )
+    .await
+    .unwrap();
+}
+/// Change one stored row the way only a hand edit could.
+fn damage(stored: &Stored, statement: &str, id: &ConversationId) {
+    Connection::open(&stored.path)
+        .unwrap()
+        .execute(statement, [id.to_string()])
+        .unwrap();
 }
 fn id() -> ConversationId {
     ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap()
@@ -161,28 +286,29 @@ async fn listed_when(
 async fn listing_shows_only_the_callers_conversations_and_opens_nothing() {
     // Room for one live conversation, so a list that opened or reserved one
     // would leave no room for the creation at the end.
-    let listing = listing(ConversationLimits {
+    let listing = stored(ConversationLimits {
         max_conversations: 1,
         ..ConversationLimits::default()
     });
     let mine = id();
     let another_principal = id();
     let another_organization = id();
-    put(&listing, &mine, "org", "person", 10);
-    summarize(&listing, &mine, "mine", 15);
-    put(&listing, &another_principal, "org", "other", 20);
-    summarize(&listing, &another_principal, "not yours", 40);
-    put(&listing, &another_organization, "elsewhere", "person", 30);
-    summarize(&listing, &another_organization, "not yours either", 50);
+    let another_by_case = id();
+    stored_put(&listing, &mine, "org", "person", 10).await;
+    stored_say(&listing, &mine, "mine", 15).await;
+    stored_put(&listing, &another_principal, "org", "other", 20).await;
+    stored_say(&listing, &another_principal, "not yours", 40).await;
+    stored_put(&listing, &another_organization, "elsewhere", "person", 30).await;
+    stored_say(&listing, &another_organization, "not yours either", 50).await;
+    // Ownership is the owner's text exactly: one letter's case is somebody
+    // else.
+    stored_put(&listing, &another_by_case, "org", "Person", 30).await;
+    stored_say(&listing, &another_by_case, "nor this", 60).await;
 
-    let listed = listing
-        .service
-        .list(owner(), false)
-        .await
-        .unwrap()
-        .conversations;
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(listed.complete);
     assert_eq!(
-        listed,
+        listed.conversations,
         [ConversationListEntry {
             conversation_id: mine.to_string(),
             title: Some("mine".into()),
@@ -193,24 +319,21 @@ async fn listing_shows_only_the_callers_conversations_and_opens_nothing() {
             archived: false,
         }]
     );
-    assert_eq!(
-        ids(&listing
-            .service
-            .list(caller("org", "other"), false)
-            .await
-            .unwrap()
-            .conversations),
-        [another_principal.to_string()]
-    );
-    assert_eq!(
-        ids(&listing
-            .service
-            .list(caller("elsewhere", "person"), false)
-            .await
-            .unwrap()
-            .conversations),
-        [another_organization.to_string()]
-    );
+    for ((organization, principal), expected) in [
+        (("org", "other"), &another_principal),
+        (("elsewhere", "person"), &another_organization),
+        (("org", "Person"), &another_by_case),
+    ] {
+        assert_eq!(
+            ids(&listing
+                .service
+                .list(caller(organization, principal), false)
+                .await
+                .unwrap()
+                .conversations),
+            [expected.to_string()]
+        );
+    }
     assert!(listing
         .service
         .list(caller("nobody", "nobody"), false)
@@ -229,7 +352,7 @@ async fn listing_shows_only_the_callers_conversations_and_opens_nothing() {
         .create(created.clone(), owner(), None)
         .await
         .unwrap();
-    summarize(&listing, &created, "live", 60);
+    stored_say(&listing, &created, "live", 60).await;
     assert_eq!(listing.provider.open_calls.load(Ordering::SeqCst), 1);
     let opens = listing.storage.opens.load(Ordering::SeqCst);
     // And a live conversation is listed without being opened again, or its
@@ -391,27 +514,16 @@ async fn listing_refuses_a_caller_whose_action_cannot_be_recorded_and_after_reti
 
 #[tokio::test]
 async fn the_bound_is_applied_after_ownership_and_keeps_the_newest() {
-    let listing = listing(ConversationLimits::default());
+    let listing = stored(ConversationLimits::default());
+    let bound = MAX_LISTED_CONVERSATIONS as u64;
     // More than a whole list of somebody else's conversations, every one of
     // them newer than anything the caller has.
-    for n in 0..MAX_LISTED_CONVERSATIONS as u64 + 100 {
-        let foreign = id();
-        put(&listing, &foreign, "org", "other", 1_000 + n);
-        summarize(&listing, &foreign, "newer", 10_000 + n);
-    }
-    let mine: Vec<_> = (0..3).map(|_| id()).collect();
-    for (n, conversation) in mine.iter().enumerate() {
-        put(&listing, conversation, "org", "person", n as u64);
-        summarize(&listing, conversation, "mine", n as u64);
-    }
-    let listed = listing
-        .service
-        .list(owner(), false)
-        .await
-        .unwrap()
-        .conversations;
+    stored_many(&listing, "org", "other", bound + 100, false, |n| 10_000 + n);
+    let mine = stored_many(&listing, "org", "person", 3, false, |n| n);
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(listed.complete);
     assert_eq!(
-        ids(&listed),
+        ids(&listed.conversations),
         mine.iter()
             .rev()
             .map(ToString::to_string)
@@ -419,13 +531,15 @@ async fn the_bound_is_applied_after_ownership_and_keeps_the_newest() {
     );
 
     // Past the bound, the oldest of the caller's own are the ones left out.
-    let mut own: Vec<_> = mine.clone();
-    for n in 3..MAX_LISTED_CONVERSATIONS as u64 + 10 {
-        let conversation = id();
-        put(&listing, &conversation, "org", "person", n);
-        summarize(&listing, &conversation, "mine", n);
-        own.push(conversation);
-    }
+    let mut own = mine;
+    own.extend(stored_many(
+        &listing,
+        "org",
+        "person",
+        bound + 7,
+        false,
+        |n| 3 + n,
+    ));
     let listed = listing
         .service
         .list(owner(), false)
@@ -447,74 +561,65 @@ async fn the_bound_is_applied_after_ownership_and_keeps_the_newest() {
 }
 
 #[tokio::test]
-async fn newest_summary_first_then_identity_and_an_unreadable_summary_lists_bare() {
-    let listing = listing(ConversationLimits::default());
+async fn newest_summary_first_then_identity_and_an_unreadable_row_is_counted_not_shown() {
+    let listing = stored(ConversationLimits::default());
     let [older, tied_low, tied_high] = {
         let mut three = [id(), id(), id()];
         three[1..].sort_by_key(ToString::to_string);
         three
     };
-    put(&listing, &older, "org", "person", 50);
-    summarize(&listing, &older, "older", 50);
-    put(&listing, &tied_low, "org", "person", 1);
-    put(&listing, &tied_high, "org", "person", 2);
-    summarize(&listing, &tied_low, "low", 100);
-    summarize(&listing, &tied_high, "high", 100);
-    let listed = listing
-        .service
-        .list(owner(), false)
-        .await
-        .unwrap()
-        .conversations;
+    stored_put(&listing, &older, "org", "person", 50).await;
+    stored_say(&listing, &older, "older", 50).await;
+    stored_put(&listing, &tied_high, "org", "person", 2).await;
+    stored_put(&listing, &tied_low, "org", "person", 1).await;
+    stored_say(&listing, &tied_high, "high", 100).await;
+    stored_say(&listing, &tied_low, "low", 100).await;
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(listed.complete);
     assert_eq!(
-        ids(&listed),
+        ids(&listed.conversations),
         [
             tied_low.to_string(),
             tied_high.to_string(),
             older.to_string()
         ]
     );
-    assert_eq!(listed[0].title.as_deref(), Some("low"));
-    assert_eq!(listed[0].preview.as_deref(), Some("low"));
-    assert_eq!(listed[0].created_at_ms, 1);
-    assert_eq!(listed[0].updated_at_ms, 100);
+    let first = &listed.conversations[0];
+    assert_eq!(first.title.as_deref(), Some("low"));
+    assert_eq!(first.preview.as_deref(), Some("low"));
+    assert_eq!(first.created_at_ms, 1);
+    assert_eq!(first.updated_at_ms, 100);
 
-    // A summary store that cannot be read costs the rows their summaries,
-    // not the list.
-    // And one somebody archived.
-    let archived = id();
-    put(&listing, &archived, "org", "person", 3);
-    archive(&listing, &archived, 3);
-    assert!(!ids(&listing
-        .service
-        .list(owner(), false)
-        .await
-        .unwrap()
-        .conversations)
-    .contains(&archived.to_string()));
-    listing.summaries.load_fails.store(true, Ordering::SeqCst);
-    let listed = listing
-        .service
-        .list(owner(), false)
-        .await
-        .unwrap()
-        .conversations;
-    assert_eq!(ids(&listed)[0], older.to_string());
-    // The archived one too: that it was archived cannot be read.
-    assert!(ids(&listed).contains(&archived.to_string()));
-    assert!(listed.iter().all(|entry| entry.title.is_none()
-        && entry.preview.is_none()
-        && entry.updated_at_ms == entry.created_at_ms
-        && !entry.archived));
-    assert_eq!(listed.len(), 4);
-    // In the default list only: whether they were archived cannot be read.
-    assert!(listing
-        .service
-        .list(owner(), true)
-        .await
-        .unwrap()
-        .conversations
-        .is_empty());
+    // A summary, or a record, that cannot be read back is left out of the
+    // list its stored flag files it under, and that list says it is not
+    // whole. The other list never met it and is.
+    for statement in [
+        "UPDATE summaries SET title = '' WHERE conversation_id = ?1",
+        "UPDATE conversations SET creator_surface = '' WHERE id = ?1",
+    ] {
+        let raw = Connection::open(&listing.path).unwrap();
+        raw.execute(statement, [tied_low.to_string()]).unwrap();
+        let listed = listing.service.list(owner(), false).await.unwrap();
+        assert_eq!(
+            ids(&listed.conversations),
+            [tied_high.to_string(), older.to_string()],
+            "{statement}"
+        );
+        assert!(!listed.complete, "{statement}");
+        assert!(listing.service.list(owner(), true).await.unwrap().complete);
+        // Repaired, it is back, and the list is whole again.
+        raw.execute(
+            "UPDATE summaries SET title = 'low' WHERE conversation_id = ?1",
+            [tied_low.to_string()],
+        )
+        .unwrap();
+        raw.execute(
+            "UPDATE conversations SET creator_surface = 'panel' WHERE id = ?1",
+            [tied_low.to_string()],
+        )
+        .unwrap();
+        assert!(listing.service.list(owner(), false).await.unwrap().complete);
+    }
 }
 
 #[tokio::test]
@@ -713,16 +818,6 @@ async fn a_summary_that_cannot_be_written_does_not_fail_the_message() {
     listing.service.shutdown().await.unwrap();
 }
 
-fn archive(listing: &Listing, id: &ConversationId, at: u64) {
-    let mut summaries = listing.summaries.summaries.lock().unwrap();
-    let said = summaries
-        .get(id)
-        .cloned()
-        .unwrap_or_else(|| ConversationSummary::after_message(None, "said", None, at));
-    let archived = said.after_archiving(true);
-    summaries.insert(id.clone(), archived);
-}
-
 #[tokio::test]
 async fn archiving_moves_a_conversation_between_the_lists_and_a_new_message_brings_it_back() {
     let listing = listing(ConversationLimits::default());
@@ -867,215 +962,147 @@ async fn an_archive_that_cannot_be_written_fails_visibly() {
 
 #[tokio::test]
 async fn a_list_says_whether_the_bound_left_any_out() {
-    let listing = listing(ConversationLimits::default());
+    let listing = stored(ConversationLimits::default());
     let bound = MAX_LISTED_CONVERSATIONS as u64;
     // Another principal's conversations, and the caller's own that nothing
     // was said in, are not the caller's to list and never make it incomplete.
-    for n in 0..bound + 50 {
-        let foreign = id();
-        put(&listing, &foreign, "org", "other", n);
-        summarize(&listing, &foreign, "theirs", n);
-    }
+    stored_many(&listing, "org", "other", bound + 50, false, |n| n);
     for n in 0..10 {
-        put(&listing, &id(), "org", "person", n);
+        stored_put(&listing, &id(), "org", "person", n).await;
     }
-    let mut own = 0;
-    let mut add = |archived: bool| {
-        let conversation = id();
-        own += 1;
-        put(&listing, &conversation, "org", "person", 1_000 + own);
-        if archived {
-            archive(&listing, &conversation, 1_000 + own);
-        } else {
-            summarize(&listing, &conversation, "mine", 1_000 + own);
-        }
-    };
-    for _ in 0..bound - 1 {
-        add(false);
-    }
+    stored_many(&listing, "org", "person", bound - 1, false, |n| 1_000 + n);
     let under = listing.service.list(owner(), false).await.unwrap();
     assert_eq!(under.conversations.len(), MAX_LISTED_CONVERSATIONS - 1);
     assert!(under.complete);
     // Exactly at the bound, with nothing behind it: all of them.
-    add(false);
+    stored_many(&listing, "org", "person", 1, false, |_| 5_000);
     let at = listing.service.list(owner(), false).await.unwrap();
     assert_eq!(at.conversations.len(), MAX_LISTED_CONVERSATIONS);
     assert!(at.complete);
     // One more behind the bound: the list is cut, and says so.
-    add(false);
+    stored_many(&listing, "org", "person", 1, false, |_| 5_001);
     let past = listing.service.list(owner(), false).await.unwrap();
     assert_eq!(past.conversations.len(), MAX_LISTED_CONVERSATIONS);
     assert!(!past.complete);
 
     // The archived list is judged by its own filter: the default list's
     // conversations, one past its bound, do not count against it.
-    for _ in 0..bound {
-        add(true);
-    }
+    stored_many(&listing, "org", "person", bound, true, |n| 10_000 + n);
     let archived = listing.service.list(owner(), true).await.unwrap();
     assert_eq!(archived.conversations.len(), MAX_LISTED_CONVERSATIONS);
     assert!(archived.complete);
-    add(true);
+    stored_many(&listing, "org", "person", 1, true, |_| 20_000);
     let archived = listing.service.list(owner(), true).await.unwrap();
     assert_eq!(archived.conversations.len(), MAX_LISTED_CONVERSATIONS);
     assert!(!archived.complete);
 }
 
 #[tokio::test]
-async fn an_unreadable_record_makes_every_list_incomplete() {
-    let root = std::env::temp_dir().join(format!("nessa-listing-test-{}", uuid::Uuid::new_v4()));
-    let repository = Arc::new(
-        crate::conversation::infrastructure::LocalConversationRepository::new(root.clone())
-            .unwrap(),
+async fn an_unreadable_row_makes_its_owners_list_incomplete_and_nobody_elses() {
+    let listing = stored(ConversationLimits::default());
+    let mine = id();
+    stored_put(&listing, &mine, "org", "person", 1).await;
+    stored_say(&listing, &mine, "mine", 2).await;
+    let theirs = id();
+    stored_put(&listing, &theirs, "org", "other", 1).await;
+    stored_say(&listing, &theirs, "theirs", 2).await;
+    assert!(listing.service.list(owner(), false).await.unwrap().complete);
+    // Somebody else's record damaged: whose it is still reads, and it is not
+    // the caller's, so the caller's list is whole. Its owner's is not.
+    damage(
+        &listing,
+        "UPDATE conversations SET creation_action = '' WHERE id = ?1",
+        &theirs,
     );
-    let summaries = Arc::new(MemorySummaries::default());
-    let service = ConversationService::new(
-        ConversationDependencies {
-            agents: only(Arc::new(Provider::new(
-                Arc::new(ProviderFactory::default()),
-            ))),
-            storage: Arc::new(CountingStorage::default()),
-            metadata: repository.clone(),
-            creation_audit: Arc::new(AcceptingCreationAudit),
-            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
-            attachments: None,
-            summaries: summaries.clone(),
-            deletion_audit: Arc::new(AcceptingDeletionAudit),
-            provider_sessions: ProviderSessionErasers::default(),
-            deletion_budgets: DELETION_BUDGETS,
-            clock: Arc::new(TestClock),
-        },
-        ConversationLimits::default(),
-        None,
-    )
-    .unwrap();
-    let conversation = id();
-    crate::conversation::application::ConversationRepository::create(
-        repository.as_ref(),
-        Conversation::new(
-            conversation.clone(),
-            OrganizationId::new("org").unwrap(),
-            PrincipalId::new("person").unwrap(),
-            "panel".into(),
-            "create".into(),
-            1,
-            AgentId::Claude,
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-    summaries.summaries.lock().unwrap().insert(
-        conversation.clone(),
-        ConversationSummary::after_message(None, "mine", None, 2),
-    );
-    let listed = service.list(owner(), false).await.unwrap();
-    assert_eq!(listed.conversations.len(), 1);
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert_eq!(ids(&listed.conversations), [mine.to_string()]);
     assert!(listed.complete);
-    // A deleted conversation whose record was moved aside leaves a tombstone
-    // alone: missing from no list, so every list is still complete, but a
-    // deletion the start's finish can neither read nor finish, and counts.
-    let orphan = id();
-    let repository_port: &dyn crate::conversation::application::ConversationRepository =
-        repository.as_ref();
-    repository_port
-        .create(
-            Conversation::new(
-                orphan.clone(),
-                OrganizationId::new("org").unwrap(),
-                PrincipalId::new("person").unwrap(),
-                "panel".into(),
-                "create".into(),
-                1,
-                AgentId::Claude,
-            )
-            .unwrap(),
-        )
+    let other = listing
+        .service
+        .list(caller("org", "other"), false)
         .await
         .unwrap();
-    repository_port
-        .record_deletion(
-            &orphan,
-            crate::conversation::domain::ConversationDeletion::new(
-                OrganizationId::new("org").unwrap(),
-                PrincipalId::new("person").unwrap(),
-                "panel".into(),
-                "delete".into(),
-                3,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    std::fs::remove_file(root.join(format!("{orphan}.json"))).unwrap();
-    assert!(service.list(owner(), false).await.unwrap().complete);
-    let left = service.finish_deletions().await.unwrap();
-    assert_eq!((left.unreadable, left.orphaned_tombstones), (0, 1));
-    std::fs::remove_file(root.join("deleted").join(format!("{orphan}.json"))).unwrap();
-    // Its ownership record damaged: whose it is cannot be read, so it is
-    // left out of every list, and no list claims to name everything.
-    std::fs::write(root.join(format!("{conversation}.json")), br#"{"id":"#).unwrap();
-    for archived in [false, true] {
-        let listed = service.list(owner(), archived).await.unwrap();
-        assert!(listed.conversations.is_empty(), "{archived}");
-        assert!(!listed.complete, "{archived}");
-    }
-    // Every caller's list, not only its owner's: whose it is cannot be read.
-    let stranger = service
-        .list(caller("elsewhere", "someone"), false)
-        .await
-        .unwrap();
-    assert!(!stranger.complete);
-    // And a start's finish counts it, since it may be a deletion it cannot see.
-    let left = service.finish_deletions().await.unwrap();
-    assert!(left.unfinished.is_empty());
-    assert_eq!((left.unreadable, left.orphaned_tombstones), (1, 0));
-    std::fs::remove_dir_all(root).ok();
+    assert!(other.conversations.is_empty());
+    assert!(!other.complete);
+    // The caller's own: left out, and the caller's list says so, in the list
+    // its flag files it under.
+    damage(
+        &listing,
+        "UPDATE conversations SET creation_action = '' WHERE id = ?1",
+        &mine,
+    );
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(listed.conversations.is_empty());
+    assert!(!listed.complete);
+    assert!(listing.service.list(owner(), true).await.unwrap().complete);
+    // And a stranger's list, which never met either, is whole.
+    assert!(
+        listing
+            .service
+            .list(caller("elsewhere", "someone"), false)
+            .await
+            .unwrap()
+            .complete
+    );
+}
+
+#[tokio::test]
+async fn a_list_reads_only_the_callers_conversations_however_many_others_there_are() {
+    let listing = stored(ConversationLimits::default());
+    // Fifty thousand conversations of other people's, one of them damaged, and
+    // three of the caller's.
+    let others = stored_many(&listing, "org", "someone", 50_000, false, |n| n);
+    damage(
+        &listing,
+        "UPDATE conversations SET creator_surface = '' WHERE id = ?1",
+        &others[0],
+    );
+    let mine = stored_many(&listing, "org", "person", 3, false, |n| 100 + n);
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(listed.complete);
+    assert_eq!(
+        ids(&listed.conversations),
+        mine.iter()
+            .rev()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    // What the list cost is the store's to show: its query reads only the
+    // owner's rows (`the_list_query_reads_only_its_owners_rows_however_many_others_there_are`).
 }
 
 #[tokio::test]
 async fn the_archive_filter_applies_before_the_bound() {
-    let listing = listing(ConversationLimits::default());
+    let listing = stored(ConversationLimits::default());
     // A whole list of the caller's own archived conversations, every one of
     // them newer than the unarchived ones.
-    let mut archived = Vec::new();
-    for n in 0..MAX_LISTED_CONVERSATIONS as u64 + 5 {
-        let conversation = id();
-        put(&listing, &conversation, "org", "person", 10_000 + n);
-        archive(&listing, &conversation, 10_000 + n);
-        archived.push(conversation);
-    }
-    let unarchived: Vec<_> = (0..3).map(|_| id()).collect();
-    for (n, conversation) in unarchived.iter().enumerate() {
-        put(&listing, conversation, "org", "person", n as u64);
-        summarize(&listing, conversation, "unarchived", n as u64);
-    }
+    let archived = stored_many(
+        &listing,
+        "org",
+        "person",
+        MAX_LISTED_CONVERSATIONS as u64 + 5,
+        true,
+        |n| 10_000 + n,
+    );
+    let unarchived = stored_many(&listing, "org", "person", 3, false, |n| n);
     // Archived ones take no place in the default list...
-    let listed = listing
-        .service
-        .list(owner(), false)
-        .await
-        .unwrap()
-        .conversations;
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    assert!(listed.complete);
     assert_eq!(
-        ids(&listed),
+        ids(&listed.conversations),
         unarchived
             .iter()
             .rev()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
     );
-    assert!(listed.iter().all(|entry| !entry.archived));
+    assert!(listed.conversations.iter().all(|entry| !entry.archived));
     // ...and asked for, they are bounded like any list, newest first.
-    let listed = listing
-        .service
-        .list(owner(), true)
-        .await
-        .unwrap()
-        .conversations;
-    assert_eq!(listed.len(), MAX_LISTED_CONVERSATIONS);
+    let listed = listing.service.list(owner(), true).await.unwrap();
+    assert!(!listed.complete);
+    assert_eq!(listed.conversations.len(), MAX_LISTED_CONVERSATIONS);
     assert_eq!(
-        ids(&listed),
+        ids(&listed.conversations),
         archived
             .iter()
             .rev()
@@ -1083,5 +1110,5 @@ async fn the_archive_filter_applies_before_the_bound() {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
     );
-    assert!(listed.iter().all(|entry| entry.archived));
+    assert!(listed.conversations.iter().all(|entry| entry.archived));
 }

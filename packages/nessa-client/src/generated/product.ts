@@ -590,7 +590,7 @@ export interface ConversationSummary {
 export interface ConversationListResult {
   /** The caller's conversations, most recently updated first. Ownership is applied before the bound, so another principal's conversations never take a place in it. */
   conversations: ConversationSummary[]
-  /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or while any conversation record on this gateway cannot be read: whose it is cannot be read either, so this is gateway-wide, not per caller, and lasts until an operator repairs it or moves it aside (or, for a record from before records named their agent, runs scripts/retrofit-conversation-agents.mjs). A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
+  /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or when a stored record or summary of the caller's own cannot be read back, which lasts until an operator repairs it. Nobody else's conversations are read to answer a list, so nobody else's damage makes it false. A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
   complete: boolean
 }
 /** Submit one input; execution and request IDs stay fixed across retries. */

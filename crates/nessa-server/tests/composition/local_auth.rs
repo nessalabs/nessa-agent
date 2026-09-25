@@ -65,3 +65,29 @@ fn an_agent_this_run_cannot_start_is_not_one_readiness_answers_for() {
 fn a_gateway_configured_with_no_agents_answers_for_none() {
     assert!(launch_files(None, &HashSet::new()).is_empty());
 }
+
+#[test]
+fn metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it() {
+    let root = tempfile::tempdir().unwrap();
+    // Nothing from an earlier build: conversations start.
+    assert!(refuse_metadata_files(root.path()).is_ok());
+    // Either directory, even empty — a move interrupted after its last file —
+    // refuses, naming it and the script, until the move has finished.
+    for name in ["metadata", "summaries"] {
+        let directory = root.path().join(name);
+        std::fs::create_dir(&directory).unwrap();
+        let Err(RunError::Agent(message)) = refuse_metadata_files(root.path()) else {
+            panic!("{name} was not refused");
+        };
+        assert!(
+            message.contains(&directory.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains("scripts/move-conversation-metadata.mjs"),
+            "{message}"
+        );
+        std::fs::remove_dir(&directory).unwrap();
+    }
+    assert!(refuse_metadata_files(root.path()).is_ok());
+}

@@ -11,7 +11,7 @@ use crate::{
     conversation::domain::ConversationId,
     conversation_test_support::{
         fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, MemorySummaries, Provider,
-        RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -618,6 +618,7 @@ async fn assert_terminal_failure_round_trip(
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,

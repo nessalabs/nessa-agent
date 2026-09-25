@@ -18,7 +18,7 @@ use crate::{
     conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, LocalConversationRepository, LocalConversationSummaries,
+        DurableConversationFileLinkAudit, LocalConversationStore,
     },
 };
 use crate::{
@@ -275,6 +275,33 @@ struct BuiltConversations {
     warm_ups: Vec<StartupWarmUp>,
 }
 
+/// Refuse to start conversations while metadata an earlier build kept as
+/// files is still on disk: this build reads only the database, and starting
+/// beside the files would show nobody their conversations
+/// (`metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it`).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn refuse_metadata_files(root: &Path) -> Result<(), RunError> {
+    for name in ["metadata", "summaries"] {
+        let directory = root.join(name);
+        match std::fs::symlink_metadata(&directory) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(RunError::Agent(format!(
+                    "could not tell whether {} holds conversation metadata from an earlier build: {error}",
+                    directory.display()
+                )))
+            }
+            Ok(_) => {
+                return Err(RunError::Agent(format!(
+                    "conversation metadata from an earlier build is still at {}; stop the gateway and run `node scripts/move-conversation-metadata.mjs` to move it into the database",
+                    directory.display()
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn conversations(
     _agents: &AgentsConfig,
@@ -318,8 +345,13 @@ fn conversations(
     // bytes, reading them needs the attachment store, and beginning an
     // upload needs to ask who owns a conversation: so the repository is
     // built, then attachments over it, and only then the providers.
+    //
+    // Ownership, tombstones and summaries are one database. Metadata an
+    // earlier build kept as files is refused rather than read in its old
+    // shape, and the refusal names what moves it (docs/adr/todo/196-conversation-metadata-database.md).
+    refuse_metadata_files(&root)?;
     let metadata = Arc::new(
-        LocalConversationRepository::new(root.join("metadata"))
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let current_opencode_model = opencode
@@ -420,12 +452,6 @@ fn conversations(
         DurableConversationDeletionAudit::new(root.join("audit").join("deletion"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
-    // Beside the ownership records rather than inside them: those are written
-    // once, and a summary is replaced on every turn.
-    let summaries = Arc::new(
-        LocalConversationSummaries::new(root.join("summaries"))
-            .map_err(|error| RunError::Agent(error.to_string()))?,
-    );
     let fixed_probe = LocalAgentProbe::from_environment(
         launch_files(Some(agents), &built.unavailable)
             .into_iter()
@@ -465,12 +491,13 @@ fn conversations(
             agents: ConversationAgents::from_source(configured, selected, resolver.clone())
                 .map_err(|error| RunError::Agent(error.to_string()))?,
             storage,
-            metadata,
+            metadata: metadata.clone(),
             creation_audit,
             file_link_audit,
             deletion_audit,
             attachments: Some(attachments.conversations),
-            summaries,
+            summaries: metadata.clone(),
+            listing: metadata,
             provider_sessions: erasers,
             deletion_budgets: super::agent_budgets::deletion(),
             clock,

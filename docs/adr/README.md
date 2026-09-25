@@ -64,6 +64,7 @@ this table. None of it changes implementation or approval status.
 | 5 | [0012 — Harnesses and optional tools](todo/0012-agent-harnesses-and-optional-tools.md) | Optional MCP/CLI interfaces while preserving external harness behavior |
 | 6 | [0014 — Nessa-owned policy hooks](todo/0014-nessa-owned-policy-hooks.md) | Proposed hook enforcement, context disclosure, capability degradation and attributed policy stops |
 | 7 | [173 — Fetch every agent runtime](todo/173-fetch-agent-runtimes.md) | Pin and fetch Claude's and Codex's native binaries the way Opencode's already are, resolve a runtime already on the machine within a supported range, and record what each install did |
+| 9 | [196 — Conversation metadata in an embedded database](todo/196-conversation-metadata-database.md) | Implemented, in review: ownership, tombstones and summaries in one private SQLite file through `nessa-local-database`, a list that reads only its caller's conversations with `complete` exact per caller, and a one-time move of the files. Remaining: page tokens, and deleting the move and its refusal once no namespace predates it |
 | 8 | [182 — Archiving and deleting conversations](todo/182-conversation-deletion.md) | Implemented, in review: gateway archive and permanent delete, erasing each agent's own session over ACP, and the panel's Messages list with archive, delete and undo. Remaining: an archived view, bulk delete, and what an agent's own delete leaves behind ("Not decided here") |
 
 Auth API readiness and operating-bound work is complete. The

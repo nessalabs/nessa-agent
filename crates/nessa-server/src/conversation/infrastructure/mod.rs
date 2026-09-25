@@ -1,15 +1,25 @@
 //! Private local metadata and audit adapters implement application-owned ports.
-//! Ownership records and summaries are separate directories: a record is
-//! written once, a summary is replaced on every turn. A deleted conversation's
-//! tombstone sits beneath the records and stays; its summary is removed, and
-//! its deletion record joins the other audit records, which nothing removes.
-//! `BindingSessionEraser` carries an agent binding's answer about its own
-//! record of a session into the deletion, unchanged.
-mod repository;
-pub use repository::LocalConversationRepository;
-
-mod summaries;
-pub use summaries::LocalConversationSummaries;
+//!
+//! `LocalConversationStore` keeps ownership records, tombstones and summaries
+//! as three tables of one private SQLite database (`schema.sql`, opened by
+//! `nessa-local-database`), and is the repository, the summaries and the
+//! listing at once:
+//!
+//! ```text
+//!   ConversationRepository ─┐
+//!   ConversationSummaries  ─┼─▶ LocalConversationStore ─▶ metadata.sqlite3
+//!   ConversationListing    ─┘                              conversations ◀─ deletions
+//!                                                                        ◀─ summaries
+//! ```
+//!
+//! Left arrows are the ports it implements; right, the file it owns; the
+//! arrows inside the file are foreign keys. A record is written once, a summary
+//! is replaced on every turn. A deleted conversation's tombstone stays; its
+//! summary is removed, and its deletion record joins the other audit records,
+//! which nothing removes. `BindingSessionEraser` carries an agent binding's
+//! answer about its own record of a session into the deletion, unchanged.
+mod store;
+pub use store::LocalConversationStore;
 
 mod provider_sessions;
 pub use provider_sessions::BindingSessionEraser;
@@ -28,9 +38,5 @@ mod audit_mapping;
 pub use audit::DurableExecutionAudit;
 
 #[cfg(test)]
-#[path = "../../../tests/conversation/repository.rs"]
-mod repository_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/conversation/summaries.rs"]
-mod summaries_tests;
+#[path = "../../../tests/conversation/store.rs"]
+mod store_tests;

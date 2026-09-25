@@ -1,8 +1,10 @@
 //! Authenticated commands resolve one shared Agent owner per conversation.
 //! Service -> metadata repository; shared Agent -> SDK session storage/provider.
 //! Service -> ConversationSummaries: what a list shows about each conversation,
-//! written when a message is accepted and when a turn completes, and read with
-//! ownership records to list conversations without opening any of them.
+//! written when a message is accepted and when a turn completes.
+//! Service -> ConversationListing: one caller's conversations with their
+//! summaries, read without opening any of them and without reading anybody
+//! else's; the store that keeps both answers it in one question.
 //! A bounded read projection consumes SDK observations independently of sockets.
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
@@ -70,9 +72,10 @@ pub use ports::{
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
     ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
     ConversationDeletionCause, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationFuture,
-    ConversationOwnershipState, ConversationRecords, ConversationRepository, ConversationSummaries,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationFuture, ConversationListing,
+    ConversationOwnershipState, ConversationRepository, ConversationSummaries, ListedConversation,
+    ListedConversations, RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage,
+    UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,

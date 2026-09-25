@@ -6,8 +6,9 @@ use crate::conversation::application::{
     ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
     ConversationDeletionBudgets, ConversationDependencies, ConversationError,
     ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFuture,
-    ConversationLimits, ConversationRecords, ConversationRepository, ConversationService,
-    ConversationSummaries, ProviderSessionEraser, ProviderSessionErasers,
+    ConversationLimits, ConversationListing, ConversationRepository, ConversationService,
+    ConversationSummaries, ListedConversation, ListedConversations, ProviderSessionEraser,
+    ProviderSessionErasers, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
@@ -89,13 +90,20 @@ impl ConversationRepository for MemoryRepository {
         let value = self.records.lock().unwrap().get(id).cloned();
         Box::pin(async move { Ok(value) })
     }
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
-        let conversations = self.records.lock().unwrap().values().cloned().collect();
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        let mut conversations: Vec<ConversationId> = self
+            .records
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.deletion().is_some_and(|deletion| !deletion.erased()))
+            .map(|record| record.id().clone())
+            .collect();
+        conversations.sort_by_key(ToString::to_string);
         Box::pin(async move {
-            Ok(ConversationRecords {
+            Ok(UnfinishedDeletions {
                 conversations,
                 unreadable: 0,
-                orphaned_tombstones: 0,
             })
         })
     }
@@ -156,6 +164,80 @@ impl ConversationRepository for MemoryRepository {
                 }),
         };
         Box::pin(async move { result })
+    }
+}
+
+/// Lists what a [`MemoryRepository`] and [`MemorySummaries`] hold, as
+/// [`ConversationListing`] promises. A substitute for tests about something
+/// else; what the promise means is tested against the store that keeps it
+/// (`store.rs`, `listing.rs`). Summaries are read through
+/// [`MemorySummaries`], so its failures and gate apply here too: one that
+/// cannot be read is counted.
+pub(crate) struct MemoryListing {
+    pub(crate) repository: Arc<MemoryRepository>,
+    pub(crate) summaries: Arc<MemorySummaries>,
+}
+impl ConversationListing for MemoryListing {
+    fn list(
+        &self,
+        organization: &OrganizationId,
+        owner: &nessa_auth::domain::PrincipalId,
+        archived: bool,
+        limit: usize,
+    ) -> ConversationFuture<'_, ListedConversations> {
+        let records: Vec<Conversation> = self
+            .repository
+            .records
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.allows(organization, owner) && record.deletion().is_none())
+            .cloned()
+            .collect();
+        Box::pin(async move {
+            let mut listed = ListedConversations::default();
+            for conversation in records {
+                match self.summaries.load(conversation.id()).await {
+                    Ok(Some(summary)) if summary.archived() == archived => {
+                        listed.conversations.push(ListedConversation {
+                            conversation,
+                            summary,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(_) => listed.unreadable += 1,
+                }
+            }
+            listed.conversations.sort_by(|left, right| {
+                right
+                    .summary
+                    .updated_at_ms()
+                    .cmp(&left.summary.updated_at_ms())
+                    .then_with(|| {
+                        left.conversation
+                            .id()
+                            .to_string()
+                            .cmp(&right.conversation.id().to_string())
+                    })
+            });
+            listed.conversations.truncate(limit);
+            Ok(listed)
+        })
+    }
+}
+
+/// For a service no test lists: refuses, so a test that does list without
+/// wiring a listing fails rather than seeing nothing.
+pub(crate) struct Unlisted;
+impl ConversationListing for Unlisted {
+    fn list(
+        &self,
+        _: &OrganizationId,
+        _: &nessa_auth::domain::PrincipalId,
+        _: bool,
+        _: usize,
+    ) -> ConversationFuture<'_, ListedConversations> {
+        Box::pin(async { Err(ConversationError::Metadata) })
     }
 }
 
@@ -412,6 +494,7 @@ pub(crate) fn image_fixture_with_model(
     provider.model_images.store(model_images, Ordering::SeqCst);
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
+    let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider.clone()))),
@@ -420,7 +503,11 @@ pub(crate) fn image_fixture_with_model(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments,
-            summaries: Arc::new(MemorySummaries::default()),
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: repository.clone(),
+                summaries,
+            }),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
@@ -463,6 +550,7 @@ pub(crate) fn fixture(
     let provider = Arc::new(ProviderFactory::default());
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
+    let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider.clone()))),
@@ -471,7 +559,11 @@ pub(crate) fn fixture(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
-            summaries: Arc::new(MemorySummaries::default()),
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: repository.clone(),
+                summaries,
+            }),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,

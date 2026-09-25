@@ -14,9 +14,9 @@ use super::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
     ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
     ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, RuntimeReadiness, StopFailure,
-    SubmittedMessage,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
+    ListedConversation, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{
@@ -363,6 +363,7 @@ struct Inner {
     deletion_audit: Arc<dyn ConversationDeletionAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
     summaries: Arc<dyn ConversationSummaries>,
+    listing: Arc<dyn ConversationListing>,
     // One summary change at a time per conversation, so a turn's reply and
     // the next message cannot each read the same summary and have the later
     // write lose the other's change. Per conversation, so one conversation's
@@ -527,6 +528,9 @@ pub struct ConversationDependencies {
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
     /// What a list of conversations shows about each one.
     pub summaries: Arc<dyn ConversationSummaries>,
+    /// Which of one owner's conversations a list shows, read from ownership,
+    /// tombstones and summaries without reading anybody else's.
+    pub listing: Arc<dyn ConversationListing>,
     /// Each agent's way of deleting its own record of a provider session,
     /// asked when a conversation on that agent is deleted.
     pub provider_sessions: ProviderSessionErasers,
@@ -550,6 +554,7 @@ impl ConversationService {
             deletion_audit,
             attachments,
             summaries,
+            listing,
             provider_sessions,
             deletion_budgets,
             clock,
@@ -572,6 +577,7 @@ impl ConversationService {
                 deletion_audit,
                 attachments,
                 summaries,
+                listing,
                 summary_writes: ConversationLocks::default(),
                 deletions: ConversationLocks::default(),
                 provider_sessions,
@@ -1412,10 +1418,13 @@ impl ConversationService {
     /// updated first, at most [`MAX_LISTED_CONVERSATIONS`] of them: those not
     /// archived, or, when `archived`, only those that are.
     ///
-    /// Read from ownership records, stored summaries, and what is live on this
-    /// gateway. Nothing is resolved: no provider is opened and no session
-    /// storage is opened to draw a list
+    /// Read from [`ConversationListing`], which reads only this caller's
+    /// conversations and at most one more than the bound, and from what is
+    /// live on this gateway for those it returns. Nothing is resolved: no
+    /// provider is opened and no session storage is opened to draw a list
     /// (`listing_shows_only_the_callers_conversations_and_opens_nothing`).
+    /// What a list costs is the caller's own conversations, never the
+    /// gateway's (`a_list_reads_only_the_callers_conversations_however_many_others_there_are`).
     ///
     /// A conversation with no summary is left out: nothing was ever said in
     /// it — one opened only to hold an upload, say — and a list of what was
@@ -1425,24 +1434,16 @@ impl ConversationService {
     /// (`archiving_a_conversation_nothing_was_said_in_changes_nothing`) — so
     /// "has a summary" and "something was said" are the one rule. That includes
     /// conversations from before summaries were kept, which are not given a
-    /// summary after the fact. One whose summary cannot be read was written,
-    /// so something was said, and it is listed rather than failing the list:
-    /// bare — no title or preview, its creation time — and in the default list
-    /// only, reported as not archived. Whether it was archived cannot be read;
-    /// showing it where a person looks first, over hiding it in the archived
-    /// list or in neither, is the choice that never loses a conversation from
-    /// view (`newest_summary_first_then_identity_and_an_unreadable_summary_lists_bare`). A conversation naming an
-    /// agent this build cannot open is listed like any other: it is its
-    /// owner's to see and to delete. The bound is applied after ownership and
-    /// the archive filter (`the_archive_filter_applies_before_the_bound`), and
-    /// the list says whether it left any out
-    /// ([`ConversationList::complete`]): a list exactly at the bound with
-    /// nothing behind it is complete
-    /// (`a_list_says_whether_the_bound_left_any_out`), and no list — any
-    /// caller's — is complete while any conversation record on the gateway
-    /// cannot be read, until an operator repairs it
-    /// (`an_unreadable_record_makes_every_list_incomplete`; the remedy is in
-    /// [`ConversationList::complete`]).
+    /// summary after the fact. A conversation naming an agent this build
+    /// cannot open is listed like any other: it is its owner's to see and to
+    /// delete. The bound is applied after ownership and the archive filter
+    /// (`the_archive_filter_applies_before_the_bound`), and the list says
+    /// whether it is whole ([`ConversationList::complete`]): a list exactly at
+    /// the bound with nothing behind it is complete
+    /// (`a_list_says_whether_the_bound_left_any_out`), and one that met a
+    /// record or summary of this caller's it could not read is not — only
+    /// this caller's, since nobody else's is read
+    /// (`an_unreadable_row_makes_its_owners_list_incomplete_and_nobody_elses`).
     pub async fn list(
         &self,
         caller: ConversationCaller,
@@ -1450,34 +1451,41 @@ impl ConversationService {
     ) -> Result<ConversationList, ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
-        let records = self.inner.metadata.list().await?;
-        // A record that cannot be read may be this caller's, so a list that
-        // left one out cannot say it names them all
-        // (`an_unreadable_record_makes_every_list_incomplete`).
-        let unreadable = records.unreadable;
-        let owned: Vec<Conversation> = records
+        // One past the bound, so the list can say whether it left any out.
+        let listed = self
+            .inner
+            .listing
+            .list(
+                &caller.organization_id,
+                &caller.principal_id,
+                archived,
+                MAX_LISTED_CONVERSATIONS + 1,
+            )
+            .await?;
+        let complete =
+            listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
+        // Whose they are, and that none is deleted, is the listing's answer:
+        // it compares ownership exactly as `Conversation::allows` does
+        // (`the_list_is_the_owners_undeleted_said_in_conversations_newest_first`).
+        let owned: Vec<ListedConversation> = listed
             .conversations
             .into_iter()
-            .filter(|record| {
-                record
-                    .check_access(&caller.organization_id, &caller.principal_id)
-                    .is_ok()
-            })
+            .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         // Only a conversation that finished opening has anything to say about
         // running; one still opening, or whose opening failed, is not waited on.
-        // Answered first, and the live conversations let go of before any
-        // summary is read: a list must not keep a stopped agent, or its
-        // history's lease, while it waits on storage
+        // The live conversations are let go of before the list is answered: a
+        // list must not keep a stopped agent, or its history's lease
         // (`a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased`).
         let live: HashMap<ConversationId, Arc<LiveConversation>> = {
             let owners = self.inner.conversations.lock().await;
             owned
                 .iter()
-                .filter_map(|record| {
-                    let slot = owners.get(record.id())?;
+                .filter_map(|listed| {
+                    let id = listed.conversation.id();
+                    let slot = owners.get(id)?;
                     let live = slot.value.get()?.as_ref().ok()?;
-                    Some((record.id().clone(), live.clone()))
+                    Some((id.clone(), live.clone()))
                 })
                 .collect()
         };
@@ -1487,54 +1495,25 @@ impl ConversationService {
                 running.insert(id);
             }
         }
-        let mut entries = Vec::with_capacity(owned.len());
-        for record in owned {
-            let summary = match self.inner.summaries.load(record.id()).await {
-                Ok(Some(summary)) => Some(summary),
-                Ok(None) => continue,
-                Err(error) => {
-                    tracing::warn!(
-                        conversation_id = %record.id(),
-                        %error,
-                        "conversation summary could not be read; listed without it"
-                    );
-                    None
-                }
-            };
-            let is_archived = summary.as_ref().is_some_and(ConversationSummary::archived);
-            if is_archived != archived {
-                continue;
-            }
-            let running = running.contains(record.id());
-            entries.push(ConversationListEntry {
-                conversation_id: record.id().to_string(),
-                title: summary
-                    .as_ref()
-                    .and_then(ConversationSummary::title)
-                    .map(|title| title.as_str().to_owned()),
-                preview: summary
-                    .as_ref()
-                    .and_then(ConversationSummary::preview)
-                    .map(|preview| preview.as_str().to_owned()),
-                created_at_ms: record.creation_requested_at_ms(),
-                updated_at_ms: summary.as_ref().map_or(
-                    record.creation_requested_at_ms(),
-                    ConversationSummary::updated_at_ms,
-                ),
-                running,
-                archived: is_archived,
-            });
-        }
-        entries.sort_by(|left, right| {
-            right
-                .updated_at_ms
-                .cmp(&left.updated_at_ms)
-                .then_with(|| left.conversation_id.cmp(&right.conversation_id))
-        });
-        let complete = unreadable == 0 && entries.len() <= MAX_LISTED_CONVERSATIONS;
-        entries.truncate(MAX_LISTED_CONVERSATIONS);
+        let conversations = owned
+            .into_iter()
+            .map(
+                |ListedConversation {
+                     conversation,
+                     summary,
+                 }| ConversationListEntry {
+                    conversation_id: conversation.id().to_string(),
+                    title: summary.title().map(|title| title.as_str().to_owned()),
+                    preview: summary.preview().map(|preview| preview.as_str().to_owned()),
+                    created_at_ms: conversation.creation_requested_at_ms(),
+                    updated_at_ms: summary.updated_at_ms(),
+                    running: running.contains(conversation.id()),
+                    archived: summary.archived(),
+                },
+            )
+            .collect();
         Ok(ConversationList {
-            conversations: entries,
+            conversations,
             complete,
         })
     }
@@ -2011,22 +1990,18 @@ impl ConversationService {
     /// apart and growing. What is still unfinished after its tries is
     /// returned with its last typed failure, and logged, and is tried again
     /// at the next start or by a repeated delete. Stops early, returning what
-    /// it has, once the service is retired. Records that could not be read
-    /// are counted too: a damaged tombstone is a deletion nothing here can
-    /// see, let alone finish
-    /// (`an_unreadable_record_makes_every_list_incomplete`).
+    /// it has, once the service is retired. Tombstones that could not be read
+    /// are counted too: a deletion nothing here can see, let alone finish
+    /// (`an_unfinished_deletion_that_cannot_be_named_is_counted`).
+    /// Only unfinished deletions are read, never every conversation.
     ///
     /// # Errors
     /// The repository's error when the records cannot be enumerated at all.
     pub async fn finish_deletions(&self) -> Result<DeletionsLeft, ConversationError> {
-        let records = self.inner.metadata.list().await?;
-        let (unreadable, orphaned_tombstones) = (records.unreadable, records.orphaned_tombstones);
-        let unfinished: Vec<ConversationId> = records
-            .conversations
-            .into_iter()
-            .filter(|record| record.deletion().is_some_and(|deletion| !deletion.erased()))
-            .map(|record| record.id().clone())
-            .collect();
+        let UnfinishedDeletions {
+            conversations: unfinished,
+            unreadable,
+        } = self.inner.metadata.unfinished_deletions().await?;
         let mut left = Vec::new();
         for id in unfinished {
             let mut failure = None;
@@ -2068,7 +2043,6 @@ impl ConversationService {
         Ok(DeletionsLeft {
             unfinished: left,
             unreadable,
-            orphaned_tombstones,
         })
     }
 
@@ -2792,12 +2766,9 @@ pub struct DeletionsLeft {
     /// Each deletion still unfinished after its tries, with its last typed
     /// failure.
     pub unfinished: Vec<(ConversationId, ConversationError)>,
-    /// How many conversation records could not be read at all, so whether
-    /// any is an unfinished deletion cannot be known.
+    /// How many tombstones of unfinished deletions could not be read, so
+    /// whose deletion is unfinished cannot be known.
     pub unreadable: usize,
-    /// How many tombstones have no conversation record beside them: deletions
-    /// that can be neither read nor finished.
-    pub orphaned_tombstones: usize,
 }
 
 /// Why the agent was not asked, or its ask failed.
