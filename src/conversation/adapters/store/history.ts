@@ -32,6 +32,12 @@ export type ConversationHistory = {
   /** Null until the first list arrives. */
   rows: ConversationSummary[] | null
   /**
+   * Whether the gateway said the last read named every conversation. When it
+   * did not, the list says so, so an empty list or search is not taken as
+   * all there is.
+   */
+  complete: boolean
+  /**
    * The conversations the gateway lists as archived, by identity: what keeps a
    * tab open on one of them from standing in the list as if it were new.
    */
@@ -75,6 +81,7 @@ const initialState: ConversationHistory = {
   rows: null,
   archivedIds: [],
   failure: null,
+  complete: true,
   requestId: null,
   commandError: null,
   undoable: null,
@@ -90,7 +97,7 @@ type Extra = { extra: { conversation: ConversationEffects } }
  * archived. Both, or neither: half a list would put an archived tab back in it.
  */
 export const listConversations = createAsyncThunk<
-  { rows: ConversationSummary[]; archivedIds: string[] },
+  { rows: ConversationSummary[]; archivedIds: string[]; complete: boolean },
   void,
   Extra & { rejectValue: ReadFailure }
 >("conversationHistory/list", async (_, { extra, rejectWithValue }) => {
@@ -99,7 +106,11 @@ export const listConversations = createAsyncThunk<
       extra.conversation.list(false),
       extra.conversation.list(true),
     ])
-    return { rows, archivedIds: archived.map((row) => row.conversationId) }
+    return {
+      rows: rows.conversations,
+      archivedIds: archived.conversations.map((row) => row.conversationId),
+      complete: rows.complete && archived.complete,
+    }
   } catch (error) {
     // The port promises a typed reason for every rejected list; anything else
     // is a stale list whose cause this build cannot name.
@@ -301,6 +312,7 @@ const historySlice = createSlice({
         if (state.requestId !== action.meta.requestId) return
         state.rows = action.payload.rows
         state.archivedIds = action.payload.archivedIds
+        state.complete = action.payload.complete
         state.failure = null
         state.requestId = null
       })

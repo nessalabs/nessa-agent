@@ -1004,16 +1004,20 @@ it("lists the gateway's conversations as the panel's summaries", async () => {
     complete: false,
   }))
   const effects = effectsOf(() => ({ conversation: { list } }) as unknown as NessaClient)
-  await expect(effects.list(false)).resolves.toEqual([
-    {
-      conversationId: "00000000-0000-4000-8000-000000000001",
-      title: "Flights to Lisbon",
-      preview: "Done.",
-      updatedAtMs: 2,
-      running: true,
-      archived: false,
-    },
-  ])
+  await expect(effects.list(false)).resolves.toEqual({
+    conversations: [
+      {
+        conversationId: "00000000-0000-4000-8000-000000000001",
+        title: "Flights to Lisbon",
+        preview: "Done.",
+        updatedAtMs: 2,
+        running: true,
+        archived: false,
+      },
+    ],
+    // The gateway's word that it left some out is carried, not dropped.
+    complete: false,
+  })
   expect(list).toHaveBeenCalledWith({ archived: false })
 })
 

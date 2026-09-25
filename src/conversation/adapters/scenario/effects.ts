@@ -133,7 +133,13 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
         }
       })
       // As the gateway does: a conversation nothing was said in is not listed.
-      return rows.filter((row) => row.archived === listArchived && row.preview !== null)
+      // A scenario holds far fewer than the gateway's bound: its list is whole.
+      return {
+        conversations: rows.filter(
+          (row) => row.archived === listArchived && row.preview !== null,
+        ),
+        complete: true,
+      }
     },
     async archive(id, archive) {
       control(id)

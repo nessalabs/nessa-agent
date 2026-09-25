@@ -134,6 +134,11 @@ export function ConversationList({
     history.rows !== null && history.failure !== null
       ? "The list could not be refreshed, so it may be out of date."
       : null,
+    // The gateway's own word that it left some out: an empty list or search
+    // is then not all there is.
+    history.rows !== null && !history.complete
+      ? "Not every conversation is shown."
+      : null,
   ]
     .filter(Boolean)
     .join(" ")

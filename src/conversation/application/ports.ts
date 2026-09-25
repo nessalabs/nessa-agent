@@ -1,4 +1,5 @@
 import type {
+  ConversationListing,
   ConversationSummary,
   ConversationView,
   Submission,
@@ -45,7 +46,7 @@ export interface ConversationEffects {
    * archived ones when `archived`, the rest otherwise. A read:
    * it rejects with {@link ConversationReadFailedError} for the same reasons.
    */
-  list(archived: boolean): Promise<ConversationSummary[]>
+  list(archived: boolean): Promise<ConversationListing>
   /**
    * Archive (`true`) or unarchive a conversation: whether the list shows it.
    * Resolves with whether anything changed — false when it already was, or

@@ -849,7 +849,7 @@ describe("a list read succeeds", () => {
       // Hold the first read's answers until the second has landed; they say nothing.
       if (calls <= 2) {
         await held.wait()
-        return []
+        return { conversations: [], complete: true }
       }
       return effects.list(archived)
     }

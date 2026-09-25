@@ -450,6 +450,7 @@ the conversations known to be deleted (`deletedIds`).
 | An older action answers after a newer one was asked | its own row settles; a delete it confirms still lets go of tabs and adds `deletedIds` | unchanged | unchanged, except that a delete of X withdraws an undo of X | as its row |
 | Any answer | the list is read again | — | — | — |
 | A list read succeeds | replaced, newest read wins | unchanged | unchanged | — |
+| A list read succeeds but the gateway says it is not complete (the 500-row bound, or a record it could not read) | replaced, newest read wins | "Not every conversation is shown." beside it, so an empty list or search is not taken as all there is | unchanged | — |
 | A list read fails | kept | "The list could not be refreshed, so it may be out of date." beside it | unchanged | — |
 | The Messages tab is left | — | cleared; an action still out says what became of it when it answers | withdrawn | — |
 
@@ -460,8 +461,8 @@ or on another surface, is told so the next time it reads — "Conversation
 deleted", with nothing to retry — so a draft written in it is still there to
 copy. Until then its row can still show, as any tab the list has not caught up
 with does. An archived conversation leaves the list even while a tab holds it
-open. The list's `complete` flag is the gateway's; the panel does not read
-anything into a conversation's absence from the list.
+open. The list's `complete` flag is the gateway's; the panel says when it is
+false, and reads nothing into a conversation's absence from the list.
 
 ## Not decided here
 

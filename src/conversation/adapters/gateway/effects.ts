@@ -420,8 +420,8 @@ export function gatewayEffects(
       // stale list and nothing more, in the same words a stale view uses.
       return Promise.resolve()
         .then(() => api().list({ archived }))
-        .then(({ conversations }) =>
-          conversations.map((row) => ({
+        .then(({ conversations, complete }) => ({
+          conversations: conversations.map((row) => ({
             conversationId: row.conversationId,
             title: row.title,
             preview: row.preview,
@@ -429,7 +429,8 @@ export function gatewayEffects(
             running: row.running,
             archived: row.archived,
           })),
-        )
+          complete,
+        }))
         .catch((error: unknown) => {
           throw readFailure(error)
         })

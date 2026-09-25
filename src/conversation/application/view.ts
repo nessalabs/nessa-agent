@@ -85,6 +85,16 @@ export type Submission = {
 export type SubmissionReceipt = { executionId: string; disposition: string }
 
 /**
+ * One read of the list: its rows, and whether the gateway says they are every
+ * conversation under that filter — not so past its bound of 500, or while it
+ * cannot read one of its records.
+ */
+export type ConversationListing = {
+  conversations: ConversationSummary[]
+  complete: boolean
+}
+
+/**
  * One conversation as the gateway lists it: a row for the Messages list. The
  * gateway reads these from what it has stored, so a closed conversation is
  * listed too, and listing starts nothing.

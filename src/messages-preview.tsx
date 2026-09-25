@@ -149,11 +149,13 @@ const deletedIds = new Set<string>()
 
 const previewStore = makeStore({
   conversation: {
-    list: async (archived: boolean) =>
-      listed
+    list: async (archived: boolean) => ({
+      conversations: listed
         .filter((row) => !deletedIds.has(row.conversationId))
         .filter((row) => archivedIds.has(row.conversationId) === archived)
         .map((row) => ({ ...row, archived })),
+      complete: true,
+    }),
     archive: async (id: string, archived: boolean) => {
       const changed = archivedIds.has(id) !== archived
       if (archived) archivedIds.add(id)

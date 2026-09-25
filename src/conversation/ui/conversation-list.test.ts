@@ -305,8 +305,15 @@ it("keeps the tab after a lost delete, and says the gateway did not confirm it",
 it("keeps the row of an open conversation the list has not caught up with out while its action is out", async () => {
   const held: Array<() => void> = []
   const { store, effects } = await gatewayWithClosedConversation({
-    list: async (archived: boolean) =>
-      (await effects.list(archived)).filter((row) => row.conversationId !== written),
+    list: async (archived: boolean) => {
+      const listing = await effects.list(archived)
+      return {
+        ...listing,
+        conversations: listing.conversations.filter(
+          (row) => row.conversationId !== written,
+        ),
+      }
+    },
     archive: async (id: string, archived: boolean) => {
       await new Promise<void>((go) => held.push(go))
       return effects.archive(id, archived)
@@ -335,8 +342,16 @@ it("announces nothing when archiving changed nothing", async () => {
 
 it("announces an undone archive by the conversation's name", async () => {
   const { store, effects } = await gatewayWithClosedConversation({
-    list: async (archived: boolean) =>
-      (await effects.list(archived)).map((row) => ({ ...row, title: "Lisbon trip" })),
+    list: async (archived: boolean) => {
+      const listing = await effects.list(archived)
+      return {
+        ...listing,
+        conversations: listing.conversations.map((row) => ({
+          ...row,
+          title: "Lisbon trip",
+        })),
+      }
+    },
   })
   await render(store)
   await press("Lisbon trip", "Archive")
@@ -419,4 +434,30 @@ it("says the list may be out of date when reading it again fails", async () => {
   expect(container.textContent).toContain(
     "The list could not be refreshed, so it may be out of date.",
   )
+})
+
+it("says not every conversation is shown when the gateway says its list is not complete", async () => {
+  const { store, effects } = await gatewayWithClosedConversation({
+    list: async (archived: boolean) => ({
+      ...(await effects.list(archived)),
+      complete: false,
+    }),
+  })
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  await render(store)
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Not every conversation is shown."),
+  )
+})
+
+it("says nothing about completeness when the list is whole", async () => {
+  const { store } = await gatewayWithClosedConversation()
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  await render(store)
+  await vi.waitFor(() => expect(rows()).toHaveLength(1))
+  expect(container.textContent).not.toContain("Not every conversation is shown.")
 })
