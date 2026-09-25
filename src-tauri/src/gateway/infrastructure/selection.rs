@@ -1,5 +1,6 @@
 use super::super::application::{
     GatewayHost, GatewayReconciliationAudit, GatewayReconciliationIds, LoginShellPath,
+    MonotonicClock,
 };
 #[cfg(target_os = "macos")]
 use super::macos::{FileReconciliationAudit, LaunchctlDisabledServiceStatus, Launchd};
@@ -40,14 +41,17 @@ pub fn reconciliation_ids() -> Arc<dyn GatewayReconciliationIds> {
     Arc::new(RandomReconciliationIds)
 }
 
-pub fn reconciliation_audit(config_root: Option<PathBuf>) -> Arc<dyn GatewayReconciliationAudit> {
+pub fn reconciliation_audit(
+    config_root: Option<PathBuf>,
+    clock: Arc<dyn MonotonicClock>,
+) -> Arc<dyn GatewayReconciliationAudit> {
     #[cfg(target_os = "macos")]
     {
-        Arc::new(FileReconciliationAudit::new(config_root))
+        Arc::new(FileReconciliationAudit::new(config_root, clock))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = config_root;
+        let _ = (config_root, clock);
         Arc::new(UnsupportedAudit)
     }
 }

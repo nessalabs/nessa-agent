@@ -250,10 +250,6 @@ impl AttemptReceipt {
         self.wait_settlement()?.reported
     }
 
-    fn wait_physical(&self) -> Result<ReconciledGateway, GatewayError> {
-        self.wait_settlement()?.physical
-    }
-
     fn wait_physical_until(&self, deadline: Instant) -> Result<ReconciledGateway, GatewayError> {
         let state = self.state.lock().map_err(|_| state_unavailable())?;
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -561,6 +557,35 @@ pub struct Gateway {
     caller_resume_gate: Arc<CallerResumeGate>,
 }
 
+pub struct GatewayRuntimeDependencies {
+    host: Arc<dyn GatewayHost>,
+    login_shell: Arc<dyn LoginShellPath>,
+    startup_events: Arc<dyn GatewayStartupEvents>,
+    reconciliation_ids: Arc<dyn GatewayReconciliationIds>,
+    reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
+    clock: Arc<dyn MonotonicClock>,
+}
+
+impl GatewayRuntimeDependencies {
+    pub fn new(
+        host: Arc<dyn GatewayHost>,
+        login_shell: Arc<dyn LoginShellPath>,
+        startup_events: Arc<dyn GatewayStartupEvents>,
+        reconciliation_ids: Arc<dyn GatewayReconciliationIds>,
+        reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        Self {
+            host,
+            login_shell,
+            startup_events,
+            reconciliation_ids,
+            reconciliation_audit,
+            clock,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ReconciliationExecutor {
     host: Arc<dyn GatewayHost>,
@@ -597,28 +622,33 @@ impl Gateway {
         runtime: PathBuf,
         stage: String,
     ) -> Self {
-        Self::bootstrap_with_clock(
-            host,
-            login_shell,
-            startup_events,
-            reconciliation_ids,
-            reconciliation_audit,
-            Arc::new(SystemMonotonicClock),
+        Self::bootstrap_with_dependencies(
+            GatewayRuntimeDependencies::new(
+                host,
+                login_shell,
+                startup_events,
+                reconciliation_ids,
+                reconciliation_audit,
+                Arc::new(SystemMonotonicClock),
+            ),
             runtime,
             stage,
         )
     }
 
-    pub fn bootstrap_with_clock(
-        host: Arc<dyn GatewayHost>,
-        login_shell: Arc<dyn LoginShellPath>,
-        startup_events: Arc<dyn GatewayStartupEvents>,
-        reconciliation_ids: Arc<dyn GatewayReconciliationIds>,
-        reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
-        clock: Arc<dyn MonotonicClock>,
+    pub fn bootstrap_with_dependencies(
+        dependencies: GatewayRuntimeDependencies,
         runtime: PathBuf,
         stage: String,
     ) -> Self {
+        let GatewayRuntimeDependencies {
+            host,
+            login_shell,
+            startup_events,
+            reconciliation_ids,
+            reconciliation_audit,
+            clock,
+        } = dependencies;
         Self {
             host,
             login_shell,

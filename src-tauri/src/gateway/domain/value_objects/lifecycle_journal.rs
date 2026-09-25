@@ -641,28 +641,12 @@ impl LifecycleHistory {
         self.next_sequence
     }
 
-    pub fn namespace(&self) -> &str {
-        &self.namespace
-    }
-
-    pub fn attempt_correlation(&self) -> &ReconciliationCorrelation {
-        &self.attempt_correlation
-    }
-
-    pub fn target(&self) -> &ReconciliationTarget {
-        &self.target
-    }
-
     pub fn latest_observation(&self) -> Option<&LifecycleObservation> {
         self.latest_observation.as_ref()
     }
 
     pub fn is_terminal(&self) -> bool {
         self.terminal
-    }
-
-    pub fn has_effect_plan(&self) -> bool {
-        !self.plans.is_empty()
     }
 
     fn latest_incarnation(&self) -> Option<ReconciliationIncarnation> {
@@ -824,7 +808,7 @@ mod tests {
 
     #[test]
     fn every_nonterminal_crash_prefix_restores_to_the_same_state() {
-        let records = vec![
+        let records = [
             intent(Some(incarnation(10))),
             plan(1),
             record(

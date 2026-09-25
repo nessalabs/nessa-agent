@@ -10,7 +10,7 @@ use crate::gateway::{
         GatewayError, GatewayReconciliationAttempt, GatewayReconciliationAudit,
         GatewayReconciliationEffect, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-        GatewayReconciliationRequest,
+        GatewayReconciliationRequest, MonotonicClock,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -40,11 +40,15 @@ const MAX_RECORD_BYTES: u64 = 256 * 1024;
 
 pub(in crate::gateway::infrastructure) struct FileReconciliationAudit {
     config_root: Option<PathBuf>,
+    clock: Arc<dyn MonotonicClock>,
 }
 
 impl FileReconciliationAudit {
-    pub(in crate::gateway::infrastructure) fn new(config_root: Option<PathBuf>) -> Self {
-        Self { config_root }
+    pub(in crate::gateway::infrastructure) fn new(
+        config_root: Option<PathBuf>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        Self { config_root, clock }
     }
 
     fn open_directory(&self) -> Result<PrivateDirectory, GatewayError> {
@@ -70,6 +74,7 @@ struct FileJournalSession {
     state: Mutex<SessionState>,
     advanced: Condvar,
     deadline: Option<Instant>,
+    clock: Arc<dyn MonotonicClock>,
 }
 
 struct SessionState {
@@ -571,17 +576,18 @@ fn record_kind(kind: &str) -> Option<LifecycleRecordKind> {
 fn acquire_lock(
     directory: &PrivateDirectory,
     deadline: Option<Instant>,
+    clock: &dyn MonotonicClock,
 ) -> Result<File, GatewayError> {
     let file = directory
         .open_file(OsStr::new(LOCK_FILE), OpenMode::OpenOrCreate)
         .map_err(|error| GatewayError::Registration(error.to_string()))?;
-    let deadline = deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(120));
+    let deadline = deadline.unwrap_or_else(|| clock.now() + Duration::from_secs(120));
     loop {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(file);
         }
         let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock || Instant::now() >= deadline {
+        if error.kind() != io::ErrorKind::WouldBlock || clock.now() >= deadline {
             return Err(GatewayError::Registration(format!(
                 "Cannot acquire gateway lifecycle journal lock: {error}"
             )));
@@ -725,7 +731,7 @@ impl FileJournalSession {
     fn check_deadline(&self) -> Result<(), GatewayError> {
         if self
             .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
+            .is_some_and(|deadline| self.clock.now() >= deadline)
         {
             Err(GatewayError::Registration(
                 "Gateway lifecycle journal deadline passed".into(),
@@ -830,7 +836,7 @@ impl FileJournalSession {
     fn namespace(&self) -> Result<String, GatewayError> {
         let wait = match self.deadline {
             Some(deadline) => deadline
-                .checked_duration_since(Instant::now())
+                .checked_duration_since(self.clock.now())
                 .ok_or_else(|| {
                     GatewayError::Registration("Gateway lifecycle journal deadline passed".into())
                 })?,
@@ -869,9 +875,9 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
         deadline: Option<Instant>,
     ) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError> {
         let directory = self.open_directory()?;
-        let lock = acquire_lock(&directory, deadline)?;
+        let lock = acquire_lock(&directory, deadline, self.clock.as_ref())?;
         let records = load_records(&directory)?;
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if deadline.is_some_and(|deadline| self.clock.now() >= deadline) {
             return Err(GatewayError::Registration(
                 "Gateway lifecycle journal deadline passed during recovery".into(),
             ));
@@ -900,6 +906,7 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
             }),
             advanced: Condvar::new(),
             deadline,
+            clock: self.clock.clone(),
         }))
     }
 }

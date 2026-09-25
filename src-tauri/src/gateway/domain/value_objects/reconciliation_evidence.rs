@@ -514,14 +514,6 @@ impl ReconciliationValidationFacts {
     }
 
     #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn history_complete(&self) -> bool {
-        self.history_complete
-    }
-
-    #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
@@ -535,14 +527,6 @@ impl ReconciliationValidationFacts {
     )]
     pub fn runtime_identity(&self) -> ReconciliationRuntimeIdentity {
         self.runtime_identity
-    }
-
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn physical_report_agrees(&self) -> bool {
-        self.physical_report_agrees
     }
 
     #[cfg_attr(
@@ -760,14 +744,6 @@ impl ReconciliationOutcomeRecord {
             cleanup,
             disposition,
         }
-    }
-
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn physical(&self) -> &ReconciliationPhysicalRecord {
-        &self.physical
     }
 
     pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {

@@ -13,4 +13,4 @@ pub use ports::{
     GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
     LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway, SystemMonotonicClock,
 };
-pub use service::Gateway;
+pub use service::{Gateway, GatewayRuntimeDependencies};

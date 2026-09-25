@@ -109,10 +109,6 @@ impl GatewayStopRequest {
         }
     }
 
-    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
-        &self.attempt
-    }
-
     pub fn intended(&self) -> &ReconciledGateway {
         &self.intended
     }
@@ -739,14 +735,6 @@ impl GatewayReconciliationOutcome {
     }
 
     #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
-        self.intent.attempt()
-    }
-
-    #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
@@ -775,27 +763,11 @@ impl GatewayReconciliationOutcome {
     }
 
     #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn physical(&self) -> &ReconciliationPhysicalRecord {
-        self.record.physical()
-    }
-
-    #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {
         self.record.reported_history()
-    }
-
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn validation(&self) -> &ReconciliationValidationFacts {
-        self.record.validation()
     }
 
     pub fn effect(&self) -> &GatewayReconciliationEffect {

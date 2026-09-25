@@ -53,7 +53,7 @@ use crate::attachments::{
 use crate::gateway::domain::value_objects::ServiceConfiguration;
 use crate::gateway::{
     self,
-    application::{Gateway, SystemMonotonicClock},
+    application::{Gateway, GatewayRuntimeDependencies, SystemMonotonicClock},
 };
 use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
 use crate::local_data;
@@ -198,15 +198,18 @@ impl HostDependencies {
             None
         } else {
             let runtime = app.path().resource_dir()?.join("runtime");
+            let clock = Arc::new(SystemMonotonicClock);
             let reconciliation_audit =
-                gateway::infrastructure::reconciliation_audit(config_root.clone());
-            Some(Arc::new(Gateway::bootstrap_with_clock(
-                gateway::infrastructure::current(service_configuration.clone(), home),
-                gateway::infrastructure::login_shell_path(),
-                gateway::infrastructure::startup_events(app),
-                gateway::infrastructure::reconciliation_ids(),
-                reconciliation_audit,
-                Arc::new(SystemMonotonicClock),
+                gateway::infrastructure::reconciliation_audit(config_root.clone(), clock.clone());
+            Some(Arc::new(Gateway::bootstrap_with_dependencies(
+                GatewayRuntimeDependencies::new(
+                    gateway::infrastructure::current(service_configuration.clone(), home),
+                    gateway::infrastructure::login_shell_path(),
+                    gateway::infrastructure::startup_events(app),
+                    gateway::infrastructure::reconciliation_ids(),
+                    reconciliation_audit,
+                    clock,
+                ),
                 runtime,
                 stage.clone(),
             )))
