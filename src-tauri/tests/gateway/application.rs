@@ -1231,13 +1231,14 @@ fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
         gateway.startup().unwrap().phase(),
         &GatewayStartupPhase::Ready
     );
+    assert_eq!(audit.intents.lock().unwrap().len(), 1);
+    assert!(audit.joined.lock().unwrap().is_empty());
     gateway
         .stop_agents(Instant::now() + Duration::from_secs(30))
         .unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["active-owner"]);
-    assert_eq!(audit.intents.lock().unwrap().len(), 1);
+    assert_eq!(audit.intents.lock().unwrap().len(), 2);
     assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
-    assert!(audit.joined.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -2985,7 +2986,10 @@ fn retained_cleanup_identity_tracks_native_and_audit_facts_separately() {
     tauri::async_runtime::block_on(gateway.start()).unwrap();
     assert!(matches!(
         tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)),
-        Err(GatewayError::Audit { physical: None, .. })
+        Err(GatewayError::Audit {
+            physical: Some(GatewayPhysicalResult::Succeeded),
+            ..
+        })
     ));
     gateway
         .stop_agents(Instant::now() + Duration::from_secs(30))
