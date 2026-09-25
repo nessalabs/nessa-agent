@@ -68,7 +68,7 @@ chmod 700 \
   "$RUN_DIR/systemd" \
   "$RUN_DIR/systemd/user"
 
-dbus-run-session -- bash -euo pipefail <<'INNER'
+unset DBUS_SESSION_BUS_ADDRESS
 manager_log="$XDG_RUNTIME_DIR/systemd-manager.log"
 bus_error="$XDG_RUNTIME_DIR/systemd-bus-error.log"
 SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console \
@@ -88,7 +88,7 @@ print_manager_diagnostics() {
   fi
 }
 
-ready=false
+private_ready=false
 for _ in $(seq 1 240); do
   if ! kill -0 "$manager_pid" 2>/dev/null; then
     set +e
@@ -100,16 +100,34 @@ for _ in $(seq 1 240); do
     print_manager_diagnostics
     exit 1
   fi
-  if [ -S "$XDG_RUNTIME_DIR/systemd/private" ] && \
-    busctl --address="$DBUS_SESSION_BUS_ADDRESS" \
-      status org.freedesktop.systemd1 >/dev/null 2>"$bus_error"; then
-    ready=true
+  if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then
+    private_ready=true
     break
   fi
   sleep 0.05
 done
-if [ "$ready" != true ]; then
-  echo "disposable systemd user manager did not acquire its D-Bus name" >&2
+if [ "$private_ready" != true ]; then
+  echo "disposable systemd user manager did not create its private API socket" >&2
+  print_manager_diagnostics
+  exit 1
+fi
+if ! systemctl --user start dbus.socket 2>"$bus_error"; then
+  echo "disposable systemd user manager could not start its user bus" >&2
+  print_manager_diagnostics
+  exit 1
+fi
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+bus_ready=false
+for _ in $(seq 1 240); do
+  if busctl --address="$DBUS_SESSION_BUS_ADDRESS" \
+    status org.freedesktop.systemd1 >/dev/null 2>"$bus_error"; then
+    bus_ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [ "$bus_ready" != true ]; then
+  echo "disposable systemd user bus did not expose the manager name" >&2
   print_manager_diagnostics
   exit 1
 fi
@@ -121,5 +139,4 @@ cargo test -p nessa-app --no-default-features \
   gateway::infrastructure::linux::reconciliation::tests::native_user_manager_is_required_for_the_linux_acceptance_gate \
   -- --ignored --exact
 echo "disposable systemd gateway lifecycle completed"
-INNER
 DELEGATED

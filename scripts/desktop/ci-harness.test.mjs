@@ -98,6 +98,13 @@ test("the disposable user manager proves the same session bus and cleans its exa
   assert.match(script, /export SYSTEMD_GENERATOR_PATH="\$RUN_DIR\/empty-generators"/)
   assert.match(script, /export SYSTEMD_UNIT_PATH="\$RUN_DIR\/systemd\/user:/)
   assert.match(script, /systemd --user --unit=basic\.target/)
+  assert.match(script, /unset DBUS_SESSION_BUS_ADDRESS/)
+  assert.match(script, /systemctl --user start dbus\.socket/)
+  assert.match(
+    script,
+    /export DBUS_SESSION_BUS_ADDRESS="unix:path=\$XDG_RUNTIME_DIR\/bus"/,
+  )
+  assert.doesNotMatch(script, /dbus-run-session/)
   assert.match(script, /disposable systemd user manager ready at/)
   assert.match(script, /disposable systemd gateway lifecycle completed/)
   assert.match(script, /SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console/)
@@ -117,7 +124,7 @@ test("the disposable user manager proves the same session bus and cleans its exa
   assert.doesNotMatch(script, /chmod -R|find .* -delete/)
   assert.match(script, /primary_status=\$\?/)
   assert.match(script, /if \[ "\$primary_status" -eq 0 \]/)
-  assert.equal(script.match(/print_manager_diagnostics/g)?.length, 3)
+  assert.equal(script.match(/print_manager_diagnostics/g)?.length, 5)
 })
 
 test("the frontend job owns top-level script tests and their just dependency", () => {
