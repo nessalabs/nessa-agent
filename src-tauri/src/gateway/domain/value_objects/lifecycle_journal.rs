@@ -20,6 +20,7 @@ use super::{
     ReconciliationEvidence, ReconciliationIncarnation, ReconciliationInitiator,
     ReconciliationTarget, SystemdEvidenceError, SystemdJobAttempt, SystemdJobMode,
     SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName,
+    SystemdUnitState,
 };
 use std::{
     collections::BTreeMap,
@@ -104,6 +105,13 @@ pub enum LifecycleEffect {
         service: String,
     },
     PublishServiceDefinition {
+        target: ReconciliationTarget,
+    },
+    PublishSystemdServiceDefinition {
+        target: ReconciliationTarget,
+        definition_digest: String,
+    },
+    CreateGatewayDataDirectory {
         target: ReconciliationTarget,
     },
     ReloadSystemdManager {
@@ -218,6 +226,7 @@ pub struct LifecycleObservation {
     incarnation: Option<ReconciliationIncarnation>,
     target_artifact_present: bool,
     systemd: Option<Box<SystemdRuntimeObservation>>,
+    systemd_state: Option<SystemdUnitState>,
 }
 
 impl LifecycleObservation {
@@ -231,7 +240,25 @@ impl LifecycleObservation {
             incarnation,
             target_artifact_present,
             systemd: None,
+            systemd_state: None,
         }
+    }
+
+    pub fn with_systemd_state(
+        version: u64,
+        target_artifact_present: bool,
+        state: SystemdUnitState,
+    ) -> Result<Self, SystemdEvidenceError> {
+        if state == SystemdUnitState::Active {
+            return Err(SystemdEvidenceError::ContradictoryRuntime);
+        }
+        Ok(Self {
+            version,
+            incarnation: None,
+            target_artifact_present,
+            systemd: None,
+            systemd_state: Some(state),
+        })
     }
 
     pub fn with_systemd(
@@ -250,6 +277,7 @@ impl LifecycleObservation {
             incarnation: Some(incarnation),
             target_artifact_present,
             systemd: Some(Box::new(systemd)),
+            systemd_state: Some(SystemdUnitState::Active),
         })
     }
 
@@ -267,6 +295,10 @@ impl LifecycleObservation {
 
     pub fn systemd(&self) -> Option<&SystemdRuntimeObservation> {
         self.systemd.as_deref()
+    }
+
+    pub fn systemd_state(&self) -> Option<SystemdUnitState> {
+        self.systemd_state
     }
 }
 
@@ -835,10 +867,15 @@ fn validate_primary_effect(
         | LifecycleEffect::StopAgents { incarnation } => expected_before == Some(incarnation),
         LifecycleEffect::UnloadService { service } => service == namespace,
         LifecycleEffect::PublishServiceDefinition { target: planned }
+        | LifecycleEffect::CreateGatewayDataDirectory { target: planned }
         | LifecycleEffect::CreateSystemdWantsDirectory { target: planned }
         | LifecycleEffect::PublishSystemdWantsLink { target: planned }
         | LifecycleEffect::BootstrapService { target: planned }
         | LifecycleEffect::AdoptReadyIncarnation { target: planned } => planned == target,
+        LifecycleEffect::PublishSystemdServiceDefinition {
+            target: planned,
+            definition_digest,
+        } => planned == target && valid_digest(definition_digest),
         LifecycleEffect::ReloadSystemdManager { unit, .. }
         | LifecycleEffect::StartSystemdUnit { unit, .. }
         | LifecycleEffect::StopSystemdUnit { unit, .. } => unit.as_str() == target.service(),
@@ -847,6 +884,13 @@ fn validate_primary_effect(
     agrees
         .then_some(())
         .ok_or(LifecycleJournalError::TargetMismatch)
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn native_attempt_matches(

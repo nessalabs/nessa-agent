@@ -199,8 +199,11 @@ impl HostDependencies {
         } else {
             let runtime = app.path().resource_dir()?.join("runtime");
             let clock = Arc::new(SystemMonotonicClock);
-            let reconciliation_audit =
-                gateway::infrastructure::reconciliation_audit(config_root.clone(), clock.clone());
+            let reconciliation_audit = gateway::infrastructure::reconciliation_audit(
+                config_root.clone(),
+                home.clone(),
+                clock.clone(),
+            );
             Some(Arc::new(Gateway::bootstrap_with_dependencies(
                 GatewayRuntimeDependencies::new(
                     gateway::infrastructure::current(

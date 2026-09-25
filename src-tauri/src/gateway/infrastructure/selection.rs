@@ -56,15 +56,29 @@ pub fn reconciliation_ids() -> Arc<dyn GatewayReconciliationIds> {
 
 pub fn reconciliation_audit(
     config_root: Option<PathBuf>,
+    home: PathBuf,
     clock: Arc<dyn MonotonicClock>,
 ) -> Arc<dyn GatewayReconciliationAudit> {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
+        let _ = home;
         Arc::new(FileReconciliationAudit::new(config_root, clock))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = config_root;
+        let state = std::env::var_os("XDG_STATE_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/state"));
+        Arc::new(FileReconciliationAudit::new(
+            Some(state.join("nessa")),
+            clock,
+        ))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (config_root, clock);
+        let _ = (config_root, home, clock);
         Arc::new(UnsupportedAudit)
     }
 }

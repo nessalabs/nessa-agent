@@ -27,4 +27,7 @@ mod systemd;
 pub use systemd::{
     SystemdEvidenceError, SystemdInvocationId, SystemdJobAttempt, SystemdJobMode,
     SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName,
+    SystemdUnitState,
 };
+#[cfg(target_os = "linux")]
+pub use systemd::{SystemdJobConclusion, SystemdJobTerminal};

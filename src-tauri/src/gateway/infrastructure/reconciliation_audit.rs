@@ -21,7 +21,7 @@ use crate::gateway::{
         ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
         ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget,
         SystemdJobAttempt, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
-        SystemdRuntimeObservation, SystemdUnitName,
+        SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
@@ -423,13 +423,26 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 _ => LifecycleEffect::AdoptReadyIncarnation { target },
             })
         }
-        "create_systemd_wants_directory" | "publish_systemd_wants_link" => {
+        "publish_systemd_service_definition" => {
+            object_exact(object, &["kind", "target", "definitionDigest"])?;
+            Ok(LifecycleEffect::PublishSystemdServiceDefinition {
+                target: parse_target(&object["target"])?,
+                definition_digest: string(object, "definitionDigest")?,
+            })
+        }
+        "create_gateway_data_directory"
+        | "create_systemd_wants_directory"
+        | "publish_systemd_wants_link" => {
             object_exact(object, &["kind", "target"])?;
             let target = parse_target(&object["target"])?;
-            Ok(if kind == "create_systemd_wants_directory" {
-                LifecycleEffect::CreateSystemdWantsDirectory { target }
-            } else {
-                LifecycleEffect::PublishSystemdWantsLink { target }
+            Ok(match kind.as_str() {
+                "create_gateway_data_directory" => {
+                    LifecycleEffect::CreateGatewayDataDirectory { target }
+                }
+                "create_systemd_wants_directory" => {
+                    LifecycleEffect::CreateSystemdWantsDirectory { target }
+                }
+                _ => LifecycleEffect::PublishSystemdWantsLink { target },
             })
         }
         "reload_systemd_manager" | "start_systemd_unit" | "stop_systemd_unit" => {
@@ -597,7 +610,13 @@ fn parse_command_result(value: &Value) -> Result<LifecycleCommandResult, Gateway
 fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError> {
     let value = object(
         value,
-        &["version", "incarnation", "targetArtifactPresent", "systemd"],
+        &[
+            "version",
+            "incarnation",
+            "targetArtifactPresent",
+            "systemd",
+            "systemdState",
+        ],
     )?;
     let version = value["version"]
         .as_u64()
@@ -606,8 +625,28 @@ fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError
         .as_bool()
         .ok_or_else(|| invalid_record("invalid target artifact fact"))?;
     let incarnation = optional_identity(&value["incarnation"])?;
+    let systemd_state = if value["systemdState"].is_null() {
+        None
+    } else {
+        Some(
+            SystemdUnitState::parse(&string(value, "systemdState")?)
+                .map_err(|error| invalid_record(&error.to_string()))?,
+        )
+    };
     if value["systemd"].is_null() {
-        return Ok(LifecycleObservation::new(version, incarnation, artifact));
+        return match systemd_state {
+            Some(state) => LifecycleObservation::with_systemd_state(version, artifact, state)
+                .map_err(|error| invalid_record(&error.to_string())),
+            None if incarnation.is_none() => Ok(LifecycleObservation::new(version, None, artifact)),
+            None => Err(invalid_record(
+                "portable observation has no native platform evidence",
+            )),
+        };
+    }
+    if systemd_state != Some(SystemdUnitState::Active) {
+        return Err(invalid_record(
+            "active systemd runtime disagrees with its physical state",
+        ));
     }
     let incarnation = incarnation
         .ok_or_else(|| invalid_record("systemd observation has no portable incarnation"))?;
@@ -1623,6 +1662,17 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         LifecycleEffect::PublishServiceDefinition { target } => {
             json!({"kind":"publish_service_definition", "target":self::target(target)})
         }
+        LifecycleEffect::PublishSystemdServiceDefinition {
+            target,
+            definition_digest,
+        } => json!({
+            "kind":"publish_systemd_service_definition",
+            "target":self::target(target),
+            "definitionDigest":definition_digest,
+        }),
+        LifecycleEffect::CreateGatewayDataDirectory { target } => {
+            json!({"kind":"create_gateway_data_directory", "target":self::target(target)})
+        }
         LifecycleEffect::ReloadSystemdManager { manager, unit } => json!({
             "kind":"reload_systemd_manager",
             "manager":systemd_manager(manager),
@@ -1734,6 +1784,7 @@ fn observation(state: &LifecycleObservation) -> Value {
         "incarnation":state.incarnation().map(identity),
         "targetArtifactPresent":state.target_artifact_present(),
         "systemd":state.systemd().map(systemd_runtime),
+        "systemdState":state.systemd_state().map(SystemdUnitState::as_str),
     })
 }
 
@@ -1870,6 +1921,7 @@ mod tests {
             "incarnation":null,
             "targetArtifactPresent":false,
             "systemd":null,
+            "systemdState":null,
         });
         let payload = match kind {
             LifecycleRecordKind::Intent => json!({
@@ -1959,6 +2011,21 @@ mod tests {
             parse_systemd_runtime(&systemd_runtime(&runtime)).unwrap(),
             runtime
         );
+
+        for state in [
+            SystemdUnitState::Absent,
+            SystemdUnitState::Inactive,
+            SystemdUnitState::Activating,
+            SystemdUnitState::Deactivating,
+            SystemdUnitState::Failed,
+            SystemdUnitState::Unknown,
+        ] {
+            let observed = LifecycleObservation::with_systemd_state(1, false, state).unwrap();
+            assert_eq!(
+                parse_observation(&observation(&observed)).unwrap(),
+                observed
+            );
+        }
     }
 
     #[test]

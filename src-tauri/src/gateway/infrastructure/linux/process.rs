@@ -7,6 +7,11 @@ use crate::gateway::{
 };
 use std::os::fd::{FromRawFd, OwnedFd};
 
+pub(super) struct LinuxProcessHandle {
+    pidfd: OwnedFd,
+    process_id: u32,
+}
+
 pub(super) struct LinuxSignalAuthority {
     token: GatewayStopProofToken,
     pidfd: OwnedFd,
@@ -28,7 +33,8 @@ pub(super) fn verify_pidfd_support() -> Result<(), String> {
 }
 
 impl LinuxSignalAuthority {
-    pub fn open(
+    pub fn corroborate(
+        handle: LinuxProcessHandle,
         token: GatewayStopProofToken,
         native: SystemdRuntimeObservation,
         portable: ReconciliationIncarnation,
@@ -36,22 +42,21 @@ impl LinuxSignalAuthority {
     ) -> Result<Self, GatewayError> {
         if native.target() != portable.target()
             || native.main_process_id() != portable.process_id()
+            || handle.process_id != portable.process_id()
             || observation_version == 0
         {
             return Err(GatewayError::Stop(
                 "Linux signal proof disagrees with the portable gateway incarnation".into(),
             ));
         }
-        let descriptor = pidfd_open(native.main_process_id());
-        if descriptor < 0 {
-            return Err(GatewayError::Stop(format!(
-                "The gateway process cannot be held for exact signal delivery: {}",
-                std::io::Error::last_os_error()
-            )));
+        if !handle.is_live() {
+            return Err(GatewayError::Stop(
+                "The gateway process exited during exact signal proof".into(),
+            ));
         }
         Ok(Self {
             token,
-            pidfd: unsafe { OwnedFd::from_raw_fd(descriptor as i32) },
+            pidfd: handle.pidfd,
             native,
             portable,
             observation_version,
@@ -95,6 +100,26 @@ impl LinuxSignalAuthority {
                 LifecycleCommandResult::Failed(error.to_string())
             }
         })
+    }
+}
+
+impl LinuxProcessHandle {
+    pub fn open(process_id: u32) -> Result<Self, GatewayError> {
+        let descriptor = pidfd_open(process_id);
+        if descriptor < 0 {
+            return Err(GatewayError::Stop(format!(
+                "The gateway process cannot be held for exact signal delivery: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(Self {
+            pidfd: unsafe { OwnedFd::from_raw_fd(descriptor as i32) },
+            process_id,
+        })
+    }
+
+    pub fn is_live(&self) -> bool {
+        pidfd_send_signal(std::os::fd::AsRawFd::as_raw_fd(&self.pidfd), 0) == 0
     }
 }
 

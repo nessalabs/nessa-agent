@@ -619,6 +619,19 @@ pub trait GatewayReconciliationProgress: Send + Sync {
         ))
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn systemd_state_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        target_artifact_present: bool,
+        state: crate::gateway::domain::value_objects::SystemdUnitState,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let _ = (source, target_artifact_present, state);
+        Err(GatewayError::Registration(
+            "This gateway progress port cannot record systemd state evidence".into(),
+        ))
+    }
+
     /// Retry the exact observation whose publication may have succeeded before
     /// acknowledgement. Returns `None` when no observation is pending.
     fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {

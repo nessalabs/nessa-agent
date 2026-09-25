@@ -102,6 +102,90 @@ pub enum SystemdJobMode {
     Fail,
 }
 
+/// Closed physical state of the named unit at one fresh observation boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemdUnitState {
+    Absent,
+    Inactive,
+    Activating,
+    Active,
+    Deactivating,
+    Failed,
+    Unknown,
+}
+
+impl SystemdUnitState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Inactive => "inactive",
+            Self::Activating => "activating",
+            Self::Active => "active",
+            Self::Deactivating => "deactivating",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, SystemdEvidenceError> {
+        match value {
+            "absent" => Ok(Self::Absent),
+            "inactive" => Ok(Self::Inactive),
+            "activating" => Ok(Self::Activating),
+            "active" => Ok(Self::Active),
+            "deactivating" => Ok(Self::Deactivating),
+            "failed" => Ok(Self::Failed),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(SystemdEvidenceError::ContradictoryRuntime),
+        }
+    }
+}
+
+/// Terminal `JobRemoved` evidence emitted by one systemd manager.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemdJobTerminal {
+    manager: SystemdManagerIdentity,
+    object_path: String,
+    job_id: u32,
+    unit: SystemdUnitName,
+    result: String,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl SystemdJobTerminal {
+    pub fn new(
+        manager: SystemdManagerIdentity,
+        object_path: String,
+        job_id: u32,
+        unit: SystemdUnitName,
+        result: String,
+    ) -> Result<Self, SystemdEvidenceError> {
+        let derived = object_path
+            .strip_prefix("/org/freedesktop/systemd1/job/")
+            .and_then(|value| value.parse::<u32>().ok());
+        if job_id == 0 || derived != Some(job_id) || result.trim().is_empty() {
+            return Err(SystemdEvidenceError::InvalidJob);
+        }
+        Ok(Self {
+            manager,
+            object_path,
+            job_id,
+            unit,
+            result,
+        })
+    }
+}
+
+/// Domain classification of a terminal against both its plan and returned attempt.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SystemdJobConclusion {
+    Accepted,
+    Rejected(String),
+    Indeterminate(String),
+}
+
 impl SystemdJobMode {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -184,6 +268,38 @@ impl SystemdJobAttempt {
             && self.object_path == object_path
             && self.job_id == job_id
             && self.unit == *unit
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn classify_terminal(
+        &self,
+        planned_manager: &SystemdManagerIdentity,
+        planned_operation: SystemdJobOperation,
+        planned_mode: SystemdJobMode,
+        planned_unit: &SystemdUnitName,
+        terminal: &SystemdJobTerminal,
+    ) -> SystemdJobConclusion {
+        if self.manager != *planned_manager
+            || self.operation != planned_operation
+            || self.mode != planned_mode
+            || self.unit != *planned_unit
+            || self.manager != terminal.manager
+            || self.object_path != terminal.object_path
+            || self.job_id != terminal.job_id
+            || self.unit != terminal.unit
+        {
+            return SystemdJobConclusion::Indeterminate(
+                "systemd terminal evidence disagrees with its plan or returned attempt".into(),
+            );
+        }
+        if terminal.result == "done" {
+            SystemdJobConclusion::Accepted
+        } else {
+            SystemdJobConclusion::Rejected(format!(
+                "job {} at {} completed with {}",
+                terminal.job_id, terminal.object_path, terminal.result
+            ))
+        }
     }
 }
 
@@ -324,6 +440,66 @@ mod tests {
             7,
         )
         .is_err());
+    }
+
+    #[test]
+    fn terminal_classification_requires_the_plan_attempt_and_signal_to_agree() {
+        let unit = SystemdUnitName::parse("nessa-prod.service".into()).unwrap();
+        let attempt = SystemdJobAttempt::new(
+            manager(),
+            SystemdJobOperation::Start,
+            SystemdJobMode::Fail,
+            unit.clone(),
+            "/org/freedesktop/systemd1/job/7".into(),
+            7,
+        )
+        .unwrap();
+        let exact = SystemdJobTerminal::new(
+            manager(),
+            "/org/freedesktop/systemd1/job/7".into(),
+            7,
+            unit.clone(),
+            "done".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            attempt.classify_terminal(
+                &manager(),
+                SystemdJobOperation::Start,
+                SystemdJobMode::Fail,
+                &unit,
+                &exact,
+            ),
+            SystemdJobConclusion::Accepted
+        );
+        assert!(matches!(
+            attempt.classify_terminal(
+                &manager(),
+                SystemdJobOperation::Stop,
+                SystemdJobMode::Fail,
+                &unit,
+                &exact,
+            ),
+            SystemdJobConclusion::Indeterminate(_)
+        ));
+        let other = SystemdJobTerminal::new(
+            manager(),
+            "/org/freedesktop/systemd1/job/8".into(),
+            8,
+            unit.clone(),
+            "done".into(),
+        )
+        .unwrap();
+        assert!(matches!(
+            attempt.classify_terminal(
+                &manager(),
+                SystemdJobOperation::Start,
+                SystemdJobMode::Fail,
+                &unit,
+                &other,
+            ),
+            SystemdJobConclusion::Indeterminate(_)
+        ));
     }
 
     #[test]

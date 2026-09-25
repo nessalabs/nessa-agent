@@ -8,6 +8,7 @@ use std::{
 pub(super) struct LinuxGatewayPaths {
     pub config_root: PathBuf,
     pub data_root: PathBuf,
+    pub state_root: PathBuf,
     pub unit_root: PathBuf,
     pub unit_file: PathBuf,
     pub wants_directory: PathBuf,
@@ -20,6 +21,7 @@ impl LinuxGatewayPaths {
         home: &Path,
         config_home: Option<OsString>,
         data_home: Option<OsString>,
+        state_home: Option<OsString>,
         unit: &SystemdUnitName,
     ) -> Result<Self, String> {
         let home = normalized_absolute(home)
@@ -30,11 +32,13 @@ impl LinuxGatewayPaths {
             })?;
         let config = xdg_root(config_home, &home, ".config", "XDG_CONFIG_HOME")?;
         let data = xdg_root(data_home, &home, ".local/share", "XDG_DATA_HOME")?;
+        let state = xdg_root(state_home, &home, ".local/state", "XDG_STATE_HOME")?;
         let unit_root = config.join("systemd/user");
         let wants_directory = unit_root.join("default.target.wants");
         Ok(Self {
             config_root: config.clone(),
             data_root: data.clone(),
+            state_root: state.join("nessa/gateway").join(unit.as_str()),
             unit_file: unit_root.join(unit.as_str()),
             wants_link: wants_directory.join(unit.as_str()),
             runtime_root: data.join("nessa/gateway-runtimes").join(unit.as_str()),
@@ -79,6 +83,7 @@ mod tests {
             Path::new("/home/me"),
             Some("/cfg".into()),
             Some("/data".into()),
+            Some("/state".into()),
             &unit,
         )
         .unwrap();
@@ -94,6 +99,10 @@ mod tests {
             paths.runtime_root,
             Path::new("/data/nessa/gateway-runtimes/nessa-gateway-prod.service")
         );
+        assert_eq!(
+            paths.state_root,
+            Path::new("/state/nessa/gateway/nessa-gateway-prod.service")
+        );
     }
 
     #[test]
@@ -102,6 +111,7 @@ mod tests {
         assert!(LinuxGatewayPaths::new(
             Path::new("/home/me"),
             Some("relative".into()),
+            None,
             None,
             &unit,
         )

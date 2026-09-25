@@ -602,6 +602,42 @@ impl GatewayReconciliationProgress for StartupProgress {
         Ok(observation)
     }
 
+    fn systemd_state_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        target_artifact_present: bool,
+        systemd_state: crate::gateway::domain::value_objects::SystemdUnitState,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let observation = {
+            let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+            if state.pending_observation.is_some() {
+                return Err(GatewayError::Registration(
+                    "A gateway lifecycle observation still awaits exact acknowledgement".into(),
+                ));
+            }
+            state.observation_version = state.observation_version.saturating_add(1);
+            let observation = LifecycleObservation::with_systemd_state(
+                state.observation_version,
+                target_artifact_present,
+                systemd_state,
+            )
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            state.pending_observation = Some((source.clone(), observation.clone()));
+            observation
+        };
+        if let Err(error) = retry_delivery(|| self.journal.observation(source, &observation)) {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::Observation);
+            return Err(error);
+        }
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        Ok(observation)
+    }
+
     fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
         let pending = self
             .state
