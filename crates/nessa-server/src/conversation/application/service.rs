@@ -2857,11 +2857,14 @@ enum AskFailure {
 /// record: only what [`ConversationRepository`]'s contract lets that call
 /// answer. Every other error — one a substituted repository returns
 /// included — is [`Self::Metadata`], so none there can be answered as a
-/// deletion or taken for a reason to wait. Past the fence, a repository's
-/// error is kept whole inside [`DeletionFailures`], and only its own
-/// fields decide a wait ([`waiting_for`])
+/// deletion or taken for a reason to wait
 /// (`a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`,
 /// `a_repository_error_in_a_background_try_is_never_a_reason_to_wait`).
+///
+/// Past the fence, a repository's error is kept whole inside
+/// [`DeletionFailures`], and only its own fields decide a wait
+/// ([`waiting_for`];
+/// `a_repository_error_past_the_fence_is_never_a_reason_to_wait`).
 #[derive(Debug)]
 enum RepositoryFailure {
     /// No record to delete.

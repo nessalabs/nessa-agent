@@ -1103,6 +1103,53 @@ async fn a_repository_error_in_a_background_try_is_never_a_reason_to_wait() {
 }
 
 #[tokio::test]
+async fn a_repository_error_past_the_fence_is_never_a_reason_to_wait() {
+    // Past the fence a delete writes its tombstone three more times: what it
+    // read of the history, what the agent settled, and that it is erased.
+    // Whatever the repository answers to any of them is kept whole as the
+    // tombstone's failure, and only `DeletionFailures`' own fields decide a
+    // wait — even an error shaped like one.
+    for faulted in 1..=3 {
+        for waiting in [
+            DeletionFailures {
+                no_agent_slot: true,
+                ..DeletionFailures::default()
+            },
+            DeletionFailures {
+                history_held: true,
+                ..DeletionFailures::default()
+            },
+        ] {
+            let fixture = deleting();
+            let id = talked_in(&fixture).await;
+            fixture.service.shutdown().await.unwrap();
+            let repository = Faulty::over(fixture.repository.clone());
+            let service = service_with(&fixture, repository.clone(), fixture.storage.clone());
+            // The fence's own write and those before the faulted one pass.
+            repository
+                .writes
+                .lock()
+                .unwrap()
+                .extend((0..faulted).map(|_| None).chain([Some(Fault::Fail(
+                    ConversationError::DeletionIncomplete(Box::new(waiting)),
+                ))]));
+            let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+            assert!(repository.writes.lock().unwrap().is_empty());
+            assert!(
+                matches!(
+                    &failures.tombstone,
+                    Some(ConversationError::DeletionIncomplete(_))
+                ),
+                "write {faulted} past the fence: {failures:?}"
+            );
+            assert!(!failures.no_agent_slot && !failures.history_held);
+            assert_eq!(service.inner.retries.waiting_for(&id), None);
+            service.shutdown().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_delete_whose_predecessor_never_fenced_fences_it_itself() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
