@@ -1193,6 +1193,8 @@ fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
             Ok(correlation(1)),
             Ok(correlation(2)),
             Err(GatewayError::Registration("join id unavailable".into())),
+            Ok(correlation(4)),
+            Ok(correlation(5)),
         ]))),
         audit.clone(),
         "/runtime".into(),
@@ -1321,10 +1323,11 @@ fn failed_intent_delivery_is_terminally_audited_and_cannot_be_replaced() {
             gateway.startup().unwrap().phase(),
             GatewayStartupPhase::Failed(_)
         ));
-        gateway
-            .stop_agents(Instant::now() + Duration::from_secs(30))
-            .unwrap();
-        assert_eq!(*host.0.lock().unwrap(), ["ignored-intent-failure"]);
+        assert!(matches!(
+            gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+            Err(GatewayError::Audit { physical: None, .. })
+        ));
+        assert!(host.0.lock().unwrap().is_empty());
     }
 }
 
@@ -1700,7 +1703,10 @@ fn panicking_outcome_audit_is_reported_without_losing_confirmed_stop_identity() 
 
     assert!(matches!(
         tauri::async_runtime::block_on(gateway.start()),
-        Err(GatewayError::Audit { physical: None, .. })
+        Err(GatewayError::Audit {
+            physical: Some(GatewayPhysicalResult::Succeeded),
+            ..
+        })
     ));
     gateway
         .stop_agents(Instant::now() + Duration::from_secs(30))
@@ -2131,10 +2137,10 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
                 .unwrap();
         })
     };
-    assert!(
-        audit.wait_for_joined(1),
-        "credential did not join the unstarted successor"
-    );
+    assert!(matches!(
+        credential_result_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
 
     a_release_tx.send(()).unwrap();
     a_result_rx
@@ -2145,6 +2151,10 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
     successor_entered_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
+    assert!(
+        audit.wait_for_joined(1),
+        "credential join was not audited when the successor journal opened"
+    );
     assert!(matches!(
         successor_result_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
@@ -2813,7 +2823,7 @@ struct FailSecondAudit {
 impl TestAuditBehavior for FailSecondAudit {
     fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         let call = self.intent_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_intent && call >= 2 {
+        if self.fail_intent && matches!(call, 2 | 3) {
             Err(GatewayError::Registration(
                 "second intent audit failed".into(),
             ))
@@ -2824,7 +2834,7 @@ impl TestAuditBehavior for FailSecondAudit {
 
     fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
         let call = self.outcome_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        if !self.fail_intent && call >= 2 {
+        if !self.fail_intent && matches!(call, 2 | 3) {
             Err(GatewayError::Registration(
                 "second outcome audit failed".into(),
             ))

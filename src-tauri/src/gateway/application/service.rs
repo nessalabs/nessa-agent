@@ -525,6 +525,22 @@ fn retry_delivery<T>(
     }
 }
 
+fn deliver_before_stop_effect<T>(
+    deliver: impl FnMut() -> Result<T, GatewayError>,
+) -> Result<T, GatewayError> {
+    match catch_unwind(AssertUnwindSafe(|| retry_delivery(deliver))) {
+        Ok(Ok(receipt)) => Ok(receipt),
+        Ok(Err(error)) => Err(GatewayError::Audit {
+            audit: error.to_string(),
+            physical: None,
+        }),
+        Err(_) => Err(GatewayError::Audit {
+            audit: "gateway stop audit adapter panicked".into(),
+            physical: None,
+        }),
+    }
+}
+
 pub struct Gateway {
     host: Arc<dyn GatewayHost>,
     login_shell: Arc<dyn LoginShellPath>,
@@ -875,7 +891,7 @@ fn execute_stop_request(
         .clone()
         .open(&attempt, Some(session.request().deadline()))?;
     let intent = GatewayReconciliationIntent::new(attempt, target.clone(), Some(intended.clone()))?;
-    retry_delivery(|| journal.intent(&intent))?;
+    deliver_before_stop_effect(|| journal.intent(&intent))?;
     let primary = LifecyclePlanStep::new(
         "signal-agents".into(),
         LifecycleEffect::StopAgents {
@@ -884,7 +900,7 @@ fn execute_stop_request(
         LifecycleEffectPredicate::Always,
     )
     .map_err(|error| GatewayError::Stop(error.to_string()))?;
-    let plan = retry_delivery(|| {
+    let plan = deliver_before_stop_effect(|| {
         journal.effect_plan(
             "stop-agents-on-desktop-quit",
             Some(&intended),

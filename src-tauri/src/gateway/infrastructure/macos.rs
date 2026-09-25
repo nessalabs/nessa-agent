@@ -1569,7 +1569,7 @@ mod tests {
         let message = unreadable_process_identity();
         assert!(message.contains("preserved rather than risking a live gateway"));
         assert!(message.contains("Quit Nessa and open it again"));
-        assert!(message.contains("lifecycle journal"));
+        assert!(message.contains("lifecycle evidence"));
     }
 
     /// A service that gave up is loaded, has no process, and launchd will
