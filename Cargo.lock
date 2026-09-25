@@ -2822,8 +2822,11 @@ version = "0.1.0"
 name = "nessa-app"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "async-io",
  "base64 0.22.1",
  "block2",
+ "futures-lite",
  "getrandom 0.3.4",
  "gtk",
  "json-patch",

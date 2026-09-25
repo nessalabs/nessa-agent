@@ -33,10 +33,9 @@ use nessa_gateway_endpoint::{
 use serde::Deserialize;
 use std::{
     ffi::OsString,
-    fs::{self, OpenOptions},
+    fs,
     io::{ErrorKind, Read, Write},
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -1323,7 +1322,8 @@ fn retire(
     clock: &dyn MonotonicClock,
 ) -> Result<(), String> {
     let directory = data.join("gateway-upgrade");
-    nessa_local_storage::create_directory(&directory).map_err(|error| error.to_string())?;
+    nessa_local_storage::create_directory_beneath(data, Path::new("gateway-upgrade"))
+        .map_err(|error| error.to_string())?;
     let request_id = random_uuid()?;
     let request = serde_json::to_vec(&serde_json::json!({
         "requestId": request_id,
@@ -1333,7 +1333,7 @@ fn retire(
         "targetGeneration": target.service_generation(),
     }))
     .map_err(|error| error.to_string())?;
-    atomic_write(&directory.join("request.json"), &request)?;
+    atomic_write(&directory, Path::new("request.json"), &request)?;
     let sent = retirement_pidfd_signal(descriptor.as_raw_fd());
     if sent != 0 {
         return Err(std::io::Error::last_os_error().to_string());
@@ -1436,26 +1436,21 @@ fn retirement_acknowledged(
     Ok(true)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let directory = path
-        .parent()
-        .ok_or_else(|| "Retirement request has no directory".to_string())?;
-    let temporary = directory.join(format!(".nessa-retirement-{}", random_digest()?));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)
-            .map_err(|error| error.to_string())?;
-        file.write_all(bytes).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
-        nessa_local_storage::replace(&temporary, path).map_err(|error| error.to_string())?;
-        nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())
-    })();
-    let _ = fs::remove_file(&temporary);
-    result
+fn atomic_write(directory: &Path, destination: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut temporary = nessa_local_storage::PrivateTempFile::new_beneath(directory, Path::new(""))
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file_mut()
+        .write_all(bytes)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    temporary
+        .persist_beneath(destination)
+        .map_err(|error| error.to_string())?;
+    nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

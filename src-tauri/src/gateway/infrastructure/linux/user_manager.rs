@@ -5,19 +5,22 @@ use crate::gateway::{
         SystemdManagerIdentity, SystemdUnitName,
     },
 };
+use futures_lite::{future, StreamExt};
 use std::{
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 use zbus::{
-    blocking::{Connection, Proxy},
+    blocking::{connection::Builder as ConnectionBuilder, Connection, Proxy},
     zvariant::OwnedObjectPath,
+    Proxy as AsyncProxy,
 };
 
 const SYSTEMD_DESTINATION: &str = "org.freedesktop.systemd1";
 const SYSTEMD_PATH: &str = "/org/freedesktop/systemd1";
 const SYSTEMD_MANAGER: &str = "org.freedesktop.systemd1.Manager";
+const DBUS_METHOD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct UnitSnapshot {
@@ -63,6 +66,7 @@ pub(super) struct JobTerminal {
 pub(super) struct JobHandle {
     pub attempt: SystemdJobAttempt,
     terminal: mpsc::Receiver<Result<JobTerminal, String>>,
+    cancellation: async_channel::Sender<()>,
 }
 
 pub(super) struct UserManager {
@@ -72,7 +76,11 @@ pub(super) struct UserManager {
 
 impl UserManager {
     pub fn connect(expected_uid: u32) -> Result<Self, String> {
-        let connection = Connection::session().map_err(|error| error.to_string())?;
+        let connection = ConnectionBuilder::session()
+            .map_err(|error| error.to_string())?
+            .method_timeout(DBUS_METHOD_TIMEOUT)
+            .build()
+            .map_err(|error| error.to_string())?;
         let identity = manager_identity(&connection)?;
         if identity.user_id() != expected_uid {
             return Err("The systemd user-manager D-Bus owner has another UID".into());
@@ -209,100 +217,146 @@ impl UserManager {
         clock: &dyn MonotonicClock,
     ) -> Result<JobHandle, String> {
         self.recheck_identity()?;
-        let connection = self.connection.clone();
+        let connection = self.connection.inner().clone();
         let identity = self.identity.clone();
         let unit = unit.clone();
+        let (cancellation_sender, cancellation_receiver) = async_channel::bounded(1);
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
         let (attempt_sender, attempt_receiver) = mpsc::sync_channel(1);
         let (terminal_sender, terminal_receiver) = mpsc::sync_channel(1);
-        thread::spawn(move || {
-            let result = (|| -> Result<(), String> {
-                let proxy = manager_proxy(&connection, identity.unique_name())?;
-                let mut signals = proxy
-                    .receive_signal("JobRemoved")
+        thread::Builder::new()
+            .name("nessa-systemd-job".into())
+            .spawn(move || {
+                let result: Result<(), String> = async_io::block_on(async {
+                    let proxy = AsyncProxy::new(
+                        &connection,
+                        identity.unique_name(),
+                        SYSTEMD_PATH,
+                        SYSTEMD_MANAGER,
+                    )
+                    .await
                     .map_err(|error| error.to_string())?;
-                ready_sender
-                    .send(Ok(()))
-                    .map_err(|error| error.to_string())?;
-                let method = match operation {
-                    SystemdJobOperation::Start => "StartUnit",
-                    SystemdJobOperation::Stop => "StopUnit",
-                };
-                let path: OwnedObjectPath = proxy
-                    .call(method, &(unit.as_str(), SystemdJobMode::Fail.as_str()))
-                    .map_err(|error| error.to_string())?;
-                let path_string = path.to_string();
-                let job_id = path_string
-                    .strip_prefix("/org/freedesktop/systemd1/job/")
-                    .and_then(|value| value.parse().ok())
-                    .ok_or_else(|| {
-                        "The systemd job path has no canonical numeric ID".to_string()
-                    })?;
-                let attempt = SystemdJobAttempt::new(
-                    identity.clone(),
-                    operation,
-                    SystemdJobMode::Fail,
-                    unit.clone(),
-                    path_string,
-                    job_id,
-                )
-                .map_err(|error| error.to_string())?;
-                attempt_sender
-                    .send(Ok(attempt.clone()))
-                    .map_err(|error| error.to_string())?;
-                for message in &mut signals {
-                    let (signal_id, signal_path, signal_unit, result): (
-                        u32,
-                        OwnedObjectPath,
-                        String,
-                        String,
-                    ) = message
-                        .body()
-                        .deserialize()
+                    let mut signals = proxy
+                        .receive_signal("JobRemoved")
+                        .await
                         .map_err(|error| error.to_string())?;
-                    let parsed_unit =
-                        SystemdUnitName::parse(signal_unit).map_err(|error| error.to_string())?;
-                    if attempt.agrees_with_terminal(
-                        &identity,
-                        signal_path.as_str(),
-                        signal_id,
-                        &parsed_unit,
-                    ) {
-                        terminal_sender
-                            .send(Ok(JobTerminal {
-                                manager: identity.clone(),
-                                object_path: signal_path.to_string(),
-                                job_id: signal_id,
-                                unit: parsed_unit,
-                                result,
-                            }))
+                    ready_sender
+                        .send(Ok(()))
+                        .map_err(|error| error.to_string())?;
+                    let method = match operation {
+                        SystemdJobOperation::Start => "StartUnit",
+                        SystemdJobOperation::Stop => "StopUnit",
+                    };
+                    let path: OwnedObjectPath = proxy
+                        .call(method, &(unit.as_str(), SystemdJobMode::Fail.as_str()))
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let path_string = path.to_string();
+                    let job_id = path_string
+                        .strip_prefix("/org/freedesktop/systemd1/job/")
+                        .and_then(|value| value.parse().ok())
+                        .ok_or_else(|| {
+                            "The systemd job path has no canonical numeric ID".to_string()
+                        })?;
+                    let attempt = SystemdJobAttempt::new(
+                        identity.clone(),
+                        operation,
+                        SystemdJobMode::Fail,
+                        unit.clone(),
+                        path_string,
+                        job_id,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    attempt_sender
+                        .send(Ok(attempt.clone()))
+                        .map_err(|error| error.to_string())?;
+                    loop {
+                        enum SignalPoll {
+                            Message(Option<zbus::Message>),
+                            Cancelled,
+                        }
+                        let message = match future::race(
+                            async { SignalPoll::Message(signals.next().await) },
+                            async {
+                                let _ = cancellation_receiver.recv().await;
+                                SignalPoll::Cancelled
+                            },
+                        )
+                        .await
+                        {
+                            SignalPoll::Message(Some(message)) => message,
+                            SignalPoll::Message(None) => {
+                                return Err("The systemd job signal stream disconnected".into());
+                            }
+                            SignalPoll::Cancelled => return Ok(()),
+                        };
+                        let (signal_id, signal_path, signal_unit, result): (
+                            u32,
+                            OwnedObjectPath,
+                            String,
+                            String,
+                        ) = message
+                            .body()
+                            .deserialize()
                             .map_err(|error| error.to_string())?;
-                        return Ok(());
+                        let parsed_unit = SystemdUnitName::parse(signal_unit)
+                            .map_err(|error| error.to_string())?;
+                        if attempt.agrees_with_terminal(
+                            &identity,
+                            signal_path.as_str(),
+                            signal_id,
+                            &parsed_unit,
+                        ) {
+                            terminal_sender
+                                .send(Ok(JobTerminal {
+                                    manager: identity.clone(),
+                                    object_path: signal_path.to_string(),
+                                    job_id: signal_id,
+                                    unit: parsed_unit,
+                                    result,
+                                }))
+                                .map_err(|error| error.to_string())?;
+                            return Ok(());
+                        }
                     }
+                });
+                if let Err(error) = result {
+                    let _ = ready_sender.send(Err(error.clone()));
+                    let _ = attempt_sender.send(Err(error.clone()));
+                    let _ = terminal_sender.send(Err(error));
                 }
-                Err("The systemd job signal stream disconnected".into())
-            })();
-            if let Err(error) = result {
-                let _ = ready_sender.send(Err(error.clone()));
-                let _ = attempt_sender.send(Err(error.clone()));
-                let _ = terminal_sender.send(Err(error));
-            }
-        });
-        receive_until(
+            })
+            .map_err(|error| format!("The systemd job worker could not start: {error}"))?;
+        let ready = receive_until(
             &ready_receiver,
             clock,
             clock.now() + Duration::from_secs(5),
             "Timed out installing the systemd JobRemoved subscription",
-        )??;
+        );
+        match ready {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) | Err(error) => {
+                let _ = cancellation_sender.try_send(());
+                return Err(error);
+            }
+        }
         let attempt = receive_until(
             &attempt_receiver,
             clock,
             clock.now() + Duration::from_secs(30),
             "The systemd enqueue reply was lost or timed out",
-        )??;
+        );
+        let attempt = match attempt {
+            Ok(Ok(attempt)) => attempt,
+            Ok(Err(error)) | Err(error) => {
+                let _ = cancellation_sender.try_send(());
+                return Err(error);
+            }
+        };
         Ok(JobHandle {
             attempt,
             terminal: terminal_receiver,
+            cancellation: cancellation_sender,
         })
     }
 }
@@ -352,8 +406,18 @@ impl JobHandle {
     }
 }
 
+impl Drop for JobHandle {
+    fn drop(&mut self) {
+        let _ = self.cancellation.try_send(());
+    }
+}
+
 pub(super) fn verify_linger(expected_uid: u32) -> Result<(), String> {
-    let connection = Connection::system().map_err(|error| error.to_string())?;
+    let connection = ConnectionBuilder::system()
+        .map_err(|error| error.to_string())?
+        .method_timeout(DBUS_METHOD_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
     let manager = Proxy::new(
         &connection,
         "org.freedesktop.login1",
@@ -452,5 +516,28 @@ mod tests {
             Err("late".into())
         );
         assert!(clock.now() >= deadline);
+    }
+
+    #[test]
+    fn dropping_a_job_handle_cancels_its_signal_wait() {
+        let manager = SystemdManagerIdentity::new(":1.7".into(), 41, 1000).unwrap();
+        let unit = SystemdUnitName::parse("nessa-gateway.service".into()).unwrap();
+        let attempt = SystemdJobAttempt::new(
+            manager,
+            SystemdJobOperation::Start,
+            SystemdJobMode::Fail,
+            unit,
+            "/org/freedesktop/systemd1/job/9".into(),
+            9,
+        )
+        .unwrap();
+        let (_terminal_sender, terminal) = mpsc::channel();
+        let (cancellation, cancelled) = async_channel::bounded(1);
+        drop(JobHandle {
+            attempt,
+            terminal,
+            cancellation,
+        });
+        assert_eq!(cancelled.try_recv(), Ok(()));
     }
 }

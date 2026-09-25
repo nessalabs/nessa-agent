@@ -638,6 +638,28 @@ fn renameat_noreplace(
 }
 
 fn remove_exact_tree(path: &Path) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Err("Exact runtime cleanup requires Linux directory handles".into())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        remove_exact_tree_linux(path)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn remove_exact_tree_linux(path: &Path) -> Result<(), String> {
+    use std::{
+        ffi::{CStr, CString},
+        mem::MaybeUninit,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+    };
+
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     let temporary_name = path
         .file_name()
@@ -650,7 +672,126 @@ fn remove_exact_tree(path: &Path) -> Result<(), String> {
     {
         return Err("Temporary gateway runtime identity changed".into());
     }
-    fs::remove_dir_all(path).map_err(|error| error.to_string())
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Temporary gateway runtime has no parent".to_string())?;
+    let parent_path = CString::new(parent.as_os_str().as_bytes())
+        .map_err(|_| "Temporary gateway runtime parent contains NUL".to_string())?;
+    let parent_descriptor = unsafe {
+        libc::open(
+            parent_path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if parent_descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let parent = unsafe { File::from_raw_fd(parent_descriptor) };
+    let name = CString::new(
+        path.file_name()
+            .ok_or_else(|| "Temporary gateway runtime has no name".to_string())?
+            .as_bytes(),
+    )
+    .map_err(|_| "Temporary gateway runtime name contains NUL".to_string())?;
+    let child_descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if child_descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let child = unsafe { File::from_raw_fd(child_descriptor) };
+    let opened = child.metadata().map_err(|error| error.to_string())?;
+    if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+        return Err("Temporary gateway runtime changed before cleanup".into());
+    }
+
+    fn remove_children(directory: &File, effective_uid: u32) -> Result<(), String> {
+        let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
+        if duplicate < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let stream = unsafe { libc::fdopendir(duplicate) };
+        if stream.is_null() {
+            unsafe { libc::close(duplicate) };
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        loop {
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                continue;
+            }
+            let mut stat = MaybeUninit::<libc::stat>::uninit();
+            if unsafe {
+                libc::fstatat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    stat.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } != 0
+            {
+                unsafe { libc::closedir(stream) };
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            let stat = unsafe { stat.assume_init() };
+            if stat.st_uid != effective_uid {
+                unsafe { libc::closedir(stream) };
+                return Err("Temporary gateway runtime gained an entry with another owner".into());
+            }
+            let kind = stat.st_mode & libc::S_IFMT;
+            if kind == libc::S_IFDIR {
+                let descriptor = unsafe {
+                    libc::openat(
+                        directory.as_raw_fd(),
+                        name.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    )
+                };
+                if descriptor < 0 {
+                    unsafe { libc::closedir(stream) };
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                let child = unsafe { File::from_raw_fd(descriptor) };
+                if let Err(error) = remove_children(&child, effective_uid) {
+                    unsafe { libc::closedir(stream) };
+                    return Err(error);
+                }
+                if unsafe {
+                    libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR)
+                } != 0
+                {
+                    unsafe { libc::closedir(stream) };
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+            } else if kind == libc::S_IFREG || kind == libc::S_IFLNK {
+                if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+                    unsafe { libc::closedir(stream) };
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+            } else {
+                unsafe { libc::closedir(stream) };
+                return Err("Temporary gateway runtime gained an unsupported entry".into());
+            }
+        }
+        if unsafe { libc::closedir(stream) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
+    remove_children(&child, unsafe { libc::geteuid() })?;
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    parent.sync_all().map_err(|error| error.to_string())
 }
 
 fn sync_directory(path: &Path) -> Result<(), String> {
