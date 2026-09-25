@@ -1015,6 +1015,7 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
         clock: Arc<ControlledOutcomeClock>,
         deadline: Instant,
         rejected: bool,
+        indeterminate: bool,
     }
 
     impl GatewayHost for DeadlineAtSettlementHost {
@@ -1035,24 +1036,56 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
             journal: &dyn GatewayReconciliationJournalSession,
             plan: &AuditDeliveryReceipt,
         ) -> Result<LifecycleObservation, GatewayError> {
-            let result = complete_stop(session, journal, plan, || {
-                if self.rejected {
-                    Err(GatewayError::Stop("native stop rejected".into()))
-                } else {
-                    Ok(())
-                }
-            });
+            let result = if self.indeterminate {
+                session.begin_proof()?;
+                let candidate = session.request().intended().audit_identity()?;
+                session.prove(candidate.clone(), 1)?;
+                session.claim(plan, &candidate, 1)?;
+                let command = LifecycleCommandResult::Indeterminate(
+                    "native stop result remained unknown".into(),
+                );
+                session.command_result(command.clone())?;
+                journal.effect_completion(
+                    "stop-agents-on-desktop-quit",
+                    "signal-agents",
+                    &command,
+                )?;
+                let observation = LifecycleObservation::new(2, Some(candidate), true);
+                journal.observation(
+                    &LifecycleObservationSource::Effect {
+                        plan_id: "stop-agents-on-desktop-quit".into(),
+                        step_id: "signal-agents".into(),
+                    },
+                    &observation,
+                )?;
+                session.fresh_observation(observation)?;
+                Err(GatewayError::Stop("native stop indeterminate".into()))
+            } else {
+                complete_stop(session, journal, plan, || {
+                    if self.rejected {
+                        Err(GatewayError::Stop("native stop rejected".into()))
+                    } else {
+                        Ok(())
+                    }
+                })
+            };
             self.clock.set(self.deadline);
             result
         }
     }
 
-    for rejected in [false, true] {
+    for (rejected, indeterminate) in [(false, false), (true, false), (false, true)] {
         let now = Instant::now();
         let deadline = now + Duration::from_secs(1);
         let clock = Arc::new(ControlledOutcomeClock::new(now));
         let request = GatewayReconciliationRequest::new(
-            correlation(if rejected { 301 } else { 201 }),
+            correlation(if indeterminate {
+                401
+            } else if rejected {
+                301
+            } else {
+                201
+            }),
             ReconciliationEvidence::new(
                 ReconciliationCause::DesktopQuitPolicy,
                 ReconciliationInitiator::DesktopHost,
@@ -1060,11 +1093,19 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
             .unwrap(),
         );
         let attempt = GatewayReconciliationAttempt::new(
-            correlation(if rejected { 302 } else { 202 }),
+            correlation(if indeterminate {
+                402
+            } else if rejected {
+                302
+            } else {
+                202
+            }),
             request,
         )
         .unwrap();
-        let gateway = reconciled(if rejected {
+        let gateway = reconciled(if indeterminate {
+            "deadline-indeterminate"
+        } else if rejected {
             "deadline-rejected"
         } else {
             "deadline-accepted"
@@ -1080,6 +1121,7 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
                 clock,
                 deadline,
                 rejected,
+                indeterminate,
             }),
             audit.clone(),
             session.clone(),
@@ -1087,7 +1129,12 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
             intended,
         );
 
-        if rejected {
+        if indeterminate {
+            assert_eq!(
+                result,
+                Err(GatewayError::Stop("native stop indeterminate".into()))
+            );
+        } else if rejected {
             assert_eq!(
                 result,
                 Err(GatewayError::Stop("native stop rejected".into()))
@@ -1104,15 +1151,33 @@ fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StopOutcomeAuditBehavior {
+    ErrorThenDeadline,
+    PanicThenDeadline,
+    InFlightSucceedsAtDeadline,
+    RetrySucceeds,
+    RetryFails,
+    RetryPanics,
+}
+
+#[derive(Clone, Copy)]
+enum StopCommandBehavior {
+    Accepted,
+    Rejected,
+    Indeterminate,
+}
+
 #[test]
-fn stop_outcome_retry_rechecks_the_deadline_before_the_second_port_call() {
-    struct RetryDeadlineAudit {
+fn stop_outcome_delivery_preserves_attempt_retry_and_physical_facts() {
+    struct OutcomeAudit {
+        behavior: StopOutcomeAuditBehavior,
         clock: Arc<ControlledOutcomeClock>,
         deadline: Instant,
         physical_outcomes: AtomicUsize,
     }
 
-    impl TestAuditBehavior for RetryDeadlineAudit {
+    impl TestAuditBehavior for OutcomeAudit {
         fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
             Ok(())
         }
@@ -1135,11 +1200,263 @@ fn stop_outcome_retry_rechecks_the_deadline_before_the_second_port_call() {
             _: Option<&LifecycleObservation>,
             _: ReconciliationCleanupDecision,
         ) -> Result<(), GatewayError> {
-            self.physical_outcomes.fetch_add(1, Ordering::SeqCst);
-            self.clock.set(self.deadline);
-            Err(GatewayError::Registration(
-                "first outcome acknowledgement failed".into(),
-            ))
+            let call = self.physical_outcomes.fetch_add(1, Ordering::SeqCst) + 1;
+            match (self.behavior, call) {
+                (StopOutcomeAuditBehavior::ErrorThenDeadline, 1) => {
+                    self.clock.set(self.deadline);
+                    Err(GatewayError::Registration("first sink error".into()))
+                }
+                (StopOutcomeAuditBehavior::PanicThenDeadline, 1) => {
+                    self.clock.set(self.deadline);
+                    panic!("first sink panic")
+                }
+                (StopOutcomeAuditBehavior::InFlightSucceedsAtDeadline, 1) => {
+                    self.clock.set(self.deadline);
+                    Ok(())
+                }
+                (StopOutcomeAuditBehavior::RetrySucceeds, 1)
+                | (StopOutcomeAuditBehavior::RetryFails, 1)
+                | (StopOutcomeAuditBehavior::RetryPanics, 1) => {
+                    Err(GatewayError::Registration("first sink error".into()))
+                }
+                (StopOutcomeAuditBehavior::RetrySucceeds, 2) => Ok(()),
+                (StopOutcomeAuditBehavior::RetryFails, 2) => {
+                    Err(GatewayError::Registration("second sink error".into()))
+                }
+                (StopOutcomeAuditBehavior::RetryPanics, 2) => panic!("second sink panic"),
+                _ => panic!("unexpected outcome call {call}"),
+            }
+        }
+    }
+
+    struct SettledHost(StopCommandBehavior);
+
+    impl GatewayHost for SettledHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            _: &GatewayReconciliationAttempt,
+            _: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            unreachable!("the focused stop test does not register")
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            match self.0 {
+                StopCommandBehavior::Accepted => complete_stop(session, journal, plan, || Ok(())),
+                StopCommandBehavior::Rejected => complete_stop(session, journal, plan, || {
+                    Err(GatewayError::Stop("native stop rejected".into()))
+                }),
+                StopCommandBehavior::Indeterminate => {
+                    session.begin_proof()?;
+                    let candidate = session.request().intended().audit_identity()?;
+                    session.prove(candidate.clone(), 1)?;
+                    session.claim(plan, &candidate, 1)?;
+                    let command = LifecycleCommandResult::Indeterminate(
+                        "native stop result remained unknown".into(),
+                    );
+                    session.command_result(command.clone())?;
+                    journal.effect_completion(
+                        "stop-agents-on-desktop-quit",
+                        "signal-agents",
+                        &command,
+                    )?;
+                    let observation = LifecycleObservation::new(2, Some(candidate), true);
+                    journal.observation(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: "stop-agents-on-desktop-quit".into(),
+                            step_id: "signal-agents".into(),
+                        },
+                        &observation,
+                    )?;
+                    session.fresh_observation(observation)?;
+                    Err(GatewayError::Stop("native stop indeterminate".into()))
+                }
+            }
+        }
+    }
+
+    for command in [
+        StopCommandBehavior::Accepted,
+        StopCommandBehavior::Rejected,
+        StopCommandBehavior::Indeterminate,
+    ] {
+        for behavior in [
+            StopOutcomeAuditBehavior::ErrorThenDeadline,
+            StopOutcomeAuditBehavior::PanicThenDeadline,
+            StopOutcomeAuditBehavior::InFlightSucceedsAtDeadline,
+            StopOutcomeAuditBehavior::RetrySucceeds,
+            StopOutcomeAuditBehavior::RetryFails,
+            StopOutcomeAuditBehavior::RetryPanics,
+        ] {
+            let now = Instant::now();
+            let deadline = now + Duration::from_secs(1);
+            let clock = Arc::new(ControlledOutcomeClock::new(now));
+            let serial = match behavior {
+                StopOutcomeAuditBehavior::ErrorThenDeadline => 501,
+                StopOutcomeAuditBehavior::PanicThenDeadline => 511,
+                StopOutcomeAuditBehavior::InFlightSucceedsAtDeadline => 521,
+                StopOutcomeAuditBehavior::RetrySucceeds => 531,
+                StopOutcomeAuditBehavior::RetryFails => 541,
+                StopOutcomeAuditBehavior::RetryPanics => 551,
+            } + match command {
+                StopCommandBehavior::Accepted => 0,
+                StopCommandBehavior::Rejected => 100,
+                StopCommandBehavior::Indeterminate => 200,
+            };
+            let request = GatewayReconciliationRequest::new(
+                correlation(serial),
+                ReconciliationEvidence::new(
+                    ReconciliationCause::DesktopQuitPolicy,
+                    ReconciliationInitiator::DesktopHost,
+                )
+                .unwrap(),
+            );
+            let attempt =
+                GatewayReconciliationAttempt::new(correlation(serial + 1), request).unwrap();
+            let gateway = reconciled(match command {
+                StopCommandBehavior::Accepted => "outcome-accepted",
+                StopCommandBehavior::Rejected => "outcome-rejected",
+                StopCommandBehavior::Indeterminate => "outcome-indeterminate",
+            });
+            let intended = gateway.audit_identity().unwrap();
+            let session = Arc::new(GatewayStopSession::new(
+                GatewayStopRequest::new(attempt.clone(), gateway, deadline),
+                clock.clone(),
+            ));
+            let audit = Arc::new(OutcomeAudit {
+                behavior,
+                clock,
+                deadline,
+                physical_outcomes: AtomicUsize::new(0),
+            });
+
+            let result = execute_stop_request(
+                Arc::new(SettledHost(command)),
+                audit.clone(),
+                session.clone(),
+                attempt,
+                intended,
+            );
+
+            let expected_calls = match behavior {
+                StopOutcomeAuditBehavior::ErrorThenDeadline
+                | StopOutcomeAuditBehavior::PanicThenDeadline
+                | StopOutcomeAuditBehavior::InFlightSucceedsAtDeadline => 1,
+                StopOutcomeAuditBehavior::RetrySucceeds
+                | StopOutcomeAuditBehavior::RetryFails
+                | StopOutcomeAuditBehavior::RetryPanics => 2,
+            };
+            assert_eq!(
+                audit.physical_outcomes.load(Ordering::SeqCst),
+                expected_calls
+            );
+            assert!(session.settlement().is_ok());
+
+            if matches!(
+                behavior,
+                StopOutcomeAuditBehavior::RetrySucceeds
+                    | StopOutcomeAuditBehavior::InFlightSucceedsAtDeadline
+            ) {
+                assert_eq!(
+                    result,
+                    match command {
+                        StopCommandBehavior::Accepted => Ok(()),
+                        StopCommandBehavior::Rejected => {
+                            Err(GatewayError::Stop("native stop rejected".into()))
+                        }
+                        StopCommandBehavior::Indeterminate => {
+                            Err(GatewayError::Stop("native stop indeterminate".into()))
+                        }
+                    }
+                );
+                continue;
+            }
+
+            let Err(GatewayError::Audit { audit, physical }) = result else {
+                panic!("outcome failure lost audit or physical facts: {result:?}")
+            };
+            assert!(audit.contains("first attempt failed"));
+            match behavior {
+                StopOutcomeAuditBehavior::ErrorThenDeadline => {
+                    assert!(audit.contains("first sink error"));
+                    assert!(audit.contains("exact retry was denied"));
+                    assert!(audit.contains("deadline passed before outcome delivery"));
+                }
+                StopOutcomeAuditBehavior::PanicThenDeadline => {
+                    assert!(audit.contains("outcome audit adapter panicked"));
+                    assert!(audit.contains("exact retry was denied"));
+                }
+                StopOutcomeAuditBehavior::RetryFails => {
+                    assert!(audit.contains("first sink error"));
+                    assert!(audit.contains("exact retry failed: second sink error"));
+                }
+                StopOutcomeAuditBehavior::RetryPanics => {
+                    assert!(audit.contains("first sink error"));
+                    assert!(audit.contains("exact retry failed"));
+                    assert!(audit.contains("outcome audit adapter panicked"));
+                }
+                StopOutcomeAuditBehavior::RetrySucceeds
+                | StopOutcomeAuditBehavior::InFlightSucceedsAtDeadline => unreachable!(),
+            }
+            match (command, physical) {
+                (StopCommandBehavior::Accepted, Some(GatewayPhysicalResult::Succeeded)) => {}
+                (StopCommandBehavior::Rejected, Some(GatewayPhysicalResult::Failed(error))) => {
+                    assert_eq!(*error, GatewayError::Stop("native stop rejected".into()));
+                }
+                (
+                    StopCommandBehavior::Indeterminate,
+                    Some(GatewayPhysicalResult::Failed(error)),
+                ) => {
+                    assert_eq!(
+                        *error,
+                        GatewayError::Stop("native stop indeterminate".into())
+                    );
+                }
+                (_, physical) => panic!("wrong settled physical result: {physical:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn stop_outcome_is_audited_after_the_response_receiver_is_dropped() {
+    struct CallerLossAudit {
+        delivered: Mutex<bool>,
+    }
+
+    impl TestAuditBehavior for CallerLossAudit {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn joined(
+            &self,
+            _: &GatewayReconciliationAttempt,
+            _: &GatewayReconciliationRequest,
+        ) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn physical_outcome(
+            &self,
+            _: &LifecyclePhysicalOutcome,
+            _: Option<&LifecycleObservation>,
+            _: ReconciliationCleanupDecision,
+        ) -> Result<(), GatewayError> {
+            *self.delivered.lock().unwrap() = true;
+            Ok(())
         }
     }
 
@@ -1167,45 +1484,93 @@ fn stop_outcome_retry_rechecks_the_deadline_before_the_second_port_call() {
         }
     }
 
-    let now = Instant::now();
-    let deadline = now + Duration::from_secs(1);
-    let clock = Arc::new(ControlledOutcomeClock::new(now));
+    let deadline = Instant::now() + Duration::from_secs(60);
     let request = GatewayReconciliationRequest::new(
-        correlation(401),
+        correlation(801),
         ReconciliationEvidence::new(
             ReconciliationCause::DesktopQuitPolicy,
             ReconciliationInitiator::DesktopHost,
         )
         .unwrap(),
     );
-    let attempt = GatewayReconciliationAttempt::new(correlation(402), request).unwrap();
-    let gateway = reconciled("deadline-retry");
+    let attempt = GatewayReconciliationAttempt::new(correlation(802), request).unwrap();
+    let gateway = reconciled("caller-loss");
     let intended = gateway.audit_identity().unwrap();
     let session = Arc::new(GatewayStopSession::new(
         GatewayStopRequest::new(attempt.clone(), gateway, deadline),
-        clock.clone(),
+        Arc::new(SystemMonotonicClock),
     ));
-    let audit = Arc::new(RetryDeadlineAudit {
-        clock,
-        deadline,
-        physical_outcomes: AtomicUsize::new(0),
+    let audit = Arc::new(CallerLossAudit {
+        delivered: Mutex::new(false),
     });
 
-    let result = execute_stop_request(
+    let (receiver, worker) = spawn_stop_request(
         Arc::new(SettledHost),
         audit.clone(),
         session.clone(),
         attempt,
         intended,
     );
+    drop(receiver);
+    worker.join().unwrap();
 
-    assert!(matches!(
-        result,
-        Err(GatewayError::Stop(message))
-            if message.contains("deadline passed before outcome delivery")
-    ));
-    assert_eq!(audit.physical_outcomes.load(Ordering::SeqCst), 1);
+    assert!(*audit.delivered.lock().unwrap());
     assert!(session.settlement().is_ok());
+}
+
+#[test]
+fn stop_outcome_retry_returns_only_the_acknowledged_receipt() {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let request = GatewayReconciliationRequest::new(
+        correlation(901),
+        ReconciliationEvidence::new(
+            ReconciliationCause::DesktopQuitPolicy,
+            ReconciliationInitiator::DesktopHost,
+        )
+        .unwrap(),
+    );
+    let attempt = GatewayReconciliationAttempt::new(correlation(902), request).unwrap();
+    let gateway = reconciled("receipt-retry");
+    let intended = gateway.audit_identity().unwrap();
+    let session = GatewayStopSession::new(
+        GatewayStopRequest::new(attempt.clone(), gateway, deadline),
+        Arc::new(SystemMonotonicClock),
+    );
+    let plan = AuditDeliveryReceipt::new(
+        attempt.correlation().clone(),
+        1,
+        LifecycleRecordKind::EffectPlan,
+    );
+    session.begin_proof().unwrap();
+    session.prove(intended.clone(), 1).unwrap();
+    session.claim(&plan, &intended, 1).unwrap();
+    session
+        .command_result(LifecycleCommandResult::Accepted)
+        .unwrap();
+    session
+        .fresh_observation(LifecycleObservation::new(2, Some(intended), true))
+        .unwrap();
+    let expected = AuditDeliveryReceipt::new(
+        attempt.correlation().clone(),
+        77,
+        LifecycleRecordKind::Outcome,
+    );
+    let mut calls = 0;
+
+    let receipt = deliver_stop_outcome(&session, GatewayPhysicalResult::Succeeded, || {
+        calls += 1;
+        if calls == 1 {
+            Err(GatewayError::Registration(
+                "published record receipt was uncertain".into(),
+            ))
+        } else {
+            Ok(expected.clone())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(calls, 2);
+    assert_eq!(receipt, expected);
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -577,33 +577,88 @@ fn deliver_before_stop_effect<T>(
     }
 }
 
-enum StopOutcomeDeliveryError {
-    Authority(GatewayError),
-    Audit(GatewayError),
+enum StopOutcomeAttemptFailure {
+    Returned(GatewayError),
+    Panicked,
 }
 
-impl StopOutcomeDeliveryError {
-    fn into_gateway_error(self) -> GatewayError {
+impl StopOutcomeAttemptFailure {
+    fn description(&self) -> String {
         match self {
-            Self::Authority(error) | Self::Audit(error) => error,
+            Self::Returned(error) => error.to_string(),
+            Self::Panicked => "gateway stop outcome audit adapter panicked".into(),
         }
+    }
+}
+
+enum StopOutcomeRetryFailure {
+    Denied(GatewayError),
+    Attempt(StopOutcomeAttemptFailure),
+}
+
+struct StopOutcomeDeliveryFailure {
+    first: StopOutcomeAttemptFailure,
+    retry: StopOutcomeRetryFailure,
+    physical: GatewayPhysicalResult,
+}
+
+impl StopOutcomeDeliveryFailure {
+    fn into_gateway_error(self) -> GatewayError {
+        let retry = match self.retry {
+            StopOutcomeRetryFailure::Denied(error) => {
+                format!("exact retry was denied: {error}")
+            }
+            StopOutcomeRetryFailure::Attempt(error) => {
+                format!("exact retry failed: {}", error.description())
+            }
+        };
+        GatewayError::Audit {
+            audit: format!(
+                "gateway stop outcome delivery failed: first attempt failed: {}; {retry}",
+                self.first.description()
+            ),
+            physical: Some(self.physical),
+        }
+    }
+}
+
+fn invoke_stop_outcome(
+    deliver: &mut impl FnMut() -> Result<AuditDeliveryReceipt, GatewayError>,
+) -> Result<AuditDeliveryReceipt, StopOutcomeAttemptFailure> {
+    match catch_unwind(AssertUnwindSafe(deliver)) {
+        Ok(Ok(receipt)) => Ok(receipt),
+        Ok(Err(error)) => Err(StopOutcomeAttemptFailure::Returned(error)),
+        Err(_) => Err(StopOutcomeAttemptFailure::Panicked),
     }
 }
 
 fn deliver_stop_outcome(
     session: &GatewayStopSession,
+    physical: GatewayPhysicalResult,
     mut deliver: impl FnMut() -> Result<AuditDeliveryReceipt, GatewayError>,
-) -> Result<AuditDeliveryReceipt, StopOutcomeDeliveryError> {
-    session
-        .begin_outcome_delivery()
-        .map_err(StopOutcomeDeliveryError::Authority)?;
-    match deliver() {
+) -> Result<AuditDeliveryReceipt, GatewayError> {
+    if let Err(authority) = session.begin_outcome_delivery() {
+        return Err(match physical {
+            GatewayPhysicalResult::Succeeded => authority,
+            GatewayPhysicalResult::Failed(error) => *error,
+        });
+    }
+    match invoke_stop_outcome(&mut deliver) {
         Ok(receipt) => Ok(receipt),
-        Err(_) => {
-            session
-                .begin_outcome_delivery()
-                .map_err(StopOutcomeDeliveryError::Authority)?;
-            deliver().map_err(StopOutcomeDeliveryError::Audit)
+        Err(first) => {
+            let retry = match session.begin_outcome_delivery() {
+                Ok(()) => match invoke_stop_outcome(&mut deliver) {
+                    Ok(receipt) => return Ok(receipt),
+                    Err(error) => StopOutcomeRetryFailure::Attempt(error),
+                },
+                Err(error) => StopOutcomeRetryFailure::Denied(error),
+            };
+            Err(StopOutcomeDeliveryFailure {
+                first,
+                retry,
+                physical,
+            }
+            .into_gateway_error())
         }
     }
 }
@@ -912,14 +967,13 @@ impl Gateway {
         let intended = gateway.audit_identity()?;
         let request = GatewayStopRequest::new(attempt.clone(), gateway, deadline);
         let session = Arc::new(GatewayStopSession::new(request, self.clock.clone()));
-        let worker_session = session.clone();
-        let host = self.host.clone();
-        let audit = self.reconciliation_audit.clone();
-        let (answer, receiver) = mpsc::sync_channel(1);
-        thread::spawn(move || {
-            let result = execute_stop_request(host, audit, worker_session, attempt, intended);
-            let _ = answer.send(result);
-        });
+        let (receiver, _worker) = spawn_stop_request(
+            self.host.clone(),
+            self.reconciliation_audit.clone(),
+            session.clone(),
+            attempt,
+            intended,
+        );
         let Some(remaining) = deadline.checked_duration_since(self.clock.now()) else {
             session.expire_at_deadline();
             return Err(GatewayError::Stop(
@@ -944,6 +998,24 @@ impl Gateway {
     fn wait_for_pending_receipt(&self) -> Option<Arc<AttemptReceipt>> {
         self.lifecycle_probe.wait_for_pending(&self.lifecycle)
     }
+}
+
+fn spawn_stop_request(
+    host: Arc<dyn GatewayHost>,
+    audit: Arc<dyn GatewayReconciliationAudit>,
+    session: Arc<GatewayStopSession>,
+    attempt: GatewayReconciliationAttempt,
+    intended: ReconciliationIncarnation,
+) -> (
+    mpsc::Receiver<Result<(), GatewayError>>,
+    thread::JoinHandle<()>,
+) {
+    let (answer, receiver) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let result = execute_stop_request(host, audit, session, attempt, intended);
+        let _ = answer.send(result);
+    });
+    (receiver, worker)
 }
 
 fn execute_stop_request(
@@ -986,14 +1058,13 @@ fn execute_stop_request(
                 command,
                 observed: observation,
             };
-            deliver_stop_outcome(session.as_ref(), || {
+            deliver_stop_outcome(session.as_ref(), GatewayPhysicalResult::Succeeded, || {
                 journal.physical_outcome(
                     &physical,
                     Some(&observed),
                     ReconciliationCleanupDecision::RetainPrior,
                 )
-            })
-            .map_err(StopOutcomeDeliveryError::into_gateway_error)?;
+            })?;
             Ok(())
         }
         Err(error) => {
@@ -1005,21 +1076,18 @@ fn execute_stop_request(
                 phase: LifecycleFailedPhase::NativeDispatch,
                 message: error.to_string(),
             };
-            let outcome = deliver_stop_outcome(session.as_ref(), || {
-                journal.physical_outcome(
-                    &physical,
-                    Some(&last_confirmed),
-                    ReconciliationCleanupDecision::RetainPrior,
-                )
-            });
-            match outcome {
-                Ok(_) => Err(error),
-                Err(StopOutcomeDeliveryError::Authority(_)) => Err(error),
-                Err(StopOutcomeDeliveryError::Audit(audit)) => Err(GatewayError::Audit {
-                    audit: audit.to_string(),
-                    physical: Some(GatewayPhysicalResult::Failed(Box::new(error))),
-                }),
-            }
+            let outcome = deliver_stop_outcome(
+                session.as_ref(),
+                GatewayPhysicalResult::Failed(Box::new(error.clone())),
+                || {
+                    journal.physical_outcome(
+                        &physical,
+                        Some(&last_confirmed),
+                        ReconciliationCleanupDecision::RetainPrior,
+                    )
+                },
+            );
+            outcome.and(Err(error))
         }
     }
 }
