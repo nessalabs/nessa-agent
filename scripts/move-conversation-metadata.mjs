@@ -202,6 +202,11 @@ export function read(conversations, held = new Set()) {
       found.refused.push({ path: directory, why: "it is not a directory of its own" })
       continue
     }
+    const exposed = unprivate(lstatSync(directory))
+    if (exposed !== undefined) {
+      found.refused.push({ path: directory, why: exposed })
+      continue
+    }
     for (const name of readdirSync(directory).sort()) {
       const path = join(directory, name)
       if (directory === metadata && name === "deleted") continue
@@ -212,6 +217,11 @@ export function read(conversations, held = new Set()) {
         continue
       }
       const stat = lstatSync(path)
+      const exposed = stat.isFile() ? unprivate(stat) : undefined
+      if (exposed !== undefined) {
+        found.refused.push({ path, why: exposed })
+        continue
+      }
       if (!stat.isFile() || !name.endsWith(".json")) {
         found.refused.push({
           path,
@@ -371,7 +381,11 @@ async function database(conversations, { dryRun = false } = {}) {
 export function statedVersion(definition) {
   const versions = definition
     .split("\n")
-    .map((line) => /^PRAGMA user_version = (.*);$/.exec(line.trim()))
+    .map((line) =>
+      /^PRAGMA user_version = (.*);$/.exec(
+        line.replace(/^[ \t\n\f\r]+|[ \t\n\f\r]+$/g, ""),
+      ),
+    )
     .filter(Boolean)
   const stated = versions.length === 1 ? versions[0][1] : ""
   const version = /^\d+$/.test(stated) ? Number(stated) : 0
@@ -428,6 +442,21 @@ function insert(db, table, rows) {
     }
   }
   return { inserted, conflicts }
+}
+
+/**
+ * Why an entry is not private to this user, as the server that wrote it
+ * required every file and directory to be (`nessa-local-storage`): someone
+ * else's, reachable by others, or a file with a second name. Windows keeps
+ * this in ACLs a script cannot read, so there nothing is refused for it.
+ */
+function unprivate(stat) {
+  if (process.platform === "win32") return undefined
+  if (stat.uid !== process.getuid())
+    return "it is not owned by the user the gateway runs as"
+  if ((stat.mode & 0o077) !== 0) return "it is not private to its owner"
+  if (stat.isFile() && stat.nlink !== 1) return "it has more than one name"
+  return undefined
 }
 
 /**
@@ -488,8 +517,11 @@ async function held(conversations) {
 export async function move(conversations, { dryRun = false } = {}) {
   const metadata = join(conversations, "metadata")
   const summaries = join(conversations, "summaries")
+  if (!present(conversations)) return { state: "nothing" }
   if (!lstatSync(conversations).isDirectory())
     throw new Error(`${conversations} is not a directory`)
+  const exposed = unprivate(lstatSync(conversations))
+  if (exposed !== undefined) throw new Error(`${conversations}: ${exposed}`)
   if (!present(metadata) && !present(summaries)) return { state: "nothing" }
   const found = read(conversations, await held(conversations))
   if (found.refused.length > 0) return { state: "refused", refused: found.refused }

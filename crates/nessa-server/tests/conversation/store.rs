@@ -9,8 +9,8 @@ use crate::conversation::{
         ConversationRepository, ConversationSummaries,
     },
     domain::{
-        Conversation, ConversationDeletion, ConversationId, ConversationSummary,
-        ProviderSessionErasure, ProviderSessionLink,
+        Conversation, ConversationDeletion, ConversationId, ConversationPreview,
+        ConversationSummary, ConversationTitle, ProviderSessionErasure, ProviderSessionLink,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -787,9 +787,21 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
     let directory = tempfile::tempdir().unwrap();
     let conversations = directory.path().join("conversations");
     nessa_local_storage::create_directory(&conversations).unwrap();
+    // Private, as the server that wrote them required.
     let write = |path: PathBuf, text: String| {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path.parent().unwrap())
+            .unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, text.as_bytes()).unwrap();
     };
     let session = || ExecutionSessionId::new("provider-session").unwrap();
     let recorded = r#"{"state":"recorded","id":"provider-session"}"#;
@@ -828,9 +840,10 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
         tombstones.push((recorded, name, false, settled.clone()));
         tombstones.push((recorded, name, true, settled.after_erasure().unwrap()));
     }
+    // Every field its own value, so no two columns can be swapped unseen.
     let record = |id: &ConversationId| {
         format!(
-            r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":1,"agent":"claude"}}"#
+            r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"a-surface","creation_action":"an-action","creation_requested_at_ms":3,"agent":"claude"}}"#
         )
     };
     let kept = new_id();
@@ -841,7 +854,7 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
     write(
         conversations.join("summaries").join(format!("{kept}.json")),
         format!(
-            r#"{{"id":"{kept}","title":"Plan the trip","preview":"Plan the trip","updated_at_ms":9,"archived":true}}"#
+            r#"{{"id":"{kept}","title":"Plan the trip","preview":"Book the flights first","updated_at_ms":9,"archived":true}}"#
         ),
     );
     let deleted: Vec<(ConversationId, ConversationDeletion)> = tombstones
@@ -881,10 +894,30 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(conversation.agent(), Some(AgentId::Claude));
+    assert_eq!(
+        conversation,
+        Conversation::new(
+            kept.clone(),
+            org(),
+            alice(),
+            "a-surface".into(),
+            "an-action".into(),
+            3,
+            AgentId::Claude,
+        )
+        .unwrap()
+    );
     assert_eq!(
         ConversationSummaries::load(&store, &kept).await.unwrap(),
-        Some(said("Plan the trip", 9).after_archiving(true))
+        Some(
+            ConversationSummary::new(
+                Some(ConversationTitle::new("Plan the trip").unwrap()),
+                Some(ConversationPreview::new("Book the flights first").unwrap()),
+                9,
+                true,
+            )
+            .unwrap()
+        )
     );
     for (id, expected) in &deleted {
         let read = ConversationRepository::load(&store, id)

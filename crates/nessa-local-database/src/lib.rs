@@ -51,7 +51,7 @@ impl Schema {
     /// on a line of its own, with N above 0 — 0 is an empty file's.
     pub fn new(definition: &'static str) -> Result<Self, OpenError> {
         let mut versions = definition.lines().filter_map(|line| {
-            line.trim()
+            line.trim_matches(|character: char| character.is_ascii_whitespace())
                 .strip_prefix("PRAGMA user_version = ")?
                 .strip_suffix(';')
         });

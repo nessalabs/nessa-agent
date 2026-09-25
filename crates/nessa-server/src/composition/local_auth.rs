@@ -303,9 +303,9 @@ fn refuse_metadata_files(root: &Path) -> Result<(), RunError> {
             }
             Ok(_) => {
                 return Err(RunError::Agent(format!(
-                    "conversation metadata from an earlier build is still at {}; stop the gateway and run `node scripts/move-conversation-metadata.mjs {}` to move it into the database",
+                    "conversation metadata from an earlier build is still at {}; stop the gateway and run `node scripts/move-conversation-metadata.mjs {:?}` to move it into the database",
                     directory.display(),
-                    root.display()
+                    root.display().to_string()
                 )))
             }
         }

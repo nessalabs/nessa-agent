@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -45,7 +46,7 @@ const tombstone = (id, extra = {}) => ({
 const summary = (id, extra = {}) => ({
   id,
   title: "Plan the trip",
-  preview: "Plan the trip",
+  preview: "Book the flights first",
   updated_at_ms: 300,
   archived: true,
   ...extra,
@@ -123,7 +124,7 @@ test("M1: every record, tombstone and summary moves into the database, and the f
     {
       conversation_id: two,
       title: "Plan the trip",
-      preview: "Plan the trip",
+      preview: "Book the flights first",
       updated_at_ms: 300,
       archived: 1,
     },
@@ -391,7 +392,8 @@ test("a dry run finds what the real run would refuse, and still writes nothing",
 
 test("a directory that cannot be looked at is not one with nothing to move", async () => {
   const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
-  await assert.rejects(move(join(root, "mistyped")), /ENOENT/)
+  // Nothing there at all is M6: nothing to move, and the path is reported.
+  assert.deepEqual(await move(join(root, "mistyped")), { state: "nothing" })
   if (process.platform !== "win32" && process.getuid() !== 0) {
     chmodSync(root, 0o000)
     try {
@@ -442,4 +444,33 @@ test("a schema's version is read as the server reads it", () => {
   ])
     assert.throws(() => statedVersion(definition), /one version above 0/, definition)
   assert.equal(statedVersion("  PRAGMA user_version = 7;  "), 7)
+  for (const spaced of [
+    "\u0085PRAGMA user_version = 1;",
+    "\uFEFFPRAGMA user_version = 1;",
+  ])
+    assert.throws(() => statedVersion(spaced), /one version above 0/)
+})
+
+test("M3: an entry the server would have refused as not private is refused too", async (t) => {
+  if (process.platform === "win32") return t.skip("Windows keeps privacy in ACLs")
+  for (const [expose, why] of [
+    [(root) => chmodSync(join(root, "metadata", `${one}.json`), 0o644), /not private/],
+    [
+      (root) =>
+        linkSync(join(root, "metadata", `${one}.json`), join(root, "second-name")),
+      /more than one name/,
+    ],
+    [(root) => chmodSync(join(root, "metadata"), 0o777), /not private/],
+  ]) {
+    const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+    expose(root)
+    const result = await move(root)
+    assert.equal(result.state, "refused")
+    assert.match(result.refused[0].why, why)
+    assert.ok(!existsSync(join(root, "metadata.sqlite3")))
+  }
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  chmodSync(root, 0o755)
+  await assert.rejects(move(root), /not private/)
+  assert.ok(!existsSync(join(root, "metadata.sqlite3")))
 })

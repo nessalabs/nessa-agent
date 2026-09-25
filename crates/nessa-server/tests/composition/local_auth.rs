@@ -92,7 +92,7 @@ fn metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it() {
         // Naming the directory to move, so the script moves this one.
         assert!(
             message.contains(&format!(
-                "scripts/move-conversation-metadata.mjs {}",
+                "scripts/move-conversation-metadata.mjs \"{}\"",
                 root.display()
             )),
             "{message}"
