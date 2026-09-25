@@ -3,9 +3,8 @@
  * this build reads.
  *
  * The gateway now keeps ownership records, tombstones and summaries in one
- * SQLite file, `conversations/metadata.sqlite3`, and refuses to start its
- * conversations while `conversations/metadata/` or `conversations/summaries/`
- * is still there: reading both shapes is what CODING_STANDARDS.md's "One
+ * SQLite file, `conversations/metadata.sqlite3`, and does not start while
+ * `conversations/metadata/` or `conversations/summaries/` is still there: reading both shapes is what CODING_STANDARDS.md's "One
  * current contract" forbids. This is the move, run once, with the gateway
  * stopped. See docs/adr/todo/196-conversation-metadata-database.md, whose
  * table M1–M7 this follows row for row.

@@ -101,3 +101,24 @@ fn metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it() {
     }
     assert!(metadata_store(root).is_ok());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_root_whose_contents_cannot_be_looked_at_is_refused_not_taken_as_empty() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root reads through any mode, so there is nothing to refuse it.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("private");
+    nessa_local_storage::create_directory(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = metadata_store(&root);
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let Err(RunError::Agent(message)) = refused else {
+        panic!("a root nothing could be looked at in was taken as empty");
+    };
+    assert!(message.contains("could not tell whether"), "{message}");
+    assert!(!root.join("metadata.sqlite3").exists());
+}

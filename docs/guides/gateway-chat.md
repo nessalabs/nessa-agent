@@ -135,8 +135,8 @@ Conversation metadata is now one private database,
 `conversations/metadata.sqlite3`, rather than the `conversations/metadata/` and
 `conversations/summaries/` directories earlier builds wrote
 ([ADR 196](../adr/todo/196-conversation-metadata-database.md)). While either
-directory is there the gateway refuses to start its conversations and names
-this, to be run once, after the retrofit, with the gateway stopped:
+directory is there the gateway does not start, and its error names this and the
+directory to move, to be run once, after the retrofit, with the gateway stopped:
 
 ```bash
 node scripts/move-conversation-metadata.mjs --dry-run    # what it would move

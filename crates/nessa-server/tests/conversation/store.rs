@@ -782,31 +782,61 @@ async fn a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone() {
 async fn a_database_the_move_writes_is_one_this_store_reads() {
     // Files as the build before this one wrote them, moved by the script the
     // gateway's refusal names, then read back here: the script's spelling of
-    // every column and the schema's version are held to the store's.
+    // every column — every provider-session state and every erasure — and the
+    // schema's version are held to the store's.
     let directory = tempfile::tempdir().unwrap();
     let conversations = directory.path().join("conversations");
     nessa_local_storage::create_directory(&conversations).unwrap();
-    let (kept, deleted) = (new_id(), new_id());
     let write = |path: PathBuf, text: String| {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     };
-    for id in [&kept, &deleted] {
-        write(
-            conversations.join("metadata").join(format!("{id}.json")),
-            format!(
-                r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":1,"agent":"claude"}}"#
-            ),
-        );
-    }
-    write(
-        conversations
-            .join("metadata")
-            .join("deleted")
-            .join(format!("{deleted}.json")),
-        format!(
-            r#"{{"id":"{deleted}","organization":"org","initiator":"alice","surface":"panel","request":"delete","requested_at_ms":50,"provider_session":{{"state":"recorded","id":"provider-session"}},"provider_erasure":"not_listed","erased":false}}"#
+    let session = || ExecutionSessionId::new("provider-session").unwrap();
+    let recorded = r#"{"state":"recorded","id":"provider-session"}"#;
+    let mut tombstones: Vec<(&str, &str, bool, ConversationDeletion)> = vec![
+        (r#"{"state":"unread"}"#, "null", false, deletion("delete")),
+        (
+            r#"{"state":"absent"}"#,
+            r#""no_provider_session""#,
+            false,
+            deletion("delete").after_reading(None),
         ),
+        (
+            r#"{"state":"unknown"}"#,
+            r#""session_unknown""#,
+            false,
+            deletion("delete").after_losing_history(),
+        ),
+        (
+            recorded,
+            "null",
+            false,
+            deletion("delete").after_reading(Some(session())),
+        ),
+    ];
+    for (name, erasure) in [
+        (r#""deleted""#, ProviderSessionErasure::Deleted),
+        (r#""archived""#, ProviderSessionErasure::Archived),
+        (r#""acknowledged""#, ProviderSessionErasure::Acknowledged),
+        (r#""not_listed""#, ProviderSessionErasure::NotListed),
+        (r#""not_supported""#, ProviderSessionErasure::NotSupported),
+        (r#""no_handler""#, ProviderSessionErasure::NoHandler),
+    ] {
+        let settled = deletion("delete")
+            .after_reading(Some(session()))
+            .after_provider_erasure(erasure);
+        tombstones.push((recorded, name, false, settled.clone()));
+        tombstones.push((recorded, name, true, settled.after_erasure().unwrap()));
+    }
+    let record = |id: &ConversationId| {
+        format!(
+            r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":1,"agent":"claude"}}"#
+        )
+    };
+    let kept = new_id();
+    write(
+        conversations.join("metadata").join(format!("{kept}.json")),
+        record(&kept),
     );
     write(
         conversations.join("summaries").join(format!("{kept}.json")),
@@ -814,6 +844,26 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
             r#"{{"id":"{kept}","title":"Plan the trip","preview":"Plan the trip","updated_at_ms":9,"archived":true}}"#
         ),
     );
+    let deleted: Vec<(ConversationId, ConversationDeletion)> = tombstones
+        .into_iter()
+        .map(|(provider_session, provider_erasure, erased, expected)| {
+            let id = new_id();
+            write(
+                conversations.join("metadata").join(format!("{id}.json")),
+                record(&id),
+            );
+            write(
+                conversations
+                    .join("metadata")
+                    .join("deleted")
+                    .join(format!("{id}.json")),
+                format!(
+                    r#"{{"id":"{id}","organization":"org","initiator":"alice","surface":"panel","request":"delete","requested_at_ms":50,"provider_session":{provider_session},"provider_erasure":{provider_erasure},"erased":{erased}}}"#
+                ),
+            );
+            (id, expected)
+        })
+        .collect();
     let script =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/move-conversation-metadata.mjs");
     let moved = std::process::Command::new("node")
@@ -836,18 +886,13 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
         ConversationSummaries::load(&store, &kept).await.unwrap(),
         Some(said("Plan the trip", 9).after_archiving(true))
     );
-    let tombstone = ConversationRepository::load(&store, &deleted)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        tombstone.deletion(),
-        Some(
-            &deletion("delete")
-                .after_reading(Some(ExecutionSessionId::new("provider-session").unwrap()))
-                .after_provider_erasure(ProviderSessionErasure::NotListed)
-        )
-    );
+    for (id, expected) in &deleted {
+        let read = ConversationRepository::load(&store, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.deletion(), Some(expected), "{expected:?}");
+    }
     assert_eq!(listed(&store, &alice(), true, 10).await, (vec![kept], 0));
 }
 

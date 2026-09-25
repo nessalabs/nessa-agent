@@ -107,10 +107,11 @@ function nothingWasDone(
     // The agents this build can drive are compiled in, so no edit to
     // `config.json` adds one — and naming an agent there that has no adapter
     // stops the gateway starting at all, which turns one stranded conversation
-    // into no gateway. The two real repairs belong to whoever runs the server:
-    // `scripts/retrofit-conversation-agents.mjs` for a record written before
-    // conversations named their agent, and a newer build for a name written by
-    // one. Same news as the client's own sentence for this code, so the panel
+    // into no gateway. The real repair belongs to whoever runs the server: a
+    // build that knows the agent the conversation was written with. (A record
+    // from before conversations named their agent no longer reaches a running
+    // gateway: the metadata move refuses it until the retrofit has run.) Same
+    // news as the client's own sentence for this code, so the panel
     // says the same thing whether you typed or clicked.
     case "agent-unsupported":
       return "This conversation runs on an agent this version of Nessa cannot open, so nothing was done."

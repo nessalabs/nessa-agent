@@ -109,7 +109,7 @@ it inside the `limit + 1` window.
 | L6 | Somebody else's (a different organization, or an owner that differs by any byte, including case) | no | no |
 | L7 | More than `limit` rows qualify | the newest 500 readable rows among the 501 met; fewer when some of those are L5 | yes |
 | L8 | Exactly 500 qualify | all 500 | no |
-| L9 | The database cannot be opened or queried | the list fails (`conversation_storage_unavailable`) | — |
+| L9 | The database cannot be queried | the list fails (`conversation_storage_unavailable`); one that cannot be opened stops the gateway starting | — |
 
 L5 changes what 182 said. There, a conversation whose summary could not be read
 was listed bare, in the default list. Here a summary row is unreadable only
@@ -125,8 +125,8 @@ so the row is left out and the list says it is incomplete.
 `node scripts/move-conversation-metadata.mjs`, run with the gateway stopped,
 moves `conversations/metadata/*.json`, `conversations/metadata/deleted/*.json`
 and `conversations/summaries/*.json` into the database, then removes those
-files and directories. Until the old directories are gone, the gateway refuses
-to start its conversations and names the script. It does not read two shapes.
+files and directories. Until the old directories are gone, the gateway does
+not start, and says why and what to run. It does not read two shapes.
 Records from before agents were named are refused by the move with the
 retrofit script's name, so the order is: retrofit, then move.
 
@@ -138,7 +138,7 @@ retrofit script's name, so the order is: retrofit, then move.
 | M4 | A tombstone or summary with no record, as a file or in the database | Refused as M3: the foreign key has nowhere to point | Unchanged |
 | M5 | Interrupted while removing files, in any order | Rerunning is M2; a record already in the database counts for its tombstone and summary | Database only |
 | M6 | No old directories | Nothing | Unchanged |
-| M7 | The gateway started with old directories present | — | The gateway refuses to start its conversations and names the script |
+| M7 | The gateway started with old directories present | — | The gateway does not start, and its error names the script and the directory to move |
 
 The script's rules for a record's shape are the server's JSON shapes of the
 build before this one. It is a mover for this one change and is deleted

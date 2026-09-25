@@ -1269,3 +1269,32 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
     let listed = service.list(owner(), false).await.unwrap();
     assert_eq!(ids(&listed.conversations), [mine.id().to_string()]);
 }
+
+#[tokio::test]
+async fn an_unreadable_row_inside_a_cut_window_costs_the_list_that_row() {
+    let listing = stored(ConversationLimits::default());
+    let bound = MAX_LISTED_CONVERSATIONS as u64;
+    let mine = stored_many(&listing, "org", "person", bound + 5, false, |n| n);
+    // Two of the newest, inside the window of one past the bound.
+    for id in &mine[mine.len() - 2..] {
+        damage(
+            &listing,
+            "UPDATE summaries SET title = '' WHERE conversation_id = ?1",
+            id,
+        );
+    }
+    let listed = listing.service.list(owner(), false).await.unwrap();
+    // The 501 met, less the two that cannot be read: fewer than the bound,
+    // though more stand behind it, and the list says it is not whole.
+    assert_eq!(listed.conversations.len(), MAX_LISTED_CONVERSATIONS - 1);
+    assert!(!listed.complete);
+    assert_eq!(
+        ids(&listed.conversations),
+        mine[..mine.len() - 2]
+            .iter()
+            .rev()
+            .take(MAX_LISTED_CONVERSATIONS - 1)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+}
