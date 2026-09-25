@@ -24,8 +24,8 @@ use crate::gateway::{
         LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
         LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationCause,
         ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
-        ServiceConfiguration, SystemdJobMode, SystemdJobOperation, SystemdRuntimeObservation,
-        SystemdUnitName,
+        ServiceConfiguration, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
+        SystemdRuntimeObservation, SystemdUnitName,
     },
 };
 use nessa_gateway_endpoint::{
@@ -775,13 +775,13 @@ impl GatewayHost for SystemdGateway {
         retry(|| {
             journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)
         })?;
-        let fresh = manager.snapshot(&unit).map_err(GatewayError::Stop)?;
-        let observed = fresh
-            .as_ref()
-            .map(|snapshot| portable_from_snapshot(&unit, snapshot, Some(intended)))
-            .transpose()
-            .map(Option::flatten)
-            .map_err(GatewayError::Stop)?;
+        let (observed, _) = observe_systemd_state(
+            manager.as_ref(),
+            &unit,
+            &data,
+            self.runtime_context.as_ref(),
+        )
+        .map_err(GatewayError::Stop)?;
         let observation = LifecycleObservation::new(
             2,
             observed,
@@ -930,16 +930,49 @@ fn recovery_artifact_present(
         LifecycleEffect::PublishSystemdWantsLink { .. } => {
             wants_link_matches(&paths.wants_link, &paths.unit_file)
         }
-        LifecycleEffect::ReloadSystemdManager { .. } => {
-            Ok(snapshot.is_some_and(|state| snapshot_declares_target(state, target)))
-        }
-        LifecycleEffect::StartSystemdUnit { .. }
-        | LifecycleEffect::BootstrapService { .. }
-        | LifecycleEffect::AdoptReadyIncarnation { .. } => {
-            Ok(observed.is_some_and(|incarnation| incarnation.target() == target))
-        }
-        LifecycleEffect::StopSystemdUnit { .. } | LifecycleEffect::UnloadService { .. } => {
-            Ok(snapshot.is_some())
+        LifecycleEffect::ReloadSystemdManager { manager, unit } => match snapshot {
+            Some(state)
+                if state.manager == *manager
+                    && unit.as_str() == target.service()
+                    && state.id == unit.as_str()
+                    && state.names == [unit.as_str()]
+                    && snapshot_declares_target(state, target) =>
+            {
+                Ok(true)
+            }
+            None => Ok(false),
+            Some(_) => Err("Recovered manager reload evidence disagrees with its plan".into()),
+        },
+        LifecycleEffect::StartSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => systemd_job_artifact_present(
+            SystemdJobOperation::Start,
+            manager,
+            unit,
+            *mode,
+            target,
+            snapshot,
+            observed,
+        ),
+        LifecycleEffect::StopSystemdUnit {
+            manager,
+            unit,
+            mode,
+        } => systemd_job_artifact_present(
+            SystemdJobOperation::Stop,
+            manager,
+            unit,
+            *mode,
+            target,
+            snapshot,
+            observed,
+        ),
+        LifecycleEffect::BootstrapService { .. }
+        | LifecycleEffect::AdoptReadyIncarnation { .. }
+        | LifecycleEffect::UnloadService { .. } => {
+            Err("A non-systemd service effect cannot be recovered by the Linux host".into())
         }
         LifecycleEffect::RequestRetirement { .. } => {
             Err("A non-systemd retirement effect cannot be recovered by the Linux host".into())
@@ -1093,6 +1126,55 @@ fn snapshot_declares_target(snapshot: &UnitSnapshot, target: &ReconciliationTarg
     })
 }
 
+fn systemd_job_artifact_present(
+    operation: SystemdJobOperation,
+    manager: &SystemdManagerIdentity,
+    unit: &SystemdUnitName,
+    mode: SystemdJobMode,
+    target: &ReconciliationTarget,
+    snapshot: Option<&UnitSnapshot>,
+    observed: Option<&ReconciliationIncarnation>,
+) -> Result<bool, String> {
+    if mode != SystemdJobMode::Fail || unit.as_str() != target.service() {
+        return Err("Systemd job evidence disagrees with its planned authority".into());
+    }
+    let Some(snapshot) = snapshot else {
+        return observed.map_or(Ok(false), |_| {
+            Err("A gateway endpoint was observed without its planned systemd unit".into())
+        });
+    };
+    if snapshot.manager != *manager
+        || snapshot.id != unit.as_str()
+        || snapshot.names != [unit.as_str()]
+        || !snapshot_declares_target(snapshot, target)
+    {
+        return Err("Systemd job evidence disagrees with its planned target".into());
+    }
+    match operation {
+        SystemdJobOperation::Start => {
+            native_from_snapshot(snapshot, target, unit, true)?;
+            if observed.is_some_and(|incarnation| {
+                incarnation.target() == target
+                    && incarnation.process_id() == snapshot.main_process_id
+            }) {
+                Ok(true)
+            } else {
+                Err("Started systemd target lacks its exact endpoint incarnation".into())
+            }
+        }
+        SystemdJobOperation::Stop
+            if snapshot.main_process_id == 0
+                && matches!(snapshot.active_state.as_str(), "inactive" | "failed")
+                && observed.is_none() =>
+        {
+            Ok(true)
+        }
+        SystemdJobOperation::Stop => {
+            Err("Stopped systemd target still has active or contradictory evidence".into())
+        }
+    }
+}
+
 fn start_unit(
     progress: &dyn GatewayReconciliationProgress,
     unit: &SystemdUnitName,
@@ -1171,13 +1253,23 @@ fn run_systemd_job(
                 step.id(),
                 &LifecycleCommandResult::Indeterminate(error.clone()),
             )?;
+            let artifact_present = systemd_job_artifact_present(
+                operation,
+                manager.identity(),
+                unit,
+                SystemdJobMode::Fail,
+                target,
+                snapshot.as_ref(),
+                incarnation.as_ref(),
+            )
+            .map_err(GatewayError::Registration)?;
             progress.physical_observed(
                 &LifecycleObservationSource::Effect {
                     plan_id: plan_id.into(),
                     step_id: step.id().into(),
                 },
                 incarnation,
-                snapshot.is_some(),
+                artifact_present,
             )?;
             return Err(GatewayError::Registration(error));
         }
@@ -1187,24 +1279,24 @@ fn run_systemd_job(
     let (incarnation, snapshot) = observe_after_job(manager, unit, data, runtime_context)?;
     let completion = classify_terminal(manager, unit, &terminal);
     progress.effect_completed(plan_id, step.id(), &completion)?;
+    let artifact_present = systemd_job_artifact_present(
+        operation,
+        manager.identity(),
+        unit,
+        SystemdJobMode::Fail,
+        target,
+        snapshot.as_ref(),
+        incarnation.as_ref(),
+    )
+    .map_err(GatewayError::Registration)?;
     progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: plan_id.into(),
             step_id: step.id().into(),
         },
         incarnation,
-        snapshot.is_some(),
+        artifact_present,
     )?;
-    if operation == SystemdJobOperation::Stop
-        && snapshot.as_ref().is_some_and(|state| {
-            state.main_process_id != 0
-                || !matches!(state.active_state.as_str(), "inactive" | "failed")
-        })
-    {
-        return Err(GatewayError::Registration(
-            "systemd completed the stop job but fresh unit state still owns a process".into(),
-        ));
-    }
     match completion {
         LifecycleCommandResult::Accepted => Ok(()),
         LifecycleCommandResult::Rejected(message)
@@ -1224,19 +1316,29 @@ fn observe_after_job(
     data: &Path,
     runtime_context: &dyn LinuxRuntimeContext,
 ) -> Result<(Option<ReconciliationIncarnation>, Option<UnitSnapshot>), GatewayError> {
-    let snapshot = manager.snapshot(unit).map_err(GatewayError::Registration)?;
+    observe_systemd_state(manager, unit, data, runtime_context).map_err(GatewayError::Registration)
+}
+
+fn observe_systemd_state(
+    manager: &dyn LinuxUserManager,
+    unit: &SystemdUnitName,
+    data: &Path,
+    runtime_context: &dyn LinuxRuntimeContext,
+) -> Result<(Option<ReconciliationIncarnation>, Option<UnitSnapshot>), String> {
+    let snapshot = manager.snapshot(unit)?;
     let advertisement = runtime_context
         .discover_endpoint(data)
-        .map_err(GatewayError::Registration)?;
-    let incarnation = portable_incarnation(unit, snapshot.as_ref(), advertisement.as_ref())?;
+        .map_err(|error| error.to_string())?;
+    let incarnation = portable_incarnation(unit, snapshot.as_ref(), advertisement.as_ref())
+        .map_err(|error| error.to_string())?;
     if snapshot.as_ref().is_some_and(|state| {
         state.main_process_id != 0 || !matches!(state.active_state.as_str(), "inactive" | "failed")
     }) && incarnation.is_none()
     {
-        return Err(GatewayError::Registration(
+        return Err(
             "Fresh systemd job observation found an active or ambiguous process without exact endpoint identity"
                 .into(),
-        ));
+        );
     }
     Ok((incarnation, snapshot))
 }
@@ -1483,34 +1585,6 @@ fn portable_incarnation(
     )
     .map(Some)
     .map_err(|error| GatewayError::Registration(error.to_string()))
-}
-
-fn portable_from_snapshot(
-    unit: &SystemdUnitName,
-    snapshot: &UnitSnapshot,
-    fallback: Option<&ReconciledGateway>,
-) -> Result<Option<ReconciliationIncarnation>, String> {
-    let arguments = snapshot.exec_start_ex.first().map(|entry| &entry.1);
-    let fingerprint =
-        arguments.and_then(|values| environment_value(values, "NESSA_RUNTIME_FINGERPRINT"));
-    let generation =
-        arguments.and_then(|values| environment_value(values, "NESSA_SERVICE_GENERATION"));
-    let instance = fallback.map(ReconciledGateway::runtime_instance);
-    let port = arguments
-        .and_then(|values| environment_value(values, "NESSA_PORT"))
-        .and_then(|value| value.parse().ok())
-        .or_else(|| fallback.map(ReconciledGateway::port));
-    let (Some(fingerprint), Some(generation), Some(instance), Some(port)) =
-        (fingerprint, generation, instance, port)
-    else {
-        return Ok(None);
-    };
-    let target =
-        ReconciliationTarget::new(unit.as_str().into(), fingerprint.into(), generation.into())
-            .map_err(|error| error.to_string())?;
-    ReconciliationIncarnation::new(target, instance.into(), snapshot.main_process_id, port)
-        .map(Some)
-        .map_err(|error| error.to_string())
 }
 
 fn chosen_agent_path(
@@ -1830,35 +1904,20 @@ fn retire_prior(
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
     progress.effect_completed("request-systemd-retirement", step.id(), &completion)?;
-    let snapshot = runtime
-        .manager
-        .snapshot(unit)
+    let (observed, _) = observe_systemd_state(runtime.manager, unit, data, runtime.context)
         .map_err(GatewayError::Registration)?;
+    let artifact_present =
+        retirement_artifact_present(data, &request_id, prior, target, observed.as_ref())
+            .map_err(GatewayError::Registration)?;
     progress.physical_observed(
         &LifecycleObservationSource::Effect {
             plan_id: "request-systemd-retirement".into(),
             step_id: step.id().into(),
         },
-        snapshot
-            .as_ref()
-            .map(|snapshot| portable_from_snapshot(unit, snapshot, Some(&gateway(prior))))
-            .transpose()
-            .map(Option::flatten)
-            .map_err(GatewayError::Registration)?,
-        snapshot.is_some(),
+        observed,
+        artifact_present,
     )?;
     result.map_err(GatewayError::Registration)
-}
-
-fn gateway(value: &ReconciliationIncarnation) -> ReconciledGateway {
-    ReconciledGateway::new(
-        value.target().service().into(),
-        value.target().runtime_fingerprint().into(),
-        value.runtime_instance().into(),
-        value.target().service_generation().into(),
-        value.process_id(),
-        value.port(),
-    )
 }
 
 #[derive(Deserialize)]
@@ -2227,6 +2286,74 @@ mod tests {
     }
 
     #[test]
+    fn systemd_job_artifacts_require_exact_cross_field_evidence() {
+        let (unit, target, snapshot) = fixture();
+        let observed = ReconciliationIncarnation::new(
+            target.clone(),
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            snapshot.main_process_id,
+            7420,
+        )
+        .unwrap();
+        assert!(systemd_job_artifact_present(
+            SystemdJobOperation::Start,
+            &snapshot.manager,
+            &unit,
+            SystemdJobMode::Fail,
+            &target,
+            Some(&snapshot),
+            Some(&observed),
+        )
+        .unwrap());
+
+        let mut stopped = snapshot.clone();
+        stopped.active_state = "inactive".into();
+        stopped.sub_state = "dead".into();
+        stopped.invocation = None;
+        stopped.main_process_id = 0;
+        assert!(systemd_job_artifact_present(
+            SystemdJobOperation::Stop,
+            &stopped.manager,
+            &unit,
+            SystemdJobMode::Fail,
+            &target,
+            Some(&stopped),
+            None,
+        )
+        .unwrap());
+
+        let mut wrong_target = stopped.clone();
+        wrong_target.exec_start_ex[0].1[2] =
+            format!("NESSA_RUNTIME_FINGERPRINT={}", "c".repeat(64));
+        for (state, observed) in [
+            (&wrong_target, None),
+            (&snapshot, None),
+            (&stopped, Some(&observed)),
+        ] {
+            assert!(systemd_job_artifact_present(
+                SystemdJobOperation::Stop,
+                &snapshot.manager,
+                &unit,
+                SystemdJobMode::Fail,
+                &target,
+                Some(state),
+                observed,
+            )
+            .is_err());
+        }
+        assert!(systemd_job_artifact_present(
+            SystemdJobOperation::Start,
+            &snapshot.manager,
+            &unit,
+            SystemdJobMode::Fail,
+            &target,
+            Some(&wrong_target),
+            Some(&observed),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn recovery_controller_uses_injected_uid_manager_and_endpoint_boundaries() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
@@ -2378,6 +2505,7 @@ mod tests {
             Some(&prior),
         )
         .is_err());
+        assert!(retirement_artifact_present(&data, request_id, &prior, &target, None).is_err());
     }
 
     #[cfg(target_os = "linux")]
