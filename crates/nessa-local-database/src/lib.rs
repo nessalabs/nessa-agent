@@ -25,8 +25,8 @@
 //!
 //! A schema states its own version, as the one `PRAGMA user_version = N;`
 //! its definition runs, so anything else that creates the file from the same
-//! definition — a move script, say — agrees on it without restating it
-//! (`a_schema_states_its_version_once_in_its_definition`). An empty file is
+//! definition — a move script, say — runs the same line and sets the same
+//! version (`a_schema_states_its_version_once_in_its_definition`). An empty file is
 //! given the schema, in one transaction, at that version. A file at that
 //! version is opened. Anything else — another version, or tables
 //! with no version — is refused as [`OpenError::Version`] and left untouched
@@ -55,7 +55,14 @@ impl Schema {
                 .strip_prefix("PRAGMA user_version = ")?
                 .strip_suffix(';')
         });
-        match (versions.next().map(str::parse::<u32>), versions.next()) {
+        let digits = |version: &str| version.bytes().all(|byte| byte.is_ascii_digit());
+        match (
+            versions
+                .next()
+                .filter(|version| digits(version))
+                .map(str::parse::<u32>),
+            versions.next(),
+        ) {
             (Some(Ok(version)), None) if version > 0 => Ok(Self {
                 version,
                 definition,

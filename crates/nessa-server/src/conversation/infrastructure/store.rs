@@ -108,13 +108,9 @@ impl LocalConversationStore {
 /// and costs a list or a startup finish that row alone
 /// (`a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone`).
 fn damaged(error: &rusqlite::Error) -> bool {
-    matches!(
-        error,
-        rusqlite::Error::FromSqlConversionFailure(..)
-            | rusqlite::Error::InvalidColumnType(..)
-            | rusqlite::Error::IntegralValueOutOfRange(..)
-            | rusqlite::Error::Utf8Error(..)
-    )
+    // The one such error a `STRICT` table leaves reachable: every other
+    // column type is held to its declaration when it is written.
+    matches!(error, rusqlite::Error::Utf8Error(..))
 }
 
 /// A row's cells, `None` when they are [`damaged`].

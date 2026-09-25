@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -264,7 +265,7 @@ test("a dry run reads and reports, and writes nothing", async () => {
     records: 1,
     tombstones: 0,
     summaries: 0,
-    inserted: 0,
+    inserted: 1,
   })
   assert.ok(!existsSync(join(root, "metadata.sqlite3")))
   assert.ok(existsSync(join(root, "metadata", `${one}.json`)))
@@ -347,4 +348,56 @@ test("M5: a run killed in the middle of its commit is finished by the next", asy
   })
   // The killed writer's rows were rolled back, not kept.
   assert.equal(rows(root, "SELECT count(*) AS n FROM conversations")[0].n, 1)
+})
+
+test("a dry run finds what the real run would refuse, and still writes nothing", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  await move(root)
+  mkdirSync(join(root, "metadata"), { mode: 0o700 })
+  writeFileSync(
+    join(root, "metadata", `${one}.json`),
+    JSON.stringify(record(one, { owner: "mallory" })),
+    { mode: 0o600 },
+  )
+  writeFileSync(join(root, "metadata", `${two}.json`), JSON.stringify(record(two)), {
+    mode: 0o600,
+  })
+  const refused = await move(root, { dryRun: true })
+  assert.equal(refused.state, "refused")
+  assert.match(refused.refused[0].why, /already holds/)
+  rmSync(join(root, "metadata", `${one}.json`))
+  assert.deepEqual(await move(root, { dryRun: true }), {
+    state: "would move",
+    records: 1,
+    tombstones: 0,
+    summaries: 0,
+    inserted: 1,
+  })
+  assert.equal(rows(root, "SELECT count(*) AS n FROM conversations")[0].n, 1)
+  // At another version, the dry run is refused as the real run is.
+  const db = new DatabaseSync(join(root, "metadata.sqlite3"))
+  db.exec("PRAGMA user_version = 99")
+  db.close()
+  await assert.rejects(move(root, { dryRun: true }), /schema version 99/)
+})
+
+test("a directory that cannot be looked at is not one with nothing to move", async () => {
+  const root = conversationsOf({ [`metadata/${one}.json`]: record(one) })
+  await assert.rejects(move(join(root, "mistyped")), /ENOENT/)
+  if (process.platform !== "win32" && process.getuid() !== 0) {
+    chmodSync(root, 0o000)
+    try {
+      await assert.rejects(move(root), /EACCES/)
+    } finally {
+      chmodSync(root, 0o700)
+    }
+  }
+  // A link left where a directory was is not an absent one either.
+  const linked = conversationsOf({})
+  rmSync(join(linked, "metadata"), { recursive: true })
+  rmSync(join(linked, "summaries"), { recursive: true })
+  symlinkSync(join(linked, "nowhere"), join(linked, "metadata"))
+  const result = await move(linked)
+  assert.equal(result.state, "refused")
+  assert.match(result.refused[0].why, /not a directory of its own/)
 })

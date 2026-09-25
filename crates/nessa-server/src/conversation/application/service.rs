@@ -1464,11 +1464,18 @@ impl ConversationService {
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
-        // Whose they are, and that none is deleted, is the listing's answer,
-        // which asks the domain (`ConversationListing::list`).
+        // Found by the listing, decided by the domain: a row it returns that
+        // is not this caller's, or is deleted, is not shown whatever listing
+        // is wired here (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
         let owned: Vec<ListedConversation> = listed
             .conversations
             .into_iter()
+            .filter(|listed| {
+                listed
+                    .conversation
+                    .check_access(&caller.organization_id, &caller.principal_id)
+                    .is_ok()
+            })
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         // Only a conversation that finished opening has anything to say about
@@ -1549,7 +1556,7 @@ impl ConversationService {
     ///
     /// A deleted conversation's summary is never written. The question is
     /// asked under the summary lock a delete erases it under, so a reply
-    /// settling after the delete cannot put the file back
+    /// settling after the delete cannot put the summary back
     /// (`a_late_reply_cannot_write_back_a_deleted_summary`).
     async fn change_summary(
         &self,

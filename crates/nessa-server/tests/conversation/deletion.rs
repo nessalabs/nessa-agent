@@ -2674,9 +2674,9 @@ async fn a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased() {
         async move { service.list(caller("list"), false).await }
     });
     entered.await.unwrap();
-    // The list has read whether the conversation is running and is waiting
-    // on its summary: it holds nothing of the live agent, so a delete gets
-    // the history's lease once the agent is stopped.
+    // The list is waiting on its summaries, before it has asked what is
+    // running: it holds nothing of the live agent, so a delete gets the
+    // history's lease once the agent is stopped.
     assert!(fixture
         .service
         .delete(id.clone(), caller("delete-1"))

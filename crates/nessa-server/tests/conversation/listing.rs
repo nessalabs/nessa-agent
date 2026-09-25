@@ -7,10 +7,13 @@ use super::{
 };
 use crate::{
     agents::domain::AgentId,
-    conversation::domain::{Conversation, ConversationId, ConversationSummary},
+    conversation::domain::{
+        Conversation, ConversationDeletion, ConversationId, ConversationSummary,
+    },
     conversation::{
         application::{
-            ConversationListing, ConversationRepository, ConversationSummaries, ListedConversations,
+            ConversationFuture, ConversationListing, ConversationRepository, ConversationSummaries,
+            ListedConversation, ListedConversations,
         },
         infrastructure::LocalConversationStore,
     },
@@ -1143,7 +1146,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         limit: usize,
-    ) -> crate::conversation::application::ConversationFuture<'_, ListedConversations> {
+    ) -> ConversationFuture<'_, ListedConversations> {
         self.0.lock().unwrap().push(limit);
         Box::pin(async { Ok(ListedConversations::default()) })
     }
@@ -1180,4 +1183,89 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
         *asked.0.lock().unwrap(),
         [MAX_LISTED_CONVERSATIONS + 1, MAX_LISTED_CONVERSATIONS + 1]
     );
+}
+
+/// A listing that answers with whatever it was given, whoever asks.
+struct Answering(Vec<ListedConversation>);
+impl ConversationListing for Answering {
+    fn list(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: bool,
+        _: usize,
+    ) -> ConversationFuture<'_, ListedConversations> {
+        let conversations = self.0.clone();
+        Box::pin(async move {
+            Ok(ListedConversations {
+                conversations,
+                unreadable: 0,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
+    let conversation = |organization: &str, principal: &str| {
+        Conversation::new(
+            id(),
+            OrganizationId::new(organization).unwrap(),
+            PrincipalId::new(principal).unwrap(),
+            "panel".into(),
+            "create".into(),
+            1,
+            AgentId::Claude,
+        )
+        .unwrap()
+    };
+    let mine = conversation("org", "person");
+    let deleted = conversation("org", "person")
+        .deleted(
+            ConversationDeletion::new(
+                OrganizationId::new("org").unwrap(),
+                PrincipalId::new("person").unwrap(),
+                "panel".into(),
+                "delete".into(),
+                2,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let summary = ConversationSummary::after_message(None, "said", None, 3);
+    let answered = [
+        mine.clone(),
+        deleted,
+        conversation("org", "Person"),
+        conversation("elsewhere", "person"),
+    ]
+    .into_iter()
+    .map(|conversation| ListedConversation {
+        conversation,
+        summary: summary.clone(),
+    })
+    .collect();
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(
+                Arc::new(ProviderFactory::default()),
+            ))),
+            storage: Arc::new(CountingStorage::default()),
+            metadata: Arc::new(MemoryRepository::default()),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Answering(answered)),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let listed = service.list(owner(), false).await.unwrap();
+    assert_eq!(ids(&listed.conversations), [mine.id().to_string()]);
 }

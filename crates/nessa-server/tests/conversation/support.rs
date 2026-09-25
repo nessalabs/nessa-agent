@@ -13,7 +13,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
 };
-use nessa_auth::domain::OrganizationId;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::{
         agent_execution::{
@@ -183,7 +183,7 @@ impl ConversationListing for MemoryListing {
     fn list(
         &self,
         organization: &OrganizationId,
-        owner: &nessa_auth::domain::PrincipalId,
+        owner: &PrincipalId,
         archived: bool,
         limit: usize,
     ) -> ConversationFuture<'_, ListedConversations> {
@@ -235,7 +235,7 @@ impl ConversationListing for Unlisted {
     fn list(
         &self,
         _: &OrganizationId,
-        _: &nessa_auth::domain::PrincipalId,
+        _: &PrincipalId,
         _: bool,
         _: usize,
     ) -> ConversationFuture<'_, ListedConversations> {

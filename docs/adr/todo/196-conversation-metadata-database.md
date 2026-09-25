@@ -132,7 +132,7 @@ retrofit script's name, so the order is: retrofit, then move.
 
 | Row | On disk when run | The script does | After |
 | --- | --- | --- | --- |
-| M1 | Old directories, no database | Creates the database from `schema.sql`, inserts every record, tombstone and summary in one transaction, commits, then removes the files and directories | Database only |
+| M1 | Old directories, no database | Creates the database from `schema.sql` in one transaction, inserts every record, tombstone and summary in a second, commits, then removes the files and directories | Database only |
 | M2 | Old directories and a database a crashed run committed | Each file whose row is already there with the same values is removed; a missing row is inserted first; a row that differs stops the run, naming it | Database only |
 | M3 | Any file unreadable, pre-agent, or naming a different ID | Nothing is committed; each such file is named; the exit is nonzero | Unchanged; the operator repairs it or moves it aside and runs again |
 | M4 | A tombstone or summary with no record, as a file or in the database | Refused as M3: the foreign key has nowhere to point | Unchanged |
@@ -188,8 +188,9 @@ gateway-wide. Pagination was asked about and deferred; see Consequences.
   crates).
 - A corrupt database file fails every conversation metadata read, where a
   corrupt JSON file cost one conversation. SQLite's own integrity makes that
-  rarer than a damaged file was, but it is louder when it happens: the log names
-  the file, and `conversation_storage_unavailable` says so to the caller.
+  rarer than a damaged file was, but it is louder when it happens: the log says
+  what SQLite reported (and names the file when it cannot be opened), and
+  `conversation_storage_unavailable` says so to the caller.
 - Every schema change ships a version bump and its own move. A gateway run
   against a database of another version refuses to open it rather than guess.
 - Namespaces that already have conversations must run the move once, with the

@@ -83,8 +83,12 @@ fn metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it() {
             message.contains(&directory.display().to_string()),
             "{message}"
         );
+        // Naming the directory to move, so the script moves this one.
         assert!(
-            message.contains("scripts/move-conversation-metadata.mjs"),
+            message.contains(&format!(
+                "scripts/move-conversation-metadata.mjs {}",
+                root.path().display()
+            )),
             "{message}"
         );
         std::fs::remove_dir(&directory).unwrap();

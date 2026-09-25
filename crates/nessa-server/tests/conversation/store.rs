@@ -774,6 +774,10 @@ async fn a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone() {
     );
 }
 
+// Unix only, as conversations are (composition refuses them elsewhere): on
+// Windows a file the script makes carries no private ACL, and the store
+// rightly refuses it.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_database_the_move_writes_is_one_this_store_reads() {
     // Files as the build before this one wrote them, moved by the script the
@@ -845,6 +849,19 @@ async fn a_database_the_move_writes_is_one_this_store_reads() {
         )
     );
     assert_eq!(listed(&store, &alice(), true, 10).await, (vec![kept], 0));
+}
+
+#[test]
+fn a_database_that_cannot_be_opened_is_metadata_unavailable() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    std::fs::write(&path, [7; 4096]).unwrap();
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(ConversationError::Metadata)
+    ));
 }
 
 /// Rows of `count` conversations owned by `owner`, each with a summary,

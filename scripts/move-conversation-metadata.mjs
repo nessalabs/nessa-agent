@@ -32,7 +32,6 @@
 
 import {
   closeSync,
-  existsSync,
   fsyncSync,
   lstatSync,
   openSync,
@@ -195,7 +194,7 @@ export function read(conversations, held = new Set()) {
     [summaries, SUMMARY, found.summaries],
   ]
   for (const [directory, fields, rows] of directories) {
-    if (!existsSync(directory)) continue
+    if (!present(directory)) continue
     // Through a link, the files removed at the end would be another
     // directory's.
     if (!lstatSync(directory).isDirectory()) {
@@ -331,7 +330,7 @@ async function database(conversations) {
   const definition = readFileSync(SCHEMA, "utf8")
   const version = statedVersion(definition)
   let created = false
-  if (!existsSync(path)) {
+  if (!present(path)) {
     // Private before SQLite opens it, as the server creates it.
     closeSync(openSync(path, "wx", 0o600))
     created = true
@@ -400,7 +399,23 @@ function insert(db, table, rows) {
   return { inserted, conflicts }
 }
 
+/**
+ * Whether `path` is there, told apart from being unable to look: a directory
+ * that cannot be read is not one with nothing to move.
+ */
+function present(path) {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if (error.code === "ENOENT") return false
+    throw error
+  }
+}
+
 function syncDirectory(directory) {
+  // Windows opens no directory for a sync; its moves are written through.
+  if (process.platform === "win32") return
   const handle = openSync(directory, "r")
   try {
     fsyncSync(handle)
@@ -412,7 +427,8 @@ function syncDirectory(directory) {
 /** The records a database already there holds. */
 async function held(conversations) {
   const path = join(conversations, DATABASE)
-  if (!existsSync(path)) return new Set()
+  if (!present(path)) return new Set()
+  if (!lstatSync(path).isFile()) throw new Error(`${path} is not a regular file`)
   const { DatabaseSync } = await import("node:sqlite")
   // Read and write, never read only: a run killed mid-commit leaves a journal
   // only a writer can roll back, and until it is the file cannot be read.
@@ -441,7 +457,9 @@ async function held(conversations) {
 export async function move(conversations, { dryRun = false } = {}) {
   const metadata = join(conversations, "metadata")
   const summaries = join(conversations, "summaries")
-  if (!existsSync(metadata) && !existsSync(summaries)) return { state: "nothing" }
+  if (!lstatSync(conversations).isDirectory())
+    throw new Error(`${conversations} is not a directory`)
+  if (!present(metadata) && !present(summaries)) return { state: "nothing" }
   const found = read(conversations, await held(conversations))
   if (found.refused.length > 0) return { state: "refused", refused: found.refused }
   const counts = {
@@ -449,7 +467,13 @@ export async function move(conversations, { dryRun = false } = {}) {
     tombstones: found.tombstones.length,
     summaries: found.summaries.length,
   }
-  if (dryRun) return { state: "would move", ...counts, inserted: 0 }
+  // A dry run with no database yet has nothing to check the files against.
+  if (dryRun && !present(join(conversations, DATABASE)))
+    return {
+      state: "would move",
+      ...counts,
+      inserted: found.records.length + found.tombstones.length + found.summaries.length,
+    }
   const db = await database(conversations)
   let inserted = 0
   try {
@@ -468,6 +492,11 @@ export async function move(conversations, { dryRun = false } = {}) {
       db.exec("ROLLBACK")
       return { state: "refused", refused: conflicts }
     }
+    // A dry run asks everything a real one does, then keeps none of it.
+    if (dryRun) {
+      db.exec("ROLLBACK")
+      return { state: "would move", ...counts, inserted }
+    }
     db.exec("COMMIT")
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK")
@@ -481,7 +510,7 @@ export async function move(conversations, { dryRun = false } = {}) {
     unlinkSync(path)
   for (const path of found.temporaries) unlinkSync(path)
   for (const directory of [join(metadata, "deleted"), metadata, summaries])
-    if (existsSync(directory)) rmdirSync(directory)
+    if (present(directory)) rmdirSync(directory)
   syncDirectory(conversations)
   return { state: "moved", ...counts, inserted }
 }

@@ -88,6 +88,7 @@ fn a_schema_states_its_version_once_in_its_definition() {
         "CREATE TABLE t (id TEXT) STRICT;\nPRAGMA user_version = 0;",
         "CREATE TABLE t (id TEXT) STRICT;\nPRAGMA user_version = three;",
         "PRAGMA user_version = 1;\nPRAGMA user_version = 2;",
+        "CREATE TABLE t (id TEXT) STRICT;\nPRAGMA user_version = +1;",
     ] {
         assert!(
             matches!(Schema::new(definition), Err(OpenError::UnversionedSchema)),
@@ -161,6 +162,21 @@ fn every_connection_enforces_keys_and_overwrites_what_it_deletes() {
     assert!(!bytes
         .windows(marker.len())
         .any(|window| window == marker.as_bytes()));
+}
+
+#[test]
+fn a_file_that_is_not_a_database_is_refused_and_left_as_it_was() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    let mut file =
+        nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew).unwrap();
+    std::io::Write::write_all(&mut file, &[7; 4096]).unwrap();
+    drop(file);
+    assert!(matches!(
+        open(&path, &schema()),
+        Err(OpenError::Database(_))
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), [7; 4096]);
 }
 
 #[test]
