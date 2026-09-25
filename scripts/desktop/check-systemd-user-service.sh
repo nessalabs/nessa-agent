@@ -21,20 +21,41 @@ cleanup() {
 }
 trap cleanup EXIT
 chmod 700 "$runtime_directory"
-export XDG_RUNTIME_DIR="$runtime_directory"
+runner_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+transient_unit="nessa-systemd-acceptance-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
+if ! XDG_RUNTIME_DIR="$runner_runtime" systemctl --user show-environment >/dev/null 2>&1; then
+  echo "hosted runner does not provide the required ephemeral user manager" >&2
+  exit 1
+fi
 
-# This manager exists only for this test process. The production prerequisite
-# still checks logind linger separately; CI never changes the runner account's
-# linger setting.
+# The hosted runner's existing manager supplies only a delegated cgroup. The
+# nested manager and its bus remain isolated under the temporary runtime root.
+# The production prerequisite still checks linger separately; CI never changes
+# the runner account's linger setting.
+XDG_RUNTIME_DIR="$runner_runtime" systemd-run --user --pipe --wait --collect --quiet \
+  --unit="$transient_unit" \
+  -p Delegate=yes -p Type=exec -d \
+  -E "RUN_DIR=$runtime_directory" \
+  -E "PATH=$PATH" \
+  -E "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" \
+  -E "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
+  bash -euo pipefail <<'DELEGATED'
+export XDG_RUNTIME_DIR="$RUN_DIR"
+export XDG_CONFIG_HOME="$RUN_DIR/config"
+mkdir -p "$XDG_CONFIG_HOME/systemd/user"
+chmod 700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/systemd" "$XDG_CONFIG_HOME/systemd/user"
+
 dbus-run-session -- bash -euo pipefail <<'INNER'
 manager_log="$XDG_RUNTIME_DIR/systemd-manager.log"
 bus_error="$XDG_RUNTIME_DIR/systemd-bus-error.log"
 SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console \
-  systemd --user --unit=basic.target >"$manager_log" 2>&1 &
+  systemd --user >"$manager_log" 2>&1 &
 manager_pid=$!
 stop_manager() {
-  kill "$manager_pid" 2>/dev/null || true
-  wait "$manager_pid" 2>/dev/null || true
+  if [ -n "${manager_pid:-}" ]; then
+    kill -KILL "$manager_pid" 2>/dev/null || true
+    wait "$manager_pid" 2>/dev/null || true
+  fi
 }
 trap stop_manager EXIT
 print_manager_diagnostics() {
@@ -45,9 +66,14 @@ print_manager_diagnostics() {
 }
 
 ready=false
-for _ in $(seq 1 100); do
+for _ in $(seq 1 240); do
   if ! kill -0 "$manager_pid" 2>/dev/null; then
-    echo "disposable systemd user manager exited before readiness" >&2
+    set +e
+    wait "$manager_pid"
+    manager_status=$?
+    set -e
+    manager_pid=
+    echo "disposable systemd user manager exited before readiness with status $manager_status" >&2
     print_manager_diagnostics
     exit 1
   fi
@@ -71,3 +97,4 @@ cargo test -p nessa-app --no-default-features \
   gateway::infrastructure::linux::reconciliation::tests::native_user_manager_is_required_for_the_linux_acceptance_gate \
   -- --ignored --exact
 INNER
+DELEGATED

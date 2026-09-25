@@ -82,13 +82,21 @@ test("the existing Linux matrix leg uniquely owns real runtime assembly", () => 
 
 test("the disposable user manager proves the same session bus and cleans its exact runtime", () => {
   const script = readFileSync("scripts/desktop/check-systemd-user-service.sh", "utf8")
+  assert.match(script, /systemctl --user show-environment/)
+  assert.match(script, /systemd-run --user --pipe --wait --collect --quiet/)
+  assert.match(script, /--unit="\$transient_unit"/)
+  assert.match(script, /-p Delegate=yes -p Type=exec -d/)
+  assert.match(script, /export XDG_RUNTIME_DIR="\$RUN_DIR"/)
+  assert.match(script, /export XDG_CONFIG_HOME="\$RUN_DIR\/config"/)
   assert.match(script, /SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console/)
   assert.match(script, /kill -0 "\$manager_pid"/)
+  assert.match(script, /manager exited before readiness with status \$manager_status/)
   assert.match(script, /-S "\$XDG_RUNTIME_DIR\/systemd\/private"/)
   assert.match(script, /busctl --address="\$DBUS_SESSION_BUS_ADDRESS"/)
   assert.match(script, /status org\.freedesktop\.systemd1/)
   assert.match(script, /2>"\$bus_error"/)
   assert.doesNotMatch(script, /busctl --user/)
+  assert.doesNotMatch(script, /loginctl|enable-linger/)
   assert.match(
     script,
     /inaccessible_directory="\$runtime_directory\/systemd\/inaccessible\/dir"/,
