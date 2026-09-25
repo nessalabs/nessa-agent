@@ -88,6 +88,18 @@ test("the disposable user manager proves the same session bus and cleans its exa
   assert.match(script, /-p Delegate=yes -p Type=exec -d/)
   assert.match(script, /export XDG_RUNTIME_DIR="\$RUN_DIR"/)
   assert.match(script, /export XDG_CONFIG_HOME="\$RUN_DIR\/config"/)
+  assert.match(script, /export XDG_DATA_HOME="\$RUN_DIR\/data"/)
+  assert.match(script, /export XDG_STATE_HOME="\$RUN_DIR\/state"/)
+  assert.match(script, /export XDG_CACHE_HOME="\$RUN_DIR\/cache"/)
+  assert.match(
+    script,
+    /export SYSTEMD_ENVIRONMENT_GENERATOR_PATH="\$RUN_DIR\/empty-environment-generators"/,
+  )
+  assert.match(script, /export SYSTEMD_GENERATOR_PATH="\$RUN_DIR\/empty-generators"/)
+  assert.match(script, /export SYSTEMD_UNIT_PATH="\$RUN_DIR\/systemd\/user:/)
+  assert.match(script, /systemd --user --unit=basic\.target/)
+  assert.match(script, /disposable systemd user manager ready at/)
+  assert.match(script, /disposable systemd gateway lifecycle completed/)
   assert.match(script, /SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console/)
   assert.match(script, /kill -0 "\$manager_pid"/)
   assert.match(script, /manager exited before readiness with status \$manager_status/)

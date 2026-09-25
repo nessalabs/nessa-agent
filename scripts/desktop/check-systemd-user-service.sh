@@ -42,14 +42,37 @@ XDG_RUNTIME_DIR="$runner_runtime" systemd-run --user --pipe --wait --collect --q
   bash -euo pipefail <<'DELEGATED'
 export XDG_RUNTIME_DIR="$RUN_DIR"
 export XDG_CONFIG_HOME="$RUN_DIR/config"
-mkdir -p "$XDG_CONFIG_HOME/systemd/user"
-chmod 700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/systemd" "$XDG_CONFIG_HOME/systemd/user"
+export XDG_DATA_HOME="$RUN_DIR/data"
+export XDG_STATE_HOME="$RUN_DIR/state"
+export XDG_CACHE_HOME="$RUN_DIR/cache"
+export SYSTEMD_ENVIRONMENT_GENERATOR_PATH="$RUN_DIR/empty-environment-generators"
+export SYSTEMD_GENERATOR_PATH="$RUN_DIR/empty-generators"
+export SYSTEMD_UNIT_PATH="$RUN_DIR/systemd/user:/usr/lib/systemd/user"
+mkdir -p \
+  "$XDG_CONFIG_HOME/systemd/user" \
+  "$XDG_DATA_HOME" \
+  "$XDG_STATE_HOME" \
+  "$XDG_CACHE_HOME" \
+  "$SYSTEMD_ENVIRONMENT_GENERATOR_PATH" \
+  "$SYSTEMD_GENERATOR_PATH" \
+  "$RUN_DIR/systemd/user"
+chmod 700 \
+  "$XDG_CONFIG_HOME" \
+  "$XDG_CONFIG_HOME/systemd" \
+  "$XDG_CONFIG_HOME/systemd/user" \
+  "$XDG_DATA_HOME" \
+  "$XDG_STATE_HOME" \
+  "$XDG_CACHE_HOME" \
+  "$SYSTEMD_ENVIRONMENT_GENERATOR_PATH" \
+  "$SYSTEMD_GENERATOR_PATH" \
+  "$RUN_DIR/systemd" \
+  "$RUN_DIR/systemd/user"
 
 dbus-run-session -- bash -euo pipefail <<'INNER'
 manager_log="$XDG_RUNTIME_DIR/systemd-manager.log"
 bus_error="$XDG_RUNTIME_DIR/systemd-bus-error.log"
 SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console \
-  systemd --user >"$manager_log" 2>&1 &
+  systemd --user --unit=basic.target >"$manager_log" 2>&1 &
 manager_pid=$!
 stop_manager() {
   if [ -n "${manager_pid:-}" ]; then
@@ -90,11 +113,13 @@ if [ "$ready" != true ]; then
   print_manager_diagnostics
   exit 1
 fi
+echo "disposable systemd user manager ready at $XDG_RUNTIME_DIR with $SYSTEMD_UNIT_PATH"
 
 export NESSA_SYSTEMD_ACCEPTANCE=1
 export NESSA_STAGE=dev
 cargo test -p nessa-app --no-default-features \
   gateway::infrastructure::linux::reconciliation::tests::native_user_manager_is_required_for_the_linux_acceptance_gate \
   -- --ignored --exact
+echo "disposable systemd gateway lifecycle completed"
 INNER
 DELEGATED
