@@ -12,7 +12,7 @@ use crate::gateway::domain::value_objects::{
     ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     ServiceConfiguration,
 };
-use nessa_local_storage::OpenMode;
+use nessa_local_storage::{OpenMode, PrivateTempFile};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
@@ -940,33 +940,25 @@ fn register(
         }
     }
     let installation = (|| -> Result<ManagedRuntime, RegisterFailure> {
-        std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
+        let agents_relative = Path::new("Library/LaunchAgents");
+        nessa_local_storage::create_private_directory_tree_beneath(home, agents_relative)
+            .map_err(|error| error.to_string())?;
         let logs = log.parent().ok_or("invalid log directory")?;
         nessa_local_storage::create_directory(logs).map_err(|e| e.to_string())?;
         // Reserve the log privately before launchd opens it.
         let _ =
             nessa_local_storage::open(&log, OpenMode::OpenOrCreate).map_err(|e| e.to_string())?;
-        let next = agents.join(format!(".{label}.{}.plist", std::process::id()));
-        let mut file =
-            nessa_local_storage::open(&next, OpenMode::OpenOrCreate).map_err(|e| e.to_string())?;
-        file.set_len(0).map_err(|e| e.to_string())?;
-        file.write_all(&serde_json::to_vec(&definition).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
-        let converted = Command::new("/usr/bin/plutil")
-            .args(["-convert", "xml1"])
-            .arg(&next)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !converted.status.success() {
-            let _ = fs::remove_file(&next);
-            return Err("Could not write gateway service definition".into());
-        }
-        nessa_local_storage::open(&next, OpenMode::Read)
-            .map_err(|e| e.to_string())?
+        let definition_json = serde_json::to_vec(&definition).map_err(|error| error.to_string())?;
+        let definition_xml = convert_definition_to_xml(&definition_json)?;
+        let mut next = PrivateTempFile::new_beneath(home, agents_relative)
+            .map_err(|error| error.to_string())?;
+        next.as_file_mut()
+            .write_all(&definition_xml)
+            .map_err(|error| error.to_string())?;
+        next.as_file()
             .sync_all()
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| error.to_string())?;
+        let destination = agents_relative.join(format!("{label}.plist"));
         run_planned_effect(
             progress,
             "publish-service-definition",
@@ -976,7 +968,10 @@ fn register(
             || {
                 publish_definition(
                     progress,
-                    || fs::rename(&next, &path).map_err(|error| error.to_string()),
+                    || {
+                        next.persist_beneath(&destination)
+                            .map_err(|error| error.to_string())
+                    },
                     || {
                         nessa_local_storage::sync_directory(&agents)
                             .map_err(|error| error.to_string())
@@ -1309,6 +1304,35 @@ fn registered_agent_path(
 fn service_matches(path: &Path, expected: &Value) -> bool {
     read_definition(path).is_ok_and(|actual| actual == *expected)
 }
+
+fn convert_definition_to_xml(definition: &[u8]) -> Result<Vec<u8>, String> {
+    let mut child = Command::new("/usr/bin/plutil")
+        .args(["-convert", "xml1", "-o", "-", "--", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or("Could not open plist converter input")?
+        .write_all(definition)
+        .map_err(|error| error.to_string())?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if detail.is_empty() {
+            "Could not write gateway service definition".into()
+        } else {
+            format!("Could not write gateway service definition: {detail}")
+        });
+    }
+    Ok(output.stdout)
+}
+
 fn read_definition(path: &Path) -> Result<Value, String> {
     let output = Command::new("/usr/bin/plutil")
         .args(["-convert", "json", "-o", "-"])
