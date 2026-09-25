@@ -456,6 +456,17 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 _ => LifecycleEffect::SettleSystemdWantsLinkTransaction { target },
             })
         }
+        "settle_gateway_data_directory_transaction"
+        | "settle_systemd_wants_directory_transaction" => {
+            object_exact(object, &["kind", "target", "generation"])?;
+            let target = parse_target(&object["target"])?;
+            let generation = string(object, "generation")?;
+            Ok(if kind == "settle_gateway_data_directory_transaction" {
+                LifecycleEffect::SettleGatewayDataDirectoryTransaction { target, generation }
+            } else {
+                LifecycleEffect::SettleSystemdWantsDirectoryTransaction { target, generation }
+            })
+        }
         "reload_systemd_manager" | "start_systemd_unit" | "stop_systemd_unit" => {
             let has_mode = kind != "reload_systemd_manager";
             object_exact(
@@ -1051,6 +1062,7 @@ fn recovery_step(
     pending_observation: Option<&LifecycleObservationSource>,
 ) -> Result<Option<GatewayLifecycleRecoveryStep>, GatewayError> {
     let mut primary_steps = Vec::new();
+    let mut plans = Vec::new();
     let mut all_steps = Vec::new();
     let mut native_attempts = Vec::new();
     let mut completions = Vec::new();
@@ -1062,6 +1074,7 @@ fn recovery_step(
                 cleanup,
                 ..
             } => {
+                plans.push((plan_id.clone(), cleanup.clone()));
                 primary_steps.push((plan_id.clone(), primary.clone()));
                 all_steps.push((plan_id.clone(), primary.clone()));
                 all_steps.extend(cleanup.iter().cloned().map(|step| (plan_id.clone(), step)));
@@ -1095,6 +1108,10 @@ fn recovery_step(
         return Ok(Some(GatewayLifecycleRecoveryStep::new(
             plan_id.clone(),
             step,
+            plans
+                .iter()
+                .find(|(candidate, _)| candidate == plan_id)
+                .map_or_else(Vec::new, |(_, cleanup)| cleanup.clone()),
             Some(completion),
             native_attempts
                 .iter()
@@ -1119,6 +1136,10 @@ fn recovery_step(
         [(plan_id, step)] => Ok(Some(GatewayLifecycleRecoveryStep::new(
             plan_id.clone(),
             step.clone(),
+            plans
+                .iter()
+                .find(|(candidate, _)| candidate == plan_id)
+                .map_or_else(Vec::new, |(_, cleanup)| cleanup.clone()),
             None,
             native_attempts
                 .iter()
@@ -1692,6 +1713,11 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         LifecycleEffect::CreateGatewayDataDirectory { target } => {
             json!({"kind":"create_gateway_data_directory", "target":self::target(target)})
         }
+        LifecycleEffect::SettleGatewayDataDirectoryTransaction { target, generation } => json!({
+            "kind":"settle_gateway_data_directory_transaction",
+            "target":self::target(target),
+            "generation":generation,
+        }),
         LifecycleEffect::ReloadSystemdManager { manager, unit } => json!({
             "kind":"reload_systemd_manager",
             "manager":systemd_manager(manager),
@@ -1700,6 +1726,11 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         LifecycleEffect::CreateSystemdWantsDirectory { target } => {
             json!({"kind":"create_systemd_wants_directory", "target":self::target(target)})
         }
+        LifecycleEffect::SettleSystemdWantsDirectoryTransaction { target, generation } => json!({
+            "kind":"settle_systemd_wants_directory_transaction",
+            "target":self::target(target),
+            "generation":generation,
+        }),
         LifecycleEffect::PublishSystemdWantsLink { target } => {
             json!({"kind":"publish_systemd_wants_link", "target":self::target(target)})
         }
@@ -2083,6 +2114,29 @@ mod tests {
             },
             LifecycleEffect::SettleSystemdWantsLinkTransaction {
                 target: target.clone(),
+            },
+        ] {
+            let value = lifecycle_effect(&effect);
+            assert_eq!(parse_effect(&value).unwrap(), effect);
+        }
+    }
+
+    #[test]
+    fn systemd_directory_cleanup_effects_round_trip_exact_transactions() {
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        for effect in [
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                target: target.clone(),
+                generation: "c".repeat(64),
+            },
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target,
+                generation: "d".repeat(64),
             },
         ] {
             let value = lifecycle_effect(&effect);

@@ -7,11 +7,13 @@ use super::{
         LinuxSignalAuthority, NativeLinuxProcessFactory,
     },
     staging::{
-        bytes_match, create_owned_directory_chain, definition_transaction,
-        discard_wants_link_temporary, owned_file_bytes, publish_bytes, publish_runtime,
-        publish_wants_link, remove_staging_runtime, replace_owned_bytes, runtime_fingerprint,
-        settle_definition_transaction, settle_wants_link_transaction, staging_runtime_present,
-        validate_runtime, wants_link_matches, wants_link_temporary_present,
+        bytes_match, create_owned_directory_transaction, definition_transaction,
+        discard_wants_link_temporary, owned_directory_transaction_present, owned_file_bytes,
+        publish_bytes, publish_runtime, publish_wants_link, remove_staging_runtime,
+        replace_owned_bytes, runtime_fingerprint, settle_definition_transaction,
+        settle_owned_directory_transaction, settle_recovered_owned_directory_transaction,
+        settle_wants_link_transaction, staging_runtime_present, validate_runtime,
+        wants_link_matches, wants_link_temporary_present,
     },
     unit::{render, rendered_agent_path, unit_name, RenderedUnit, UnitDefinition},
     user_manager::{verify_linger, JobTerminal, UnitSnapshot, UserManager},
@@ -44,7 +46,7 @@ use std::{
     io::{ErrorKind, Read, Write},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -573,19 +575,28 @@ impl GatewayHost for SystemdGateway {
             &paths.runtime_root,
             &staged_runtime,
             &fingerprint,
+            || {
+                self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
+                    .map_err(|error| error.to_string())
+            },
         )?;
-        planned_physical(
+        let data_directory_generation = random_digest().map_err(GatewayError::Registration)?;
+        planned_directory(
             progress,
             "create-gateway-data-directory",
             LifecycleEffect::CreateGatewayDataDirectory {
                 target: target.clone(),
             },
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                target: target.clone(),
+                generation: data_directory_generation.clone(),
+            },
+            &data,
+            &data_directory_generation,
             || {
                 self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
                     .map_err(|error| error.to_string())
             },
-            || prepare_data_directory(self.configuration.data_root(), &data),
-            || owned_directory_present(&data),
         )?;
         planned_physical_with_cleanup(
             progress,
@@ -620,7 +631,7 @@ impl GatewayHost for SystemdGateway {
                     ),
                 },
                 present: || bytes_match(&paths.unit_file, &rendered.bytes),
-                cleanup_run: || {
+                cleanup_run: |_| {
                     settle_definition_transaction(
                         &paths.unit_file,
                         &rendered.bytes,
@@ -652,18 +663,23 @@ impl GatewayHost for SystemdGateway {
             || manager.reload(),
             || Ok(true),
         )?;
-        planned_physical(
+        let wants_directory_generation = random_digest().map_err(GatewayError::Registration)?;
+        planned_directory(
             progress,
             "create-systemd-wants-directory",
             LifecycleEffect::CreateSystemdWantsDirectory {
                 target: target.clone(),
             },
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target: target.clone(),
+                generation: wants_directory_generation.clone(),
+            },
+            &paths.wants_directory,
+            &wants_directory_generation,
             || {
                 self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
                     .map_err(|error| error.to_string())
             },
-            || create_owned_directory_chain(&paths.wants_directory),
-            || owned_directory_present(&paths.wants_directory),
         )?;
         planned_physical_with_cleanup(
             progress,
@@ -690,7 +706,7 @@ impl GatewayHost for SystemdGateway {
                     )
                 },
                 present: || wants_link_matches(&paths.wants_link, &paths.unit_file),
-                cleanup_run: || {
+                cleanup_run: |_| {
                     discard_wants_link_temporary(
                         &paths.wants_directory,
                         &paths.wants_link,
@@ -858,6 +874,44 @@ impl GatewayHost for SystemdGateway {
                         &paths.wants_link,
                         &paths.unit_file,
                         recovery.target().service_generation(),
+                    )
+                    .map_err(GatewayError::Registration)?;
+                }
+                LifecycleEffect::CreateGatewayDataDirectory { target }
+                    if target == recovery.target() =>
+                {
+                    let generation = directory_cleanup_generation(recovery, true)?;
+                    settle_recovered_owned_directory_transaction(
+                        &data,
+                        generation,
+                        matches!(step.completion(), Some(LifecycleCommandResult::Accepted)),
+                    )
+                    .map_err(GatewayError::Registration)?;
+                }
+                LifecycleEffect::CreateSystemdWantsDirectory { target }
+                    if target == recovery.target() =>
+                {
+                    let generation = directory_cleanup_generation(recovery, false)?;
+                    settle_recovered_owned_directory_transaction(
+                        &paths.wants_directory,
+                        generation,
+                        matches!(step.completion(), Some(LifecycleCommandResult::Accepted)),
+                    )
+                    .map_err(GatewayError::Registration)?;
+                }
+                LifecycleEffect::SettleGatewayDataDirectoryTransaction { target, generation }
+                    if target == recovery.target() =>
+                {
+                    settle_recovered_owned_directory_transaction(&data, generation, true)
+                        .map_err(GatewayError::Registration)?;
+                }
+                LifecycleEffect::SettleSystemdWantsDirectoryTransaction { target, generation }
+                    if target == recovery.target() =>
+                {
+                    settle_recovered_owned_directory_transaction(
+                        &paths.wants_directory,
+                        generation,
+                        true,
                     )
                     .map_err(GatewayError::Registration)?;
                 }
@@ -1144,6 +1198,36 @@ impl GatewayHost for SystemdGateway {
     }
 }
 
+fn directory_cleanup_generation(
+    recovery: &GatewayLifecycleRecovery,
+    data_directory: bool,
+) -> Result<&str, GatewayError> {
+    recovery
+        .pending_step()
+        .and_then(|step| {
+            step.contingencies()
+                .iter()
+                .find_map(|contingency| match contingency.effect() {
+                    LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                        target,
+                        generation,
+                    } if data_directory && target == recovery.target() => Some(generation.as_str()),
+                    LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                        target,
+                        generation,
+                    } if !data_directory && target == recovery.target() => {
+                        Some(generation.as_str())
+                    }
+                    _ => None,
+                })
+        })
+        .ok_or_else(|| {
+            GatewayError::Registration(
+                "Recovered directory creation lacks its exact cleanup transaction".into(),
+            )
+        })
+}
+
 fn command_failure(result: &LifecycleCommandResult) -> Option<String> {
     match result {
         LifecycleCommandResult::Accepted => None,
@@ -1159,6 +1243,7 @@ fn stage_runtime(
     root: &Path,
     destination: &Path,
     fingerprint: &str,
+    authorize: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), GatewayError> {
     let staging_generation = random_digest().map_err(GatewayError::Registration)?;
     let primary = LifecyclePlanStep::new(
@@ -1179,7 +1264,8 @@ fn stage_runtime(
     .map_err(|error| GatewayError::Registration(error.to_string()))?;
     let plan_id = "stage-systemd-runtime";
     progress.effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup))?;
-    let result = publish_runtime(source, root, fingerprint, &staging_generation).map(|_| ());
+    let result = authorize()
+        .and_then(|()| publish_runtime(source, root, fingerprint, &staging_generation).map(|_| ()));
     let primary_present = runtime_artifact_present(destination, fingerprint);
     let cleanup_result = remove_staging_runtime(root, &staging_generation);
     let cleanup_present = staging_runtime_present(root, &staging_generation);
@@ -1262,6 +1348,42 @@ fn stage_runtime(
     result.map_err(GatewayError::Registration)
 }
 
+fn planned_directory(
+    progress: &dyn GatewayReconciliationProgress,
+    plan_id: &str,
+    primary: LifecycleEffect,
+    cleanup: LifecycleEffect,
+    path: &Path,
+    generation: &str,
+    authorize: impl FnOnce() -> Result<(), String>,
+) -> Result<(), GatewayError> {
+    let transaction = Mutex::new(None);
+    planned_physical_with_cleanup(
+        progress,
+        plan_id,
+        PhysicalPlanWithCleanup { primary, cleanup },
+        PhysicalActionsWithCleanup {
+            authorize,
+            run: || {
+                let created = create_owned_directory_transaction(path, generation)?;
+                *transaction
+                    .lock()
+                    .map_err(|_| "Gateway directory transaction lock was poisoned".to_string())? =
+                    created;
+                Ok(())
+            },
+            present: || owned_directory_present(path),
+            cleanup_run: |retain| {
+                let transaction = transaction
+                    .lock()
+                    .map_err(|_| "Gateway directory transaction lock was poisoned".to_string())?;
+                settle_owned_directory_transaction(transaction.as_ref(), retain)
+            },
+            cleanup_present: || owned_directory_transaction_present(path, generation),
+        },
+    )
+}
+
 fn planned_physical(
     progress: &dyn GatewayReconciliationProgress,
     plan_id: &str,
@@ -1330,7 +1452,7 @@ where
     Authorize: FnOnce() -> Result<(), String>,
     Run: FnOnce() -> Result<(), String>,
     Present: FnOnce() -> Result<bool, String>,
-    CleanupRun: FnOnce() -> Result<(), String>,
+    CleanupRun: FnOnce(bool) -> Result<(), String>,
     CleanupPresent: FnOnce() -> Result<bool, String>,
 {
     let primary = LifecyclePlanStep::new(
@@ -1348,7 +1470,7 @@ where
     progress.effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup))?;
     let result = (actions.authorize)().and_then(|()| (actions.run)());
     let primary_present = (actions.present)();
-    let cleanup_result = (actions.cleanup_run)();
+    let cleanup_result = (actions.cleanup_run)(result.is_ok());
     let cleanup_present = (actions.cleanup_present)();
     let completion = match &result {
         Ok(()) => LifecycleCommandResult::Accepted,
@@ -1486,8 +1608,20 @@ fn recovery_artifact_present(
             }
             owned_directory_present(authority.data)
         }
+        LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+            target: planned,
+            generation,
+        } => {
+            if planned != target {
+                return Err("Recovered data-directory cleanup targets another lifecycle".into());
+            }
+            owned_directory_transaction_present(authority.data, generation)
+        }
         LifecycleEffect::CreateSystemdWantsDirectory { .. } => {
             owned_directory_present(&paths.wants_directory)
+        }
+        LifecycleEffect::SettleSystemdWantsDirectoryTransaction { generation, .. } => {
+            owned_directory_transaction_present(&paths.wants_directory, generation)
         }
         LifecycleEffect::PublishSystemdWantsLink { .. } => {
             wants_link_matches(&paths.wants_link, &paths.unit_file)
@@ -2386,18 +2520,6 @@ fn verify_env_launcher() -> Result<(), String> {
         || metadata.permissions().mode() & 0o7777 != 0o755
     {
         return Err("/usr/bin/env must be a root-owned regular executable with mode 0755".into());
-    }
-    Ok(())
-}
-
-fn prepare_data_directory(root: &Path, data: &Path) -> Result<(), String> {
-    nessa_local_storage::create_directory(root).map_err(|error| error.to_string())?;
-    let relative = data
-        .strip_prefix(root)
-        .map_err(|_| "The gateway data directory escaped its trusted root".to_string())?;
-    if !relative.as_os_str().is_empty() {
-        nessa_local_storage::create_directory_beneath(root, relative)
-            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -3347,7 +3469,7 @@ mod tests {
                         .fetch_add(1, Ordering::SeqCst);
                     Ok(true)
                 },
-                cleanup_run: || {
+                cleanup_run: |_| {
                     progress.physical_cleanup.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 },
@@ -4073,7 +4195,7 @@ mod tests {
             &unit,
         )
         .unwrap();
-        create_owned_directory_chain(&paths.unit_root).unwrap();
+        super::super::staging::create_owned_directory_chain(&paths.unit_root).unwrap();
         fs::write(&paths.unit_file, b"admitted bytes").unwrap();
         fs::set_permissions(&paths.unit_file, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(
@@ -4116,6 +4238,16 @@ mod tests {
         ))
         .unwrap();
         let path = unit_root.join(unit.as_str());
+        let wants = unit_root.join("default.target.wants");
+        let wants_preexisting = wants.exists();
+        fs::create_dir_all(&wants).expect("disposable systemd wants directory must be creatable");
+        let link = wants.join(unit.as_str());
+        std::os::unix::fs::symlink(Path::new("..").join(unit.as_str()), &link)
+            .expect("disposable systemd wants link must be creatable");
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            Path::new("..").join(unit.as_str())
+        );
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -4132,15 +4264,38 @@ mod tests {
             drop(file);
             manager.reload()?;
             let start = manager.enqueue(SystemdJobOperation::Start, &unit, &clock)?;
+            let start_attempt = start.attempt.clone();
             let terminal = start.wait(&clock, clock.now() + JOB_TIMEOUT)?;
             if terminal.result != "done" {
                 return Err(format!("disposable StartUnit returned {}", terminal.result));
+            }
+            let terminal_evidence = SystemdJobTerminal::new(
+                terminal.manager.clone(),
+                terminal.object_path.clone(),
+                terminal.job_id,
+                terminal.unit.clone(),
+                terminal.result.clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            if start_attempt.classify_terminal(
+                manager.identity(),
+                SystemdJobOperation::Start,
+                SystemdJobMode::Fail,
+                &unit,
+                &terminal_evidence,
+            ) != SystemdJobConclusion::Accepted
+            {
+                return Err("real StartUnit evidence did not classify as accepted".into());
             }
             let running = manager
                 .snapshot(&unit)?
                 .ok_or_else(|| "disposable unit disappeared after StartUnit".to_string())?;
             if running.main_process_id == 0 || running.active_state != "active" {
                 return Err("disposable unit did not reach an active process".into());
+            }
+            let process = NativeLinuxProcessFactory.open(running.main_process_id)?;
+            if !process.is_live() {
+                return Err("pidfd did not retain the disposable main process".into());
             }
             let stop = manager.enqueue(SystemdJobOperation::Stop, &unit, &clock)?;
             let terminal = stop.wait(&clock, clock.now() + JOB_TIMEOUT)?;
@@ -4153,6 +4308,17 @@ mod tests {
             if stopped.main_process_id != 0 || stopped.active_state != "inactive" {
                 return Err("disposable unit did not reach inactive/dead".into());
             }
+            let absent = SystemdUnitName::parse(format!(
+                "nessa-gateway-absent-{}.service",
+                std::process::id()
+            ))
+            .map_err(|error| error.to_string())?;
+            if manager
+                .enqueue(SystemdJobOperation::Start, &absent, &clock)
+                .is_ok()
+            {
+                return Err("StartUnit unexpectedly admitted an absent disposable unit".into());
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -4160,9 +4326,14 @@ mod tests {
                 let _ = job.wait(&clock, clock.now() + JOB_TIMEOUT);
             }
         }
+        let link_removal = fs::remove_file(&link);
         let removal = fs::remove_file(&path);
         let reload = manager.reload();
+        link_removal.expect("disposable systemd wants link cleanup must succeed");
         removal.expect("disposable systemd unit cleanup must succeed");
+        if !wants_preexisting {
+            fs::remove_dir(&wants).expect("disposable empty wants directory cleanup must succeed");
+        }
         reload.expect("systemd must acknowledge disposable unit cleanup");
         result.expect("native disposable StartUnit/StopUnit lifecycle must pass");
     }

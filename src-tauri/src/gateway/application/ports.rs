@@ -1059,6 +1059,7 @@ pub struct GatewayLifecycleRecovery {
 pub struct GatewayLifecycleRecoveryStep {
     plan_id: String,
     step: LifecyclePlanStep,
+    contingencies: Vec<LifecyclePlanStep>,
     completion: Option<LifecycleCommandResult>,
     native_attempt: Option<SystemdJobAttempt>,
 }
@@ -1067,12 +1068,14 @@ impl GatewayLifecycleRecoveryStep {
     pub(crate) fn new(
         plan_id: String,
         step: LifecyclePlanStep,
+        contingencies: Vec<LifecyclePlanStep>,
         completion: Option<LifecycleCommandResult>,
         native_attempt: Option<SystemdJobAttempt>,
     ) -> Self {
         Self {
             plan_id,
             step,
+            contingencies,
             completion,
             native_attempt,
         }
@@ -1088,6 +1091,11 @@ impl GatewayLifecycleRecoveryStep {
 
     pub fn completion(&self) -> Option<&LifecycleCommandResult> {
         self.completion.as_ref()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn contingencies(&self) -> &[LifecyclePlanStep] {
+        &self.contingencies
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]

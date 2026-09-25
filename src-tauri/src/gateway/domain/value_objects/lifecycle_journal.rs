@@ -118,12 +118,20 @@ pub enum LifecycleEffect {
     CreateGatewayDataDirectory {
         target: ReconciliationTarget,
     },
+    SettleGatewayDataDirectoryTransaction {
+        target: ReconciliationTarget,
+        generation: String,
+    },
     ReloadSystemdManager {
         manager: SystemdManagerIdentity,
         unit: SystemdUnitName,
     },
     CreateSystemdWantsDirectory {
         target: ReconciliationTarget,
+    },
+    SettleSystemdWantsDirectoryTransaction {
+        target: ReconciliationTarget,
+        generation: String,
     },
     PublishSystemdWantsLink {
         target: ReconciliationTarget,
@@ -188,6 +196,10 @@ impl LifecyclePlanStep {
             LifecycleEffect::StageRuntime { fingerprint }
             | LifecycleEffect::PruneRuntime { fingerprint } => sha256_hex(fingerprint),
             LifecycleEffect::RemoveStagingRuntime { generation } => sha256_hex(generation),
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction { generation, .. }
+            | LifecycleEffect::SettleSystemdWantsDirectoryTransaction { generation, .. } => {
+                sha256_hex(generation)
+            }
             LifecycleEffect::RequestSystemdRetirement { request_id, .. } => {
                 canonical_uuid(request_id)
             }
@@ -875,7 +887,13 @@ fn validate_primary_effect(
         LifecycleEffect::UnloadService { service } => service == namespace,
         LifecycleEffect::PublishServiceDefinition { target: planned }
         | LifecycleEffect::CreateGatewayDataDirectory { target: planned }
+        | LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+            target: planned, ..
+        }
         | LifecycleEffect::CreateSystemdWantsDirectory { target: planned }
+        | LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+            target: planned, ..
+        }
         | LifecycleEffect::PublishSystemdWantsLink { target: planned }
         | LifecycleEffect::SettleSystemdWantsLinkTransaction { target: planned }
         | LifecycleEffect::BootstrapService { target: planned }
@@ -962,6 +980,20 @@ fn validate_cleanup_effect(
             LifecycleEffect::BootstrapService { target: planned },
             LifecycleEffect::UnloadService { service },
         ) => planned == target && service == namespace,
+        (
+            LifecycleEffect::CreateGatewayDataDirectory { target: created },
+            LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                target: settled,
+                generation,
+            },
+        )
+        | (
+            LifecycleEffect::CreateSystemdWantsDirectory { target: created },
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target: settled,
+                generation,
+            },
+        ) => created == target && settled == target && valid_digest(generation),
         (
             LifecycleEffect::PublishSystemdServiceDefinition {
                 target: published,
@@ -1568,6 +1600,33 @@ mod tests {
             &LifecycleEffect::SettleSystemdWantsLinkTransaction { target: other },
             &target,
             target.service(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn directory_cleanup_requires_the_exact_target_and_a_valid_transaction() {
+        let target = systemd_target();
+        let cleanup = LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+            target: target.clone(),
+            generation: "7".repeat(64),
+        };
+        assert!(validate_cleanup_effect(
+            &LifecycleEffect::CreateGatewayDataDirectory {
+                target: target.clone(),
+            },
+            &cleanup,
+            &target,
+            target.service(),
+        )
+        .is_ok());
+        assert!(LifecyclePlanStep::new(
+            "cleanup".into(),
+            LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                target,
+                generation: "not-a-digest".into(),
+            },
+            LifecycleEffectPredicate::PrimaryReturned,
         )
         .is_err());
     }
