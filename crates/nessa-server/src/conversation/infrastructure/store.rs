@@ -342,7 +342,6 @@ fn read(
     };
     let conversation = stored
         .read()
-        .filter(|conversation| conversation.id() == id)
         .ok_or_else(|| unreadable("conversations", &id.to_string()))?;
     match read_deletion(connection, id)? {
         Some(deletion) => conversation

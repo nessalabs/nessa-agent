@@ -97,6 +97,30 @@ fn a_schema_states_its_version_once_in_its_definition() {
 }
 
 #[test]
+fn a_definition_that_does_not_set_the_version_it_states_is_refused_and_not_kept() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    // Stated on a line of its own, but inside a comment SQLite never runs.
+    let commented =
+        Schema::new("CREATE TABLE t (id TEXT) STRICT;\n/*\nPRAGMA user_version = 5;\n*/").unwrap();
+    assert!(matches!(
+        open(&path, &commented),
+        Err(OpenError::Version {
+            found: 0,
+            expected: 5
+        })
+    ));
+    // Nothing of it was kept: the file is still empty and takes a schema.
+    assert_eq!(
+        open(&path, &schema())
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .unwrap(),
+        3
+    );
+}
+
+#[test]
 fn every_connection_enforces_keys_and_overwrites_what_it_deletes() {
     let (_directory, root) = private_directory();
     let path = root.join("store.sqlite3");
