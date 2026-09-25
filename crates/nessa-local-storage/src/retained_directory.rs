@@ -413,6 +413,69 @@ impl PrivateDirectoryTempFile<'_> {
         )
     }
 
+    /// Atomically replace one name in the originating retained directory.
+    ///
+    /// Rename success disarms reservation cleanup. The returned handle retains
+    /// the published identity even when a later acknowledgement step fails.
+    #[cfg(unix)]
+    pub fn replace(
+        mut self,
+        destination: &OsStr,
+    ) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
+        if let Err(error) = validate_name(destination) {
+            return Err(self.fail_before(PrivatePublicationStage::ValidateDestination, error));
+        }
+        if let Err(error) = self.directory.verify_binding() {
+            return Err(self.fail_before(PrivatePublicationStage::VerifyOriginBinding, error));
+        }
+        let file = self.file.as_ref().expect("temporary file is open");
+        match self.directory.named_file_is(&self.name, file) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(
+                    self.fail_before(PrivatePublicationStage::ValidateReservation, unsafe_file())
+                );
+            }
+            Err(error) => {
+                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
+            }
+        }
+        if let Err(error) = file.sync_all() {
+            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
+        }
+        let identity = match self.directory.inner.file_identity(file) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
+            }
+        };
+        if let Err(error) = self.directory.inner.replace(&self.name, destination, file) {
+            return Err(self.fail_before(PrivatePublicationStage::Rename, error));
+        }
+
+        self.cleanup_required = false;
+        let published = PublishedPrivateFile {
+            name: destination.to_owned(),
+            identity,
+            file: self.file.take().expect("temporary file is open"),
+        };
+        acknowledge_publication(
+            published,
+            |published| published.file.sync_all(),
+            |published| match self
+                .directory
+                .inner
+                .named_file_is(&published.name, &published.file)?
+            {
+                true => Ok(()),
+                false => Err(unsafe_file()),
+            },
+            || self.directory.verify_binding(),
+            || self.directory.inner.sync(),
+            || self.directory.verify_binding(),
+        )
+    }
+
     fn fail_before(
         &mut self,
         stage: PrivatePublicationStage,

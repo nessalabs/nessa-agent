@@ -12,7 +12,7 @@ use crate::gateway::domain::value_objects::{
     ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     ServiceConfiguration,
 };
-use nessa_local_storage::{OpenMode, PrivateTempFile};
+use nessa_local_storage::{OpenMode, PrivateDirectory};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
@@ -940,9 +940,10 @@ fn register(
         }
     }
     let installation = (|| -> Result<ManagedRuntime, RegisterFailure> {
-        let agents_relative = Path::new("Library/LaunchAgents");
-        nessa_local_storage::create_private_directory_tree_beneath(home, agents_relative)
+        nessa_local_storage::create_private_directory_path(&agents)
             .map_err(|error| error.to_string())?;
+        let agents_directory =
+            PrivateDirectory::open_path(&agents, &agents).map_err(|error| error.to_string())?;
         let logs = log.parent().ok_or("invalid log directory")?;
         nessa_local_storage::create_directory(logs).map_err(|e| e.to_string())?;
         // Reserve the log privately before launchd opens it.
@@ -950,7 +951,8 @@ fn register(
             nessa_local_storage::open(&log, OpenMode::OpenOrCreate).map_err(|e| e.to_string())?;
         let definition_json = serde_json::to_vec(&definition).map_err(|error| error.to_string())?;
         let definition_xml = convert_definition_to_xml(&definition_json)?;
-        let mut next = PrivateTempFile::new_beneath(home, agents_relative)
+        let mut next = agents_directory
+            .reserve_temp()
             .map_err(|error| error.to_string())?;
         next.as_file_mut()
             .write_all(&definition_xml)
@@ -958,7 +960,7 @@ fn register(
         next.as_file()
             .sync_all()
             .map_err(|error| error.to_string())?;
-        let destination = agents_relative.join(format!("{label}.plist"));
+        let destination = format!("{label}.plist");
         run_planned_effect(
             progress,
             "publish-service-definition",
@@ -969,7 +971,8 @@ fn register(
                 publish_definition(
                     progress,
                     || {
-                        next.persist_beneath(&destination)
+                        next.replace(std::ffi::OsStr::new(&destination))
+                            .map(|_| ())
                             .map_err(|error| error.to_string())
                     },
                     || {

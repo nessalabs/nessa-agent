@@ -136,6 +136,26 @@ fn publication_returns_the_open_destination_for_identity_acknowledgement() {
     assert_eq!(bytes, b"published");
 }
 
+#[cfg(unix)]
+#[test]
+fn retained_replacement_publishes_the_reserved_identity_atomically() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "definition", b"old");
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"new").unwrap();
+
+    let published = reservation.replace(OsStr::new("definition")).unwrap();
+
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    assert_eq!(
+        std::fs::read(root.join("records/definition")).unwrap(),
+        b"new"
+    );
+    assert_eq!(names(&directory).len(), 1);
+}
+
 #[test]
 fn dropping_a_published_handle_keeps_the_destination() {
     let (_temporary, _root, directory) = fixture();

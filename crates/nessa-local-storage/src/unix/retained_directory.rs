@@ -287,6 +287,22 @@ impl RetainedDirectory {
         Ok(())
     }
 
+    pub fn replace(&self, from: &OsStr, to: &OsStr, _: &File) -> io::Result<()> {
+        self.verify_binding()?;
+        let from = CString::new(from.as_bytes()).map_err(|_| unsafe_file())?;
+        let to = CString::new(to.as_bytes()).map_err(|_| unsafe_file())?;
+        let directory = self
+            .chain
+            .last()
+            .expect("retained directory has a root")
+            .file
+            .as_raw_fd();
+        if unsafe { libc::renameat(directory, from.as_ptr(), directory, to.as_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     pub fn remove_reserved(&self, name: &OsStr, file: &File) -> io::Result<()> {
         if !self.named_file_is(name, file)? {
             return Err(unsafe_file());
