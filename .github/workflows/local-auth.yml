@@ -314,6 +314,9 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
             webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
+      - name: Exercise the disposable systemd user-manager lifecycle
+        if: runner.os == 'Linux'
+        run: bash scripts/desktop/check-systemd-user-service.sh
       # This repeats a release build of nessa-server after the matrix's debug
       # build below, and a release build of nessa-mcp after gateway-contract.
       # It is intentionally unique: this is the shipping-profile evidence that

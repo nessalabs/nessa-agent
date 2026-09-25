@@ -70,10 +70,18 @@ trait LinuxManagerFactory: Send + Sync {
 trait LinuxRuntimeContext: Send + Sync {
     fn user_ids(&self) -> (u32, u32);
     fn xdg_paths(&self) -> (Option<OsString>, Option<OsString>, Option<OsString>);
-    fn discover_endpoint(
-        &self,
-        data: &Path,
-    ) -> Result<Option<GatewayEndpointAdvertisement>, String>;
+    fn observe_endpoint_health(&self, data: &Path) -> Result<Option<LinuxEndpointHealth>, String>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinuxEndpointHealth {
+    advertisement: GatewayEndpointAdvertisement,
+}
+
+impl LinuxEndpointHealth {
+    fn advertisement(&self) -> &GatewayEndpointAdvertisement {
+        &self.advertisement
+    }
 }
 
 struct LinuxRuntime<'a> {
@@ -243,11 +251,10 @@ impl LinuxRuntimeContext for NativeLinuxRuntimeContext {
         self.xdg_paths.clone()
     }
 
-    fn discover_endpoint(
-        &self,
-        data: &Path,
-    ) -> Result<Option<GatewayEndpointAdvertisement>, String> {
-        discover_endpoint(data)
+    fn observe_endpoint_health(&self, data: &Path) -> Result<Option<LinuxEndpointHealth>, String> {
+        discover_endpoint(data).map(|advertisement| {
+            advertisement.map(|advertisement| LinuxEndpointHealth { advertisement })
+        })
     }
 }
 
@@ -328,9 +335,10 @@ impl SystemdGateway {
                 != evidence.installed
             || self
                 .runtime_context
-                .discover_endpoint(evidence.data)
+                .observe_endpoint_health(evidence.data)
                 .map_err(GatewayError::Registration)?
                 .as_ref()
+                .map(LinuxEndpointHealth::advertisement)
                 != evidence.advertisement
         {
             return Err(GatewayError::Registration(
@@ -399,9 +407,12 @@ impl GatewayHost for SystemdGateway {
         );
         let advertisement = self
             .runtime_context
-            .discover_endpoint(&data)
+            .observe_endpoint_health(&data)
             .map_err(pre_admission)?;
-        let before = portable_incarnation(&unit, installed.as_ref(), advertisement.as_ref())
+        let advertisement = advertisement
+            .as_ref()
+            .map(LinuxEndpointHealth::advertisement);
+        let before = portable_incarnation(&unit, installed.as_ref(), advertisement)
             .map_err(pre_admission)?;
         let prior_definition = match (installed.as_ref(), before.as_ref()) {
             (Some(snapshot), Some(prior)) => {
@@ -487,7 +498,7 @@ impl GatewayHost for SystemdGateway {
                 paths: &paths,
                 installed: installed.as_ref(),
                 data: &data,
-                advertisement: advertisement.as_ref(),
+                advertisement,
             },
         )
         .map_err(pre_admission)?;
@@ -504,7 +515,7 @@ impl GatewayHost for SystemdGateway {
             &unit,
             &target,
             &rendered,
-            advertisement.as_ref(),
+            advertisement,
         )? {
             let incarnation = ready.audit_identity()?;
             let native = exact_native(
@@ -1075,14 +1086,15 @@ impl GatewayHost for SystemdGateway {
                     "The gateway process cannot be held for exact signal delivery: {error}"
                 ))
             })?;
-        let advertisement = self
+        let health = self
             .runtime_context
-            .discover_endpoint(&data)
+            .observe_endpoint_health(&data)
             .map_err(GatewayError::Stop)?;
+        let advertisement = health.as_ref().map(LinuxEndpointHealth::advertisement);
         let native =
             native_from_snapshot(&snapshot, &target, &unit, true).map_err(GatewayError::Stop)?;
-        let portable = portable_incarnation(&unit, Some(&snapshot), advertisement.as_ref())?
-            .ok_or_else(|| {
+        let portable =
+            portable_incarnation(&unit, Some(&snapshot), advertisement)?.ok_or_else(|| {
                 GatewayError::Stop(
                     "The intended systemd process has no matching endpoint advertisement".into(),
                 )
@@ -1124,6 +1136,12 @@ impl GatewayHost for SystemdGateway {
                 "The intended systemd process lost its unit or enablement identity".into(),
             ));
         }
+        let refreshed_health = self
+            .runtime_context
+            .observe_endpoint_health(&data)
+            .map_err(GatewayError::Stop)?;
+        require_same_endpoint_health(health.as_ref(), refreshed_health.as_ref())
+            .map_err(GatewayError::Stop)?;
         let second = manager
             .snapshot(&unit)
             .map_err(GatewayError::Stop)?
@@ -1235,6 +1253,15 @@ fn command_failure(result: &LifecycleCommandResult) -> Option<String> {
         | LifecycleCommandResult::Failed(error)
         | LifecycleCommandResult::Indeterminate(error) => Some(error.clone()),
     }
+}
+
+fn require_same_endpoint_health(
+    initial: Option<&LinuxEndpointHealth>,
+    refreshed: Option<&LinuxEndpointHealth>,
+) -> Result<(), String> {
+    (initial.is_some() && initial == refreshed)
+        .then_some(())
+        .ok_or_else(|| "The gateway health identity changed during proof".into())
 }
 
 fn stage_runtime(
@@ -1365,12 +1392,12 @@ fn planned_directory(
         PhysicalActionsWithCleanup {
             authorize,
             run: || {
-                let created = create_owned_directory_transaction(path, generation)?;
+                let outcome = create_owned_directory_transaction(path, generation);
                 *transaction
                     .lock()
                     .map_err(|_| "Gateway directory transaction lock was poisoned".to_string())? =
-                    created;
-                Ok(())
+                    outcome.transaction;
+                outcome.result
             },
             present: || owned_directory_present(path),
             cleanup_run: |retain| {
@@ -2044,12 +2071,16 @@ fn observe_systemd_state(
 ) -> Result<ObservedSystemdState, String> {
     manager.recheck_identity()?;
     let snapshot = manager.snapshot(unit)?;
-    let advertisement = runtime_context
-        .discover_endpoint(data)
+    let health = runtime_context
+        .observe_endpoint_health(data)
         .map_err(|error| error.to_string())?;
     manager.recheck_identity()?;
-    let incarnation = portable_incarnation(unit, snapshot.as_ref(), advertisement.as_ref())
-        .map_err(|error| error.to_string())?;
+    let incarnation = portable_incarnation(
+        unit,
+        snapshot.as_ref(),
+        health.as_ref().map(LinuxEndpointHealth::advertisement),
+    )
+    .map_err(|error| error.to_string())?;
     let unit_state = classify_unit_state(snapshot.as_ref(), incarnation.as_ref());
     let native = match (&snapshot, &incarnation, unit_state) {
         (Some(snapshot), Some(incarnation), SystemdUnitState::Active) => Some(
@@ -2161,9 +2192,9 @@ fn wait_ready(
 ) -> Result<ReconciledGateway, GatewayError> {
     let deadline = runtime.clock.now() + READY_TIMEOUT;
     loop {
-        let advertisement = runtime
+        let health = runtime
             .context
-            .discover_endpoint(data)
+            .observe_endpoint_health(data)
             .map_err(GatewayError::Registration)?;
         if let Some(ready) = exact_ready(
             runtime.manager,
@@ -2171,7 +2202,7 @@ fn wait_ready(
             unit,
             target,
             rendered,
-            advertisement.as_ref(),
+            health.as_ref().map(LinuxEndpointHealth::advertisement),
         )? {
             return Ok(ready);
         }
@@ -2633,10 +2664,11 @@ fn retire_prior(
                 "The retiring gateway process cannot be held: {error}"
             ))
         })?;
-    let advertisement = runtime
+    let health = runtime
         .context
-        .discover_endpoint(authority.data)
+        .observe_endpoint_health(authority.data)
         .map_err(GatewayError::Registration)?;
+    let advertisement = health.as_ref().map(LinuxEndpointHealth::advertisement);
     let retained_path = snapshot
         .exec_start_ex
         .first()
@@ -2670,7 +2702,7 @@ fn retire_prior(
             "The retiring systemd definition changed after planning".into(),
         ));
     }
-    if portable_incarnation(unit, Some(&snapshot), advertisement.as_ref())?.as_ref() != Some(prior)
+    if portable_incarnation(unit, Some(&snapshot), advertisement)?.as_ref() != Some(prior)
         || runtime
             .manager
             .get_unit_by_pid(prior.process_id())
@@ -2689,6 +2721,8 @@ fn retire_prior(
         process,
         runtime.clock,
         || {
+            let refreshed_health = runtime.context.observe_endpoint_health(authority.data)?;
+            require_same_endpoint_health(health.as_ref(), refreshed_health.as_ref())?;
             verify_systemd_authority(runtime.manager, authority.paths, unit)?;
             let second = runtime
                 .manager
@@ -3054,12 +3088,14 @@ mod tests {
             )
         }
 
-        fn discover_endpoint(
-            &self,
-            _: &Path,
-        ) -> Result<Option<GatewayEndpointAdvertisement>, String> {
+        fn observe_endpoint_health(&self, _: &Path) -> Result<Option<LinuxEndpointHealth>, String> {
             self.endpoint_error.as_ref().map_or_else(
-                || Ok(self.advertisement.clone()),
+                || {
+                    Ok(self
+                        .advertisement
+                        .clone()
+                        .map(|advertisement| LinuxEndpointHealth { advertisement }))
+                },
                 |error| Err(error.clone()),
             )
         }
@@ -3794,6 +3830,49 @@ mod tests {
         GatewayEndpointAdvertisement::new(endpoint, Some(managed)).unwrap()
     }
 
+    #[test]
+    fn live_health_is_distinct_from_endpoint_publication_and_must_remain_exact() {
+        let (unit, target, snapshot) = fixture();
+        let manager = FixedManager {
+            identity: snapshot.manager.clone(),
+            unit_path: snapshot.unit_path.clone(),
+            snapshot: Some(snapshot.clone()),
+        };
+        let base = FixedRuntimeContext {
+            effective_uid: 501,
+            real_uid: 501,
+            config_home: None,
+            data_home: None,
+            state_home: None,
+            advertisement: None,
+            endpoint_error: None,
+        };
+        let missing = observe_systemd_state(&manager, &unit, Path::new("/data"), &base).unwrap();
+        assert!(missing.incarnation.is_none());
+        assert_eq!(missing.unit_state, SystemdUnitState::Unknown);
+
+        let unavailable = FixedRuntimeContext {
+            endpoint_error: Some("gateway endpoint health deadline elapsed".into()),
+            ..base
+        };
+        assert!(observe_systemd_state(&manager, &unit, Path::new("/data"), &unavailable).is_err());
+
+        let exact = LinuxEndpointHealth {
+            advertisement: endpoint_for(&target, "550e8400-e29b-41d4-a716-446655440001", 41),
+        };
+        let wrong = LinuxEndpointHealth {
+            advertisement: endpoint_for(
+                &ReconciliationTarget::new(unit.as_str().into(), "c".repeat(64), "d".repeat(64))
+                    .unwrap(),
+                "550e8400-e29b-41d4-a716-446655440001",
+                41,
+            ),
+        };
+        assert!(require_same_endpoint_health(Some(&exact), Some(&exact)).is_ok());
+        assert!(require_same_endpoint_health(Some(&exact), Some(&wrong)).is_err());
+        assert!(require_same_endpoint_health(Some(&exact), None).is_err());
+    }
+
     impl LinuxUserManager for OwnerChangingManager {
         fn identity(&self) -> &SystemdManagerIdentity {
             &self.identity
@@ -4162,7 +4241,11 @@ mod tests {
         let target =
             ReconciliationTarget::new(unit.as_str().into(), "c".repeat(64), "d".repeat(64))
                 .unwrap();
-        for (live, verification) in [(true, Err("snapshot B changed")), (false, Ok(()))] {
+        for (live, verification) in [
+            (true, Err("snapshot B changed")),
+            (true, Err("endpoint health changed")),
+            (false, Ok(())),
+        ] {
             let signals = Arc::new(AtomicUsize::new(0));
             let result = retire(
                 &data,
@@ -4214,13 +4297,19 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[ignore = "run by the Ubuntu disposable user-manager acceptance step"]
     fn native_user_manager_is_required_for_the_linux_acceptance_gate() {
         use std::os::unix::fs::OpenOptionsExt;
 
-        let effective_uid = unsafe { libc::geteuid() };
-        let manager = NativeLinuxManagerFactory.connect(effective_uid).expect(
-            "Linux acceptance requires a real lingering user manager; absence is a blocker",
+        assert_eq!(
+            std::env::var("NESSA_SYSTEMD_ACCEPTANCE").as_deref(),
+            Ok("1"),
+            "the native fixture must be invoked by the explicit disposable-manager gate"
         );
+        let effective_uid = unsafe { libc::geteuid() };
+        let manager = UserManager::connect(effective_uid)
+            .map(|manager| Box::new(manager) as Box<dyn LinuxUserManager>)
+            .expect("Linux acceptance requires the disposable user manager to be reachable");
         assert_eq!(manager.identity().user_id(), effective_uid);
         manager.recheck_identity().unwrap();
         let runtime = std::env::var_os("XDG_RUNTIME_DIR")
@@ -4238,6 +4327,16 @@ mod tests {
         ))
         .unwrap();
         let path = unit_root.join(unit.as_str());
+        let failing_unit = SystemdUnitName::parse(format!(
+            "nessa-gateway-failing-{}.service",
+            std::process::id()
+        ))
+        .unwrap();
+        let failing_path = unit_root.join(failing_unit.as_str());
+        let script = runtime.join(format!(
+            ".nessa-gateway-acceptance-{}.sh",
+            std::process::id()
+        ));
         let wants = unit_root.join("default.target.wants");
         let wants_preexisting = wants.exists();
         fs::create_dir_all(&wants).expect("disposable systemd wants directory must be creatable");
@@ -4248,23 +4347,51 @@ mod tests {
             fs::read_link(&link).unwrap(),
             Path::new("..").join(unit.as_str())
         );
+        let mut script_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&script)
+            .expect("disposable signal fixture must be creatable");
+        script_file
+            .write_all(b"#!/bin/sh\ntrap ':' USR1\nwhile :; do sleep 1; done\n")
+            .unwrap();
+        script_file.sync_all().unwrap();
+        drop(script_file);
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&path)
             .expect("disposable systemd acceptance unit must be creatable");
+        let mut failing_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&failing_path)
+            .expect("disposable failing systemd unit must be creatable");
         let clock = SystemMonotonicClock;
         let result = (|| -> Result<(), String> {
             file.write_all(
-                b"[Unit]\nDescription=Nessa disposable lifecycle acceptance fixture\n[Service]\nType=simple\nExecStart=/usr/bin/sleep 60\n",
+                format!(
+                    "[Unit]\nDescription=Nessa disposable lifecycle acceptance fixture\n[Service]\nType=simple\nExecStart={}\n",
+                    script.display()
+                )
+                .as_bytes(),
             )
             .map_err(|error| error.to_string())?;
             file.sync_all().map_err(|error| error.to_string())?;
             drop(file);
+            failing_file
+                .write_all(
+                    b"[Unit]\nDescription=Nessa disposable failing job fixture\n[Service]\nType=oneshot\nExecStart=/usr/bin/false\n",
+                )
+                .map_err(|error| error.to_string())?;
+            failing_file.sync_all().map_err(|error| error.to_string())?;
+            drop(failing_file);
             manager.reload()?;
             let start = manager.enqueue(SystemdJobOperation::Start, &unit, &clock)?;
-            let start_attempt = start.attempt.clone();
+            let start_attempt = start.attempt().clone();
             let terminal = start.wait(&clock, clock.now() + JOB_TIMEOUT)?;
             if terminal.result != "done" {
                 return Err(format!("disposable StartUnit returned {}", terminal.result));
@@ -4297,6 +4424,52 @@ mod tests {
             if !process.is_live() {
                 return Err("pidfd did not retain the disposable main process".into());
             }
+            process.signal(libc::SIGUSR1).map_err(|error| match error {
+                LinuxProcessSignalError::Exited => {
+                    "disposable process exited before the safe pidfd signal".to_string()
+                }
+                LinuxProcessSignalError::Failed(error) => error,
+            })?;
+            let after_signal = manager
+                .snapshot(&unit)?
+                .ok_or_else(|| "disposable unit disappeared after pidfd signal".to_string())?;
+            if after_signal.main_process_id != running.main_process_id
+                || !NativeLinuxProcessFactory
+                    .open(after_signal.main_process_id)?
+                    .is_live()
+            {
+                return Err(
+                    "safe pidfd signal did not preserve the exact disposable process".into(),
+                );
+            }
+
+            let failing = manager.enqueue(SystemdJobOperation::Start, &failing_unit, &clock)?;
+            let failing_attempt = failing.attempt().clone();
+            let failing_terminal = failing.wait(&clock, clock.now() + JOB_TIMEOUT)?;
+            if failing_terminal.result == "done" {
+                return Err("failing disposable StartUnit returned an inexact done result".into());
+            }
+            let failing_evidence = SystemdJobTerminal::new(
+                failing_terminal.manager.clone(),
+                failing_terminal.object_path.clone(),
+                failing_terminal.job_id,
+                failing_terminal.unit.clone(),
+                failing_terminal.result.clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            if !matches!(
+                failing_attempt.classify_terminal(
+                    manager.identity(),
+                    SystemdJobOperation::Start,
+                    SystemdJobMode::Fail,
+                    &failing_unit,
+                    &failing_evidence,
+                ),
+                SystemdJobConclusion::Rejected(_)
+            ) {
+                return Err("real non-done JobRemoved evidence was not rejected".into());
+            }
+
             let stop = manager.enqueue(SystemdJobOperation::Stop, &unit, &clock)?;
             let terminal = stop.wait(&clock, clock.now() + JOB_TIMEOUT)?;
             if terminal.result != "done" {
@@ -4326,11 +4499,18 @@ mod tests {
                 let _ = job.wait(&clock, clock.now() + JOB_TIMEOUT);
             }
         }
+        if let Ok(job) = manager.enqueue(SystemdJobOperation::Stop, &failing_unit, &clock) {
+            let _ = job.wait(&clock, clock.now() + JOB_TIMEOUT);
+        }
         let link_removal = fs::remove_file(&link);
         let removal = fs::remove_file(&path);
+        let failing_removal = fs::remove_file(&failing_path);
+        let script_removal = fs::remove_file(&script);
         let reload = manager.reload();
         link_removal.expect("disposable systemd wants link cleanup must succeed");
         removal.expect("disposable systemd unit cleanup must succeed");
+        failing_removal.expect("disposable failing systemd unit cleanup must succeed");
+        script_removal.expect("disposable signal fixture cleanup must succeed");
         if !wants_preexisting {
             fs::remove_dir(&wants).expect("disposable empty wants directory cleanup must succeed");
         }

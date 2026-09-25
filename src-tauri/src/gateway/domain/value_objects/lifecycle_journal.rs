@@ -465,9 +465,41 @@ impl LifecycleRecord {
 struct PlanState {
     primary_id: String,
     primary_effect: LifecycleEffect,
-    steps: BTreeMap<String, LifecycleEffectPredicate>,
+    steps: BTreeMap<String, LifecyclePlanStep>,
     completed: BTreeMap<String, LifecycleCommandResult>,
     native_attempts: BTreeMap<String, SystemdJobAttempt>,
+}
+
+/// The one acknowledged effect boundary that still requires settlement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LifecyclePendingStep {
+    plan_id: String,
+    step: LifecyclePlanStep,
+    contingencies: Vec<LifecyclePlanStep>,
+    completion: Option<LifecycleCommandResult>,
+    native_attempt: Option<SystemdJobAttempt>,
+}
+
+impl LifecyclePendingStep {
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    pub fn step(&self) -> &LifecyclePlanStep {
+        &self.step
+    }
+
+    pub fn contingencies(&self) -> &[LifecyclePlanStep] {
+        &self.contingencies
+    }
+
+    pub fn completion(&self) -> Option<&LifecycleCommandResult> {
+        self.completion.as_ref()
+    }
+
+    pub fn native_attempt(&self) -> Option<&SystemdJobAttempt> {
+        self.native_attempt.as_ref()
+    }
 }
 
 /// State rebuilt from acknowledged records and advanced by the live writer.
@@ -479,6 +511,7 @@ pub struct LifecycleHistory {
     before: Option<ReconciliationIncarnation>,
     next_sequence: u64,
     plans: BTreeMap<String, PlanState>,
+    plan_order: Vec<String>,
     pending_observation: Option<(String, String)>,
     latest_observation_source: Option<LifecycleObservationSource>,
     latest_observation: Option<LifecycleObservation>,
@@ -524,6 +557,7 @@ impl LifecycleHistory {
             before: before.clone(),
             next_sequence: 1,
             plans: BTreeMap::new(),
+            plan_order: Vec::new(),
             pending_observation: None,
             latest_observation_source: None,
             latest_observation: None,
@@ -582,6 +616,9 @@ impl LifecycleHistory {
                 if self.pending_observation.is_some() {
                     return Err(LifecycleJournalError::MissingObservation);
                 }
+                if self.pending_step().is_some() {
+                    return Err(LifecycleJournalError::MissingCompletion);
+                }
                 if plan_id.trim().is_empty() || self.plans.contains_key(plan_id) {
                     return Err(LifecycleJournalError::InvalidPlan);
                 }
@@ -599,10 +636,7 @@ impl LifecycleHistory {
                 )?;
                 let mut steps = BTreeMap::new();
                 for step in std::iter::once(primary).chain(cleanup) {
-                    if steps
-                        .insert(step.id().to_owned(), step.predicate().clone())
-                        .is_some()
-                    {
+                    if steps.insert(step.id().to_owned(), step.clone()).is_some() {
                         return Err(LifecycleJournalError::DuplicateStep);
                     }
                     if step.id() != primary.id() {
@@ -624,6 +658,7 @@ impl LifecycleHistory {
                         native_attempts: BTreeMap::new(),
                     },
                 );
+                self.plan_order.push(plan_id.clone());
             }
             LifecycleRecordPayload::NativeAttempt {
                 plan_id,
@@ -666,7 +701,8 @@ impl LifecycleHistory {
                 let predicate = plan
                     .steps
                     .get(step_id)
-                    .ok_or(LifecycleJournalError::UnknownOrCompletedStep)?;
+                    .ok_or(LifecycleJournalError::UnknownOrCompletedStep)?
+                    .predicate();
                 if plan.completed.contains_key(step_id) {
                     return Err(LifecycleJournalError::UnknownOrCompletedStep);
                 }
@@ -756,11 +792,7 @@ impl LifecycleHistory {
                 if self.pending_observation.is_some() {
                     return Err(LifecycleJournalError::MissingObservation);
                 }
-                if self
-                    .plans
-                    .values()
-                    .any(|plan| !plan.completed.contains_key(&plan.primary_id))
-                {
+                if self.pending_step().is_some() {
                     return Err(LifecycleJournalError::MissingCompletion);
                 }
                 if last_confirmed != &self.latest_observation {
@@ -850,6 +882,10 @@ impl LifecycleHistory {
         self.latest_observation.as_ref()
     }
 
+    pub fn has_effect_plan(&self) -> bool {
+        !self.plans.is_empty()
+    }
+
     pub fn pending_observation_source(&self) -> Option<LifecycleObservationSource> {
         self.pending_observation.as_ref().map(|(plan_id, step_id)| {
             LifecycleObservationSource::Effect {
@@ -857,6 +893,57 @@ impl LifecycleHistory {
                 step_id: step_id.clone(),
             }
         })
+    }
+
+    pub fn pending_step(&self) -> Option<LifecyclePendingStep> {
+        if let Some((plan_id, step_id)) = &self.pending_observation {
+            let plan = self.plans.get(plan_id)?;
+            return Some(self.pending(plan_id, plan, step_id));
+        }
+        for plan_id in &self.plan_order {
+            let plan = self.plans.get(plan_id)?;
+            if !plan.completed.contains_key(&plan.primary_id) {
+                return Some(self.pending(plan_id, plan, &plan.primary_id));
+            }
+            for (step_id, step) in &plan.steps {
+                if step_id == &plan.primary_id || plan.completed.contains_key(step_id) {
+                    continue;
+                }
+                let eligible = match step.predicate() {
+                    LifecycleEffectPredicate::Always
+                    | LifecycleEffectPredicate::PrimaryReturned => true,
+                    LifecycleEffectPredicate::PrimaryAccepted => matches!(
+                        plan.completed.get(&plan.primary_id),
+                        Some(LifecycleCommandResult::Accepted)
+                    ),
+                    LifecycleEffectPredicate::ObservationMatches(expected) => {
+                        self.latest_observation
+                            .as_ref()
+                            .and_then(LifecycleObservation::incarnation)
+                            == Some(expected)
+                    }
+                };
+                if eligible {
+                    return Some(self.pending(plan_id, plan, step_id));
+                }
+            }
+        }
+        None
+    }
+
+    fn pending(&self, plan_id: &str, plan: &PlanState, step_id: &str) -> LifecyclePendingStep {
+        LifecyclePendingStep {
+            plan_id: plan_id.into(),
+            step: plan.steps[step_id].clone(),
+            contingencies: plan
+                .steps
+                .iter()
+                .filter(|(candidate, _)| *candidate != &plan.primary_id)
+                .map(|(_, step)| step.clone())
+                .collect(),
+            completion: plan.completed.get(step_id).cloned(),
+            native_attempt: plan.native_attempts.get(step_id).cloned(),
+        }
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -1629,6 +1716,75 @@ mod tests {
             LifecycleEffectPredicate::PrimaryReturned,
         )
         .is_err());
+    }
+
+    #[test]
+    fn eligible_cleanup_is_the_domain_owned_pending_step_and_blocks_outcome() {
+        let target = systemd_target();
+        let records = vec![
+            systemd_intent(),
+            systemd_record(
+                1,
+                LifecycleRecordPayload::EffectPlan {
+                    plan_id: "publish".into(),
+                    expected_before: None,
+                    target: target.clone(),
+                    primary: LifecyclePlanStep::new(
+                        "primary".into(),
+                        LifecycleEffect::PublishSystemdWantsLink {
+                            target: target.clone(),
+                        },
+                        LifecycleEffectPredicate::Always,
+                    )
+                    .unwrap(),
+                    cleanup: vec![LifecyclePlanStep::new(
+                        "settle".into(),
+                        LifecycleEffect::SettleSystemdWantsLinkTransaction { target },
+                        LifecycleEffectPredicate::PrimaryReturned,
+                    )
+                    .unwrap()],
+                },
+            ),
+            systemd_record(
+                2,
+                LifecycleRecordPayload::EffectCompletion {
+                    plan_id: "publish".into(),
+                    step_id: "primary".into(),
+                    result: LifecycleCommandResult::Accepted,
+                },
+            ),
+            systemd_record(
+                3,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Effect {
+                        plan_id: "publish".into(),
+                        step_id: "primary".into(),
+                    },
+                    state: LifecycleObservation::new(1, None, true),
+                },
+            ),
+        ];
+        let mut history = LifecycleHistory::restore(&records).unwrap();
+        let pending = history.pending_step().expect("cleanup must remain pending");
+        assert_eq!(pending.plan_id(), "publish");
+        assert_eq!(pending.step().id(), "settle");
+        assert!(pending.completion().is_none());
+        let outcome = systemd_record(
+            4,
+            LifecycleRecordPayload::Outcome {
+                physical: LifecyclePhysicalOutcome::Failed {
+                    phase: LifecycleFailedPhase::Cleanup,
+                    message: "cleanup unavailable".into(),
+                },
+                last_confirmed: Some(LifecycleObservation::new(1, None, true)),
+                cleanup: ReconciliationCleanupDecision::RetainPrior,
+            },
+        );
+        assert_eq!(
+            history.append(&outcome),
+            Err(LifecycleJournalError::MissingCompletion)
+        );
+        assert!(!history.is_terminal());
     }
 
     #[test]

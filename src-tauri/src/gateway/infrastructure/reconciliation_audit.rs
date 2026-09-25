@@ -1037,10 +1037,16 @@ fn unresolved_recovery(
         let request = GatewayReconciliationRequest::new(request_correlation.clone(), evidence);
         let attempt =
             GatewayReconciliationAttempt::new(chain[0].attempt_correlation().clone(), request)?;
-        let has_effect_plan = chain
-            .iter()
-            .any(|record| record.kind() == LifecycleRecordKind::EffectPlan);
-        let pending_step = recovery_step(&chain, history.pending_observation_source().as_ref())?;
+        let has_effect_plan = history.has_effect_plan();
+        let pending_step = history.pending_step().map(|pending| {
+            GatewayLifecycleRecoveryStep::new(
+                pending.plan_id().into(),
+                pending.step().clone(),
+                pending.contingencies().to_vec(),
+                pending.completion().cloned(),
+                pending.native_attempt().cloned(),
+            )
+        });
         return Ok(Some((
             GatewayLifecycleRecovery::new(
                 attempt,
@@ -1055,103 +1061,6 @@ fn unresolved_recovery(
         )));
     }
     Ok(None)
-}
-
-fn recovery_step(
-    records: &[LifecycleRecord],
-    pending_observation: Option<&LifecycleObservationSource>,
-) -> Result<Option<GatewayLifecycleRecoveryStep>, GatewayError> {
-    let mut primary_steps = Vec::new();
-    let mut plans = Vec::new();
-    let mut all_steps = Vec::new();
-    let mut native_attempts = Vec::new();
-    let mut completions = Vec::new();
-    for record in records {
-        match record.payload() {
-            LifecycleRecordPayload::EffectPlan {
-                plan_id,
-                primary,
-                cleanup,
-                ..
-            } => {
-                plans.push((plan_id.clone(), cleanup.clone()));
-                primary_steps.push((plan_id.clone(), primary.clone()));
-                all_steps.push((plan_id.clone(), primary.clone()));
-                all_steps.extend(cleanup.iter().cloned().map(|step| (plan_id.clone(), step)));
-            }
-            LifecycleRecordPayload::EffectCompletion {
-                plan_id,
-                step_id,
-                result,
-            } => completions.push((plan_id.clone(), step_id.clone(), result.clone())),
-            LifecycleRecordPayload::NativeAttempt {
-                plan_id,
-                step_id,
-                attempt,
-            } => native_attempts.push((plan_id.clone(), step_id.clone(), attempt.clone())),
-            _ => {}
-        }
-    }
-    if let Some(LifecycleObservationSource::Effect { plan_id, step_id }) = pending_observation {
-        let step = all_steps
-            .iter()
-            .find(|(candidate_plan, step)| candidate_plan == plan_id && step.id() == step_id)
-            .map(|(_, step)| step.clone())
-            .ok_or_else(|| invalid_record("pending observation has no primary plan step"))?;
-        let completion = completions
-            .iter()
-            .find(|(candidate_plan, candidate_step, _)| {
-                candidate_plan == plan_id && candidate_step == step_id
-            })
-            .map(|(_, _, result)| result.clone())
-            .ok_or_else(|| invalid_record("pending observation has no completion"))?;
-        return Ok(Some(GatewayLifecycleRecoveryStep::new(
-            plan_id.clone(),
-            step,
-            plans
-                .iter()
-                .find(|(candidate, _)| candidate == plan_id)
-                .map_or_else(Vec::new, |(_, cleanup)| cleanup.clone()),
-            Some(completion),
-            native_attempts
-                .iter()
-                .find(|(candidate_plan, candidate_step, _)| {
-                    candidate_plan == plan_id && candidate_step == step_id
-                })
-                .map(|(_, _, attempt)| attempt.clone()),
-        )));
-    }
-    let incomplete = primary_steps
-        .into_iter()
-        .filter(|(plan_id, step)| {
-            !completions
-                .iter()
-                .any(|(candidate_plan, candidate_step, _)| {
-                    candidate_plan == plan_id && candidate_step == step.id()
-                })
-        })
-        .collect::<Vec<_>>();
-    match incomplete.as_slice() {
-        [] => Ok(None),
-        [(plan_id, step)] => Ok(Some(GatewayLifecycleRecoveryStep::new(
-            plan_id.clone(),
-            step.clone(),
-            plans
-                .iter()
-                .find(|(candidate, _)| candidate == plan_id)
-                .map_or_else(Vec::new, |(_, cleanup)| cleanup.clone()),
-            None,
-            native_attempts
-                .iter()
-                .find(|(candidate_plan, candidate_step, _)| {
-                    candidate_plan == plan_id && candidate_step == step.id()
-                })
-                .map(|(_, _, attempt)| attempt.clone()),
-        ))),
-        _ => Err(GatewayError::Registration(
-            "Gateway lifecycle recovery has multiple uncompleted primary effects".into(),
-        )),
-    }
 }
 
 fn acknowledge_final_record(
@@ -2275,6 +2184,165 @@ mod tests {
                 .effect(),
             LifecycleEffect::PublishSystemdWantsLink { .. }
         ));
+    }
+
+    #[test]
+    fn real_file_journal_restores_every_eligible_systemd_cleanup_boundary() {
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let cases = [
+            (
+                LifecycleEffect::StageRuntime {
+                    fingerprint: "a".repeat(64),
+                },
+                LifecycleEffect::RemoveStagingRuntime {
+                    generation: "1".repeat(64),
+                },
+            ),
+            (
+                LifecycleEffect::PublishSystemdServiceDefinition {
+                    target: target.clone(),
+                    definition_digest: "2".repeat(64),
+                },
+                LifecycleEffect::SettleSystemdDefinitionTransaction {
+                    target: target.clone(),
+                    definition_digest: "2".repeat(64),
+                },
+            ),
+            (
+                LifecycleEffect::PublishSystemdWantsLink {
+                    target: target.clone(),
+                },
+                LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                    target: target.clone(),
+                },
+            ),
+            (
+                LifecycleEffect::CreateGatewayDataDirectory {
+                    target: target.clone(),
+                },
+                LifecycleEffect::SettleGatewayDataDirectoryTransaction {
+                    target: target.clone(),
+                    generation: "3".repeat(64),
+                },
+            ),
+            (
+                LifecycleEffect::CreateSystemdWantsDirectory {
+                    target: target.clone(),
+                },
+                LifecycleEffect::SettleSystemdWantsDirectoryTransaction {
+                    target: target.clone(),
+                    generation: "4".repeat(64),
+                },
+            ),
+        ];
+        let mut serial = 600_u64;
+        for (primary_effect, cleanup_effect) in cases {
+            for cleanup_result in [
+                LifecycleCommandResult::Accepted,
+                LifecycleCommandResult::Failed("cleanup failed".into()),
+            ] {
+                serial += 1;
+                let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+                let audit = Arc::new(FileReconciliationAudit::new(
+                    Some(temporary.path().join("Nessa")),
+                    Arc::new(AdvancingClock {
+                        now: Mutex::new(Instant::now()),
+                        waits: AtomicUsize::new(0),
+                    }),
+                ));
+                let request = GatewayReconciliationRequest::new(
+                    ReconciliationCorrelation::parse(format!(
+                        "00000000-0000-4000-8000-{serial:012x}"
+                    ))
+                    .unwrap(),
+                    ReconciliationEvidence::new(
+                        ReconciliationCause::Startup,
+                        ReconciliationInitiator::DesktopHost,
+                    )
+                    .unwrap(),
+                );
+                serial += 1;
+                let attempt = GatewayReconciliationAttempt::new(
+                    ReconciliationCorrelation::parse(format!(
+                        "00000000-0000-4000-8000-{serial:012x}"
+                    ))
+                    .unwrap(),
+                    request,
+                )
+                .unwrap();
+                let session = audit.clone().open(&attempt, None).unwrap();
+                session
+                    .intent(
+                        &GatewayReconciliationIntent::new(attempt.clone(), target.clone(), None)
+                            .unwrap(),
+                    )
+                    .unwrap();
+                let primary = LifecyclePlanStep::new(
+                    "primary".into(),
+                    primary_effect.clone(),
+                    LifecycleEffectPredicate::Always,
+                )
+                .unwrap();
+                let cleanup = LifecyclePlanStep::new(
+                    "cleanup".into(),
+                    cleanup_effect.clone(),
+                    LifecycleEffectPredicate::PrimaryReturned,
+                )
+                .unwrap();
+                session
+                    .effect_plan(
+                        "effect",
+                        None,
+                        &target,
+                        &primary,
+                        std::slice::from_ref(&cleanup),
+                    )
+                    .unwrap();
+                session
+                    .effect_completion("effect", "primary", &LifecycleCommandResult::Accepted)
+                    .unwrap();
+                session
+                    .observation(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: "effect".into(),
+                            step_id: "primary".into(),
+                        },
+                        &LifecycleObservation::new(1, None, true),
+                    )
+                    .unwrap();
+                drop(session);
+
+                let session = audit.clone().open(&attempt, None).unwrap();
+                let recovery = session.recovery().unwrap();
+                let pending = recovery.pending_step().unwrap();
+                assert_eq!(pending.step(), &cleanup);
+                assert!(pending.completion().is_none());
+                session
+                    .effect_completion("effect", "cleanup", &cleanup_result)
+                    .unwrap();
+                drop(session);
+
+                let session = audit.clone().open(&attempt, None).unwrap();
+                let recovery = session.recovery().unwrap();
+                let pending = recovery.pending_step().unwrap();
+                assert_eq!(pending.step(), &cleanup);
+                assert_eq!(pending.completion(), Some(&cleanup_result));
+                session
+                    .observation(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: "effect".into(),
+                            step_id: "cleanup".into(),
+                        },
+                        &LifecycleObservation::new(2, None, false),
+                    )
+                    .unwrap();
+            }
+        }
     }
 
     #[test]

@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, DirBuilder, File, OpenOptions, Permissions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
@@ -544,7 +544,10 @@ pub(super) fn publish_wants_link(
 ) -> Result<(), String> {
     use std::{
         ffi::CString,
-        os::{fd::AsRawFd, unix::ffi::OsStrExt},
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
     };
 
     let directory_file = open_owned_directory_chain(directory)?;
@@ -1035,66 +1038,320 @@ pub(super) fn create_owned_directory_chain(path: &Path) -> Result<(), String> {
     open_owned_directory_chain(path).map(|_| ())
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct OwnedDirectoryTransaction {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CreatedDirectory {
     path: PathBuf,
+    device: Option<u128>,
+    inode: Option<u128>,
+}
+
+#[derive(Debug)]
+pub(super) struct OwnedDirectoryTransaction {
+    target: PathBuf,
     generation: String,
-    directory_device: u64,
-    directory_inode: u64,
-    marker_device: u64,
-    marker_inode: u64,
+    marker_path: PathBuf,
+    marker: File,
+    created: Vec<CreatedDirectory>,
+}
+
+#[derive(Debug)]
+pub(super) struct OwnedDirectoryTransactionOutcome {
+    pub(super) transaction: Option<OwnedDirectoryTransaction>,
+    pub(super) result: Result<(), String>,
+}
+
+struct PreparedOwnedDirectoryTransaction {
+    transaction: OwnedDirectoryTransaction,
+    result: Result<(), String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryTransactionBoundary {
+    MarkerCreate,
+    MarkerMetadata,
+    MarkerWrite,
+    MarkerFileSync,
+    ParentSync,
+    DirectoryMkdir,
+    DirectoryOpen,
+    DirectoryMetadata,
+    FinalDirectorySync,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OwnedDirectoryTransactionRecord {
+    target: PathBuf,
+    generation: String,
+    created: Vec<CreatedDirectory>,
 }
 
 pub(super) fn create_owned_directory_transaction(
     path: &Path,
     generation: &str,
-) -> Result<Option<OwnedDirectoryTransaction>, String> {
+) -> OwnedDirectoryTransactionOutcome {
+    create_owned_directory_transaction_with(path, generation, &mut |_| Ok(()))
+}
+
+fn create_owned_directory_transaction_with(
+    path: &Path,
+    generation: &str,
+    boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
+) -> OwnedDirectoryTransactionOutcome {
+    match prepare_owned_directory_transaction(path, generation, boundary) {
+        Ok(None) => OwnedDirectoryTransactionOutcome {
+            transaction: None,
+            result: Ok(()),
+        },
+        Ok(Some(prepared)) => {
+            let mut transaction = prepared.transaction;
+            let result = prepared
+                .result
+                .and_then(|()| create_owned_directory_suffix(&mut transaction, boundary));
+            OwnedDirectoryTransactionOutcome {
+                transaction: Some(transaction),
+                result,
+            }
+        }
+        Err(error) => OwnedDirectoryTransactionOutcome {
+            transaction: None,
+            result: Err(error),
+        },
+    }
+}
+
+fn prepare_owned_directory_transaction(
+    path: &Path,
+    generation: &str,
+    boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
+) -> Result<Option<PreparedOwnedDirectoryTransaction>, String> {
+    use std::{
+        ffi::CString,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+        path::Component,
+    };
+
     validate_fingerprint(generation)?;
-    let (directory, created) = open_owned_directory_chain_inner(path, true)?;
-    if !created {
+    let root = CString::new("/").expect("static root has no NUL");
+    let descriptor = unsafe {
+        libc::open(
+            root.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let mut directory = unsafe { File::from_raw_fd(descriptor) };
+    let mut existing = PathBuf::from("/");
+    let mut missing = Vec::new();
+    let mut saw_root = false;
+    let effective_uid = unsafe { libc::geteuid() };
+    let components = path.components().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < components.len() {
+        let Component::Normal(component) = components[index] else {
+            if matches!(components[index], Component::RootDir) && !saw_root {
+                saw_root = true;
+                index += 1;
+                continue;
+            }
+            return Err("Gateway directory must be normalized and absolute".into());
+        };
+        let name = CString::new(component.as_bytes())
+            .map_err(|_| "Gateway directory contains NUL".to_string())?;
+        let child = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if child < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.to_string());
+            }
+            missing.extend(
+                components[index..]
+                    .iter()
+                    .filter_map(|component| match component {
+                        Component::Normal(value) => Some(value.to_os_string()),
+                        _ => None,
+                    }),
+            );
+            break;
+        }
+        let child = unsafe { File::from_raw_fd(child) };
+        let metadata = child.metadata().map_err(|error| error.to_string())?;
+        if !metadata.is_dir()
+            || (metadata.uid() != 0 && metadata.uid() != effective_uid)
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return Err("Gateway directory ancestry has an unsafe owner or type".into());
+        }
+        existing.push(component);
+        directory = child;
+        index += 1;
+    }
+    if !saw_root {
+        return Err("Gateway directory must be absolute".into());
+    }
+    if missing.is_empty() {
+        let metadata = directory.metadata().map_err(|error| error.to_string())?;
+        if metadata.uid() != effective_uid || metadata.permissions().mode() & 0o777 != 0o700 {
+            return Err("Gateway directory is not private to the effective account".into());
+        }
+        directory.sync_all().map_err(|error| error.to_string())?;
         return Ok(None);
     }
-    let directory_metadata = directory.metadata().map_err(|error| error.to_string())?;
-    let marker = path.join(format!(".nessa-directory-{generation}"));
-    let content = format!(
-        "{generation}:{}:{}",
-        directory_metadata.dev(),
-        directory_metadata.ino()
-    );
-    let mut file = OpenOptions::new()
+
+    boundary(DirectoryTransactionBoundary::MarkerCreate)?;
+    let marker_path = existing.join(owned_directory_marker_name(path, generation));
+    let marker = OpenOptions::new()
+        .read(true)
         .write(true)
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(&marker)
+        .open(&marker_path)
         .map_err(|error| error.to_string())?;
-    if let Err(error) = file
-        .write_all(content.as_bytes())
-        .and_then(|()| file.sync_all())
-    {
-        let marker_metadata = file.metadata().map_err(|metadata| metadata.to_string())?;
-        let transaction = OwnedDirectoryTransaction {
-            path: path.to_path_buf(),
-            generation: generation.into(),
-            directory_device: directory_metadata.dev(),
-            directory_inode: directory_metadata.ino(),
-            marker_device: marker_metadata.dev(),
-            marker_inode: marker_metadata.ino(),
-        };
-        drop(file);
-        let _ = settle_owned_directory_transaction(Some(&transaction), false);
-        return Err(error.to_string());
-    }
-    directory.sync_all().map_err(|error| error.to_string())?;
-    let marker_metadata = file.metadata().map_err(|error| error.to_string())?;
-    Ok(Some(OwnedDirectoryTransaction {
-        path: path.to_path_buf(),
+    let mut transaction = OwnedDirectoryTransaction {
+        target: path.to_path_buf(),
         generation: generation.into(),
-        directory_device: directory_metadata.dev(),
-        directory_inode: directory_metadata.ino(),
-        marker_device: marker_metadata.dev(),
-        marker_inode: marker_metadata.ino(),
+        marker_path,
+        marker,
+        created: Vec::with_capacity(missing.len()),
+    };
+    let preparation = (|| {
+        boundary(DirectoryTransactionBoundary::MarkerMetadata)?;
+        transaction
+            .marker
+            .metadata()
+            .map_err(|error| error.to_string())?;
+        persist_owned_directory_transaction(&mut transaction, boundary)?;
+        boundary(DirectoryTransactionBoundary::ParentSync)?;
+        directory.sync_all().map_err(|error| error.to_string())
+    })();
+    Ok(Some(PreparedOwnedDirectoryTransaction {
+        transaction,
+        result: preparation,
     }))
+}
+
+fn create_owned_directory_suffix(
+    transaction: &mut OwnedDirectoryTransaction,
+    boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
+) -> Result<(), String> {
+    use std::{
+        ffi::CString,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+    };
+
+    let existing_parent = transaction
+        .marker_path
+        .parent()
+        .ok_or_else(|| "Gateway directory transaction marker has no parent".to_string())?;
+    let mut directory = open_owned_directory_chain_existing(existing_parent)?;
+    let relative = transaction
+        .target
+        .strip_prefix(existing_parent)
+        .map_err(|_| "Gateway directory transaction target escaped its authority".to_string())?;
+    let components = relative
+        .components()
+        .map(|component| component.as_os_str().to_os_string())
+        .collect::<Vec<_>>();
+    let mut current = existing_parent.to_path_buf();
+    for component in components {
+        let name = CString::new(component.as_bytes())
+            .map_err(|_| "Gateway directory contains NUL".to_string())?;
+        boundary(DirectoryTransactionBoundary::DirectoryMkdir)?;
+        if unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        current.push(&component);
+        transaction.created.push(CreatedDirectory {
+            path: current.clone(),
+            device: None,
+            inode: None,
+        });
+        let identity = entry_identity_at(&directory, &name)?
+            .ok_or_else(|| "Created gateway directory disappeared".to_string())?;
+        let created = transaction
+            .created
+            .last_mut()
+            .expect("the created directory was just recorded");
+        created.device = Some(identity.device as u128);
+        created.inode = Some(identity.inode as u128);
+        persist_owned_directory_transaction(transaction, boundary)?;
+        boundary(DirectoryTransactionBoundary::ParentSync)?;
+        directory.sync_all().map_err(|error| error.to_string())?;
+        boundary(DirectoryTransactionBoundary::DirectoryOpen)?;
+        let child = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if child < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        directory = unsafe { File::from_raw_fd(child) };
+        boundary(DirectoryTransactionBoundary::DirectoryMetadata)?;
+        let metadata = directory.metadata().map_err(|error| error.to_string())?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err("Created gateway directory has an unsafe owner or type".into());
+        }
+    }
+    boundary(DirectoryTransactionBoundary::FinalDirectorySync)?;
+    directory.sync_all().map_err(|error| error.to_string())
+}
+
+fn owned_directory_marker_name(path: &Path, generation: &str) -> String {
+    use std::os::unix::ffi::OsStrExt;
+
+    let digest = Sha256::digest(path.as_os_str().as_bytes());
+    let target = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(".nessa-directory-{target}-{generation}")
+}
+
+fn persist_owned_directory_transaction(
+    transaction: &mut OwnedDirectoryTransaction,
+    boundary: &mut impl FnMut(DirectoryTransactionBoundary) -> Result<(), String>,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(&OwnedDirectoryTransactionRecord {
+        target: transaction.target.clone(),
+        generation: transaction.generation.clone(),
+        created: transaction.created.clone(),
+    })
+    .map_err(|error| error.to_string())?;
+    transaction
+        .marker
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| transaction.marker.set_len(0))
+        .map_err(|error| error.to_string())?;
+    boundary(DirectoryTransactionBoundary::MarkerWrite)?;
+    transaction
+        .marker
+        .write_all(&bytes)
+        .map_err(|error| error.to_string())?;
+    boundary(DirectoryTransactionBoundary::MarkerFileSync)?;
+    transaction
+        .marker
+        .sync_all()
+        .map_err(|error| error.to_string())
 }
 
 pub(super) fn settle_owned_directory_transaction(
@@ -1104,45 +1361,65 @@ pub(super) fn settle_owned_directory_transaction(
     let Some(transaction) = transaction else {
         return Ok(());
     };
-    let directory = fs::symlink_metadata(&transaction.path).map_err(|error| error.to_string())?;
-    if !directory.is_dir()
-        || directory.file_type().is_symlink()
-        || directory.dev() != transaction.directory_device
-        || directory.ino() != transaction.directory_inode
-    {
-        return Err("Created gateway directory identity changed before cleanup".into());
-    }
-    let marker = transaction
-        .path
-        .join(format!(".nessa-directory-{}", transaction.generation));
-    let marker_metadata = fs::symlink_metadata(&marker).map_err(|error| error.to_string())?;
-    if !marker_metadata.is_file()
-        || marker_metadata.file_type().is_symlink()
-        || marker_metadata.dev() != transaction.marker_device
-        || marker_metadata.ino() != transaction.marker_inode
+    let marker_descriptor = transaction
+        .marker
+        .metadata()
+        .map_err(|error| error.to_string())?;
+    let marker_path =
+        fs::symlink_metadata(&transaction.marker_path).map_err(|error| error.to_string())?;
+    if !marker_path.is_file()
+        || marker_path.file_type().is_symlink()
+        || marker_path.dev() != marker_descriptor.dev()
+        || marker_path.ino() != marker_descriptor.ino()
     {
         return Err("Created gateway directory marker changed before cleanup".into());
     }
-    if !retain {
-        let has_other_entry = fs::read_dir(&transaction.path)
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .any(|entry| entry.path() != marker);
-        if has_other_entry {
-            return Err("Created gateway directory is no longer empty; it was retained".into());
+
+    let mut present = Vec::new();
+    for created in &transaction.created {
+        match fs::symlink_metadata(&created.path) {
+            Ok(metadata)
+                if metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && Some(metadata.dev() as u128) == created.device
+                    && Some(metadata.ino() as u128) == created.inode =>
+            {
+                present.push(created)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err("Created gateway directory identity changed before cleanup".into()),
         }
     }
-    fs::remove_file(&marker).map_err(|error| error.to_string())?;
+
     if !retain {
-        fs::remove_dir(&transaction.path).map_err(|error| error.to_string())?;
+        for (index, created) in present.iter().enumerate() {
+            let expected_child = present.get(index + 1).map(|child| child.path.as_path());
+            let has_foreign_entry = fs::read_dir(&created.path)
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .any(|entry| Some(entry.path()).as_deref() != expected_child);
+            if has_foreign_entry {
+                return Err("Created gateway directory is no longer empty; it was retained".into());
+            }
+        }
+        for created in present.into_iter().rev() {
+            fs::remove_dir(&created.path).map_err(|error| error.to_string())?;
+            sync_directory(
+                created
+                    .path
+                    .parent()
+                    .ok_or_else(|| "Created gateway directory has no parent".to_string())?,
+            )?;
+        }
     }
+    fs::remove_file(&transaction.marker_path).map_err(|error| error.to_string())?;
     sync_directory(
         transaction
-            .path
+            .marker_path
             .parent()
-            .ok_or_else(|| "Created gateway directory has no parent".to_string())?,
+            .ok_or_else(|| "Created gateway directory marker has no parent".to_string())?,
     )
 }
 
@@ -1151,13 +1428,23 @@ pub(super) fn owned_directory_transaction_present(
     generation: &str,
 ) -> Result<bool, String> {
     validate_fingerprint(generation)?;
-    let marker = path.join(format!(".nessa-directory-{generation}"));
-    match fs::symlink_metadata(marker) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(true),
-        Ok(_) => Err("Gateway directory transaction marker has an unsafe type".into()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.to_string()),
+    Ok(find_owned_directory_marker(path, generation)?.is_some())
+}
+
+fn find_owned_directory_marker(path: &Path, generation: &str) -> Result<Option<PathBuf>, String> {
+    let name = owned_directory_marker_name(path, generation);
+    for ancestor in path.ancestors().skip(1) {
+        let marker = ancestor.join(&name);
+        match fs::symlink_metadata(&marker) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                return Ok(Some(marker));
+            }
+            Ok(_) => return Err("Gateway directory transaction marker has an unsafe type".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
     }
+    Ok(None)
 }
 
 pub(super) fn settle_recovered_owned_directory_transaction(
@@ -1165,16 +1452,16 @@ pub(super) fn settle_recovered_owned_directory_transaction(
     generation: &str,
     retain: bool,
 ) -> Result<(), String> {
-    if !owned_directory_transaction_present(path, generation)? {
+    let Some(marker_path) = find_owned_directory_marker(path, generation)? else {
         return Ok(());
-    }
-    let marker = path.join(format!(".nessa-directory-{generation}"));
-    let mut file = OpenOptions::new()
+    };
+    let mut marker = OpenOptions::new()
         .read(true)
+        .write(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&marker)
+        .open(&marker_path)
         .map_err(|error| error.to_string())?;
-    let marker_metadata = file.metadata().map_err(|error| error.to_string())?;
+    let marker_metadata = marker.metadata().map_err(|error| error.to_string())?;
     if marker_metadata.uid() != unsafe { libc::geteuid() }
         || marker_metadata.nlink() != 1
         || marker_metadata.permissions().mode() & 0o777 != 0o600
@@ -1182,34 +1469,25 @@ pub(super) fn settle_recovered_owned_directory_transaction(
         return Err("Recovered gateway directory marker has an unsafe identity".into());
     }
     let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(257)
+    Read::by_ref(&mut marker)
+        .take(65_537)
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
-    if bytes.len() > 256 {
+    if bytes.len() > 65_536 {
         return Err("Recovered gateway directory marker exceeds its limit".into());
     }
-    let content = std::str::from_utf8(&bytes)
-        .map_err(|_| "Recovered gateway directory marker is not UTF-8".to_string())?;
-    let mut fields = content.split(':');
-    let recorded_generation = fields.next();
-    let directory_device = fields.next().and_then(|value| value.parse().ok());
-    let directory_inode = fields.next().and_then(|value| value.parse().ok());
-    if recorded_generation != Some(generation)
-        || directory_device.is_none()
-        || directory_inode.is_none()
-        || fields.next().is_some()
-    {
+    let record: OwnedDirectoryTransactionRecord = serde_json::from_slice(&bytes)
+        .map_err(|_| "Recovered gateway directory marker is invalid".to_string())?;
+    if record.generation != generation || record.target != path {
         return Err("Recovered gateway directory marker contradicts its plan".into());
     }
     settle_owned_directory_transaction(
         Some(&OwnedDirectoryTransaction {
-            path: path.to_path_buf(),
+            target: path.to_path_buf(),
             generation: generation.into(),
-            directory_device: directory_device.unwrap(),
-            directory_inode: directory_inode.unwrap(),
-            marker_device: marker_metadata.dev(),
-            marker_inode: marker_metadata.ino(),
+            marker_path,
+            marker,
+            created: record.created,
         }),
         retain,
     )
@@ -1854,25 +2132,25 @@ mod tests {
 
         let removed = root.join("removed");
         let generation = "7".repeat(64);
-        let transaction = create_owned_directory_transaction(&removed, &generation)
-            .unwrap()
-            .unwrap();
+        let outcome = create_owned_directory_transaction(&removed, &generation);
+        outcome.result.unwrap();
+        let transaction = outcome.transaction.unwrap();
         settle_owned_directory_transaction(Some(&transaction), false).unwrap();
         assert!(!removed.exists());
 
         let retained = root.join("retained");
-        let transaction = create_owned_directory_transaction(&retained, &generation)
-            .unwrap()
-            .unwrap();
+        let outcome = create_owned_directory_transaction(&retained, &generation);
+        outcome.result.unwrap();
+        let transaction = outcome.transaction.unwrap();
         fs::write(retained.join("foreign"), b"keep").unwrap();
         assert!(settle_owned_directory_transaction(Some(&transaction), false).is_err());
         assert_eq!(fs::read(retained.join("foreign")).unwrap(), b"keep");
         assert!(owned_directory_transaction_present(&retained, &generation).unwrap());
 
         let recovered = root.join("recovered");
-        create_owned_directory_transaction(&recovered, &generation)
-            .unwrap()
-            .unwrap();
+        let outcome = create_owned_directory_transaction(&recovered, &generation);
+        outcome.result.unwrap();
+        assert!(outcome.transaction.is_some());
         settle_recovered_owned_directory_transaction(&recovered, &generation, true).unwrap();
         assert!(recovered.is_dir());
         assert!(!owned_directory_transaction_present(&recovered, &generation).unwrap());
@@ -1880,11 +2158,114 @@ mod tests {
         let preexisting = root.join("preexisting");
         fs::create_dir(&preexisting).unwrap();
         fs::set_permissions(&preexisting, Permissions::from_mode(0o700)).unwrap();
-        assert!(
-            create_owned_directory_transaction(&preexisting, &generation)
-                .unwrap()
-                .is_none()
-        );
+        let outcome = create_owned_directory_transaction(&preexisting, &generation);
+        outcome.result.unwrap();
+        assert!(outcome.transaction.is_none());
+    }
+
+    #[test]
+    fn directory_transaction_retains_every_created_ancestor_after_a_suffix_failure() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+        let first = root.join("created");
+        let target = first.join("x".repeat(256));
+        let generation = "8".repeat(64);
+
+        let outcome = create_owned_directory_transaction(&target, &generation);
+        assert!(outcome.result.is_err());
+        let transaction = outcome.transaction.unwrap();
+        assert_eq!(transaction.created.len(), 1);
+        assert_eq!(transaction.created[0].path, first);
+        assert!(owned_directory_transaction_present(&target, &generation).unwrap());
+
+        settle_owned_directory_transaction(Some(&transaction), false).unwrap();
+        assert!(!first.exists());
+        assert!(!owned_directory_transaction_present(&target, &generation).unwrap());
+    }
+
+    #[test]
+    fn recovered_directory_transaction_removes_the_exact_nested_chain() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+        let preexisting = root.join("preexisting");
+        fs::create_dir(&preexisting).unwrap();
+        fs::set_permissions(&preexisting, Permissions::from_mode(0o700)).unwrap();
+        let target = preexisting.join("one").join("two").join("three");
+        let generation = "6".repeat(64);
+
+        let outcome = create_owned_directory_transaction(&target, &generation);
+        outcome.result.unwrap();
+        assert_eq!(outcome.transaction.unwrap().created.len(), 3);
+        settle_recovered_owned_directory_transaction(&target, &generation, false).unwrap();
+
+        assert!(preexisting.is_dir());
+        assert!(!preexisting.join("one").exists());
+        assert!(!owned_directory_transaction_present(&target, &generation).unwrap());
+    }
+
+    #[test]
+    fn directory_transaction_faults_preserve_one_settlement_owner() {
+        let cases = [
+            (DirectoryTransactionBoundary::MarkerCreate, 1),
+            (DirectoryTransactionBoundary::MarkerMetadata, 1),
+            (DirectoryTransactionBoundary::MarkerWrite, 1),
+            (DirectoryTransactionBoundary::MarkerFileSync, 1),
+            (DirectoryTransactionBoundary::ParentSync, 1),
+            (DirectoryTransactionBoundary::DirectoryMkdir, 1),
+            (DirectoryTransactionBoundary::MarkerWrite, 2),
+            (DirectoryTransactionBoundary::MarkerFileSync, 2),
+            (DirectoryTransactionBoundary::ParentSync, 2),
+            (DirectoryTransactionBoundary::DirectoryOpen, 1),
+            (DirectoryTransactionBoundary::DirectoryMetadata, 1),
+            (DirectoryTransactionBoundary::FinalDirectorySync, 1),
+        ];
+        for (serial, (failed_boundary, failed_occurrence)) in cases.into_iter().enumerate() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+            let target = root.join("one").join("two");
+            let generation = format!("{serial:064x}");
+            let mut occurrence = 0;
+            let outcome =
+                create_owned_directory_transaction_with(&target, &generation, &mut |boundary| {
+                    if boundary == failed_boundary {
+                        occurrence += 1;
+                        if occurrence == failed_occurrence {
+                            return Err(format!("injected {boundary:?} failure"));
+                        }
+                    }
+                    Ok(())
+                });
+            assert!(outcome.result.is_err(), "{failed_boundary:?}");
+            if let Some(transaction) = outcome.transaction.as_ref() {
+                settle_owned_directory_transaction(Some(transaction), false)
+                    .unwrap_or_else(|error| panic!("{failed_boundary:?}: {error}"));
+            }
+            assert!(!root.join("one").exists(), "{failed_boundary:?}");
+            assert!(!target.exists(), "{failed_boundary:?}");
+            assert!(
+                !owned_directory_transaction_present(&target, &generation).unwrap(),
+                "{failed_boundary:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn marker_creation_failure_precedes_every_directory_effect() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+        let target = root.join("one").join("two");
+        let generation = "5".repeat(64);
+        let marker = root.join(owned_directory_marker_name(&target, &generation));
+        fs::write(&marker, b"occupied").unwrap();
+
+        let outcome = create_owned_directory_transaction(&target, &generation);
+        assert!(outcome.result.is_err());
+        assert!(outcome.transaction.is_none());
+        assert!(!root.join("one").exists());
     }
 
     #[cfg(target_os = "linux")]
