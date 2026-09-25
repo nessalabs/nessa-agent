@@ -395,6 +395,9 @@ impl SessionStorageLease for PanickingStorageLease {
             failure,
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 impl Future for PanickingSaveFuture<'_> {
     type Output = Result<(), StorageError>;

@@ -394,6 +394,9 @@ impl SessionStorageLease for FailReviewLease {
             self.inner.save(snapshot).await
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
 }
 
 #[tokio::test]
@@ -485,6 +488,9 @@ impl SessionStorageLease for FailSelectedDeclineLease {
             }
             self.inner.save(snapshot).await
         })
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
     }
 }
 

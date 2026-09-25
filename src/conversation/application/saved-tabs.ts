@@ -59,8 +59,11 @@ function knownEmpty(item: LocalTabs["conversations"][number]): boolean {
 }
 
 export function conversationTabSnapshot(tabs: LocalTabs): SavedConversationTabs {
+  // A tab onto a conversation that was deleted is kept while this window is
+  // open, so a draft in it can be copied; drafts are not saved, so after a
+  // reload it would bring back nothing but the notice.
   const saved = tabs.conversations.slice(0, 64).flatMap((item) =>
-    item.serverConversationId && !knownEmpty(item)
+    item.serverConversationId && !knownEmpty(item) && item.readError !== "deleted"
       ? [
           {
             conversationId: item.serverConversationId,

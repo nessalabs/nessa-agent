@@ -1,10 +1,13 @@
 /**
  * Floating-panel conversation projection.
  *
- * application/view + usecases -> pure local submission and server-view mapping
- * adapters/store -> supervised UI commands and stale-read fences
+ * application/view + usecases -> pure local submission and server-view mapping;
+ *   queries/roster -> the Messages list joined to the open tabs
+ * adapters/store -> supervised UI commands and stale-read fences; the gateway's
+ *                   conversation list, archive and delete (history.ts)
  * adapters/gateway -> injected NessaClient operations, attachment staging, and bounded polling
- * ui -> transcript with sent-image tiles, exact permission choices, queue/stop/retry controls
+ * ui -> transcript with sent-image tiles, exact permission choices, queue/stop/retry controls;
+ *       the Messages list of every conversation written in
  *
  * A message is text plus image references. Bytes are staged at attach time and
  * a draft file carries its own upload state; `sendDraft` is the one place that
@@ -16,6 +19,8 @@
 export { AGENT_HUES } from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
 export { ConversationQueue } from "./ui/conversation-queue"
+export { ConversationList } from "./ui/conversation-list"
+export { commandErrorCleared } from "./adapters/store/history"
 export { Transcript } from "./ui/transcript"
 export { useConversation } from "./ui/use-conversation"
 

@@ -284,6 +284,7 @@ send   -> conversation.send { text, attachments: [the returned references] }
   | `unsupported-image` | `unsupported_image`, or a stored reference in an encoding no message names. | no |
   | `too-large` | `image_too_large` (it could not be brought under the model's limits), or a stored reference over the protocol's 5 MiB image bound. | no |
   | `image-input-unsupported` | `image_input_unsupported`: the agent's model takes no images. | no |
+  | `conversation-deleted` | The conversation was deleted, here or on another surface: opening it before the upload, or `begin`, was refused as `conversation_deleted`. | no |
   | `busy` | `temporarily_unavailable` after the bounded retries; a refused `begin` as `attachment_capacity` or `temporarily_unavailable`. | yes |
   | `interrupted` | `upload_interrupted`, `attachment_not_kept`, `upload_timeout` (the gateway's 408, or the client's own three-minute deadline for a PUT that never answers), or an aborted request. | yes |
   | `unavailable` | No connection or answer; `ticket_invalid`; `storage_unavailable` / `attachment_storage_unavailable`; `audit_unavailable`; a refused `begin` as `agent_not_configured` or `conversation_not_found`. | yes |
@@ -308,8 +309,10 @@ send   -> conversation.send { text, attachments: [the returned references] }
   (more than 10), `images-too-large` (more than 10 MiB together — both counted
   over the returned references, not the attached files), `too-many-files` (more
   than 10 paths), `image-input-unsupported`, `image-input-unknown`, and
-  `unknown-attachment`. A message of images or files alone sends; its tab is
-  titled by the first attachment's name. The composer's submit has
+  `unknown-attachment`. A message of images or files alone sends. The tab takes
+  the title the gateway derives from the first message — its first line as
+  plain text, else the first linked file's name, else "Image" — and a tab
+  somebody renamed keeps its own name. The composer's submit has
   no early return of its own except an attachment still being read, which says
   so in the panel.
 - **Whether the agent takes images is never guessed.** `capabilities.imageInput`
@@ -492,6 +495,27 @@ gateway start releases the leftover temporary. A genuinely corrupt owner record
 still fails closed and is never repaired; recovering that conversation ID
 requires archiving the offending file outside the running gateway.
 
+Beside the owner records the gateway keeps `summaries/<id>.json` (title, last line
+said, time, archived) for `conversation.list`, `metadata/deleted/<id>.json` for a
+deleted conversation, and `audit/deletion/` for who deleted it. A deleted
+conversation keeps its owner record and its tombstone for good: its identity is
+never reused, and every command its owner sends on it — `create` included —
+answers `conversation_deleted`, except deleting it again (see ADR 182);
+anyone else is told `conversation_not_found`. Its history, uploads and summary are erased; its audit
+records are not. A delete whose deletion record, or whose uploads' own evidence, could not be written answers
+`audit_unavailable` — it is deleted all the same; any other code from a delete means only that whether it was deleted is not known. A delete that could not finish erasing answers
+`conversation_erasure_incomplete` and is completed by deleting again, or by the
+gateway itself: while running, once an agent slot frees, the history is let go
+of, or its agent is confirmed stopped, and otherwise after it next starts — an
+agent that keeps refusing to delete its own session, or a damaged journal, needs the operator
+(see ADR 182). The
+journal's empty `.lock` file stays behind on purpose: removing it while a lease
+is held would let a second opener lock a new file beside the held one. The
+agent is asked to delete its own session over ACP (`session/delete`) and the
+deletion record says what it did — Claude's adapter deletes it, Codex's archives
+it; see [ADR 182](../adr/todo/182-conversation-deletion.md). Conversations nothing
+was ever said in are not listed.
+
 Opening a conversation's provider for the first time is gated on its mandatory
 creation audit, whatever the entry point: if that audit failed, ownership
 remains and read and send also refuse until the original creation evidence is
@@ -593,7 +617,8 @@ A present `Origin` must be one the gateway trusts for `/session`, and is echoed 
 `content-type` and `x-nessa-upload-ticket`. Any other origin is `403`.
 
 `attachment.begin` fails with `invalid_request`, `conversation_not_found` (also
-for another owner's conversation), `image_input_unsupported`,
+for another owner's conversation), `conversation_deleted` (its owner's, once
+deleted), `image_input_unsupported`,
 `attachment_capacity`, `attachment_storage_unavailable`, `audit_unavailable`,
 `temporarily_unavailable`, or `agent_not_configured`.
 `image_input_unsupported` answers a `mimeType` of `image/*` on a gateway whose

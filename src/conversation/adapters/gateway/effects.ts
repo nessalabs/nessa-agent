@@ -68,6 +68,9 @@ function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
       return "unavailable" as const
     case "image_input_unsupported":
       return "image-input-unsupported" as const
+    // Deleted, here or on another surface: nothing is ever added to it again.
+    case "conversation_deleted":
+      return "conversation-deleted" as const
     case "invalid_request":
     case "unexpected":
     case undefined:
@@ -148,7 +151,8 @@ function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
 /**
  * The gateway's codes, as the words this panel has for them. One table for
  * every conversation command, because a code means the same thing whichever
- * command met it, and this is the one place the wire's vocabulary is read.
+ * command met it — except where a command's own contract says more: `delete`
+ * reads its own codes (see `delete` below), which only it raises.
  *
  * A code that is not here keeps the client's own sentence and reaches the panel
  * with no typed reason at all, which is what an unknown answer deserves: only
@@ -172,6 +176,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   agent_startup_deadline: "agent-startup-deadline",
   conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
+  conversation_deleted: "conversation-deleted",
 }
 
 /**
@@ -181,7 +186,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
  * the same codes. Nothing was submitted and nothing was changed, so "was it
  * applied" has no meaning here; all that is left is whether the gateway will
  * ever serve this conversation again, which is what {@link ReadFailure} answers.
- * One code decides that, so one code is listed. Everything else — every other
+ * The codes that decide it are named; everything else — every other
  * code the read path can raise, the socket's own access and routing codes, a
  * transport failure, a view the client would not validate, and any code this
  * build has never heard of — is `unavailable`.
@@ -203,6 +208,10 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // read is answered from the cache — so "it keeps trying" would be false and
   // the refresh it offers could only ever return this again.
   conversation_state_unreadable: "state-unreadable",
+  // Deleted, whether or not its erasure finished: the identity is refused for
+  // good either way, so a read has nothing to wait for.
+  conversation_deleted: "deleted",
+  conversation_erasure_incomplete: "deleted",
   // Every other code, written out rather than defaulted. `Partial` would let
   // the next permanent failure join the vocabulary and land silently on "Nessa
   // keeps trying", which is the shape of the defect this very word caused a
@@ -373,6 +382,16 @@ export function gatewayEffects(
     return current
   }
   const api = () => connected().conversation
+  /** Whether a command would leave this window at all. */
+  const reachable = () => {
+    try {
+      connected()
+      return true
+    } catch (error) {
+      if (error instanceof ConversationUnavailableError) return false
+      throw error
+    }
+  }
   return {
     create(conversationId) {
       const existing = creations.get(conversationId)
@@ -395,6 +414,25 @@ export function gatewayEffects(
         })
       creations.set(conversationId, request)
       return request
+    },
+    list(archived) {
+      // A list is a read: the gateway's refusal, or no gateway at all, is a
+      // stale list and nothing more, in the same words a stale view uses.
+      return Promise.resolve()
+        .then(() => api().list({ archived }))
+        .then(({ conversations }) =>
+          conversations.map((row) => ({
+            conversationId: row.conversationId,
+            title: row.title,
+            preview: row.preview,
+            updatedAtMs: row.updatedAtMs,
+            running: row.running,
+            archived: row.archived,
+          })),
+        )
+        .catch((error: unknown) => {
+          throw readFailure(error)
+        })
     },
     read(conversationId) {
       // Opaque revisions have no numeric ordering. Serialize reads, including
@@ -525,6 +563,40 @@ export function gatewayEffects(
         await api().close(conversationId)
       } catch (error) {
         throw controlFailure(error)
+      }
+    },
+    async archive(conversationId, archived) {
+      if (!reachable()) throw new ControlFailedError("not-connected", "refused")
+      try {
+        const answer = archived
+          ? await api().archive(conversationId)
+          : await api().unarchive(conversationId)
+        return answer.applied
+      } catch (error) {
+        throw controlFailure(error)
+      }
+    },
+    async delete(conversationId) {
+      if (!reachable()) throw new ControlFailedError("not-connected", "refused")
+      try {
+        await api().delete(conversationId)
+      } catch (error) {
+        // The delete's own contract: its two news codes mean it is deleted,
+        // and any other code means only that whether it was is not known.
+        if (!(error instanceof NessaConversationControlError)) throw error
+        if (error.code === "audit_unavailable")
+          throw new ControlFailedError(
+            "deletion-unrecorded",
+            controlOutcome(error),
+            error,
+          )
+        if (error.code === "conversation_erasure_incomplete")
+          throw new ControlFailedError(
+            "conversation-erasure-incomplete",
+            controlOutcome(error),
+            error,
+          )
+        throw new ControlFailedError(undefined, "unknown", error)
       }
     },
   }

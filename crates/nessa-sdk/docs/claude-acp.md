@@ -134,6 +134,21 @@ distinct from provider-side hooks disabled by this restricted profile. See the
 evidence, and deterministic regression tests. These tests do not establish live
 provider compatibility beyond the dated checks below.
 
+## Deleting a session
+
+`ClaudeAcpProvider` implements `ProviderSessionDeleter`. The adapter advertises
+`sessionCapabilities.delete`; on `session/delete` it tears down any live query
+for the session and deletes the Claude Code session file, so a successful answer
+is reported as `ProviderSessionDeletion::Deleted`. The exchange opens its own
+connection (initialize, then the delete) and never resumes the session. The
+adapter also advertises `sessionCapabilities.list`, for the workspace, and sends
+its whole list in one frame. It leaves out a session with no titled prompt, so a
+conversation of images alone is not listed; the delete is sent regardless, and
+deletes it. Its delete of a session it no longer has is an error: when the list,
+read after that error, does not name the session, it settles as
+`ProviderSessionDeletion::NotListed`, which is how a deletion interrupted after
+Claude deleted finishes.
+
 ## Install and run
 
 The local harness manifest and lockfile pin

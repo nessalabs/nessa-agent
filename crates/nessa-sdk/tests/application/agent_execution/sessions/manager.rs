@@ -28,6 +28,9 @@ impl SessionStorageLease for FaultLease {
             self.inner.save(snapshot).await
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
 }
 fn invocation(id: &str, complete: bool) -> InvocationRecord {
     let id = ExecutionId::new(id).unwrap();

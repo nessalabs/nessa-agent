@@ -326,6 +326,10 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
     // asked for it and leaves every other conversation alone.
     assert!(built.providers.contains_key(&AgentId::Claude));
     assert!(!built.providers.contains_key(&AgentId::Opencode));
+    // Each agent built registers how it deletes its own record of a session,
+    // at the one place composition registers them; one not built does not.
+    assert!(built.erasers.handles(AgentId::Claude));
+    assert!(!built.erasers.handles(AgentId::Opencode));
 }
 
 /// And Opencode is a provider composition can actually build, which nothing
@@ -351,6 +355,8 @@ fn every_configured_agent_that_can_be_built_is() {
     .unwrap();
     assert_eq!(built.providers.len(), 2);
     assert!(built.providers.contains_key(&AgentId::Opencode));
+    assert!(built.erasers.handles(AgentId::Claude));
+    assert!(built.erasers.handles(AgentId::Opencode));
 }
 
 /// Opencode can be started against the catalog Nessa actually ships.

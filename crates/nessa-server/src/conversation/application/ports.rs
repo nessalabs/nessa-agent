@@ -1,7 +1,9 @@
 use super::ConversationError;
-use crate::conversation::domain::{Conversation, ConversationId};
+use crate::conversation::domain::{
+    Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
+};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::domain::agent_execution::prompts::ImageReference;
+use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
 use std::{future::Future, pin::Pin};
 
 pub type ConversationFuture<'a, T> =
@@ -39,6 +41,9 @@ pub struct ConversationCreationAuditRecord {
 pub enum ConversationOwnershipState {
     Absent,
     Owned,
+    /// Deleted for good. The identity keeps a tombstone and is not reused
+    /// (`a_deleted_conversation_refuses_every_command_on_it`).
+    Deleted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +57,69 @@ pub enum ConversationCreationCause {
 /// an interrupted first audit delivery can be safely retried from stored evidence.
 pub trait ConversationCreationAudit: Send + Sync {
     fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()>;
+}
+
+/// Immutable evidence that a conversation was deleted, committed before any of
+/// its history is erased.
+///
+/// Built from the stored tombstone, not from whichever request is asking: a
+/// delete repeated to finish an incomplete erasure — or the gateway finishing
+/// it after a restart — records the one deletion in the name of the request
+/// that decided it, so the record is the same each time
+/// (`a_deleted_conversation_refuses_every_command_on_it`,
+/// `an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`).
+/// `correlation_id` names that request, which is allowed for the reason
+/// [`ConversationFileLinkAuditRecord`] gives: the record is *of* it.
+///
+/// `provider_session_id` is what the conversation's saved history named as the
+/// provider's own session, read after the agent was confirmed stopped and
+/// before the history is erased. It is the only link that survives from this
+/// conversation to execution evidence keyed by that session, and to whatever
+/// the agent kept of it. `None` means the history named none: the agent never
+/// attached.
+///
+/// `provider_erasure` is what became of the agent's own record of that
+/// session, as the exchange with the agent confirmed it — never more: an
+/// agent that acknowledged a delete may have archived rather than erased
+/// (`the_agents_own_record_is_asked_to_go_after_the_stop_and_before_the_history`).
+/// The record is written only once that is settled, so it says one thing and
+/// is never contradicted by a retry.
+///
+/// There is no observation time here: the sink assigns it when it commits the
+/// record, from its own clock. `requested_at_ms` is the service's reading when
+/// the deciding request arrived.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationDeletionAuditRecord {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    pub owner_id: PrincipalId,
+    pub before: ConversationOwnershipState,
+    pub after: ConversationOwnershipState,
+    pub cause: ConversationDeletionCause,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub correlation_id: String,
+    pub provider_session_id: Option<ExecutionSessionId>,
+    pub provider_erasure: ProviderSessionErasure,
+    pub requested_at_ms: u64,
+}
+
+/// Why a conversation was deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationDeletionCause {
+    /// A verified caller who owns it asked. Nothing deletes a conversation on
+    /// its own.
+    CallerRequested,
+}
+
+/// Commits deletion evidence before a conversation's history is erased.
+///
+/// Records are idempotent by conversation identity: one conversation is
+/// deleted once, so the same record repeated is acknowledged again, and a
+/// record contradicting the one stored is refused. An unavailable sink leaves
+/// the history where it is.
+pub trait ConversationDeletionAudit: Send + Sync {
+    fn record(&self, record: ConversationDeletionAuditRecord) -> ConversationFuture<'_, ()>;
 }
 /// Waits for one-time runtime preparation to finish before this context opens a
 /// provider on a request path.
@@ -68,11 +136,77 @@ pub trait RuntimeReadiness: Send + Sync {
     fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
-/// Stores only conversation ownership. The SDK stores execution history separately.
+/// Stores only conversation ownership, and the tombstone of one that was
+/// deleted. The SDK stores execution history separately.
+///
+/// A conversation read back carries its tombstone when it has one, so a reader
+/// does not see a deleted conversation as a live one: `load` and `list` return
+/// it with its [`Conversation::deletion`], and `create` for its identity
+/// returns it as [`ConversationCreationDisposition::Existing`] rather than
+/// creating it again
+/// (`a_tombstone_outlives_reopening_and_its_identity_is_never_created_again`).
 pub trait ConversationRepository: Send + Sync {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
     /// Create once, or return the existing owner without changing it.
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation>;
+    /// Write the conversation's tombstone, or carry the one it has further,
+    /// and return the conversation as it now stands.
+    ///
+    /// What is stored is what [`Conversation::deleted`] makes of the stored
+    /// conversation and `deletion` — the domain's rule that the first decision
+    /// stands; an implementation only persists it. Durable before it
+    /// returns. [`ConversationError::NotFound`] when there is no ownership
+    /// record to delete; [`ConversationError::Metadata`] for a tombstone that
+    /// could not stand beside that record ([`Conversation::deleted`]), which
+    /// is not written.
+    fn record_deletion(
+        &self,
+        id: &ConversationId,
+        deletion: ConversationDeletion,
+    ) -> ConversationFuture<'_, Conversation>;
+    /// Every conversation on record, whoever owns it, in no particular order.
+    ///
+    /// One record that cannot be read is left out, and the implementation says
+    /// which: it is one conversation missing from a list, not a reason to show
+    /// none. How many were left out is part of the answer, since whose they
+    /// are cannot be read either. Only being unable to enumerate the records
+    /// at all is an error.
+    fn list(&self) -> ConversationFuture<'_, ConversationRecords>;
+}
+
+/// What [`ConversationRepository::list`] read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConversationRecords {
+    /// Every record that could be read.
+    pub conversations: Vec<Conversation>,
+    /// How many records are there but could not be read, so are not among
+    /// [`Self::conversations`]. Anybody's, for all a reader can tell.
+    pub unreadable: usize,
+    /// How many tombstones have no conversation record beside them. Each is
+    /// a deleted conversation, so none is missing from a list; but its
+    /// deletion can be neither read nor finished.
+    pub orphaned_tombstones: usize,
+}
+
+/// Keeps what a list of conversations shows about each one: its title, the
+/// last thing said, and when.
+///
+/// Apart from [`ConversationRepository`] on purpose. Ownership is written once
+/// and is evidence; a summary is rewritten on every turn and is a projection
+/// of what was said. A conversation with no summary is still a conversation,
+/// and a summary that could not be written leaves the list stale, never the
+/// conversation broken.
+pub trait ConversationSummaries: Send + Sync {
+    fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>>;
+    /// Replace the conversation's summary with `summary`.
+    fn record(
+        &self,
+        id: &ConversationId,
+        summary: ConversationSummary,
+    ) -> ConversationFuture<'_, ()>;
+    /// Remove the conversation's summary, if it has one. Durable before it
+    /// returns; a summary that is already gone is not an error.
+    fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
 }
 
 /// An image as a caller submitted it, before any of it has been checked.
@@ -216,6 +350,8 @@ pub trait ConversationFileLinkAudit: Send + Sync {
 pub enum AttachmentReleaseCause {
     /// The verified caller closed the conversation.
     ConversationClosed,
+    /// The verified caller deleted the conversation.
+    ConversationDeleted,
 }
 
 /// A verified caller's release of one conversation's uploaded files.

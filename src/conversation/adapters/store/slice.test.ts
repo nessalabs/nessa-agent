@@ -31,6 +31,7 @@ function deferred<T>() {
 }
 const view = (id: string, text = ""): ConversationView => ({
   conversationId: id,
+  title: null,
   revision: text,
   messages: [],
   pending: [],

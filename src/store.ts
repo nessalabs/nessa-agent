@@ -7,7 +7,10 @@
  */
 import { configureStore } from "@reduxjs/toolkit"
 
-import { conversationReducer } from "./conversation/adapters/store/slice"
+import {
+  conversationHistoryReducer,
+  conversationReducer,
+} from "./conversation/adapters/store/slice"
 import { sessionReducer } from "./session/adapters/store/slice"
 
 import { createDependencies, type AppDependencies } from "./composition/dependencies"
@@ -31,6 +34,7 @@ export function makeStore(dependencies: StoreDependencies = createDependencies()
       }),
     reducer: {
       conversation: conversationReducer,
+      conversationHistory: conversationHistoryReducer,
       session: sessionReducer,
     },
   })

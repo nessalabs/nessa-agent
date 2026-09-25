@@ -80,6 +80,66 @@ for (const invalid of [
   if (validateAuth(invalid))
     throw new Error("Product auth schema accepts invalid fixture")
 }
+// The list's bounds: what a row may say, how many rows there are, and that
+// what a summary has not got is null rather than an empty string.
+const validateList = ajv.getSchema(`${schema.$id}#/$defs/ConversationListResult`)
+const listed = read("fixtures.json").ConversationListResult
+const row = listed.conversations[0]
+for (const invalid of [
+  { complete: true, conversations: [{ ...row, title: "" }] },
+  { complete: true, conversations: [{ ...row, preview: "" }] },
+  { complete: true, conversations: [{ ...row, title: "😀".repeat(65) }] },
+  { complete: true, conversations: [{ ...row, preview: "😀".repeat(129) }] },
+  { complete: true, conversations: [{ ...row, archived: undefined }] },
+  { complete: true, conversations: [{ ...row, unread: 1 }] },
+  { complete: true, conversations: Array.from({ length: 501 }, () => row) },
+  // Whether the bound left any out is always said.
+  { conversations: [row] },
+  { complete: "yes", conversations: [row] },
+]) {
+  if (validateList(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation list accepts an out-of-bounds row")
+}
+if (
+  !validateList({
+    conversations: [{ ...row, title: "😀".repeat(64), preview: "😀".repeat(128) }],
+    complete: false,
+  })
+)
+  throw new Error("Product conversation list rejects an exact UTF-8 bound")
+// The view's title follows the list's bounds: null before anything was said,
+// never an empty string, never over the byte bound.
+const validateView = ajv.getSchema(`${schema.$id}#/$defs/ConversationView`)
+const view = read("fixtures.json").ConversationView
+for (const invalid of [
+  { ...view, title: "" },
+  { ...view, title: "😀".repeat(65) },
+  { ...view, title: undefined },
+]) {
+  if (validateView(JSON.parse(JSON.stringify(invalid))))
+    throw new Error("Product conversation view accepts an invalid title")
+}
+if (!validateView({ ...view, title: null }))
+  throw new Error("Product conversation view rejects a null title")
+const validateListParams = ajv.getSchema(`${schema.$id}#/$defs/ConversationListParams`)
+for (const invalid of [{ archived: "yes" }, { archived: true, cursor: "x" }]) {
+  if (validateListParams(invalid))
+    throw new Error("Product conversation list accepts invalid params")
+}
+for (const [name, fixture] of [
+  ["ConversationArchiveParams", read("fixtures.json").ConversationArchiveParams],
+  ["ConversationDeleteParams", read("fixtures.json").ConversationDeleteParams],
+]) {
+  const validate = ajv.getSchema(`${schema.$id}#/$defs/${name}`)
+  for (const invalid of [
+    { ...fixture, requestId: "" },
+    { ...fixture, requestId: "😀".repeat(65) },
+    { ...fixture, conversationId: "not-a-uuid" },
+    { ...fixture, reason: "because" },
+  ]) {
+    if (validate(invalid)) throw new Error(`Product ${name} accepts an invalid command`)
+  }
+}
 // Conversation command correlation and bounds are part of the product contract.
 const validateSend = ajv.getSchema(`${schema.$id}#/$defs/ConversationSendParams`)
 const send = read("fixtures.json").ConversationSendParams

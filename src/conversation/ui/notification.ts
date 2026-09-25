@@ -42,6 +42,15 @@ function readNotice(reason: ReadFailure): ConversationNotice {
           "Nessa cannot read this conversation's saved state, so it cannot be opened again. Start a new conversation to carry on.",
         retry: null,
       }
+    // Deleted, here or elsewhere. The tab is kept rather than taken away, so a
+    // draft written in it is still there to copy; nothing sent from it can land.
+    case "deleted":
+      return {
+        title: "Conversation deleted",
+        description:
+          "This conversation was deleted, so it cannot be continued. Close this tab; anything in the draft is still here to copy.",
+        retry: null,
+      }
     // Everything else, including a cause this build has no name for. It claims
     // only what is certainly true of all of them — deliberately not that the
     // gateway will come back, which no code it sends actually means.
@@ -77,6 +86,7 @@ function outranksACommand(reason: ReadFailure): boolean {
   switch (reason) {
     case "configuration-changed":
     case "state-unreadable":
+    case "deleted":
       return true
     case "unavailable":
       return false

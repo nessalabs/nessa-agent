@@ -1,4 +1,6 @@
 import type {
+  ConversationListResult,
+  ConversationSummary,
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
@@ -7,6 +9,7 @@ import type {
   LinkedFile,
 } from "../generated/product.js"
 import {
+  bounds,
   CompactionReportingSupport,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
@@ -21,6 +24,9 @@ import {
 import { imageAttachments, linkedFiles } from "./attachment-validate.js"
 
 const utf8 = new TextEncoder()
+
+/** A canonical lowercase hyphenated UUID: the schema's pattern for a conversation identity. */
+export const conversationIdPattern = new RegExp(bounds.conversationIdPattern)
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -122,10 +128,12 @@ export function conversationView(value: unknown, expected: string): Conversation
     "permissionViewError",
     "queueComplete",
     "runtime",
+    "title",
   ])
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
   identity(item, "revision")
+  optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
   if (item.permissionViewError !== undefined)
@@ -405,4 +413,64 @@ export function conversationReorder(
     "priority_conflict",
   ])
   return item as unknown as ConversationReorderResult
+}
+
+/** Null, or text of 1 to `max` UTF-8 bytes: what a summary has not got is null, never "". */
+function optionalText(item: Record<string, unknown>, key: string, max: number) {
+  return item[key] === null ? null : text(item, key, max, false)
+}
+function time(item: Record<string, unknown>, key: string) {
+  const value = item[key]
+  if (!Number.isSafeInteger(value) || (value as number) < 0)
+    throw new Error(`Invalid conversation ${key}`)
+  return value as number
+}
+
+/**
+ * The caller's conversations as the gateway listed them. Each row is checked
+ * against the schema's bounds, and a conversation listed twice is refused: the
+ * list is keyed by identity, and a second row for one conversation would be
+ * two answers to what it is called. Every row must also be what was asked for
+ * — archived or not — since a row on the wrong side of the filter is a list
+ * that contradicts its own request.
+ */
+export function conversationList(
+  value: unknown,
+  archived: boolean,
+): ConversationListResult {
+  const item = record(value)
+  exact(item, ["conversations", "complete"])
+  flag(item, "complete")
+  const seen = new Set<string>()
+  const conversations = items(item, "conversations", bounds.maxListedConversations).map(
+    (row): ConversationSummary => {
+      exact(row, [
+        "conversationId",
+        "title",
+        "preview",
+        "createdAtMs",
+        "updatedAtMs",
+        "running",
+        "archived",
+      ])
+      const conversationId = identity(row, "conversationId")
+      if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
+        throw new Error("Invalid conversation conversationId")
+      seen.add(conversationId)
+      flag(row, "running")
+      flag(row, "archived")
+      if (row.archived !== archived)
+        throw new Error("Conversation list row contradicts the archived filter")
+      return {
+        conversationId,
+        title: optionalText(row, "title", bounds.maxConversationTitleBytes),
+        preview: optionalText(row, "preview", bounds.maxConversationPreviewBytes),
+        createdAtMs: time(row, "createdAtMs"),
+        updatedAtMs: time(row, "updatedAtMs"),
+        running: row.running as boolean,
+        archived: row.archived as boolean,
+      }
+    },
+  )
+  return { conversations, complete: item.complete as boolean }
 }

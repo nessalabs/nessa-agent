@@ -31,11 +31,13 @@ import {
   MAX_SEND_TOTAL_IMAGE_BYTES,
   STORED_IMAGE_TYPES,
 } from "../../model"
+import { deletedAnyway } from "../../application/usecases"
 import { BUSY_RETRY_DELAYS_MS, gatewayEffects } from "./effects"
 
 function gatewayView(): ConversationView {
   return {
     conversationId: "server",
+    title: null,
     revision: "capabilities",
     messages: [],
     pending: [],
@@ -912,6 +914,7 @@ it.each([
   ["agent_not_configured", "unavailable"],
   ["conversation_not_found", "unavailable"],
   ["image_input_unsupported", "image-input-unsupported"],
+  ["conversation_deleted", "conversation-deleted"],
   ["invalid_request", "rejected"],
   ["unexpected", "rejected"],
 ] as const)("maps a begin the gateway refused as %s to %s", async (refusal, reason) => {
@@ -984,3 +987,149 @@ it("hands the caller's signal to the upload, and stops offering a busy ticket on
   )
   expect(error).toBeInstanceOf(AttachmentStagingError)
 })
+
+it("lists the gateway's conversations as the panel's summaries", async () => {
+  const list = vi.fn(async () => ({
+    conversations: [
+      {
+        conversationId: "00000000-0000-4000-8000-000000000001",
+        title: "Flights to Lisbon",
+        preview: "Done.",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        running: true,
+        archived: false,
+      },
+    ],
+    complete: false,
+  }))
+  const effects = effectsOf(() => ({ conversation: { list } }) as unknown as NessaClient)
+  await expect(effects.list(false)).resolves.toEqual([
+    {
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      title: "Flights to Lisbon",
+      preview: "Done.",
+      updatedAtMs: 2,
+      running: true,
+      archived: false,
+    },
+  ])
+  expect(list).toHaveBeenCalledWith({ archived: false })
+})
+
+it("turns a refused or impossible list into the same word a stale view uses", async () => {
+  const refused = effectsOf(
+    () =>
+      ({
+        conversation: {
+          list: () =>
+            Promise.reject(
+              new NessaRpcError(
+                ConversationErrorCode.ConversationStorageUnavailable,
+                "conversation_storage_unavailable",
+              ),
+            ),
+        },
+      }) as unknown as NessaClient,
+  )
+  const failure = await refused.list(false).catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(ConversationReadFailedError)
+  expect((failure as ConversationReadFailedError).reason).toBe("unavailable")
+  // No gateway at all rejects the same way rather than throwing synchronously.
+  const disconnected = await effectsOf(() => null)
+    .list(false)
+    .catch((error: unknown) => error)
+  expect((disconnected as ConversationReadFailedError).reason).toBe("unavailable")
+})
+
+it("archives, unarchives and deletes through the matching client calls", async () => {
+  const archive = vi.fn(async () => ({ requestId: "r", applied: true }))
+  const unarchive = vi.fn(async () => ({ requestId: "r", applied: true }))
+  const remove = vi.fn(async () => ({ requestId: "r", applied: true }))
+  const effects = effectsOf(
+    () =>
+      ({
+        conversation: { archive, unarchive, delete: remove },
+      }) as unknown as NessaClient,
+  )
+  await effects.archive("server", true)
+  await effects.archive("server", false)
+  await effects.delete("server")
+  expect(archive).toHaveBeenCalledExactlyOnceWith("server")
+  expect(unarchive).toHaveBeenCalledExactlyOnceWith("server")
+  expect(remove).toHaveBeenCalledExactlyOnceWith("server")
+})
+
+it.each([
+  // Any other code means only that whether it was deleted is not known.
+  [ConversationErrorCode.ConversationNotFound, undefined, "unknown"],
+  [
+    ConversationErrorCode.ConversationErasureIncomplete,
+    "conversation-erasure-incomplete",
+    "unknown",
+  ],
+  // A delete answers it only once the conversation is deleted.
+  [ConversationErrorCode.AuditUnavailable, "deletion-unrecorded", "unknown"],
+] as const)(
+  "reads a delete answered %s as the panel's own word",
+  async (code, reason, outcome) => {
+    const effects = effectsOf(
+      () =>
+        ({
+          conversation: {
+            delete: () =>
+              Promise.reject(
+                new NessaConversationControlError(
+                  "server",
+                  "action",
+                  undefined,
+                  new NessaRpcError(code, code),
+                ),
+              ),
+          },
+        }) as unknown as NessaClient,
+    )
+    const failure = await effects.delete("server").catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(ControlFailedError)
+    expect(failure).toMatchObject({ reason, outcome })
+  },
+)
+
+it("refuses an archive or delete for certain when there is no gateway connection", async () => {
+  const effects = effectsOf(() => null)
+  for (const failure of [
+    await effects.archive("server", true).catch((error: unknown) => error),
+    await effects.delete("server").catch((error: unknown) => error),
+  ])
+    expect(failure).toMatchObject({ reason: "not-connected", outcome: "refused" })
+})
+
+it.each([
+  ConversationErrorCode.TemporarilyUnavailable,
+  ConversationErrorCode.ConversationStorageUnavailable,
+])(
+  "leaves a delete answered %s as the client rates it: not vouched for",
+  async (code) => {
+    const effects = effectsOf(
+      () =>
+        ({
+          conversation: {
+            delete: () =>
+              Promise.reject(
+                new NessaConversationControlError(
+                  "server",
+                  "action",
+                  undefined,
+                  new NessaRpcError(code, code),
+                ),
+              ),
+          },
+        }) as unknown as NessaClient,
+    )
+    const failure = await effects.delete("server").catch((error: unknown) => error)
+    expect(failure).not.toMatchObject({ outcome: "refused" })
+    // Nor read as a delete that happened: no tab is let go on its word.
+    const reason = failure instanceof ControlFailedError ? failure.reason : undefined
+    expect(deletedAnyway(reason)).toBe(false)
+  },
+)

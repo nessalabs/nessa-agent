@@ -1,44 +1,55 @@
 use super::{
-    projection::Projection,
+    locks::ConversationLocks,
+    projection::{clipped, Projection, MAX_TEXT},
+    provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
+    retries::{Claim, DeletionRetries, Waiting},
     view::{
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
-        ConversationLifecyclePhase, ConversationMessageStatus, ConversationPendingMode,
-        ConversationReorderOutcome, ConversationRuntime, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
+        ConversationLifecyclePhase, ConversationList, ConversationListEntry,
+        ConversationMessageStatus, ConversationPendingMode, ConversationReorderOutcome,
+        ConversationRuntime, ConversationStartupFailure, ConversationStartupFailureCode,
+        ConversationView, SubmissionReceipt,
     },
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
     ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationRepository, RuntimeReadiness,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, RuntimeReadiness, StopFailure,
     SubmittedMessage,
 };
 use crate::agents::domain::AgentId;
-use crate::conversation::domain::{Conversation, ConversationId};
+use crate::conversation::domain::{
+    Conversation, ConversationDeletion, ConversationId, ConversationSummary,
+    ProviderSessionErasure, ProviderSessionLink,
+};
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::{
     agents::{
-        AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AgentInitializationError,
-        AttachmentFailure, AttachmentFailureCode, AttachmentPhase, AttachmentRequest,
-        QueueAdmission, QueueRemoval, QueueReorder, SteeringDelivery, SteeringEvidence,
+        AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,
+        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, QueueAdmission, QueueRemoval,
+        QueueReorder, SteeringDelivery, SteeringEvidence,
     },
-    executions::{ExecutionAudit, ExecutionRequest},
+    executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, PermissionSelectionState,
     },
     providers::{AgentProvider, OperationCapabilities},
-    sessions::{SessionManager, SessionSnapshot, SessionStorage},
+    sessions::{
+        SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, InvocationStage},
+    executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
     prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
-    sessions::SessionId,
+    sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::{
@@ -48,14 +59,57 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, OnceLock,
+        Arc, OnceLock, Weak,
     },
+    time::Duration,
 };
 use tokio::{
-    sync::{watch, Mutex, Notify, OnceCell, RwLock, RwLockReadGuard},
+    sync::{
+        watch, Mutex, Notify, OnceCell, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore,
+    },
     task::JoinHandle,
+    time::Instant,
 };
 use uuid::Uuid;
+
+/// Most conversations one list returns, applied after the caller's ownership
+/// has been checked so that nobody else's conversations take a place in it.
+pub const MAX_LISTED_CONVERSATIONS: usize = 500;
+
+/// What a delete spends before it asks the agent about its own record, set by
+/// composition from the one budgets table the client derives its wait from
+/// (`protocol/defaults/agent-startup-budgets.json`, `deletion`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConversationDeletionBudgets {
+    /// How long stopping a conversation's live agent may take before the stop
+    /// is reported unconfirmed. Every stop of one owner takes it — a delete's,
+    /// and each owner's in retirement — so there is one bound for stopping.
+    /// It bounds how long a delete waits, not how long an agent may take to
+    /// stop: a delete's stop still unconfirmed after it is carried on
+    /// in-process until it is (`waiting_for`).
+    pub stop: Duration,
+    /// How long a delete asks again for the lease on a conversation's saved
+    /// history before it reports the history still held. A stopped agent's
+    /// last handles let go of their lease as the tasks holding them finish,
+    /// which is soon after the stop but not at it.
+    pub history_lease: Duration,
+}
+
+/// How many times, when the gateway starts, it tries to finish a deletion
+/// that did not finish, and how long it waits before each try after the
+/// first, times the number of tries so far. Bounded, so a deletion that
+/// cannot finish — its agent will not answer, its history is damaged — is
+/// reported and left for the next start rather than retried forever.
+const DELETION_ATTEMPTS: u32 = 3;
+const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Most agents asked at once, across every delete on this gateway, about their
+/// own record of a session. Each ask may launch an agent process; a delete
+/// that finds them all taken is left unfinished with
+/// [`DeletionFailures::no_agent_slot`] and finished by a later try, rather than
+/// waiting beyond its own bound
+/// (`agents_asked_at_once_never_exceed_the_bound_and_the_rest_are_left_unfinished`).
+const MAX_AGENTS_ASKED_AT_ONCE: usize = 2;
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
 #[derive(Clone)]
@@ -231,7 +285,9 @@ impl LiveConversation {
 /// typed attachment lifecycle instead of becoming preparation failures here.
 struct OpeningFailure {
     cause: ConversationError,
-    cleanup: Option<AgentInitializationError>,
+    /// Whether what it launched may still be held. Stopping it cannot confirm
+    /// otherwise, so a deletion stays unfinished while it does
+    /// (`a_failed_opening_holding_what_it_launched_leaves_the_delete_unfinished`).
     holds: bool,
 }
 struct Slot {
@@ -248,7 +304,26 @@ struct Inner {
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn ConversationCreationAudit>,
     file_link_audit: Arc<dyn ConversationFileLinkAudit>,
+    deletion_audit: Arc<dyn ConversationDeletionAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
+    summaries: Arc<dyn ConversationSummaries>,
+    // One summary change at a time per conversation, so a turn's reply and
+    // the next message cannot each read the same summary and have the later
+    // write lose the other's change. Per conversation, so one conversation's
+    // summary never waits behind another's
+    // (`summary_writes_of_one_conversation_do_not_wait_for_another`). An
+    // archive and a delete's erasure of the summary take it too, and each
+    // writer asks whether the conversation was deleted while holding it, so a
+    // summary is not written back after its erasure
+    // (`a_late_reply_cannot_write_back_a_deleted_summary`).
+    summary_writes: ConversationLocks,
+    // One delete of a conversation at a time, from its fence to its last
+    // erasure, so a second delete waits for the first and answers from the
+    // tombstone it left (`concurrent_deletes_of_one_conversation_run_one_after_the_other`).
+    deletions: ConversationLocks,
+    /// Who is asked to delete an agent's own record of a provider session.
+    provider_sessions: ProviderSessionErasers,
+    deletion_budgets: ConversationDeletionBudgets,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
@@ -261,6 +336,18 @@ struct Inner {
     // rather than a flag means a transient stop can pass through without
     // leaving the gateway permanently fenced.
     stops: watch::Sender<u64>,
+    // Set once, when the service is retired, and never reset. What a delete
+    // waits on — a stop, the history's lease, an agent being asked — ends on
+    // this and not on `stops`: a desktop quit's pass that stops agents without
+    // stopping admission is no reason to give up a person's delete
+    // (`a_desktop_stop_leaves_a_delete_asking_its_agent_alone`,
+    // `a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished`).
+    retired: watch::Sender<bool>,
+    /// Deletions this run left unfinished for a reason that can change while
+    /// it runs, carried on by it.
+    retries: Arc<DeletionRetries>,
+    /// Permits for asking agents about their own record of a session.
+    agents_asked: Arc<Semaphore>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -378,8 +465,17 @@ pub struct ConversationDependencies {
     /// Not optional: a message may name a path on any gateway, so there is no
     /// configuration under which that grant goes unrecorded.
     pub file_link_audit: Arc<dyn ConversationFileLinkAudit>,
+    /// Records who deleted a conversation, before any of it is erased.
+    pub deletion_audit: Arc<dyn ConversationDeletionAudit>,
     /// `None` when this gateway keeps no uploads: every image is then refused.
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
+    /// What a list of conversations shows about each one.
+    pub summaries: Arc<dyn ConversationSummaries>,
+    /// Each agent's way of deleting its own record of a provider session,
+    /// asked when a conversation on that agent is deleted.
+    pub provider_sessions: ProviderSessionErasers,
+    /// How long a delete waits to stop the agent and to lease the history.
+    pub deletion_budgets: ConversationDeletionBudgets,
     pub clock: Arc<dyn Clock>,
 }
 impl ConversationService {
@@ -395,7 +491,11 @@ impl ConversationService {
             metadata,
             creation_audit,
             file_link_audit,
+            deletion_audit,
             attachments,
+            summaries,
+            provider_sessions,
+            deletion_budgets,
             clock,
         } = dependencies;
         if workspace.as_ref().is_some_and(|value| value.len() > 4096)
@@ -413,7 +513,13 @@ impl ConversationService {
                 metadata,
                 creation_audit,
                 file_link_audit,
+                deletion_audit,
                 attachments,
+                summaries,
+                summary_writes: ConversationLocks::default(),
+                deletions: ConversationLocks::default(),
+                provider_sessions,
+                deletion_budgets,
                 clock,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -421,6 +527,9 @@ impl ConversationService {
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
                 stops: watch::channel(0).0,
+                retired: watch::channel(false).0,
+                agents_asked: Arc::new(Semaphore::new(MAX_AGENTS_ASKED_AT_ONCE)),
+                retries: Arc::new(DeletionRetries::default()),
             }),
         })
     }
@@ -455,9 +564,10 @@ impl ConversationService {
             // this request can reserve capacity or open a provider.
             let creation_guard = service.inner.creation.lock().await;
             if let Some(record) = service.inner.metadata.load(&id).await? {
-                if !record.allows(&caller.organization_id, &caller.principal_id) {
-                    return Err(ConversationError::NotFound);
-                }
+                // A deleted conversation is not created again under its
+                // identity, whoever asks; only its owner is told why
+                // (`a_deleted_conversation_refuses_every_command_on_it`).
+                record.check_access(&caller.organization_id, &caller.principal_id)?;
                 drop(creation_guard);
                 // Acknowledge the original creation from its stored creator
                 // evidence before attributing this reopen to its caller, and
@@ -466,6 +576,19 @@ impl ConversationService {
                 // conversation with no record of who reopened it.
                 service.reconcile_creation_audit(&record).await?;
                 if caller.action_id != record.creation_action() {
+                    // Asked again, and the reopen written, under the creation
+                    // lock a delete writes its tombstone under: a delete that
+                    // finished since the check above leaves no reopen
+                    // recorded after its deletion
+                    // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
+                    let _creation = service.inner.creation.lock().await;
+                    service
+                        .inner
+                        .metadata
+                        .load(&id)
+                        .await?
+                        .ok_or(ConversationError::NotFound)?
+                        .check_access(&caller.organization_id, &caller.principal_id)?;
                     service
                         .inner
                         .creation_audit
@@ -526,9 +649,7 @@ impl ConversationService {
             }
             let outcome = service.inner.metadata.create(proposed).await?;
             let record = &outcome.conversation;
-            if !record.allows(&caller.organization_id, &caller.principal_id) {
-                return Err(ConversationError::NotFound);
-            }
+            record.check_access(&caller.organization_id, &caller.principal_id)?;
             service.reconcile_creation_audit(record).await?;
             if outcome.disposition == super::ConversationCreationDisposition::Existing
                 && caller.action_id != record.creation_action()
@@ -621,9 +742,7 @@ impl ConversationService {
             .load(id)
             .await?
             .ok_or(ConversationError::NotFound)?;
-        if !record.allows(&caller.organization_id, &caller.principal_id) {
-            return Err(ConversationError::NotFound);
-        }
+        record.check_access(&caller.organization_id, &caller.principal_id)?;
         let slot = {
             let mut owners = self.inner.conversations.lock().await;
             if self.inner.retirement.get().is_some() {
@@ -663,29 +782,43 @@ impl ConversationService {
                                 .await
                                 .map_err(|cause| OpeningFailure {
                                     cause,
-                                    cleanup: None,
                                     holds: false,
                                 })?
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::NotFound,
-                                    cleanup: None,
                                     holds: false,
                                 })?;
+                            // Asked again here, after this slot was published:
+                            // a delete writes its tombstone before it looks for
+                            // slots to stop, so a slot it did not see reads the
+                            // tombstone now and opens nothing
+                            // (`a_create_racing_a_delete_cannot_republish_it`).
+                            if record.deletion().is_some() {
+                                return Err(OpeningFailure {
+                                    cause: ConversationError::Deleted,
+                                    holds: false,
+                                });
+                            }
                             service.reconcile_creation_audit(&record).await.map_err(|cause| {
                                 OpeningFailure {
                                     cause,
-                                    cleanup: None,
                                     holds: false,
                                 }
+                            })?;
+                            // A record naming an agent this build has no
+                            // adapter for is read, listed, and deletable,
+                            // and never opened on some other agent.
+                            let agent = record.agent().ok_or(OpeningFailure {
+                                cause: ConversationError::AgentUnsupported,
+                                holds: false,
                             })?;
                             let configured = service
                                 .inner
                                 .agents
-                                .get(record.agent())
+                                .get(agent)
                                 .cloned()
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::AgentNotConfigured,
-                                    cleanup: None,
                                     holds: false,
                                 })?;
                             let session_id = SessionId::new(id.to_string()).expect("UUID session key");
@@ -698,7 +831,6 @@ impl ConversationService {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),
-                                    cleanup: None,
                                     holds: false,
                                 }
                             })?;
@@ -709,18 +841,15 @@ impl ConversationService {
                             )
                             .await
                             .map_err(|error| {
-                                let holds = error.needs_cleanup();
                                 OpeningFailure {
                                     cause: ConversationError::Agent(error.cause().clone()),
-                                    cleanup: Some(error),
-                                    holds,
+                                    holds: error.needs_cleanup(),
                                 }
                             })?;
                             let authorization = agent
                                 .authorize_attachment(AttachmentRequest::CallerRequested(actor))
                                 .map_err(|error| OpeningFailure {
                                     cause: ConversationError::Agent(error),
-                                    cleanup: None,
                                     holds: true,
                                 })?;
                             let mut events = agent.subscribe();
@@ -804,7 +933,6 @@ impl ConversationService {
                                 mem::forget(payload);
                                 Err(OpeningFailure {
                                     cause: ConversationError::Unavailable,
-                                    cleanup: None,
                                     holds: true,
                                 })
                             }
@@ -883,7 +1011,30 @@ impl ConversationService {
             agent_features: operation_capabilities.into(),
         });
         projection.lifecycle(lifecycle_view(&live.agent));
-        Ok(projection.read())
+        let mut view = projection.read();
+        drop(projection);
+        view.title = self.title(&id).await;
+        Ok(view)
+    }
+    /// The title a list shows for the conversation, which a read shows too:
+    /// one rule, the summary's, whichever of the two is drawing it
+    /// (`a_read_carries_the_title_the_list_shows`). A summary that cannot be
+    /// read is logged and the view goes without a title.
+    async fn title(&self, id: &ConversationId) -> Option<String> {
+        match self.inner.summaries.load(id).await {
+            Ok(summary) => summary
+                .as_ref()
+                .and_then(ConversationSummary::title)
+                .map(|title| title.as_str().to_owned()),
+            Err(error) => {
+                tracing::warn!(
+                    conversation_id = %id,
+                    %error,
+                    "conversation summary could not be read; the view has no title"
+                );
+                None
+            }
+        }
     }
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
     pub async fn submit(
@@ -1083,6 +1234,12 @@ impl ConversationService {
                 .lock()
                 .await
                 .admitted(&execution_id, &message, pending_mode);
+            // The agent has the message now, so the list says so — before the
+            // turn's watcher can record its reply, which must land after it. A
+            // retry of a message the agent already had says nothing new.
+            if !known {
+                service.summarize_message(&id, &message).await;
+            }
             match delivery {
                 SubmissionDelivery::Queued(receipt) => {
                     let evidence_error = match receipt.evidence() {
@@ -1091,7 +1248,7 @@ impl ConversationService {
                             Some(admission_evidence_error(failure))
                         }
                     };
-                    let settled = Self::watch_receipt(live, receipt).await;
+                    let settled = service.watch_receipt(&id, live, receipt, !known).await;
                     if let Some(error) = evidence_error {
                         return Err(error);
                     }
@@ -1122,13 +1279,23 @@ impl ConversationService {
         })
         .await
     }
-    async fn watch_receipt(live: Arc<LiveConversation>, receipt: QueueAdmission) -> bool {
+    /// `new_submission` is false for a retry of a submission the agent already
+    /// had. One found already settled then says nothing new, so its reply is
+    /// not recorded as if it had just been said.
+    async fn watch_receipt(
+        &self,
+        conversation: &ConversationId,
+        live: Arc<LiveConversation>,
+        receipt: QueueAdmission,
+        new_submission: bool,
+    ) -> bool {
         let id = receipt.id().as_str().to_owned();
         let mut completion = Box::pin(receipt.wait());
         // Inspect the actual SDK receipt, not a second admission ledger. A retry
         // can already be settled; dropping this wait never cancels SDK work.
         if let Some(result) = completion.as_mut().now_or_never() {
             let snapshot = live.agent.session_manager().snapshot().await;
+            let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
             let mut projection = live.projection.lock().await;
             projection.settled(&id, snapshot.as_ref());
             if result.is_err()
@@ -1140,14 +1307,25 @@ impl ConversationService {
             {
                 projection.receipt_failed(&id);
             }
+            drop(projection);
+            // Let go of the agent before waiting for the summary lock: a
+            // summary is not a reason to keep a stopped agent's history
+            // leased (`a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased`).
+            drop(live);
+            if let Some(reply) = reply {
+                self.summarize_reply(conversation, &reply).await;
+            }
             return true;
         }
         if !live.watched.lock().await.insert(id.clone()) {
             return false;
         }
+        let service = self.clone();
+        let conversation = conversation.clone();
         tokio::spawn(async move {
             let result = completion.await;
             let snapshot = live.agent.session_manager().snapshot().await;
+            let reply = completed_reply(snapshot.as_ref(), &id);
             let mut projection = live.projection.lock().await;
             projection.settled(&id, snapshot.as_ref());
             if result.is_err()
@@ -1161,8 +1339,220 @@ impl ConversationService {
             }
             drop(projection);
             live.watched.lock().await.remove(&id);
+            // As above: the agent is let go of before the summary lock is
+            // waited for, so a watcher cannot hold a stopped agent's history
+            // leased past a delete's wait for it.
+            drop(live);
+            if let Some(reply) = reply {
+                service.summarize_reply(&conversation, &reply).await;
+            }
         });
         false
+    }
+    /// Every conversation this caller owns and has not deleted, most recently
+    /// updated first, at most [`MAX_LISTED_CONVERSATIONS`] of them: those not
+    /// archived, or, when `archived`, only those that are.
+    ///
+    /// Read from ownership records, stored summaries, and what is live on this
+    /// gateway. Nothing is resolved: no provider is opened and no session
+    /// storage is opened to draw a list
+    /// (`listing_shows_only_the_callers_conversations_and_opens_nothing`).
+    ///
+    /// A conversation with no summary is left out: nothing was ever said in
+    /// it — one opened only to hold an upload, say — and a list of what was
+    /// said has nothing to show for it
+    /// (`a_conversation_nothing_was_said_in_is_not_listed`). Only something
+    /// said makes a summary — archiving makes none
+    /// (`archiving_a_conversation_nothing_was_said_in_changes_nothing`) — so
+    /// "has a summary" and "something was said" are the one rule. That includes
+    /// conversations from before summaries were kept, which are not given a
+    /// summary after the fact. One whose summary cannot be read was written,
+    /// so something was said, and it is listed rather than failing the list:
+    /// bare — no title or preview, its creation time — and in the default list
+    /// only, reported as not archived. Whether it was archived cannot be read;
+    /// showing it where a person looks first, over hiding it in the archived
+    /// list or in neither, is the choice that never loses a conversation from
+    /// view (`newest_summary_first_then_identity_and_an_unreadable_summary_lists_bare`). A conversation naming an
+    /// agent this build cannot open is listed like any other: it is its
+    /// owner's to see and to delete. The bound is applied after ownership and
+    /// the archive filter (`the_archive_filter_applies_before_the_bound`), and
+    /// the list says whether it left any out
+    /// ([`ConversationList::complete`]): a list exactly at the bound with
+    /// nothing behind it is complete
+    /// (`a_list_says_whether_the_bound_left_any_out`), and no list — any
+    /// caller's — is complete while any conversation record on the gateway
+    /// cannot be read, until an operator repairs it
+    /// (`an_unreadable_record_makes_every_list_incomplete`; the remedy is in
+    /// [`ConversationList::complete`]).
+    pub async fn list(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+    ) -> Result<ConversationList, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
+        let records = self.inner.metadata.list().await?;
+        // A record that cannot be read may be this caller's, so a list that
+        // left one out cannot say it names them all
+        // (`an_unreadable_record_makes_every_list_incomplete`).
+        let unreadable = records.unreadable;
+        let owned: Vec<Conversation> = records
+            .conversations
+            .into_iter()
+            .filter(|record| {
+                record
+                    .check_access(&caller.organization_id, &caller.principal_id)
+                    .is_ok()
+            })
+            .collect();
+        // Only a conversation that finished opening has anything to say about
+        // running; one still opening, or whose opening failed, is not waited on.
+        // Answered first, and the live conversations let go of before any
+        // summary is read: a list must not keep a stopped agent, or its
+        // history's lease, while it waits on storage
+        // (`a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased`).
+        let live: HashMap<ConversationId, Arc<LiveConversation>> = {
+            let owners = self.inner.conversations.lock().await;
+            owned
+                .iter()
+                .filter_map(|record| {
+                    let slot = owners.get(record.id())?;
+                    let live = slot.value.get()?.as_ref().ok()?;
+                    Some((record.id().clone(), live.clone()))
+                })
+                .collect()
+        };
+        let mut running = HashSet::new();
+        for (id, live) in live {
+            if turn_in_progress(live.agent.session_manager().snapshot().await) {
+                running.insert(id);
+            }
+        }
+        let mut entries = Vec::with_capacity(owned.len());
+        for record in owned {
+            let summary = match self.inner.summaries.load(record.id()).await {
+                Ok(Some(summary)) => Some(summary),
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        conversation_id = %record.id(),
+                        %error,
+                        "conversation summary could not be read; listed without it"
+                    );
+                    None
+                }
+            };
+            let is_archived = summary.as_ref().is_some_and(ConversationSummary::archived);
+            if is_archived != archived {
+                continue;
+            }
+            let running = running.contains(record.id());
+            entries.push(ConversationListEntry {
+                conversation_id: record.id().to_string(),
+                title: summary
+                    .as_ref()
+                    .and_then(ConversationSummary::title)
+                    .map(|title| title.as_str().to_owned()),
+                preview: summary
+                    .as_ref()
+                    .and_then(ConversationSummary::preview)
+                    .map(|preview| preview.as_str().to_owned()),
+                created_at_ms: record.creation_requested_at_ms(),
+                updated_at_ms: summary.as_ref().map_or(
+                    record.creation_requested_at_ms(),
+                    ConversationSummary::updated_at_ms,
+                ),
+                running,
+                archived: is_archived,
+            });
+        }
+        entries.sort_by(|left, right| {
+            right
+                .updated_at_ms
+                .cmp(&left.updated_at_ms)
+                .then_with(|| left.conversation_id.cmp(&right.conversation_id))
+        });
+        let complete = unreadable == 0 && entries.len() <= MAX_LISTED_CONVERSATIONS;
+        entries.truncate(MAX_LISTED_CONVERSATIONS);
+        Ok(ConversationList {
+            conversations: entries,
+            complete,
+        })
+    }
+    /// Record in the conversation's summary that `message` was accepted.
+    async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
+        let at_ms = self.inner.clock.unix_milliseconds();
+        let first_file = message.files().first().map(LinkedFile::name);
+        self.change_summary(id, |previous| {
+            Some(ConversationSummary::after_message(
+                previous,
+                message.text_str(),
+                first_file,
+                at_ms,
+            ))
+        })
+        .await;
+    }
+    /// Record in the conversation's summary that the agent replied `reply`.
+    async fn summarize_reply(&self, id: &ConversationId, reply: &str) {
+        let at_ms = self.inner.clock.unix_milliseconds();
+        self.change_summary(id, |previous| {
+            ConversationSummary::after_reply(previous, reply, at_ms)
+        })
+        .await;
+    }
+    /// Replace a conversation's summary with what `change` makes of it.
+    ///
+    /// A summary is what a list shows, not what the conversation is, so
+    /// failing to read or write one is logged and the command goes on: the
+    /// list may be stale, the conversation is not
+    /// (`a_summary_that_cannot_be_written_does_not_fail_the_message`). One that
+    /// cannot be read is left alone rather than overwritten with a summary that
+    /// would lose its title.
+    ///
+    /// A deleted conversation's summary is never written. The question is
+    /// asked under the summary lock a delete erases it under, so a reply
+    /// settling after the delete cannot put the file back
+    /// (`a_late_reply_cannot_write_back_a_deleted_summary`).
+    async fn change_summary(
+        &self,
+        id: &ConversationId,
+        change: impl FnOnce(Option<&ConversationSummary>) -> Option<ConversationSummary>,
+    ) {
+        let _writes = self.inner.summary_writes.lock(id).await;
+        match self.inner.metadata.load(id).await {
+            Ok(Some(record)) if record.deletion().is_none() => {}
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(
+                    conversation_id = %id,
+                    %error,
+                    "conversation record could not be read; its summary was left as it was"
+                );
+                return;
+            }
+        }
+        let previous = match self.inner.summaries.load(id).await {
+            Ok(previous) => previous,
+            Err(error) => {
+                tracing::warn!(
+                    conversation_id = %id,
+                    %error,
+                    "conversation summary could not be read; left as it was"
+                );
+                return;
+            }
+        };
+        let Some(next) = change(previous.as_ref()) else {
+            return;
+        };
+        if let Err(error) = self.inner.summaries.record(id, next).await {
+            tracing::warn!(
+                conversation_id = %id,
+                %error,
+                "conversation summary could not be written; the list shows the last one"
+            );
+        }
     }
     /// Reorder the complete pending queue without changing message identities or priority.
     /// Dispatch/removal races return QueueChanged; failed writes may have applied the move.
@@ -1328,9 +1718,7 @@ impl ConversationService {
                 .load(&id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            if !record.allows(&caller.organization_id, &caller.principal_id) {
-                return Err(ConversationError::NotFound);
-            }
+            record.check_access(&caller.organization_id, &caller.principal_id)?;
             let (closed, may_release) = match service.resolve(&id, &caller).await {
                 Ok(live) => {
                     let result = live.agent.close(actor).await;
@@ -1395,6 +1783,706 @@ impl ConversationService {
         })
         .await
     }
+    /// Archive the conversation, or unarchive it: whether `list` shows it by
+    /// default. Nothing is stopped or removed. Returns whether this changed
+    /// it; `false` when it already was in that state, including a repeat of
+    /// the same request, and for a conversation nothing was said in, which is
+    /// in neither list and is left so.
+    ///
+    /// Unlike the rest of the summary this is a person's decision and not a
+    /// projection, so failing to read or write it fails the command with the
+    /// store's typed error instead of being logged and passed over
+    /// (`an_archive_that_cannot_be_written_fails_visibly`).
+    pub async fn archive(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        archived: bool,
+    ) -> Result<bool, ConversationError> {
+        let service = self.clone();
+        supervised(async move {
+            let _admission = service.admit().await?;
+            caller.actor()?;
+            // Access is decided under the summary lock, which a delete erases
+            // the summary under: an archive either lands before that erasure
+            // or finds the tombstone.
+            let _writes = service.inner.summary_writes.lock(&id).await;
+            let record = service
+                .inner
+                .metadata
+                .load(&id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            // Nothing said, nothing listed, nothing to archive: no summary is
+            // made for it, so it stays out of both lists.
+            let Some(previous) = service.inner.summaries.load(&id).await? else {
+                return Ok(false);
+            };
+            if previous.archived() == archived {
+                return Ok(false);
+            }
+            service
+                .inner
+                .summaries
+                .record(&id, previous.after_archiving(archived))
+                .await?;
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Delete the conversation for good. Returns whether this request is the
+    /// one that deleted it: `true` for the deciding request and a repeat of
+    /// it, `false` for any other — the domain's rule,
+    /// [`ConversationDeletion::is_same_decision`].
+    ///
+    /// Authorize from the ownership record, as `close` does: a deleted
+    /// conversation is still its owner's to finish deleting. Then, one delete
+    /// of a conversation at a time, fence it: under the creation lock the
+    /// repository writes a tombstone, and from then on each command on the
+    /// identity, a creation of it included, is refused with
+    /// [`ConversationError::Deleted`], and it is left out of both lists
+    /// (`a_deleted_conversation_refuses_every_command_on_it`,
+    /// `a_create_racing_a_delete_cannot_republish_it`). The rest is
+    /// [`Self::finish_deletion`], which a repeat — or the gateway, when it
+    /// starts ([`Self::finish_deletions`]) — carries on from wherever the
+    /// tombstone says it got to, and which a finished deletion skips.
+    pub async fn delete(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<bool, ConversationError> {
+        let service = self.clone();
+        supervised(async move {
+            let _admission = service.admit().await?;
+            caller.actor()?;
+            let requested_at_ms = service.inner.clock.unix_milliseconds();
+            let record = service
+                .inner
+                .metadata
+                .load(&id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            if !record.allows(&caller.organization_id, &caller.principal_id) {
+                return Err(ConversationError::NotFound);
+            }
+            // Never dated before the conversation it deletes: a clock stepped
+            // back since its creation would otherwise propose a tombstone its
+            // own record refuses, and every delete of it would be refused as
+            // storage trouble. The stored tombstone is still held to that rule
+            // when read back (`a_clock_stepped_back_since_creation_still_deletes`).
+            let requested_at_ms = requested_at_ms.max(record.creation_requested_at_ms());
+            let proposed = ConversationDeletion::new(
+                caller.organization_id.clone(),
+                caller.principal_id.clone(),
+                caller.surface_id.clone(),
+                caller.action_id.clone(),
+                requested_at_ms,
+            )
+            .map_err(|_| ConversationError::InvalidInput)?;
+            // A delete that finds another attempt carrying this deletion waits
+            // for it and answers from the tombstone it leaves, rather than
+            // attempting again: one delete spends at most one attempt
+            // (`a_delete_queued_behind_another_attempt_answers_from_its_tombstone`).
+            // If that attempt never fenced it, this one does
+            // (`a_delete_whose_predecessor_never_fenced_fences_it_itself`).
+            let (_deleting, waited) = match service.inner.deletions.try_lock(&id) {
+                Some(guard) => (guard, false),
+                None => (service.inner.deletions.lock(&id).await, true),
+            };
+            if waited {
+                let current = service
+                    .inner
+                    .metadata
+                    .load(&id)
+                    .await?
+                    .ok_or(ConversationError::NotFound)?;
+                if let Some(decided) = current.deletion() {
+                    let applied = decided.is_same_decision(&proposed);
+                    // Whoever erased it has already told the worker it is done.
+                    if decided.erased() {
+                        return Ok(applied);
+                    }
+                    return Err(ConversationError::DeletionIncomplete(Box::new(
+                        DeletionFailures {
+                            another_attempt: true,
+                            ..DeletionFailures::default()
+                        },
+                    )));
+                }
+            }
+            // Only past this write does this delete know the conversation is
+            // fenced; any failure before it is just its own error.
+            let record = {
+                let _creation = service.inner.creation.lock().await;
+                service
+                    .inner
+                    .metadata
+                    .record_deletion(&id, proposed.clone())
+                    .await?
+            };
+            let decided = record.deletion().ok_or(ConversationError::Metadata)?;
+            let applied = decided.is_same_decision(&proposed);
+            match service.finish_deletion(record).await {
+                Ok(()) => {
+                    // Nothing is left for the worker to carry
+                    // (`a_person_s_delete_that_finishes_leaves_nothing_waiting`).
+                    service.inner.retries.finished(&id);
+                    Ok(applied)
+                }
+                Err(error) => {
+                    service.carry_on_if_it_can_finish(&id, &error);
+                    Err(error)
+                }
+            }
+        })
+        .await
+    }
+
+    /// Finish every deletion a tombstone says did not finish: one that
+    /// stopped short of its end — an agent not confirmed stopped, a history
+    /// still leased, an agent that could not be asked about its own record, a
+    /// deletion record the sink did not take — or that the gateway stopped in
+    /// the middle of. Composition starts this once the gateway is listening,
+    /// in the background, so it never holds up startup
+    /// (`an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`).
+    ///
+    /// Each gets at most [`DELETION_ATTEMPTS`] tries, [`DELETION_RETRY_DELAY`]
+    /// apart and growing. What is still unfinished after its tries is
+    /// returned with its last typed failure, and logged, and is tried again
+    /// at the next start or by a repeated delete. Stops early, returning what
+    /// it has, once the service is retired. Records that could not be read
+    /// are counted too: a damaged tombstone is a deletion nothing here can
+    /// see, let alone finish
+    /// (`an_unreadable_record_makes_every_list_incomplete`).
+    ///
+    /// # Errors
+    /// The repository's error when the records cannot be enumerated at all.
+    pub async fn finish_deletions(&self) -> Result<DeletionsLeft, ConversationError> {
+        let records = self.inner.metadata.list().await?;
+        let (unreadable, orphaned_tombstones) = (records.unreadable, records.orphaned_tombstones);
+        let unfinished: Vec<ConversationId> = records
+            .conversations
+            .into_iter()
+            .filter(|record| record.deletion().is_some_and(|deletion| !deletion.erased()))
+            .map(|record| record.id().clone())
+            .collect();
+        let mut left = Vec::new();
+        for id in unfinished {
+            let mut failure = None;
+            for attempt in 0..DELETION_ATTEMPTS {
+                if attempt > 0 {
+                    tokio::time::sleep(DELETION_RETRY_DELAY * attempt).await;
+                }
+                match self.finish_deletion_in_background(&id).await {
+                    // Finished, or being carried by whoever holds it now.
+                    Ok(BackgroundTry::Finished | BackgroundTry::HeldElsewhere) => {
+                        failure = None;
+                        break;
+                    }
+                    // What this run can see change is carried on by the one
+                    // rule for that, not retried here on a clock of its own
+                    // (`a_startup_finish_that_finds_every_slot_taken_is_finished_once_one_frees`).
+                    Err(error) if self.carry_on_if_it_can_finish(&id, &error) => {
+                        failure = None;
+                        break;
+                    }
+                    Err(error) => failure = Some(error),
+                }
+                if self.inner.retirement.get().is_some() {
+                    break;
+                }
+            }
+            if let Some(error) = failure {
+                tracing::warn!(
+                    conversation_id = %id,
+                    %error,
+                    "a deleted conversation's erasure is still unfinished; the next start tries again"
+                );
+                left.push((id, error));
+            }
+            if self.inner.retirement.get().is_some() {
+                break;
+            }
+        }
+        Ok(DeletionsLeft {
+            unfinished: left,
+            unreadable,
+            orphaned_tombstones,
+        })
+    }
+
+    /// Whether `error` left a deletion unfinished for a reason this run can
+    /// see change — every agent slot taken, the conversation's agent still
+    /// stopping, the history's lease still held ([`waiting_for`]) — and so one
+    /// it carries on itself, rather than leaving it for the next
+    /// start; `true` when it does. A cause that cannot change while it runs
+    /// (an agent not built, a damaged history, an agent that refused) is left
+    /// for the next start, and so is everything once retirement has begun
+    /// (`a_delete_turned_away_for_want_of_an_agent_slot_is_finished_once_one_frees`,
+    /// `a_deletion_left_for_a_held_lease_is_finished_once_it_is_let_go`,
+    /// `nothing_is_carried_on_once_retirement_has_begun`).
+    ///
+    /// The one rule for what is carried on in-process, for every finisher:
+    /// a person's delete, and the finish at start.
+    fn carry_on_if_it_can_finish(&self, id: &ConversationId, error: &ConversationError) -> bool {
+        let ConversationError::DeletionIncomplete(failures) = error else {
+            return false;
+        };
+        let Some(waiting) = waiting_for(failures) else {
+            return false;
+        };
+        if self.inner.retirement.get().is_some() {
+            return false;
+        }
+        if self.inner.retries.start() {
+            let worker = Arc::downgrade(&self.inner);
+            let retries = self.inner.retries.clone();
+            let retired = self.inner.retired.subscribe();
+            drop(tokio::spawn(supervise_carrying_on(
+                worker, retries, retired,
+            )));
+        }
+        let generation = self.inner.retries.wait(id, waiting);
+        if waiting == Waiting::ForRelease {
+            due_again_after(&self.inner.retries, id, generation, 1);
+        }
+        true
+    }
+
+    /// One background try at finishing `id`'s deletion from its tombstone as
+    /// it now stands, admitted like a delete.
+    ///
+    /// A background finisher never queues on the conversation's delete lock:
+    /// whoever holds it is carrying this deletion, and a finisher waiting its
+    /// turn would put a whole attempt between that one and a person's delete
+    /// queued behind it (`a_person_s_delete_is_never_queued_behind_a_background_try`).
+    async fn finish_deletion_in_background(
+        &self,
+        id: &ConversationId,
+    ) -> Result<BackgroundTry, ConversationError> {
+        let service = self.clone();
+        let id = id.clone();
+        supervised(async move {
+            let _admission = service.admit().await?;
+            let Some(_deleting) = service.inner.deletions.try_lock(&id) else {
+                return Ok(BackgroundTry::HeldElsewhere);
+            };
+            let record = service
+                .inner
+                .metadata
+                .load(&id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            service.finish_deletion(record).await?;
+            Ok(BackgroundTry::Finished)
+        })
+        .await
+    }
+
+    /// Carry a fenced deletion to its end, from wherever its tombstone says it
+    /// got to, each step in the deciding request's name and each step's
+    /// failure kept apart in [`ConversationError::DeletionIncomplete`]. The
+    /// caller holds the conversation's deletion lock.
+    ///
+    /// 1. Stop the live agent as retirement stops one, waiting for a slot that
+    ///    is still opening. Unconfirmed, nothing else is done.
+    /// 2. Read the provider session from the saved history, under a lease
+    ///    this deletion holds and validated as a restoration validates it,
+    ///    and keep it in the tombstone.
+    /// 3. Ask the conversation's agent, through [`ProviderSessionErasers`], to
+    ///    delete its own record of that session, and keep what that settled
+    ///    in the tombstone. After the stop, so the agent is not running it;
+    ///    before the history is erased
+    ///    (`the_agents_own_record_is_asked_to_go_after_the_stop_and_before_the_history`).
+    ///    A failure leaves the deletion unfinished, to be asked again.
+    /// 4. Record [`ConversationDeletionAuditRecord`] from the tombstone, once
+    ///    steps 2 and 3 have settled what it says.
+    /// 5. Erase: uploads are let go whatever became of the record; the
+    ///    history (under the same lease) and the summary (under the summary
+    ///    lock) only once the record is acknowledged.
+    /// 6. Mark the tombstone erased, so nothing of it is attempted again.
+    ///
+    /// Audit stores are not touched
+    /// (`deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit_record`).
+    ///
+    /// Every failure past the fence is a [`ConversationError::DeletionIncomplete`],
+    /// since the conversation is deleted whatever else happened: one of a
+    /// step's own, a panic in any port it calls
+    /// ([`DeletionFailures::interrupted`]), or a tombstone that cannot be read
+    /// as a deletion ([`DeletionFailures::tombstone`])
+    /// (`a_port_that_panics_after_the_fence_leaves_the_deletion_unfinished`).
+    async fn finish_deletion(&self, record: Conversation) -> Result<(), ConversationError> {
+        let id = record.id().clone();
+        match AssertUnwindSafe(self.finish_deletion_steps(record))
+            .catch_unwind()
+            .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(ConversationError::DeletionIncomplete(failures))) => {
+                Err(ConversationError::DeletionIncomplete(failures))
+            }
+            Ok(Err(error)) => Err(ConversationError::DeletionIncomplete(Box::new(
+                DeletionFailures {
+                    tombstone: Some(error),
+                    ..DeletionFailures::default()
+                },
+            ))),
+            Err(payload) => {
+                mem::forget(payload);
+                tracing::error!(
+                    conversation_id = %id,
+                    "a step of a deleted conversation's erasure panicked; it is left unfinished"
+                );
+                Err(ConversationError::DeletionIncomplete(Box::new(
+                    DeletionFailures {
+                        interrupted: true,
+                        ..DeletionFailures::default()
+                    },
+                )))
+            }
+        }
+    }
+    async fn finish_deletion_steps(&self, record: Conversation) -> Result<(), ConversationError> {
+        let id = record.id().clone();
+        let deletion = record
+            .deletion()
+            .cloned()
+            .ok_or(ConversationError::Metadata)?;
+        if deletion.erased() {
+            return Ok(());
+        }
+        let actor = ActionContext::new(
+            deletion.initiator().as_str(),
+            deletion.surface(),
+            deletion.request(),
+        )
+        .map_err(|_| ConversationError::Metadata)?;
+        let slot = self.inner.conversations.lock().await.get(&id).cloned();
+        if let Some(slot) = slot {
+            // Retirement stops this agent itself, and must not wait here for
+            // this delete to do it first. Answered as every step after the
+            // tombstone is: the delete happened and did not finish
+            // (`a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished`).
+            let stopped = tokio::select! {
+                stopped = self.stop_slot(&id, slot, &actor) => stopped,
+                () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
+            };
+            if let Err(stop) = stopped {
+                return Err(ConversationError::DeletionIncomplete(Box::new(
+                    DeletionFailures {
+                        stop: Some(stop),
+                        ..DeletionFailures::default()
+                    },
+                )));
+            }
+        }
+        let mut failures = DeletionFailures::default();
+        // `None` when it could not be taken; `Some(None)` when the history was
+        // never opened, so there is nothing of it to read or erase.
+        let leased = tokio::select! {
+            leased = self.erasure_lease(&id) => leased.map_err(ConversationError::Storage),
+            () = self.retired() => Err(ConversationError::Unavailable),
+        };
+        let lease = match leased {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                failures.history = Some(error);
+                None
+            }
+        };
+        let mut record = record;
+        if let (ProviderSessionLink::Unread, Some(lease)) = (deletion.provider_session(), &lease) {
+            // What could not be read is the history's; what was read and
+            // could not be kept is the tombstone's
+            // (`a_history_read_that_cannot_be_kept_is_the_tombstone_s_failure`).
+            match self.read_provider_session(&record, lease.as_deref()).await {
+                Ok(read) => match self.inner.metadata.record_deletion(record.id(), read).await {
+                    Ok(kept) => record = kept,
+                    Err(error) => failures.tombstone = Some(error),
+                },
+                Err(error) => failures.history = Some(error),
+            }
+        }
+        // The agent is asked only while this deletion holds the history's
+        // lease: a lease held elsewhere may be a writer still running the
+        // session, and deleting a running session is exactly what the agent
+        // must not be asked to do
+        // (`the_agent_is_not_asked_while_the_history_is_leased_elsewhere`).
+        let record = match &lease {
+            Some(_) => self.settle_provider_session(record, &mut failures).await,
+            None => record,
+        };
+        let recorded = match Self::deletion_record(&record) {
+            // Unsettled only when the history could not be read or the agent
+            // could not be asked, which `failures` already says.
+            None => false,
+            Some(evidence) => match self.inner.deletion_audit.record(evidence).await {
+                Ok(()) => true,
+                Err(error) => {
+                    failures.audit = Some(error);
+                    false
+                }
+            },
+        };
+        // No agent is left to read an upload of a stopped, tombstoned
+        // conversation, so its uploads go whatever became of the record.
+        if let Some(attachments) = &self.inner.attachments {
+            if let Err(error) = attachments
+                .release(AttachmentRelease {
+                    organization_id: record.organization().clone(),
+                    conversation_id: id.clone(),
+                    cause: AttachmentReleaseCause::ConversationDeleted,
+                    initiator_principal_id: deletion.initiator().clone(),
+                    initiator_surface_id: deletion.surface().to_owned(),
+                    correlation_id: deletion.request().to_owned(),
+                })
+                .await
+            {
+                failures.attachments = Some(error);
+            }
+        }
+        if recorded {
+            if let Some(Some(lease)) = &lease {
+                if let Err(error) = lease.erase().await {
+                    failures.history = Some(ConversationError::Storage(error));
+                }
+            }
+            let _writes = self.inner.summary_writes.lock(&id).await;
+            if let Err(error) = self.inner.summaries.erase(&id).await {
+                failures.summary = Some(error);
+            }
+        }
+        drop(lease);
+        if failures.is_empty() {
+            // Finished only if the tombstone can say so: a deletion whose
+            // provider session is unsettled has no finished form, so it can
+            // never be reported done here, whatever `failures` says.
+            match record
+                .deletion()
+                .and_then(ConversationDeletion::after_erasure)
+            {
+                Some(finished) => match self.inner.metadata.record_deletion(&id, finished).await {
+                    Ok(_) => return Ok(()),
+                    Err(error) => failures.tombstone = Some(error),
+                },
+                None => failures.tombstone = Some(ConversationError::Metadata),
+            }
+        }
+        tracing::error!(
+            conversation_id = %id,
+            ?failures,
+            "a deleted conversation's erasure did not finish"
+        );
+        Err(ConversationError::DeletionIncomplete(Box::new(failures)))
+    }
+
+    /// The delete's own lease on the conversation's saved history, asked for
+    /// again while the stopped agent's last handles let go of theirs, for at
+    /// most [`ConversationDeletionBudgets::history_lease`]. Still held after that is
+    /// [`StorageError::Busy`]: somebody else is its writer, so it is not
+    /// erased. `None` for a conversation whose history was never opened —
+    /// there is nothing to erase, and asking creates nothing
+    /// (`deleting_a_conversation_that_never_opened_creates_no_history_lock`).
+    async fn erasure_lease(
+        &self,
+        id: &ConversationId,
+    ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
+        let session = SessionId::new(id.to_string()).expect("UUID session key");
+        let deadline = Instant::now() + self.inner.deletion_budgets.history_lease;
+        loop {
+            match self.inner.storage.open_existing(session.clone()).await {
+                Err(StorageError::Busy) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                opened => return opened,
+            }
+        }
+    }
+
+    /// Read which provider session the saved history names, as the
+    /// tombstone that records it; the caller keeps it, before anything erases
+    /// that history.
+    ///
+    /// Read through [`SessionSnapshot::load_saved`], so a snapshot a custom
+    /// adapter returns for some other session, or one whose relationships do
+    /// not hold, is refused and nothing is kept from it
+    /// (`a_history_that_names_another_session_is_refused_and_nothing_is_erased`).
+    /// `lease` is `None` when the history was never opened: it named nothing.
+    async fn read_provider_session(
+        &self,
+        record: &Conversation,
+        lease: Option<&dyn SessionStorageLease>,
+    ) -> Result<ConversationDeletion, ConversationError> {
+        let decided = record.deletion().ok_or(ConversationError::Metadata)?;
+        let read = match lease {
+            Some(lease) => {
+                let key = SessionId::new(record.id().to_string()).expect("UUID session key");
+                match SessionSnapshot::load_saved(lease, &key)
+                    .await
+                    .map_err(ConversationError::Storage)?
+                {
+                    Some(snapshot) => {
+                        decided.after_reading(snapshot.provider_context.recorded().cloned())
+                    }
+                    // A lease with no history behind it: opened, and then its
+                    // journal moved aside or never written. Not "named none".
+                    None => decided.after_losing_history(),
+                }
+            }
+            None => decided.after_reading(None),
+        };
+        Ok(read)
+    }
+
+    /// Settle what becomes of the agent's own record of the provider session
+    /// the tombstone read, if that is not settled yet, and keep it in the
+    /// tombstone. A failure is kept in `failures` and leaves it unsettled.
+    async fn settle_provider_session(
+        &self,
+        record: Conversation,
+        failures: &mut DeletionFailures,
+    ) -> Conversation {
+        let Some(deletion) = record.deletion() else {
+            return record;
+        };
+        let ProviderSessionLink::Recorded(session) = deletion.provider_session() else {
+            return record;
+        };
+        if deletion.provider_erasure().is_some() {
+            return record;
+        }
+        let erasure = match self.erase_provider_session(&record, session.clone()).await {
+            Ok(erasure) => erasure,
+            Err(AskFailure::NoFreeSlot) => {
+                failures.no_agent_slot = true;
+                return record;
+            }
+            Err(AskFailure::Failed(error)) => {
+                failures.provider = Some(error);
+                return record;
+            }
+        };
+        let settled = deletion.after_provider_erasure(erasure);
+        match self
+            .inner
+            .metadata
+            .record_deletion(record.id(), settled)
+            .await
+        {
+            Ok(settled) => settled,
+            Err(error) => {
+                failures.tombstone = Some(error);
+                record
+            }
+        }
+    }
+
+    /// Ask the conversation's agent to delete its own record of `session`.
+    /// Which agent is asked, and what an answer means, is
+    /// [`ProviderSessionErasers`]'.
+    ///
+    /// Retiring this gateway ends the exchange: the ask is abandoned — the
+    /// SDK still stops the connection's process and releases what it made —
+    /// and answered [`ConversationError::Unavailable`], so the deletion stays
+    /// unfinished for the next start, and a retirement is never held waiting
+    /// for an agent (`a_shutdown_ends_an_agent_that_is_being_asked_and_a_later_start_finishes`).
+    /// A desktop quit's stop pass does not end it.
+    ///
+    /// A slot is taken only for an agent that will be asked, and nothing is
+    /// asked once retirement has begun. With every slot taken the answer is
+    /// [`AskFailure::NoFreeSlot`] at once — its own outcome, which no eraser's
+    /// error can be taken for
+    /// (`an_eraser_answering_capacity_is_a_failure_not_a_slot_wait`); the
+    /// deletion is then carried on by this gateway when a slot frees, which
+    /// releasing a slot here signals.
+    ///
+    /// Not held behind the runtime's first-launch preparation: the exchange's
+    /// own launch budget is the published one for that scan, and waiting for
+    /// preparation first would add a wait with no bound of its own to the
+    /// delete.
+    async fn erase_provider_session(
+        &self,
+        record: &Conversation,
+        session: ExecutionSessionId,
+    ) -> Result<ProviderSessionErasure, AskFailure> {
+        let eraser = match self
+            .inner
+            .provider_sessions
+            .handler(record.agent())
+            .map_err(AskFailure::Failed)?
+        {
+            ProviderSessionHandler::NoHandler => return Ok(ProviderSessionErasure::NoHandler),
+            ProviderSessionHandler::Ask(eraser) => eraser,
+        };
+        // Nothing is launched once retirement has begun, and a slot is taken
+        // only for an agent that will be asked
+        // (`nothing_is_asked_once_retirement_has_begun`,
+        // `a_conversation_nobody_can_ask_about_takes_no_agent_slot`).
+        if self.inner.retirement.get().is_some() {
+            return Err(AskFailure::Failed(ConversationError::Unavailable));
+        }
+        let Ok(permit) = self.inner.agents_asked.clone().try_acquire_owned() else {
+            return Err(AskFailure::NoFreeSlot);
+        };
+        // Held for the ask; letting it go wakes deletions waiting for a slot,
+        // however the ask ends — answered, abandoned, or panicking.
+        let _slot = AgentSlot {
+            permit: Some(permit),
+            retries: self.inner.retries.clone(),
+        };
+        // An ask that panics is a failure of this attempt's ask, like any
+        // other: the tombstone is written, so the delete happened and is
+        // answered unfinished (`conversation_erasure_incomplete`), not as
+        // the command failing (`a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting`).
+        let asked = async {
+            match AssertUnwindSafe(eraser.erase(session)).catch_unwind().await {
+                Ok(erased) => erased,
+                Err(payload) => {
+                    mem::forget(payload);
+                    tracing::error!(
+                        conversation_id = %record.id(),
+                        "the agent's handler panicked while asked to delete its own session"
+                    );
+                    Err(ConversationError::Unavailable)
+                }
+            }
+        };
+        tokio::select! {
+            biased;
+            () = self.retired() => Err(AskFailure::Failed(ConversationError::Unavailable)),
+            erased = asked => erased.map_err(AskFailure::Failed),
+        }
+    }
+
+    /// The deletion record a tombstone stands for, or `None` while what it
+    /// says about the provider session is not settled.
+    fn deletion_record(record: &Conversation) -> Option<ConversationDeletionAuditRecord> {
+        let deletion = record.deletion()?;
+        let provider_erasure = deletion.provider_erasure()?;
+        let provider_session_id = match deletion.provider_session() {
+            ProviderSessionLink::Recorded(session) => Some(session.clone()),
+            ProviderSessionLink::Unread
+            | ProviderSessionLink::Absent
+            | ProviderSessionLink::Unknown => None,
+        };
+        Some(ConversationDeletionAuditRecord {
+            conversation_id: record.id().clone(),
+            organization_id: record.organization().clone(),
+            owner_id: record.owner().clone(),
+            before: ConversationOwnershipState::Owned,
+            after: ConversationOwnershipState::Deleted,
+            cause: ConversationDeletionCause::CallerRequested,
+            initiator_principal_id: deletion.initiator().clone(),
+            initiator_surface_id: deletion.surface().to_owned(),
+            correlation_id: deletion.request().to_owned(),
+            provider_session_id,
+            provider_erasure,
+            requested_at_ms: deletion.requested_at_ms(),
+        })
+    }
+
     /// Whether a message to this agent may carry images, or `None` while that
     /// is not known. Three facts must agree: this gateway keeps uploads, the
     /// selected model is offered images, which it is only with recorded image
@@ -1416,6 +2504,12 @@ impl ConversationService {
         operation_capabilities
             .negotiated()
             .then_some(operation_capabilities.image_input())
+    }
+    /// Resolves once this service is retired, at once if it already is.
+    async fn retired(&self) {
+        let mut retired = self.inner.retired.subscribe();
+        // The sender lives in `inner`, which `self` holds, so this cannot close.
+        let _ = retired.wait_for(|retired| *retired).await;
     }
     async fn admit(&self) -> Result<RwLockReadGuard<'_, ()>, ConversationError> {
         let permit = self.inner.admission.read().await;
@@ -1464,6 +2558,7 @@ impl ConversationService {
         proposed: ActionContext,
     ) -> Result<(), ConversationError> {
         let actor = self.inner.retirement.get_or_init(|| proposed);
+        self.inner.retired.send_replace(true);
         // Before waiting for exclusive admission, not after: a request parked
         // waiting for the runtime holds a shared admission guard, and this is
         // what tells it to stop so that guard can be released. The fence itself
@@ -1477,11 +2572,20 @@ impl ConversationService {
             self.inner.admission.write(),
         )
         .await;
-        let Ok(_exclusive) = admission else {
-            let cleanup_error = self.close_agents(actor).await.err().map(Box::new);
-            return Err(ConversationError::RetirementAdmission { cleanup_error });
+        let retired = match admission {
+            Ok(_exclusive) => self.close_agents(actor).await,
+            Err(_) => {
+                let cleanup_error = self.close_agents(actor).await.err().map(Box::new);
+                Err(ConversationError::RetirementAdmission { cleanup_error })
+            }
         };
-        self.close_agents(actor).await
+        // Deletions whose agents were being asked when retirement ended them
+        // are still stopping those agents on tasks of their own; the runtime
+        // that ends after this would cut them short and leave what they made
+        // behind. Each binding bounds its own wait
+        // (`retirement_waits_for_abandoned_agent_deletions_to_settle`).
+        self.inner.provider_sessions.settled().await;
+        retired
     }
 
     #[cfg(any(target_os = "macos", test))]
@@ -1499,51 +2603,66 @@ impl ConversationService {
             .map(|(id, slot)| (id.clone(), slot.clone()))
             .collect();
         // Give every owner its own bounded attempt. A stalled opening or provider
-        // cannot consume another owner's cleanup opportunity. Timeout means only
-        // unconfirmed cleanup; the slot and supervised SDK work remain owned.
+        // cannot consume another owner's cleanup opportunity.
         let attempts = slots.into_iter().map(|(id, slot)| async move {
-            let attempt = async {
-                loop {
-                    let ready = slot.ready.notified();
-                    tokio::pin!(ready);
-                    ready.as_mut().enable();
-                    if let Some(value) = slot.value.get() {
-                        return match value {
-                            Ok(live) => match live.agent.close(actor.clone()).await {
-                                Ok(_) => {
-                                    live.join_attachment_owner().await;
-                                    self.release_slot(&id, &slot).await;
-                                    Ok(())
-                                }
-                                Err(error) => Err(error),
-                            },
-                            Err(failed) => match &failed.cleanup {
-                                Some(error) => match error.retry_cleanup().await {
-                                    Ok(_) => {
-                                        self.release_slot(&id, &slot).await;
-                                        Ok(())
-                                    }
-                                    Err(error) => Err(error),
-                                },
-                                None if failed.holds => Err(AgentError::CleanupUncertain),
-                                None => Ok(()),
-                            },
-                        };
-                    }
-                    ready.await;
-                }
-            };
-            match tokio::time::timeout(std::time::Duration::from_secs(10), attempt).await {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some((id.to_string(), error)),
-                Err(_) => Some((id.to_string(), AgentError::Deadline)),
-            }
+            // Retirement reports every stop as the agent's error: over its
+            // budget is a deadline there.
+            self.stop_slot(&id, slot, actor).await.err().map(|stop| {
+                let error = match stop {
+                    StopFailure::OverBudget => AgentError::Deadline,
+                    StopFailure::Failed(error) => error,
+                };
+                (id.to_string(), error)
+            })
         });
         let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
         if failures.is_empty() {
             Ok(())
         } else {
             Err(ConversationError::Retirement(failures))
+        }
+    }
+
+    /// Stop one owner, waiting for it to finish opening if it has not, and
+    /// release its slot once it is confirmed closed. Bounded by
+    /// [`ConversationDeletionBudgets::stop`]: running out of time is
+    /// [`StopFailure::OverBudget`], its own outcome and never the stop's own
+    /// error, which means only that cleanup is unconfirmed; the slot and
+    /// supervised SDK work remain owned
+    /// (`a_close_that_fails_with_a_deadline_of_its_own_is_not_the_stop_budget`).
+    async fn stop_slot(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+    ) -> Result<(), StopFailure> {
+        let attempt = async {
+            loop {
+                let ready = slot.ready.notified();
+                tokio::pin!(ready);
+                ready.as_mut().enable();
+                if let Some(value) = slot.value.get() {
+                    return match value {
+                        Ok(live) => match live.agent.close(actor.clone()).await {
+                            Ok(_) => {
+                                live.join_attachment_owner().await;
+                                self.release_slot(id, &slot).await;
+                                Ok(())
+                            }
+                            Err(error) => Err(error),
+                        },
+                        // One rule for a failed opening: while it may still hold
+                        // what it launched, its stop cannot be confirmed.
+                        Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
+                        Err(_) => Ok(()),
+                    };
+                }
+                ready.await;
+            }
+        };
+        match tokio::time::timeout(self.inner.deletion_budgets.stop, attempt).await {
+            Ok(result) => result.map_err(StopFailure::Failed),
+            Err(_) => Err(StopFailure::OverBudget),
         }
     }
 
@@ -1567,6 +2686,277 @@ impl ConversationService {
             owners.remove(id);
         }
     }
+}
+
+/// What a deletion left unfinished with `failures` is waiting for, when it is
+/// something this run can see change: an agent slot; or a release — the
+/// conversation's agent confirming a stop that ran past the stop budget, or
+/// the history's lease let go. `None` for anything else, which only the next
+/// start can finish. The one classification, for a person's delete, the
+/// finish at start, and the worker alike.
+///
+/// A stop past its budget is carried on, not left for the next start: the
+/// agent may take longer to stop than a delete waits — an ACP agent's close is
+/// bounded by its own shutdown budgets, not by `stopMs` — and a delete the
+/// person has already seen succeed must not wait for a restart to finish
+/// (`a_delete_whose_agent_stops_after_the_stop_budget_is_finished_once_it_has`).
+fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
+    if failures.no_agent_slot {
+        return Some(Waiting::ForSlot);
+    }
+    let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
+    let lease_held = matches!(
+        failures.history,
+        Some(ConversationError::Storage(StorageError::Busy))
+    );
+    (still_stopping || lease_held).then_some(Waiting::ForRelease)
+}
+
+/// An agent slot taken for one ask. Released on drop, however the ask ends,
+/// and its release wakes deletions waiting for a slot
+/// (`a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting`).
+struct AgentSlot {
+    permit: Option<OwnedSemaphorePermit>,
+    retries: Arc<DeletionRetries>,
+}
+impl Drop for AgentSlot {
+    fn drop(&mut self) {
+        // The slot is free before anybody is told it is.
+        drop(self.permit.take());
+        self.retries.slot_freed();
+    }
+}
+
+/// What [`ConversationService::finish_deletions`] could not finish.
+#[derive(Debug)]
+pub struct DeletionsLeft {
+    /// Each deletion still unfinished after its tries, with its last typed
+    /// failure.
+    pub unfinished: Vec<(ConversationId, ConversationError)>,
+    /// How many conversation records could not be read at all, so whether
+    /// any is an unfinished deletion cannot be known.
+    pub unreadable: usize,
+    /// How many tombstones have no conversation record beside them: deletions
+    /// that can be neither read nor finished.
+    pub orphaned_tombstones: usize,
+}
+
+/// Why the agent was not asked, or its ask failed.
+enum AskFailure {
+    /// Every agent slot on this gateway was taken.
+    NoFreeSlot,
+    /// Anything else: the agent's handler, or the ask itself, failed.
+    Failed(ConversationError),
+}
+
+/// What one background try came to, when it did not fail.
+enum BackgroundTry {
+    /// The deletion is finished.
+    Finished,
+    /// Another attempt holds it now, and is carrying it.
+    HeldElsewhere,
+}
+
+/// Mark `id` due a try again after `tries` × [`DELETION_RETRY_DELAY`]: a
+/// lease wait's own schedule, or one delay for a claim another attempt held.
+fn due_again_after(
+    retries: &Arc<DeletionRetries>,
+    id: &ConversationId,
+    generation: u64,
+    tries: u32,
+) {
+    let retries = retries.clone();
+    let id = id.clone();
+    drop(tokio::spawn(async move {
+        tokio::time::sleep(DELETION_RETRY_DELAY * tries).await;
+        retries.due_again(&id, generation);
+    }));
+}
+
+/// Run the worker, and if it ever ends by panicking, say so loudly and run
+/// another after [`DELETION_RETRY_DELAY`] — with every waiting deletion due,
+/// since a try it had claimed died with it — rather than leave deletions
+/// piling up with nobody to carry them. Ends when the worker ends as told:
+/// the service retired or gone.
+async fn supervise_carrying_on(
+    service: Weak<Inner>,
+    retries: Arc<DeletionRetries>,
+    retired: watch::Receiver<bool>,
+) {
+    let alive = service.clone();
+    let worker_retries = retries.clone();
+    let worker_retired = retired.clone();
+    supervise(
+        retries,
+        retired,
+        move || alive.strong_count() > 0,
+        move || {
+            carry_on(
+                service.clone(),
+                worker_retries.clone(),
+                worker_retired.clone(),
+            )
+        },
+    )
+    .await;
+}
+
+/// [`supervise_carrying_on`]'s rule, apart from the worker it runs, so a
+/// worker that panics can be tested
+/// (`a_worker_that_panics_is_replaced_with_every_waiting_deletion_due`).
+async fn supervise<Worker: Future<Output = ()>>(
+    retries: Arc<DeletionRetries>,
+    retired: watch::Receiver<bool>,
+    alive: impl Fn() -> bool,
+    mut worker: impl FnMut() -> Worker,
+) {
+    loop {
+        let ended = AssertUnwindSafe(worker()).catch_unwind().await;
+        let Err(payload) = ended else {
+            break;
+        };
+        mem::forget(payload);
+        tracing::error!(
+            "the worker carrying on unfinished deletions panicked; another starts shortly"
+        );
+        tokio::time::sleep(DELETION_RETRY_DELAY).await;
+        if *retired.borrow() || !alive() {
+            break;
+        }
+        retries.all_due();
+    }
+    retries.stopped();
+}
+
+/// The one worker that carries on deletions this run left unfinished for a
+/// reason it can see change, by the same path everything finishes a deletion
+/// by. It wakes when something may be due and tries each deletion that is:
+/// one waiting for a slot when a slot freed, spending no try; one waiting for
+/// a release — a stop or a lease — only when its own timer fires — [`DELETION_ATTEMPTS`] tries,
+/// [`DELETION_RETRY_DELAY`] apart and growing — never on another deletion's
+/// wake (`a_lease_wait_is_not_spent_by_slots_freeing`). A deletion some other
+/// attempt holds is left to it. Anything else is left for the next start.
+/// Holds nothing of the service while it waits, and ends when the service is
+/// retired or gone (`the_worker_carrying_deletions_on_ends_with_retirement`).
+async fn carry_on(
+    service: Weak<Inner>,
+    retries: Arc<DeletionRetries>,
+    mut retired: watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            () = retries.woken() => {}
+            _ = retired.wait_for(|retired| *retired) => return,
+        }
+        for claim in retries.claim_due() {
+            if *retired.borrow() {
+                return;
+            }
+            let Some(inner) = service.upgrade() else {
+                return;
+            };
+            let answer = ConversationService { inner }
+                .finish_deletion_in_background(&claim.id)
+                .await;
+            carried(&retries, &claim, answer);
+        }
+    }
+}
+
+/// Record what `claim`'s try came to.
+fn carried(
+    retries: &Arc<DeletionRetries>,
+    claim: &Claim,
+    answer: Result<BackgroundTry, ConversationError>,
+) {
+    let failures = match answer {
+        Ok(BackgroundTry::Finished) => return retries.done(claim),
+        // Somebody else holds it — an attempt carrying it, or only a delete
+        // reading the tombstone to answer — so this one is due again once
+        // the holder has had time to let go, without spending a try: a lease
+        // wait on its own schedule, a slot wait after one delay. Nothing else
+        // may wake a slot wait, since no ask need be running
+        // (`a_claim_found_held_is_tried_again_once_its_holder_lets_go`).
+        Ok(BackgroundTry::HeldElsewhere) => {
+            let tries = match claim.waiting {
+                Waiting::ForRelease => claim.release_tries + 1,
+                Waiting::ForSlot => 1,
+            };
+            return due_again_after(retries, &claim.id, claim.generation, tries);
+        }
+        Err(ConversationError::DeletionIncomplete(failures)) => failures,
+        Err(error) => {
+            tracing::warn!(conversation_id = %claim.id, %error, "a deletion is left for the next start");
+            return retries.done(claim);
+        }
+    };
+    // Only a try its release timer ran spends one of the release's tries: a
+    // slot wait that turns to waiting for a release starts that wait where it
+    // stood (`a_slot_wait_that_turns_to_a_release_wait_spends_no_release_try`).
+    let tries = match claim.waiting {
+        Waiting::ForRelease => claim.release_tries + 1,
+        Waiting::ForSlot => claim.release_tries,
+    };
+    match waiting_for(&failures) {
+        Some(Waiting::ForSlot) => {
+            return retries.requeue(claim, Waiting::ForSlot, claim.release_tries);
+        }
+        Some(Waiting::ForRelease) if tries < DELETION_ATTEMPTS => {
+            retries.requeue(claim, Waiting::ForRelease, tries);
+            return due_again_after(retries, &claim.id, claim.generation, tries + 1);
+        }
+        Some(Waiting::ForRelease) | None => {}
+    }
+    tracing::warn!(conversation_id = %claim.id, ?failures, "a deletion is left for the next start");
+    retries.done(claim);
+}
+
+/// Whether the agent's own record has a turn it selected to run and that has
+/// not settled. The session's committed snapshot, held in memory by the live
+/// agent: nothing is read from storage to answer this.
+fn turn_in_progress(snapshot: Option<SessionSnapshot>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        snapshot.invocations.iter().any(|record| {
+            record.result.is_none()
+                && record
+                    .scheduling
+                    .last()
+                    .is_some_and(|event| event.stage == InvocationStage::Running)
+        })
+    })
+}
+
+/// What a turn that completed said last, as the saved session records it.
+///
+/// A reply that calls tools is several runs of text with the tool calls
+/// between them, and a list previews the last run: what the agent said when it
+/// finished, not what it said it was about to do. Only text is read, never a
+/// thought, and no more of it than a preview could use.
+fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Option<String> {
+    let record = snapshot?
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == execution)?;
+    if !matches!(record.result, Some(Ok(ExecutionOutcome::Completed))) {
+        return None;
+    }
+    let mut reply = String::new();
+    let mut after_tool = false;
+    for event in &record.events {
+        match event.update() {
+            ExecutionUpdate::Message(chunk) if chunk.kind() == MessageKind::Text => {
+                if after_tool {
+                    reply.clear();
+                    after_tool = false;
+                }
+                let room = MAX_TEXT.saturating_sub(reply.len());
+                reply.push_str(&clipped(chunk.as_str(), room));
+            }
+            ExecutionUpdate::Tool(_) => after_tool = true,
+            _ => {}
+        }
+    }
+    (!reply.is_empty()).then_some(reply)
 }
 
 /// Whether the saved session still has a turn that names images and has not
@@ -1603,3 +2993,7 @@ mod retirement_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/opening_diagnostics.rs"]
 mod opening_diagnostics_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/deletion.rs"]
+mod deletion_tests;

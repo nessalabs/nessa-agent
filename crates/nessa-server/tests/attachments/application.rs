@@ -1685,3 +1685,130 @@ async fn images_are_normalized_fewer_at_a_time_than_they_are_transferred() {
     assert_eq!(normalizer.peak.load(Ordering::SeqCst), 1);
     assert_eq!(store.held().len(), 2);
 }
+
+#[tokio::test]
+async fn a_deleted_conversation_begins_no_upload() {
+    let fixture = fixture();
+    fixture
+        .ownership
+        .deleted
+        .lock()
+        .unwrap()
+        .push(conversation(CONVERSATION));
+    assert_eq!(
+        fixture
+            .service
+            .begin(
+                caller("org", "owner"),
+                begin_request(CONVERSATION, BYTES, PDF)
+            )
+            .await,
+        Err(BeginError::ConversationDeleted)
+    );
+    // Somebody else is told only that there is no such conversation.
+    assert_eq!(
+        fixture
+            .service
+            .begin(
+                caller("org", "stranger"),
+                begin_request(CONVERSATION, BYTES, PDF)
+            )
+            .await,
+        Err(BeginError::ConversationNotFound)
+    );
+    // No ticket was issued, so none was recorded.
+    assert!(fixture.audit.taken_all().is_empty());
+}
+
+#[tokio::test]
+async fn an_upload_whose_conversation_is_no_longer_found_is_reverted_as_not_found() {
+    let fixture = fixture();
+    let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+    let (sender, body) = ChannelBody::open();
+    sender.send(Ok(BYTES[..10].to_vec())).unwrap();
+    let service = fixture.service.clone();
+    let receiving = tokio::spawn(async move { service.receive(&ticket, None, body).await });
+    fixture.store.wrote(10).await;
+
+    // While it transfers, ownership stops saying the conversation is the
+    // uploader's — and nothing says it was deleted.
+    fixture.audit.taken_all();
+    fixture
+        .ownership
+        .owners
+        .lock()
+        .unwrap()
+        .remove(&conversation(CONVERSATION));
+    sender.send(Ok(BYTES[10..].to_vec())).unwrap();
+    drop(sender);
+    assert_eq!(receiving.await.unwrap(), Err(UploadError::NotKept));
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
+    // The trail says what was found, not a deletion nobody made.
+    let records = fixture.audit.taken_all();
+    assert!(
+        matches!(
+            records.as_slice(),
+            [
+                AttachmentAuditRecord::HoldCreated { .. },
+                AttachmentAuditRecord::HoldReverted {
+                    cause: RevertCause::ConversationNotFound,
+                    ..
+                }
+            ]
+        ),
+        "{records:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_upload_finishing_after_its_conversation_was_deleted_keeps_nothing() {
+    let fixture = fixture();
+    let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+    let (sender, body) = ChannelBody::open();
+    sender.send(Ok(BYTES[..10].to_vec())).unwrap();
+    let service = fixture.service.clone();
+    let receiving = tokio::spawn(async move { service.receive(&ticket, None, body).await });
+    fixture.store.wrote(10).await;
+
+    // The conversation is deleted while its upload is still transferring: the
+    // tombstone first, then the release, which finds no hold yet to let go of.
+    fixture
+        .ownership
+        .deleted
+        .lock()
+        .unwrap()
+        .push(conversation(CONVERSATION));
+    fixture
+        .service
+        .release(ReleaseRequest {
+            cause: ReleaseCause::ConversationDeleted,
+            ..release_request(CONVERSATION)
+        })
+        .await
+        .unwrap();
+    fixture.audit.taken_all();
+
+    // The rest arrives, and the hold it would have written is taken back.
+    sender.send(Ok(BYTES[10..].to_vec())).unwrap();
+    drop(sender);
+    assert_eq!(receiving.await.unwrap(), Err(UploadError::NotKept));
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
+    assert_eq!(fixture.store.blob_count(), 0);
+    // The trail says the hold was created and then that it did not last, and why.
+    let records = fixture.audit.taken_all();
+    assert!(
+        matches!(
+            records.as_slice(),
+            [
+                AttachmentAuditRecord::HoldCreated { .. },
+                AttachmentAuditRecord::HoldReverted {
+                    cause: RevertCause::ConversationDeleted,
+                    ..
+                }
+            ]
+        ),
+        "{records:?}"
+    );
+}

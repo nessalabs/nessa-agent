@@ -105,6 +105,13 @@ function arrayBound(field, kind, keyword) {
     throw new Error(`${field} arrays disagree on ${keyword}: ${JSON.stringify(arrays)}`)
   return bound
 }
+/** One value the schema states in several places, refused unless they agree. */
+function agreeing(name, values) {
+  const [first] = values
+  if (first === undefined || values.some((value) => value !== first))
+    throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
+  return first
+}
 const image = schema.$defs.ImageAttachment.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
@@ -117,9 +124,23 @@ const bounds = {
   maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
   maxFilePathBytes: linked.path["x-utf8MaxBytes"],
   filePathPattern: linked.path.pattern,
+  conversationIdPattern: agreeing(
+    "conversationId pattern",
+    Object.values(schema.$defs).flatMap((def) =>
+      def.properties?.conversationId ? [def.properties.conversationId.pattern] : [],
+    ),
+  ),
+  maxConversationTitleBytes: agreeing("conversation title bytes", [
+    schema.$defs.ConversationSummary.properties.title["x-utf8MaxBytes"],
+    schema.$defs.ConversationView.properties.title["x-utf8MaxBytes"],
+  ]),
+  maxConversationPreviewBytes:
+    schema.$defs.ConversationSummary.properties.preview["x-utf8MaxBytes"],
+  maxListedConversations:
+    schema.$defs.ConversationListResult.properties.conversations.maxItems,
 }
 ts += `${doc(
-  "Bounds the product schema puts on attachments, generated from it so no copy of a number can drift.",
+  "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
 for (const [kind, entries] of [
   ["Method", manifest.methods],

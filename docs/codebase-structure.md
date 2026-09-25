@@ -162,6 +162,13 @@ writing the full defaults on first launch is buying.
   hook; rendering takes props and has no idea where they came from.
   `src/panel/ui/app.tsx` is the chrome. Conversation UI lives in
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
+- The Messages tab is panel chrome over a conversation list, like the update
+  tab: `src/panel/application/messages-tab.ts` owns its place in the strip and
+  its transitions, and `src/panel/ui/messages-tab.tsx` puts
+  `src/conversation/ui/conversation-list.tsx` in it. The list is the gateway's
+  (`conversation.list`), joined to the open tabs by
+  `src/conversation/application/queries/roster.ts`; choosing a row shows that
+  conversation's own tab or reopens it as one, so a thread is drawn in one place.
 - The composer's vertical budget belongs to the composer, not to any notice.
   Five producers say things above the pill — a link that went nowhere, an
   update, the draft's files, the session, the conversation — and none excludes
@@ -185,7 +192,11 @@ writing the full defaults on first launch is buying.
   `node_modules`, where nothing may import a parser.
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: thunks call injected effects and reducers apply returned views.
-  The shared tabs are `conversations` + `activeId`. Local id counters live on
+  The shared tabs are `conversations` + `activeId`; beside them the
+  `conversationHistory` slice holds the gateway's list of conversations, which
+  is what the gateway holds rather than what this window has open. A tab's name
+  is the gateway's (its view carries it) unless somebody renamed the tab. Local
+  id counters live on
   `LocalTabs`, not on the model the future server will share. Other modules
   import `src/conversation` (the barrel), not files under it — `store.ts` is
   the exception, so tests do not pull the design system. Host subscriptions
@@ -381,6 +392,24 @@ delivered. The record is evidence of the naming, which is intent: not a read,
 not a delivery, not even an admission. A sink that cannot take it refuses the
 send, and a sink already holding different paths for that submission refuses it
 too. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
+A list of conversations is read without opening one: `conversation.list` joins the
+ownership records to a `ConversationSummaries` store (`infrastructure/summaries.rs`,
+`conversations/summaries/<id>.json`) holding each conversation's title, last line
+said and time, derived by `domain/value_objects/conversation_summary.rs` — the one
+owner of those rules — when a message is accepted and when a reply completes. A
+summary is a projection, so a failed write is logged and the command stands; the
+`archived` flag it also carries is a person's decision, so `archive`/`unarchive`
+fail visibly instead. `delete` is a consequential transition: a tombstone the
+repository owns (`metadata/deleted/<id>.json`) fences the identity before the agent
+is stopped, a `ConversationDeletionAudit` record (`infrastructure/deletion_audit.rs`,
+`audit/deletion/`) is committed before history is erased, and the SDK journal is
+erased under a lease the delete holds. Before that, the agent is asked to delete
+its own session: `ProviderSessionErasers` (`application/provider_sessions.rs`) is
+the one authority, a registry keyed by agent and filled at one site in
+`composition/agent.rs`, and each agent's handler lives in its own SDK module
+(`claude_acp`, `codex_acp`, `opencode_acp`) over the shared ACP exchange in
+`acp/sessions/deletion.rs`. The ownership record and every audit store
+are kept; see [ADR 182](adr/todo/182-conversation-deletion.md).
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
@@ -738,7 +767,9 @@ conversation without opening an agent, `TicketSecrets` for randomness, and
 `UploadBody` for a transfer however it arrives. `infrastructure/store.rs` keeps
 bytes once per digest under `attachments/blobs/` and one record per hold under
 `attachments/holds/<sha256(organization)>/<conversation>/`, private, with every
-name derived rather than copied from input and one lock ordering every change;
+name derived rather than copied from input and one lock ordering every change.
+Holds live until their conversation is closed or deleted, and a hold written
+for a conversation deleted while its bytes were still arriving is taken back;
 `audit.rs` commits one private record per transition; `conversation.rs` and
 `images.rs` implement the conversation context's `ConversationAttachments` and
 the SDK's `UserImageSource` on top of this context. `entrypoint/http.rs` is

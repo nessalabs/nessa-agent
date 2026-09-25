@@ -198,15 +198,28 @@ pub trait ImageNormalizer: Send + Sync {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OwnershipUnavailable;
 
-/// Whether a conversation exists and belongs to this caller. Asked without
-/// opening an agent: beginning an upload must not start a provider.
+/// What the conversation context says about one caller and one conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ownership {
+    /// It exists, is this caller's, and was not deleted.
+    Owned,
+    /// Not this caller's, or not there at all: the same answer on purpose.
+    NotFound,
+    /// This caller's, and deleted. Nothing is held under it again.
+    Deleted,
+}
+
+/// Whether a conversation exists and belongs to this caller, and whether it
+/// was deleted. Asked without opening an agent: beginning an upload must not
+/// start a provider. Asked twice per upload: when it begins, and again once
+/// its hold is written, since a conversation can be deleted in between.
 pub trait ConversationOwnership: Send + Sync {
     fn owns<'a>(
         &'a self,
         organization_id: &'a OrganizationId,
         principal_id: &'a PrincipalId,
         conversation_id: &'a ConversationId,
-    ) -> PortFuture<'a, bool, OwnershipUnavailable>;
+    ) -> PortFuture<'a, Ownership, OwnershipUnavailable>;
 }
 
 /// The host could not supply randomness.
@@ -254,6 +267,8 @@ pub enum UploadRejection {
 pub enum ReleaseCause {
     /// The verified caller closed the conversation.
     ConversationClosed,
+    /// The verified caller deleted the conversation.
+    ConversationDeleted,
 }
 
 /// The verified request behind a release.
@@ -279,6 +294,15 @@ pub enum RevertCause {
     /// The work of the upload that wrote it stopped without an answer, so
     /// nobody was left to finish or undo it.
     UploadUnresolved,
+    /// Its creation was recorded, and its conversation had been deleted by the
+    /// time the hold could be made usable, so it never was.
+    ConversationDeleted,
+    /// Its creation was recorded, and by the time the hold could be made
+    /// usable its conversation was no longer found as the uploader's — its
+    /// ownership record was gone or no longer said so — so it never was.
+    /// Kept apart from a deletion, which leaves a tombstone saying who and
+    /// when; this says only that ownership could not be found.
+    ConversationNotFound,
 }
 
 /// One consequential transition. Each variant carries the whole value it

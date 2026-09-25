@@ -91,6 +91,14 @@ What that policy does **not** cover is written out on the constant in
 is is worse than a narrow one. Read it there rather than here: it is the kind of
 statement that has to sit beside the value it qualifies.
 
+## Deleting a session
+
+`OpencodeAcpProvider` implements `ProviderSessionDeleter`. Whether Opencode offers
+deletion is whatever its `initialize` advertises; without it the answer is
+`NotSupported` and nothing is asked. What Opencode does on a successful
+`session/delete` is not known to this binding, so that answer is reported as
+`ProviderSessionDeletion::Acknowledged`, claiming nothing about the record.
+
 ## Install and run
 
 Opencode is not bundled. It is a runtime of its own, nearly two hundred

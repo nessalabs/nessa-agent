@@ -63,6 +63,9 @@ impl SessionStorageLease for CancellationPanicLease {
             panic_on_drop: panic && self.drop_panics,
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 struct CancellationSave<'a> {
     inner: StorageFuture<'a, ()>,

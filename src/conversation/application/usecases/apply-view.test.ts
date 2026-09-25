@@ -7,6 +7,7 @@ import { beginSend, failSend } from "./send-draft"
 
 const view: ConversationView = {
   conversationId: "server",
+  title: null,
   revision: "opaque-revision",
   truncated: true,
   queueComplete: true,
@@ -489,4 +490,13 @@ it("keeps a sent turn's local previews when the gateway echoes it by reference",
     ],
   })
   expect(applied.turns[0]).toMatchObject({ from: "user", content: [file] })
+})
+
+it("names the tab as the gateway does, unless somebody renamed it", () => {
+  const named = applyView(conversation("c0"), { ...view, title: "Flights to Lisbon" })
+  expect(named.title).toBe("Flights to Lisbon")
+  // Nothing said yet: the tab keeps the name it has.
+  expect(applyView(named, { ...view, title: null }).title).toBe("Flights to Lisbon")
+  const renamed = { ...conversation("c0"), title: "Trip", titleEdited: true as const }
+  expect(applyView(renamed, { ...view, title: "Flights to Lisbon" }).title).toBe("Trip")
 })

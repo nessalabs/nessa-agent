@@ -106,6 +106,24 @@ not avoid the write — checked against the pinned adapter rather than assumed. 
 gateway starting an agent must not move an operator's credential onto the user's
 disk, so signing Codex in remains `codex login`.
 
+## Deleting a session
+
+`CodexAcpProvider` implements `ProviderSessionDeleter`. The adapter advertises
+`sessionCapabilities.delete` but answers `session/delete` by archiving the thread
+(`threadArchive`): the transcript stays in Codex's store. A successful answer is
+therefore reported as `ProviderSessionDeletion::Archived`, never as erased.
+
+The adapter also advertises `sessionCapabilities.list`, answered from Codex's
+`thread/list` without asking for archived threads, so an archived thread is not
+listed. A deletion interrupted after Codex archived the thread, and before that
+was written down, sends the delete again on its next try: if Codex archives an
+already-archived thread without complaint the answer is `Archived` again, and if
+it refuses, a refusal of a thread it does not list settles as
+`ProviderSessionDeletion::NotListed`. Either way the deletion finishes. The
+listing is also limited to Codex's current model provider and its usual thread
+sources, so a thread Codex keeps under another provider is not listed either,
+and is asked to be deleted the same way.
+
 ## Install and run
 
 The local harness manifest and lockfile pin `@agentclientprotocol/codex-acp`

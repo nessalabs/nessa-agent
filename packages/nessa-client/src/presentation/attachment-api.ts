@@ -19,6 +19,7 @@ import {
   validSize,
   type StoredAttachment,
 } from "../protocol/attachment-validate.js"
+import { conversationIdPattern } from "../protocol/conversation-validate.js"
 import type { ConversationActionOptions } from "./conversation-api.js"
 
 /** The bytes an upload is for: what they hash to, what they are, how many there are. */
@@ -111,8 +112,6 @@ export type AttachmentApi = {
   ) => Promise<StoredAttachment>
 }
 
-const conversationIdPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ticketPattern = /^[0-9a-f]{64}$/
 const utf8 = new TextEncoder()
 

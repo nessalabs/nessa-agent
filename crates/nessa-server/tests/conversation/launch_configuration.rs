@@ -6,6 +6,7 @@
 //! cannot catch a literal written here instead, which is the drift that puts
 //! the client back under the gateway and loses the typed answer again.
 use super::{build::launch_configuration, AgentRuntime, AgentsConfig};
+use crate::composition::agent_budgets;
 use nessa_sdk::application::agent_execution::providers::UserImageSource;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -138,4 +139,51 @@ impl UserImageSource for NoImages {
     ) -> nessa_sdk::application::agent_execution::providers::UserImageFuture<'_> {
         unreachable!("the launch configuration never reads its image source")
     }
+}
+
+/// What composition gives the conversation service to spend on a delete
+/// before the agent is asked: the table's `deletion` entries, read from the
+/// same bytes the client derives its delete wait from.
+#[test]
+fn the_deletion_budgets_are_the_ones_the_shared_table_states() {
+    let table: serde_json::Value =
+        serde_json::from_str(BUDGETS_JSON).expect("bundled budgets table must parse");
+    let stated = |key: &str| {
+        Duration::from_millis(
+            table["deletion"][key]
+                .as_u64()
+                .unwrap_or_else(|| panic!("the budgets table states deletion.{key}")),
+        )
+    };
+    let injected = agent_budgets::deletion();
+    assert_eq!(injected.stop, stated("stopMs"));
+    assert_eq!(injected.history_lease, stated("historyLeaseMs"));
+    assert!(!injected.stop.is_zero() && !injected.history_lease.is_zero());
+}
+
+/// The one published bound on a delete is exactly what composition configures
+/// it to spend: its own stop and lease waits, and the agent exchange as the
+/// SDK states it for the launch configuration the gateway builds. The client
+/// waits for `deletion.worstCaseMs`, so a change on either side that is not
+/// made on the other fails here.
+#[test]
+fn the_published_delete_bound_is_what_a_delete_can_spend() {
+    let table: serde_json::Value =
+        serde_json::from_str(BUDGETS_JSON).expect("bundled budgets table must parse");
+    let published = Duration::from_millis(
+        table["deletion"]["worstCaseMs"]
+            .as_u64()
+            .expect("the budgets table states deletion.worstCaseMs"),
+    );
+    let exchange = launch_configuration(
+        &agents_config(),
+        &runtime(),
+        PathBuf::from("/workspace"),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
+    )
+    .session_deletion_limit();
+    let deletion = agent_budgets::deletion();
+    assert_eq!(deletion.stop + deletion.history_lease + exchange, published);
 }

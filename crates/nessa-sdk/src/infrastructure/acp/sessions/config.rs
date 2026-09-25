@@ -159,6 +159,25 @@ pub struct AcpConfig {
     pub images: Option<Arc<dyn UserImageSource>>,
 }
 impl AcpConfig {
+    /// The longest an ACP binding's
+    /// [`ProviderSessionDeleter::delete_session`](crate::application::agent_execution::providers::ProviderSessionDeleter::delete_session)
+    /// takes to answer with these budgets: `launch_timeout` (until
+    /// `initialize` is answered) + `startup_timeout` (the delete) +
+    /// `startup_timeout` (every `session/list` page, for the workspace, read
+    /// only after a refusal) + `shutdown_grace` + 4 ×
+    /// `kill_timeout`. Stopping the process waits out the grace, then a
+    /// terminate, a kill, and reaping, each for at most `kill_timeout`; a
+    /// binding that launches in a private directory then releases it within
+    /// one more. Bindings without one finish a `kill_timeout` sooner; this is
+    /// the bound for all of them. A launch that fails spends at most one
+    /// `kill_timeout` releasing what it made, well inside it.
+    ///
+    /// The one statement of that sum in code. Nessa's gateway publishes its
+    /// whole delete bound from it — its own waits plus this — and a gateway
+    /// test holds the published number to this function.
+    pub fn session_deletion_limit(&self) -> Duration {
+        self.launch_timeout + self.startup_timeout * 2 + self.shutdown_grace + self.kill_timeout * 4
+    }
     pub(crate) fn validate(&self) -> Result<(), AgentError> {
         if self.mcp_servers.len() > 16 || (!self.tools_enabled && !self.mcp_servers.is_empty()) {
             return Err(AgentError::Configuration(

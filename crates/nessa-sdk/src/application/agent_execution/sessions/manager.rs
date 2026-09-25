@@ -191,7 +191,7 @@ impl SessionManager {
             .map_err(StorageError::bounded)
             .map_err(AgentError::Storage)?;
         if let Some(snapshot) = &saved {
-            if let Err(error) = super::validation::validate(snapshot) {
+            if let Err(error) = snapshot.check_saved(&self.id) {
                 saved.expect("validated snapshot").discard_rejected_errors();
                 return Err(AgentError::Storage(error));
             }
@@ -201,7 +201,7 @@ impl SessionManager {
         let identity = provider.identity();
         if compacted
             .as_ref()
-            .is_some_and(|snapshot| snapshot.id != self.id || snapshot.provider != identity)
+            .is_some_and(|snapshot| snapshot.provider != identity)
         {
             return Err(AgentError::Storage(StorageError::IdentityMismatch));
         }

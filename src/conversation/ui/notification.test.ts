@@ -244,6 +244,18 @@ describe("conversation notification", () => {
         retry: null,
       })
   })
+  it("says a deleted conversation is gone, above any command, with nothing to press", () => {
+    const beside = conversation("tab")
+    beside.readError = "deleted"
+    beside.error = "This conversation was deleted, so the message was not sent."
+    beside.failure = "conversation-deleted"
+    expect(conversationNotice(beside)).toEqual({
+      title: "Conversation deleted",
+      description:
+        "This conversation was deleted, so it cannot be continued. Close this tab; anything in the draft is still here to copy.",
+      retry: null,
+    })
+  })
   it("offers no action for any read failure the gateway will not answer differently", () => {
     // Stated over the vocabulary rather than one word at a time: whichever read
     // failures are permanent, none of them may end in something to press. A

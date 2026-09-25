@@ -4,7 +4,7 @@
 use crate::{
     attachments::{
         application::{
-            AttachmentService, ConversationOwnership, OwnershipUnavailable, PortFuture,
+            AttachmentService, ConversationOwnership, Ownership, OwnershipUnavailable, PortFuture,
             ReleaseCause, ReleaseError, ReleaseRequest,
         },
         domain::Attachment,
@@ -14,7 +14,7 @@ use crate::{
             AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
             ConversationFuture, ConversationRepository,
         },
-        domain::ConversationId,
+        domain::{ConversationId, ConversationRefusal},
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -54,6 +54,7 @@ impl ConversationAttachments for ConversationHolds {
         Box::pin(async move {
             let cause = match release.cause {
                 AttachmentReleaseCause::ConversationClosed => ReleaseCause::ConversationClosed,
+                AttachmentReleaseCause::ConversationDeleted => ReleaseCause::ConversationDeleted,
             };
             self.service
                 .release(ReleaseRequest {
@@ -97,19 +98,26 @@ impl ConversationOwnership for RepositoryOwnership {
         organization_id: &'a OrganizationId,
         principal_id: &'a PrincipalId,
         conversation_id: &'a ConversationId,
-    ) -> PortFuture<'a, bool, OwnershipUnavailable> {
+    ) -> PortFuture<'a, Ownership, OwnershipUnavailable> {
         Box::pin(async move {
             // The conversation's own rule decides: organization and owner must
-            // both agree, and knowing an identifier grants nothing.
-            self.conversations
+            // both agree, knowing an identifier grants nothing, and a deleted
+            // conversation is refused — to its owner, as deleted.
+            let found = self
+                .conversations
                 .load(conversation_id)
                 .await
-                .map(|found| {
-                    found.is_some_and(|conversation| {
-                        conversation.allows(organization_id, principal_id)
-                    })
-                })
-                .map_err(|_| OwnershipUnavailable)
+                .map_err(|_| OwnershipUnavailable)?;
+            Ok(match found {
+                None => Ownership::NotFound,
+                Some(conversation) => {
+                    match conversation.check_access(organization_id, principal_id) {
+                        Ok(()) => Ownership::Owned,
+                        Err(ConversationRefusal::NotFound) => Ownership::NotFound,
+                        Err(ConversationRefusal::Deleted) => Ownership::Deleted,
+                    }
+                }
+            })
         })
     }
 }

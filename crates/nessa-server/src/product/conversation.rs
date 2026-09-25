@@ -2,11 +2,13 @@
 //! The socket has already checked current access and the conversation action grant.
 use super::{
     generated::{
-        ConversationAnswerParams, ConversationCancelParams, ConversationCloseParams,
-        ConversationCreateParams, ConversationCreateResult, ConversationErrorCode,
-        ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
-        ConversationPermissionSelectionState, ConversationReadParams, ConversationRemoveParams,
-        ConversationReorderParams, ConversationSendParams,
+        ConversationAnswerParams, ConversationArchiveParams, ConversationCancelParams,
+        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
+        ConversationDeleteParams, ConversationErrorCode, ConversationListParams,
+        ConversationListResult, ConversationMutationResult,
+        ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
+        ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
+        ConversationSendParams, ConversationSummary,
     },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -15,8 +17,8 @@ use crate::{
     agents::domain::AgentId,
     conversation::{
         application::{
-            ConversationCaller, ConversationError, RequestedAgent, SubmissionMode, SubmittedFile,
-            SubmittedImage, SubmittedMessage,
+            ConversationCaller, ConversationError, ConversationList, DeletionFailures,
+            RequestedAgent, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
         },
         domain::ConversationId,
     },
@@ -92,6 +94,13 @@ pub(super) async fn dispatch(
                     )
                     .await?;
                 Ok(success(&frame.id, &view))
+            }
+            "conversation.list" => {
+                let ConversationListParams { archived } = params!(ConversationListParams);
+                let listed = service
+                    .list(caller(frame.id.clone()), archived.unwrap_or(false))
+                    .await?;
+                Ok(success(&frame.id, &list_result(listed)))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = params!(ConversationSendParams);
@@ -212,6 +221,39 @@ pub(super) async fn dispatch(
                     },
                 ))
             }
+            "conversation.archive" | "conversation.unarchive" => {
+                let params = params!(ConversationArchiveParams);
+                let applied = service
+                    .archive(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        frame.method == "conversation.archive",
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
+            "conversation.delete" => {
+                let params = params!(ConversationDeleteParams);
+                let applied = service
+                    .delete(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
             _ => Ok(failure(
                 &frame.id,
                 ConversationErrorCode::UnknownMethod.as_str(),
@@ -265,6 +307,8 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
         // stays in the typed error and the log, not in a second wire code.
         ConversationError::CloseIncomplete { agent, .. } => error_code(agent),
         ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
+        ConversationError::Deleted => ConversationErrorCode::ConversationDeleted,
+        ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
         ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,
@@ -345,6 +389,48 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
     }
 }
 
+/// A delete that happened and did not finish. What is left to erase is what a
+/// caller acts on — repeating the delete finishes it — unless the one thing
+/// missing is evidence: a deletion record the sink did not take, which kept
+/// the history too, or uploads let go without their records, where nothing is
+/// left to erase and the answer is the lost record, as it is for `close`.
+fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
+    // Every field named, so a new one cannot be left out of this decision
+    // without failing to compile.
+    let DeletionFailures {
+        stop,
+        history,
+        provider,
+        no_agent_slot,
+        audit,
+        attachments,
+        summary,
+        tombstone,
+        interrupted,
+        another_attempt,
+    } = failures;
+    let evidence_only = stop.is_none()
+        && history.is_none()
+        && provider.is_none()
+        && !no_agent_slot
+        && summary.is_none()
+        && tombstone.is_none()
+        && !interrupted
+        && !another_attempt
+        && matches!(
+            attachments,
+            None | Some(ConversationError::AttachmentCleanup {
+                storage_failures: 0,
+                ..
+            })
+        );
+    if audit.is_some() || (evidence_only && attachments.is_some()) {
+        ConversationErrorCode::AuditUnavailable
+    } else {
+        ConversationErrorCode::ConversationErasureIncomplete
+    }
+}
+
 fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
 }
@@ -363,6 +449,30 @@ fn requested_agent(value: Option<&str>) -> Option<RequestedAgent> {
     value.map(|name| AgentId::parse(name).map_or(RequestedAgent::Unknown, RequestedAgent::Known))
 }
 
+/// A list as the wire carries it, saying whether the bound left any out
+/// (`a_cut_list_says_so_on_the_wire`).
+fn list_result(listed: ConversationList) -> ConversationListResult {
+    ConversationListResult {
+        conversations: listed
+            .conversations
+            .into_iter()
+            .map(|entry| ConversationSummary {
+                conversation_id: entry.conversation_id,
+                title: entry.title,
+                preview: entry.preview,
+                created_at_ms: entry.created_at_ms,
+                updated_at_ms: entry.updated_at_ms,
+                running: entry.running,
+                archived: entry.archived,
+            })
+            .collect(),
+        complete: listed.complete,
+    }
+}
+
 #[cfg(test)]
 #[path = "../../tests/conversation/wire_errors.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "../../tests/conversation/wire_list.rs"]
+mod wire_list;

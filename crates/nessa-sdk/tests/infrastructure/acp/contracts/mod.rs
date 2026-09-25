@@ -6,12 +6,14 @@
 //!           -> codex and opencode: the other profiles, each against a handler
 //!              speaking its own shapes
 //!           -> images (advertised prompt capability, byte source, content blocks)
+//!           -> deletion (a connection of its own: initialize, session/delete)
 //! ```
 //! Arrows show which test layer exercises each feature.
 
 mod audit;
 mod codex;
 mod configuration;
+mod deletion;
 mod executions;
 mod identity;
 mod images;

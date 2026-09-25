@@ -10,8 +10,11 @@
 //! ACP responsibilities, not provider-specific lifecycle implementations. The
 //! private process root isolates code-loading configuration while the caller's
 //! data root remains available for Opencode account lookup.
+//! `deletion` reports a successful `session/delete` as acknowledged only: what
+//! Opencode does on it is not known to this binding.
 mod binding;
 mod data_home;
+mod deletion;
 mod profile;
 pub use binding::OpencodeAcpProvider;
 pub use data_home::effective_data_home;

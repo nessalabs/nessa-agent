@@ -16,6 +16,7 @@ function image(change: { size?: number } = {}) {
 function view() {
   return {
     conversationId: "conversation",
+    title: null,
     revision: "1",
     truncated: false,
     queueComplete: true,

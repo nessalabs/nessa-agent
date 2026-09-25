@@ -72,13 +72,32 @@ use tokio::{
     time::{timeout, Instant},
 };
 
+/// What this client says about itself in `initialize`, on every connection
+/// it opens to an agent, whatever the connection is for.
+pub(in crate::infrastructure::acp) fn initialize_params() -> Value {
+    json!({"protocolVersion":1,"clientInfo":{"name":"nessa-sdk","version":env!("CARGO_PKG_VERSION")},
+        "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}})
+}
+
+/// Whether an agent's `initialize` answer is one this client works with: ACP
+/// protocol 1, and whatever the profile requires of it.
+pub(in crate::infrastructure::acp) fn check_initialize<P: AcpProfile>(
+    profile: &P,
+    init: &Value,
+) -> Result<(), AgentError> {
+    if init.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(json_rpc::protocol("requires ACP protocol 1"));
+    }
+    profile.validate_initialize(init)
+}
+
 /// Turn a provider's error response into this adapter's error, reporting what
 /// the provider said on the way past.
 ///
 /// The code is the decision fact. Provider text is retained and logged only as
 /// bounded diagnostic context, so it cannot decide lifecycle behavior or grow
 /// through an untrusted response.
-fn provider_failure(phase: &str, error: RpcError) -> AgentError {
+pub(in crate::infrastructure::acp) fn provider_failure(phase: &str, error: RpcError) -> AgentError {
     let diagnostic = error.message.map(ProviderDiagnostic::new);
     match &diagnostic {
         Some(message) => {
@@ -822,18 +841,15 @@ impl<P: AcpProfile> Worker<P> {
         } else {
             AgentStartupContext::New
         };
-        let init = self.rpc("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"nessa-sdk","version":env!("CARGO_PKG_VERSION")},
-            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), spawn_deadline, None)
+        let init = self
+            .rpc("initialize", initialize_params(), spawn_deadline, None)
             .await
             .map_err(|error| startup_deadline(error, AgentStartupPhase::Initialize, context))?;
         // The child has answered, so it is running and scanned. Start the
         // protocol budget here rather than carrying the remainder of a budget
         // that was sized for the operating system's work.
         let deadline = Instant::now() + self.config.startup_timeout;
-        if init.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
-            return Err(json_rpc::protocol("requires ACP protocol 1").into());
-        }
-        self.profile.validate_initialize(&init)?;
+        check_initialize(&self.profile, &init)?;
         self.steering_supported = self.profile.supports_steering(&init);
         self.agent_accepts_images =
             init.pointer("/agentCapabilities/promptCapabilities/image") == Some(&Value::Bool(true));

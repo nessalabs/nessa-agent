@@ -6,6 +6,7 @@ import {
   removeFile,
   closeConversation,
   openConversation,
+  openListed,
   setActive,
   moveActive,
   setDraft,
@@ -14,6 +15,7 @@ import {
 /** Local drafts and tabs; remote operations use ConversationEffects. */
 export const localConversationGateway: ConversationGateway = {
   openConversation,
+  openListed,
   attachFiles,
   changeUpload,
   forgetStoredUploads,

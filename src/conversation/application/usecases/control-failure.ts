@@ -34,6 +34,8 @@ export function controlFailureMessage(
   // reports rather than asks.
   if (reason === "attachment-cleanup-unavailable")
     return "The conversation stopped, but the gateway could not release the images it had stored for it. Nothing here depends on them; what the gateway still holds is its own to account for."
+  // The other codes that are news rather than a refusal: the delete happened.
+  if (deletedAnyway(reason)) return deletedMessage(reason, "The conversation")
   switch (outcome) {
     // Exactly what the client's constant says, so there is nothing to add.
     case "unknown":
@@ -49,6 +51,28 @@ export function controlFailureMessage(
   }
 }
 
+/** The failures a delete answers only once the conversation is deleted. */
+export type DeletedAnyway = "conversation-erasure-incomplete" | "deletion-unrecorded"
+
+/** Whether a failed delete is one that happened: the one owner of that rule. */
+export function deletedAnyway(
+  reason: CommandFailure | undefined,
+): reason is DeletedAnyway {
+  return reason === "conversation-erasure-incomplete" || reason === "deletion-unrecorded"
+}
+
+/**
+ * A delete that happened with something left to finish, said of `subject`: the
+ * one sentence for both news codes, whoever names the conversation.
+ */
+export function deletedMessage(reason: DeletedAnyway, subject: string): string {
+  const left =
+    reason === "conversation-erasure-incomplete"
+      ? "What the gateway stored for it is not all removed yet"
+      : "The gateway could not finish recording the deletion yet"
+  return `${subject} was deleted. ${left}; the gateway tries again when it next starts.`
+}
+
 /**
  * The gateway decided this control without applying any of it. Said plainly,
  * with whatever the reason adds — and said anyway when it adds nothing, because
@@ -57,7 +81,14 @@ export function controlFailureMessage(
  * here rather than quietly collapsing into the general case.
  */
 function nothingWasDone(
-  reason: Exclude<CommandFailure, "attachment-cleanup-unavailable"> | undefined,
+  reason:
+    | Exclude<
+        CommandFailure,
+        | "attachment-cleanup-unavailable"
+        | "conversation-erasure-incomplete"
+        | "deletion-unrecorded"
+      >
+    | undefined,
 ): string {
   switch (reason) {
     case "agent-startup-deadline":
@@ -91,8 +122,12 @@ function nothingWasDone(
       return "The gateway no longer has this conversation, so nothing was done."
     case "conversation-state-unreadable":
       return "Nessa cannot read this conversation's saved state, so nothing was done. Start a new conversation to carry on."
+    case "conversation-deleted":
+      return "This conversation was deleted, so nothing was done."
     case "conversation-capacity":
       return "The gateway has too many conversations open, so nothing was done. Close one and try again shortly."
+    case "not-connected":
+      return "Nessa is not connected to the gateway, so nothing was done."
     // Nothing these add is worth a sentence to somebody who pressed a control:
     // the image codes describe a message, `invalid-request` says only what the
     // sentence already says, and an undefined reason is a code with no word

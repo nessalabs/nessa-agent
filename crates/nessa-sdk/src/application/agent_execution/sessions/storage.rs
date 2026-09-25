@@ -229,6 +229,34 @@ pub trait SessionStorage: Send + Sync {
     /// Acquisition must exclude competing owners before returning. If an opening
     /// future is dropped, any acquired resources must eventually be released.
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>>;
+
+    /// Acquires a writer lease for `id` as [`Self::open`] does, but only for a
+    /// session this backend already holds something for; `Ok(None)` when it
+    /// holds nothing, in which case nothing is created.
+    ///
+    /// For a caller that means to read or erase what a session saved and has
+    /// no reason to begin one: opening a session that never existed would
+    /// leave behind the exclusion resource an opening creates (the file
+    /// adapter's `.lock`), for an identity nothing will use again.
+    ///
+    /// The default cannot tell whether a session exists without acquiring it,
+    /// so it acquires it exactly as [`Self::open`] does and returns `Some`,
+    /// creating whatever that creates. [`LocalFileStorage`] and
+    /// [`InMemoryStorage`] override it and create nothing
+    /// (`opening_an_existing_session_creates_nothing_for_one_that_never_was`).
+    ///
+    /// # Errors
+    /// The same as [`Self::open`]: [`StorageError::Busy`] while another owner
+    /// holds the session, or a backend error.
+    ///
+    /// [`LocalFileStorage`]: crate::infrastructure::session_storage::LocalFileStorage
+    /// [`InMemoryStorage`]: crate::infrastructure::session_storage::InMemoryStorage
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move { self.open(id).await.map(Some) })
+    }
 }
 
 /// Exclusive storage access to one local session, owned by its session manager.
@@ -258,9 +286,81 @@ pub trait SessionStorageLease: Send + Sync {
     /// does not imply that provider work was rolled back, or that no write reached
     /// storage. Successful return must satisfy the adapter's durability contract.
     fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()>;
+
+    /// Erases this session's saved history, so that it has no snapshot.
+    ///
+    /// Erasure happens under the exclusive lease this handle holds, which is
+    /// why it is an operation of the lease and not of the backend: removing
+    /// history that another owner is still writing would let that owner write
+    /// it back, and removing it from outside any lease would let an opener
+    /// acquire the session halfway through. The exclusion resource itself is
+    /// kept, so a second opener is still refused with [`StorageError::Busy`]
+    /// until this lease is dropped; removing it while held would let that
+    /// opener acquire a fresh one beside this lease, which is two writers.
+    ///
+    /// Afterwards [`Self::load`] returns `None`. The identity is not retired:
+    /// a later [`Self::save`], through this lease or a later one, starts a new
+    /// history under it. A caller erasing a session permanently must therefore
+    /// stop using that identity itself. Erasing a session that has no saved
+    /// history succeeds. Nothing outside this storage is touched: a provider's
+    /// own record of the context named by [`SessionSnapshot::provider_context`]
+    /// is the provider's to keep or erase.
+    ///
+    /// Like [`Self::save`], an erase that has started retains the lease until
+    /// it finishes, even if its caller stops waiting.
+    ///
+    /// # Errors
+    /// Returns a backend error when removal cannot be acknowledged. The history
+    /// may then still be present, in whole, and repeating the erase under a
+    /// lease completes it. The supplied adapters remove the history in one
+    /// step, so a failed erase leaves it whole rather than partly removed
+    /// (`a_failed_file_erase_is_typed_and_leaves_the_history_whole`).
+    fn erase(&self) -> StorageFuture<'_, ()>;
 }
 
 impl SessionSnapshot {
+    /// Loads the snapshot saved for the session `id` through `lease`, checked
+    /// the way [`Agent`](crate::application::agent_execution::agents::Agent)
+    /// checks one before restoring it: every relationship inside it is
+    /// validated, and it must have been saved under `id`.
+    ///
+    /// For a caller that reads saved history without restoring it — to learn
+    /// which provider context a session names before erasing it, say — and so
+    /// must not trust a custom adapter to have returned the session it was
+    /// asked for. It does not compare the snapshot's provider identity, which
+    /// only a caller holding the configured provider can; restoration still
+    /// does. Nothing is written, and `lease` is only borrowed.
+    ///
+    /// # Errors
+    /// A backend error from [`SessionStorageLease::load`];
+    /// [`StorageError::Corrupt`] for a snapshot whose relationships do not
+    /// hold; [`StorageError::IdentityMismatch`] for a snapshot saved under
+    /// another session (`a_snapshot_for_another_session_is_refused_when_read_to_erase`).
+    pub async fn load_saved(
+        lease: &dyn SessionStorageLease,
+        id: &SessionId,
+    ) -> Result<Option<Self>, StorageError> {
+        let saved = lease.load().await.map_err(StorageError::bounded)?;
+        if let Some(snapshot) = &saved {
+            if let Err(error) = snapshot.check_saved(id) {
+                saved.expect("checked snapshot").discard_rejected_errors();
+                return Err(error);
+            }
+        }
+        Ok(saved)
+    }
+
+    /// Whether this snapshot, read back from storage, may stand for the
+    /// session `id`: its relationships hold and it was saved under `id`. The
+    /// one check every reader of saved history applies.
+    pub(crate) fn check_saved(&self, id: &SessionId) -> Result<(), StorageError> {
+        super::validation::validate(self)?;
+        if self.id != *id {
+            return Err(StorageError::IdentityMismatch);
+        }
+        Ok(())
+    }
+
     /// Release rejected adapter evidence without recursive error-tree destruction.
     pub(crate) fn discard_rejected_errors(mut self) {
         for invocation in &mut self.invocations {

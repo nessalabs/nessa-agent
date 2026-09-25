@@ -1,7 +1,7 @@
 //! Opening failures retain their actionable meaning at the product boundary.
 use super::{
     error_code, permission_answer_failure, AgentError, ConversationError, ConversationErrorCode,
-    ImageInputRefusal, OutgoingMessage, PermissionSelectionState, StorageError,
+    DeletionFailures, ImageInputRefusal, OutgoingMessage, PermissionSelectionState, StorageError,
 };
 use nessa_sdk::{
     application::agent_execution::{
@@ -115,6 +115,7 @@ fn every_refusal_this_gateway_states_is_understood_by_the_client() {
     for error in [
         ConversationError::AgentNotConfigured,
         ConversationError::AgentUnsupported,
+        ConversationError::Deleted,
     ] {
         let code = error_code(&error).as_str();
         assert!(
@@ -255,6 +256,111 @@ fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
         assert_eq!(
             error_code(&ConversationError::Agent(AgentError::Storage(transient))),
             ConversationErrorCode::AgentOperationFailed
+        );
+    }
+}
+
+#[test]
+fn a_deleted_conversation_and_an_unfinished_deletion_have_their_own_codes() {
+    assert_eq!(
+        error_code(&ConversationError::Deleted),
+        ConversationErrorCode::ConversationDeleted
+    );
+    let unfinished = |failures: DeletionFailures| {
+        error_code(&ConversationError::DeletionIncomplete(Box::new(failures)))
+    };
+    let lost_evidence = || ConversationError::AttachmentCleanup {
+        storage_failures: 0,
+        audit_failures: 1,
+    };
+    let kept_files = || ConversationError::AttachmentCleanup {
+        storage_failures: 1,
+        audit_failures: 0,
+    };
+    // Something is left to erase: the conversation is deleted, and repeating
+    // the delete finishes it.
+    for failures in [
+        DeletionFailures {
+            stop: Some(crate::conversation::application::StopFailure::Failed(
+                AgentError::CleanupUncertain,
+            )),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            history: Some(ConversationError::Storage(StorageError::Busy)),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            summary: Some(ConversationError::Metadata),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            attachments: Some(kept_files()),
+            ..DeletionFailures::default()
+        },
+        // Evidence lost for uploads does not hide history left behind.
+        DeletionFailures {
+            history: Some(ConversationError::Storage(StorageError::Busy)),
+            attachments: Some(lost_evidence()),
+            ..DeletionFailures::default()
+        },
+        // The agent could not be asked about its own record, or refused;
+        // with uploads' evidence lost beside it, that is still what is left.
+        DeletionFailures {
+            provider: Some(ConversationError::Agent(AgentError::Deadline)),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            provider: Some(ConversationError::Agent(AgentError::Deadline)),
+            attachments: Some(lost_evidence()),
+            ..DeletionFailures::default()
+        },
+        // Another attempt left it unfinished; this request did not try again.
+        DeletionFailures {
+            another_attempt: true,
+            ..DeletionFailures::default()
+        },
+        // A step past the fence fell over, beside uploads' evidence lost: what
+        // is left is whatever the tombstone says.
+        DeletionFailures {
+            interrupted: true,
+            attachments: Some(lost_evidence()),
+            ..DeletionFailures::default()
+        },
+        // How far it got was not written down, so the next try repeats it.
+        DeletionFailures {
+            tombstone: Some(ConversationError::Metadata),
+            attachments: Some(lost_evidence()),
+            ..DeletionFailures::default()
+        },
+    ] {
+        assert_eq!(
+            unfinished(failures.clone()),
+            ConversationErrorCode::ConversationErasureIncomplete,
+            "{failures:?}"
+        );
+    }
+    // The deletion record was not taken, or only uploads' records were lost:
+    // the answer is the lost record, whatever else is also true.
+    for failures in [
+        DeletionFailures {
+            audit: Some(ConversationError::Audit),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            audit: Some(ConversationError::Audit),
+            attachments: Some(kept_files()),
+            ..DeletionFailures::default()
+        },
+        DeletionFailures {
+            attachments: Some(lost_evidence()),
+            ..DeletionFailures::default()
+        },
+    ] {
+        assert_eq!(
+            unfinished(failures.clone()),
+            ConversationErrorCode::AuditUnavailable,
+            "{failures:?}"
         );
     }
 }

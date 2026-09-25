@@ -9,7 +9,8 @@
 //! ```
 //! Arrows show calls and representation mapping. Each completed journal line is
 //! one logical snapshot replacement; unchanged earlier history is not rewritten.
-//! Pending file operations retain the lease until they finish. JSON mapping and
+//! Pending file operations retain the lease until they finish. Erasing a session
+//! removes its history under that lease and keeps the lease's exclusion. JSON mapping and
 //! checkpoint validation live in `snapshot`; file ownership and sync live in `local`.
 //! `paths` encodes exact identities into case-fold-safe journal and lease filenames.
 

@@ -80,7 +80,9 @@
 //! conversation can be reopened and nothing in its ownership record says it was
 //! closed, so it can hold again after a close, and what it holds then is let go
 //! by the next close. That includes an upload still transferring when its
-//! conversation closed. A ticket outlives the revocation of the credential it
+//! conversation closed. Deleting is final: a deleted conversation begins no
+//! upload, and ownership is asked again once an upload's hold is written, so
+//! one still transferring when its conversation was deleted keeps nothing. A ticket outlives the revocation of the credential it
 //! was given to, for at most its five minutes: the route authenticates nobody,
 //! and re-deciding access there would be a second, weaker copy of the socket's
 //! authorization. A pending hold left by a crash stays invisible and protects

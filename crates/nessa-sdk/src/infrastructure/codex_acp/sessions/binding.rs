@@ -14,7 +14,9 @@ use crate::domain::effective_capabilities::value_objects::{
 };
 use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
-use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
+use crate::infrastructure::acp::sessions::{
+    binding as acp_binding, deletion::DeletionCleanups, identity, AcpConfig,
+};
 use crate::infrastructure::process::ProcessScope;
 use serde_json::json;
 use std::sync::Arc;
@@ -27,6 +29,8 @@ pub struct CodexAcpProvider {
     capabilities: EffectiveCapabilities,
     system_prompt: Option<SystemPrompt>,
     audit: Arc<dyn ExecutionAudit>,
+    /// Deletions this binding started that are still stopping their process.
+    deletions: DeletionCleanups,
 }
 impl CodexAcpProvider {
     /// Configure a Codex ACP execution factory without starting a process.
@@ -103,6 +107,7 @@ impl CodexAcpProvider {
             capabilities,
             system_prompt: None,
             audit,
+            deletions: DeletionCleanups::default(),
         })
     }
     /// Replace the harness's default instructions with these attributed ones.
@@ -168,17 +173,35 @@ impl AgentProvider for CodexAcpProvider {
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (restore, control) = request.into_parts();
-            let factory = self.clone();
             acp_binding::open(
-                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into)),
+                self.process_factory(),
                 self.config.clone(),
                 self.capabilities.clone(),
-                CodexProfile::new(self.capabilities.model().model_id()),
+                self.profile(),
                 self.audit.clone(),
                 restore,
                 control,
             )
             .await
         })
+    }
+}
+impl CodexAcpProvider {
+    /// The launch configuration every connection this provider opens uses.
+    pub(super) fn config(&self) -> &AcpConfig {
+        &self.config
+    }
+    /// Deletions this binding started that are still stopping their process.
+    pub(super) fn deletions(&self) -> &DeletionCleanups {
+        &self.deletions
+    }
+    /// The profile every connection this provider opens speaks.
+    pub(super) fn profile(&self) -> CodexProfile {
+        CodexProfile::new(self.capabilities.model().model_id())
+    }
+    /// How every connection this provider opens is launched.
+    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+        let factory = self.clone();
+        Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
     }
 }

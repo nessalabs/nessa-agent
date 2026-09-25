@@ -45,6 +45,9 @@ impl SessionStorageLease for UncheckedLease {
         self.saves.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Err(StorageError::Io("unexpected rewrite".into())) })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async { Err(StorageError::Io("unexpected erase".into())) })
+    }
 }
 struct OpeningProbe {
     identity: ProviderIdentity,
@@ -180,6 +183,9 @@ impl SessionStorageLease for MovingLease {
         self.saves.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Err(StorageError::Io("unexpected rewrite".into())) })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async { Err(StorageError::Io("unexpected erase".into())) })
+    }
 }
 
 pub(super) async fn assert_moved_retention_admission(value: SessionSnapshot, accepted: bool) {
@@ -258,4 +264,37 @@ async fn provider_identity_mismatch_from_custom_storage_prevents_open_and_rewrit
         let lease = storage.open(value.id.clone()).await.unwrap();
         assert_same(&lease.load().await.unwrap().unwrap(), &value);
     }
+}
+
+#[tokio::test]
+async fn a_snapshot_for_another_session_is_refused_when_read_to_erase() {
+    // A custom adapter that answers every lease with the same snapshot,
+    // whichever session the lease is for.
+    let unchecked = |snapshot: SessionSnapshot| UncheckedStorage {
+        exclusion: InMemoryStorage::new(),
+        snapshot,
+        saves: Arc::new(AtomicUsize::new(0)),
+    };
+    let storage = unchecked(snapshot("other"));
+    let lease = storage.open(id("asked")).await.unwrap();
+    assert!(matches!(
+        SessionSnapshot::load_saved(lease.as_ref(), &id("asked")).await,
+        Err(StorageError::IdentityMismatch)
+    ));
+    // The same snapshot, read as the session it was saved under, stands.
+    let named = SessionSnapshot::load_saved(lease.as_ref(), &id("other"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_same(&named, &snapshot("other"));
+
+    // One whose relationships do not hold is refused whoever it names.
+    let mut repeated = snapshot("asked");
+    repeated.invocations.push(repeated.invocations[0].clone());
+    let storage = unchecked(repeated);
+    let lease = storage.open(id("asked")).await.unwrap();
+    assert!(matches!(
+        SessionSnapshot::load_saved(lease.as_ref(), &id("asked")).await,
+        Err(StorageError::Corrupt(_))
+    ));
 }

@@ -3,6 +3,11 @@ import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
   runtime?: { model: string; provider: string; workspace: string }
+  /**
+   * What the gateway calls the conversation — the one title rule, the one the
+   * Messages list shows — or null before anything was said in it.
+   */
+  title: string | null
   conversationId: string
   revision: string
   queueComplete: boolean
@@ -78,3 +83,20 @@ export type Submission = {
   files: LinkedFile[]
 }
 export type SubmissionReceipt = { executionId: string; disposition: string }
+
+/**
+ * One conversation as the gateway lists it: a row for the Messages list. The
+ * gateway reads these from what it has stored, so a closed conversation is
+ * listed too, and listing starts nothing.
+ */
+export type ConversationSummary = {
+  /** The gateway's identity for the conversation, not a tab id. */
+  conversationId: string
+  /** Derived by the gateway from the first message; null before anything was said. */
+  title: string | null
+  /** The last thing said, as one plain line; null when there is none on record. */
+  preview: string | null
+  updatedAtMs: number
+  running: boolean
+  archived: boolean
+}

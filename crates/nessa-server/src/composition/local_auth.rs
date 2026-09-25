@@ -18,8 +18,9 @@ use crate::{
             ConversationAgents, ConversationDependencies, ConversationLimits, ConversationService,
         },
         infrastructure::{
-            DurableConversationCreationAudit, DurableConversationFileLinkAudit,
-            LocalConversationRepository,
+            DurableConversationCreationAudit, DurableConversationDeletionAudit,
+            DurableConversationFileLinkAudit, LocalConversationRepository,
+            LocalConversationSummaries,
         },
     },
     core::RunError,
@@ -321,6 +322,16 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    let deletion_audit = Arc::new(
+        DurableConversationDeletionAudit::new(root.join("audit").join("deletion"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    // Beside the ownership records rather than inside them: those are written
+    // once, and a summary is replaced on every turn.
+    let summaries = Arc::new(
+        LocalConversationSummaries::new(root.join("summaries"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let service = ConversationService::new(
         ConversationDependencies {
             agents: ConversationAgents::new(built.providers, selected)
@@ -329,7 +340,11 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
             metadata,
             creation_audit,
             file_link_audit,
+            deletion_audit,
             attachments: Some(attachments.conversations),
+            summaries,
+            provider_sessions: built.erasers,
+            deletion_budgets: super::agent_budgets::deletion(),
             clock,
         },
         ConversationLimits::default(),

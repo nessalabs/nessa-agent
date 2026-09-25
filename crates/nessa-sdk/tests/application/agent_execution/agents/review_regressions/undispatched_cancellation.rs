@@ -34,6 +34,9 @@ impl SessionStorageLease for CancellationPanicLease {
             self.backing.save(snapshot).await
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 
 struct PausedBeforeDispatch {

@@ -36,7 +36,7 @@
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
 use crate::agents::domain::AgentId;
-use crate::conversation::application::ConversationAgent;
+use crate::conversation::application::{ConversationAgent, ProviderSessionErasers};
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
@@ -513,6 +513,7 @@ pub(super) fn providers(
     let selected = config.selected()?;
     let mut providers = HashMap::new();
     let mut unavailable = HashSet::new();
+    let mut erasers = ProviderSessionErasers::default();
     for (agent, runtime) in config.agents() {
         // Every agent is given the source, not only the one whose profile is
         // known to use it: the runtime sends an image only to an agent that
@@ -521,6 +522,7 @@ pub(super) fn providers(
         let build::ProviderComposition {
             provider,
             execution_audit,
+            session_eraser,
         } = match build::provider(
             agent,
             config,
@@ -551,6 +553,12 @@ pub(super) fn providers(
                 continue;
             }
         };
+        // The one place an agent's way of deleting its own record of a session
+        // is registered: whichever agent `build::provider` built, keyed by it.
+        // One that could not be built this run is left out, which the
+        // registry answers as temporary (`AgentNotConfigured`), not as an
+        // agent it can never ask.
+        erasers.register(agent, session_eraser);
         providers.insert(
             agent,
             ConversationAgent {
@@ -567,6 +575,7 @@ pub(super) fn providers(
     Ok(ConfiguredAgents {
         providers,
         unavailable,
+        erasers,
     })
 }
 #[cfg(not(unix))]
@@ -605,18 +614,24 @@ pub(super) struct ConfiguredAgents {
     /// Empty in the ordinary case, including the one this whole path exists
     /// for: an agent in the configuration that nobody has installed.
     pub unavailable: HashSet<AgentId>,
+    /// How each agent in [`Self::providers`] deletes its own record of a
+    /// session, keyed by agent.
+    pub erasers: ProviderSessionErasers,
 }
 #[cfg(unix)]
 mod build {
     use super::super::agent_budgets as budgets;
     use super::{AgentId, AgentRuntime, AgentsConfig, RunError};
-    use crate::conversation::infrastructure::DurableExecutionAudit;
+    use crate::conversation::{
+        application::ProviderSessionEraser,
+        infrastructure::{BindingSessionEraser, DurableExecutionAudit},
+    };
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
         application::agent_execution::{
             agents::AgentError,
             executions::ExecutionAudit,
-            providers::{AgentProvider, UserImageSource},
+            providers::{AgentProvider, ProviderSessionDeleter, UserImageSource},
         },
         domain::{
             agent_execution::{
@@ -642,6 +657,9 @@ mod build {
     pub(super) struct ProviderComposition {
         pub(super) provider: Arc<dyn AgentProvider>,
         pub(super) execution_audit: Arc<dyn ExecutionAudit>,
+        /// How this agent deletes its own record of a session: its binding,
+        /// whose own module says what a delete means for it.
+        pub(super) session_eraser: Arc<dyn ProviderSessionEraser>,
     }
 
     /// The largest ACP frame, derived from the largest message rather than
@@ -777,34 +795,47 @@ mod build {
         );
         let prompt = system_prompt()?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
-        let provider: Arc<dyn AgentProvider> = match agent {
-            AgentId::Claude => Arc::new(
-                ClaudeAcpProvider::new(acp, &model, limits, audit.clone())
-                    .map_err(failed)?
-                    .with_system_prompt(prompt),
-            ),
-            AgentId::Codex => Arc::new(
-                CodexAcpProvider::new(acp, &model, limits, audit.clone())
-                    .map_err(failed)?
-                    .with_system_prompt(prompt),
-            ),
-            // No prompt, because there is nowhere to put one that Opencode can
-            // be shown to read: its binding offers no `with_system_prompt` for
-            // exactly that reason, and this arm not calling one is the compiler
-            // enforcing it rather than a convention someone has to remember.
-            // Opencode therefore runs under its own instructions. What keeps
-            // that difference from mattering yet is not the session mode, which
-            // only denies edits, but the permission policy its binding launches
-            // it with: reading and searching allowed, everything else denied,
-            // including this server's own MCP shell tool.
-            AgentId::Opencode => Arc::new(
-                OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
-            ),
-        };
+        // One entry per agent: its provider, and the same binding as the way
+        // it deletes its own record of a session.
+        let (provider, binding): (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) =
+            match agent {
+                AgentId::Claude => bound(
+                    ClaudeAcpProvider::new(acp, &model, limits, audit.clone())
+                        .map_err(failed)?
+                        .with_system_prompt(prompt),
+                ),
+                AgentId::Codex => bound(
+                    CodexAcpProvider::new(acp, &model, limits, audit.clone())
+                        .map_err(failed)?
+                        .with_system_prompt(prompt),
+                ),
+                // No prompt, because there is nowhere to put one that Opencode can
+                // be shown to read: its binding offers no `with_system_prompt` for
+                // exactly that reason, and this arm not calling one is the compiler
+                // enforcing it rather than a convention someone has to remember.
+                // Opencode therefore runs under its own instructions. What keeps
+                // that difference from mattering yet is not the session mode, which
+                // only denies edits, but the permission policy its binding launches
+                // it with: reading and searching allowed, everything else denied,
+                // including this server's own MCP shell tool.
+                AgentId::Opencode => bound(
+                    OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
+                ),
+            };
         Ok(ProviderComposition {
             provider,
             execution_audit: audit,
+            session_eraser: Arc::new(BindingSessionEraser::new(binding)),
         })
+    }
+
+    /// One binding, as the provider that runs its agent and as the way that
+    /// agent deletes its own record of a session.
+    fn bound<B: AgentProvider + ProviderSessionDeleter + 'static>(
+        binding: B,
+    ) -> (Arc<dyn AgentProvider>, Arc<dyn ProviderSessionDeleter>) {
+        let binding = Arc::new(binding);
+        (binding.clone(), binding)
     }
 }
 

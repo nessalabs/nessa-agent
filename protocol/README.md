@@ -30,6 +30,8 @@ or schema version bump is needed merely to change this repository's current cont
 | `auth.session` | Current authenticated metadata |
 | `server.health` | Authorized health read (`server.read`) |
 | `conversation.create`, `conversation.read`, `conversation.send`, `conversation.steer` | Conversation creation, projection reads, and input submission |
+| `conversation.list` | The caller's conversations, newest first, with title and last line said, at most 500, and `complete` saying whether that is all of them; archived ones only on request; opens no provider |
+| `conversation.archive`, `conversation.unarchive`, `conversation.delete` | Hide or restore a conversation in the list; delete permanently (history, uploads and summary erased, audit kept, identity never reused) |
 | `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
 | `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |

@@ -4,16 +4,17 @@ use super::{
     ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
     ConversationDependencies, ConversationDisposition, ConversationError, ConversationFuture,
     ConversationLifecyclePhase, ConversationLimits, ConversationMessageStatus,
-    ConversationOwnershipState, ConversationRepository, ConversationService,
-    ConversationStartupFailureCode, RequestedAgent, RuntimeReadiness, SubmissionMode,
-    SubmittedMessage,
+    ConversationOwnershipState, ConversationRecords, ConversationRepository, ConversationService,
+    ConversationStartupFailureCode, ProviderSessionErasers, RequestedAgent, RuntimeReadiness,
+    SubmissionMode, SubmittedMessage,
 };
 use crate::{
     agents::domain::AgentId,
-    conversation::domain::{Conversation, ConversationId},
+    conversation::domain::{Conversation, ConversationDeletion, ConversationId},
     conversation_test_support::{
-        capabilities, fixture, only, AcceptingCreationAudit, MemoryRepository, Provider,
-        ProviderFactory, RecordingFileLinkAudit, TestClock,
+        capabilities, fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit,
+        MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
+        TestClock, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -215,6 +216,10 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -269,6 +274,10 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -366,6 +375,10 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -474,6 +487,10 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -497,6 +514,10 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -561,6 +582,10 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -825,6 +850,10 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits {
@@ -1012,6 +1041,10 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1043,6 +1076,9 @@ impl ConversationRepository for GatedCreateRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.inner.load(id)
     }
+    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
+        self.inner.list()
+    }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let gate = self.gate.lock().unwrap().take();
         let inner = self.inner.clone();
@@ -1053,6 +1089,13 @@ impl ConversationRepository for GatedCreateRepository {
             }
             inner.create(conversation).await
         })
+    }
+    fn record_deletion(
+        &self,
+        id: &ConversationId,
+        deletion: ConversationDeletion,
+    ) -> ConversationFuture<'_, Conversation> {
+        self.inner.record_deletion(id, deletion)
     }
 }
 #[tokio::test]
@@ -1073,6 +1116,10 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1141,6 +1188,10 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1287,6 +1338,10 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1345,6 +1400,10 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1428,6 +1487,10 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1515,6 +1578,10 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1583,6 +1650,10 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1653,6 +1724,10 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1735,6 +1810,10 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1774,6 +1853,10 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1853,6 +1936,10 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1890,6 +1977,10 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1910,6 +2001,81 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
         .expect("shutdown reports unknowable panic ownership without hanging");
     assert!(matches!(shutdown, Err(ConversationError::Retirement(_))));
 }
+/// A delete of a conversation whose provider launch failed without its
+/// cleanup being confirmed — an agent that holds what it launched, or an
+/// opening that failed while holding it: a stop that is not confirmed leaves
+/// the deletion unfinished, erasing nothing.
+async fn delete_after_a_held_opening(
+    agents: ConversationAgents,
+    storage: Arc<dyn SessionStorage>,
+    repository: Arc<MemoryRepository>,
+    id: ConversationId,
+) {
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents,
+            storage,
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let _ = service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let Err(ConversationError::DeletionIncomplete(failures)) =
+        service.delete(id.clone(), caller("panel", "delete")).await
+    else {
+        panic!("the delete finished though the opening's cleanup is unconfirmed");
+    };
+    assert!(
+        matches!(
+            failures.stop,
+            Some(crate::conversation::application::StopFailure::Failed(
+                AgentError::CleanupUncertain
+            ))
+        ),
+        "{failures:?}"
+    );
+    let record = repository.records.lock().unwrap()[&id].clone();
+    assert!(!record.deletion().unwrap().erased());
+}
+
+#[tokio::test]
+async fn an_agent_whose_failed_launch_cannot_be_cleaned_up_leaves_the_delete_unfinished() {
+    let (_, _, repository, storage) = fixture(ConversationLimits::default());
+    let provider = Arc::new(UncertainStartupDeadlineProvider {
+        attempts: AtomicUsize::new(0),
+        identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
+        capabilities: capabilities(false),
+    });
+    let id = id();
+    delete_after_a_held_opening(only(provider), storage, repository, id).await;
+}
+
+#[tokio::test]
+async fn a_failed_opening_holding_what_it_launched_leaves_the_delete_unfinished() {
+    let (_, provider, repository, _) = fixture(ConversationLimits::default());
+    let id = id();
+    delete_after_a_held_opening(
+        only(Arc::new(Provider::new(provider))),
+        Arc::new(PanickingStorage),
+        repository,
+        id,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn boundary_steering_can_be_removed_without_dispatch() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
@@ -2066,6 +2232,10 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2216,6 +2386,10 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2235,7 +2409,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         repository.records.lock().unwrap()[&id].agent(),
-        AgentId::Codex
+        Some(AgentId::Codex)
     );
 
     // Reopened after a restart, still on Codex, although a creation that names
@@ -2251,6 +2425,10 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2302,6 +2480,10 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2334,6 +2516,10 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2400,6 +2586,10 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
+                summaries: Arc::new(MemorySummaries::default()),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
                 clock: Arc::new(TestClock),
             },
             limits,
@@ -2430,6 +2620,10 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         limits,
@@ -2499,6 +2693,10 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
+                summaries: Arc::new(MemorySummaries::default()),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
                 clock: Arc::new(TestClock),
             },
             ConversationLimits::default(),
@@ -2535,6 +2733,10 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2664,6 +2866,10 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2865,6 +3071,10 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

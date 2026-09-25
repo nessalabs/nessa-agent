@@ -5,12 +5,13 @@ use super::{
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationLimits, ConversationMessageStatus, ConversationPendingMode, ConversationService,
-    PermissionDenialSupport, SubmissionMode, SubmittedMessage,
+    PermissionDenialSupport, ProviderSessionErasers, SubmissionMode, SubmittedMessage,
 };
 use crate::{
     conversation::domain::ConversationId,
     conversation_test_support::{
-        fixture, only, AcceptingCreationAudit, Provider, RecordingFileLinkAudit, TestClock,
+        fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, MemorySummaries, Provider,
+        RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -616,6 +617,10 @@ async fn assert_terminal_failure_round_trip(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

@@ -227,6 +227,60 @@ rebuilds the snapshot without invoking the provider. An interrupted final line i
 removed under the writer lease before another append; malformed complete records
 are reported as corruption. Retries reconcile the last write before appending.
 
+`SessionStorageLease::erase` removes a session's saved history under the lease
+that calls it, so no other owner can be writing it meanwhile. The file adapter
+removes the `.jsonl` journal and keeps the `.lock` file: that file is what the
+held lease has locked, and unlinking it would let the next opener lock a new one
+beside it. Erasing does not retire the identity — a later save begins a new
+history — and does not touch the provider's own record of its context.
+
+A caller that only means to read or erase what a session saved takes its lease
+with `SessionStorage::open_existing`, which answers `None` — and creates
+nothing, not even the `.lock` — for a session that was never opened. What it
+reads it reads through `SessionSnapshot::load_saved`, which applies the checks
+restoration applies (every relationship in the snapshot, and that it was saved
+under the session asked for) so a custom adapter cannot hand it another
+session's history. The provider identity is not compared there; only a caller
+holding the configured provider can, and restoration still does.
+
+The provider's own record is reached separately. `ProviderSessionDeleter` is
+implemented by each agent binding in its own module, over one shared ACP
+exchange: a connection of its own, launched as the provider launches one,
+`initialize`, and `session/delete { sessionId }` only when the agent advertised
+`agentCapabilities.sessionCapabilities.delete` — the session is never loaded or
+resumed. Each binding says what a successful answer means for its agent:
+`Deleted` for Claude, whose adapter deletes the session file; `Archived` for
+Codex, whose adapter archives the thread; `Acknowledged` for Opencode, where
+nothing more is known. An agent that does not advertise deletion answers
+`NotSupported` without being asked.
+
+The delete is sent first whenever the agent can be asked, and an accepted
+delete depends on nothing else: only the agent knows whether it still has the
+session, and an agent may leave one out of its list (Claude's lists no session
+without a titled prompt, so a conversation of images alone is never listed) or
+keep it under a workspace since changed. Only a refusal is read against the
+list, when the agent advertises `sessionCapabilities.list`: its list for the
+configured workspace — followed through `nextCursor` for at most 64 pages,
+within a second startup budget, and read with bounds of its own (16 MiB, about
+a million values), since an agent may send its whole list in one frame. The
+agent's own error answer to deleting a session its list, read in full, does not
+name settles as `NotListed`: that is what an agent says of a session it no
+longer has, and it is what lets a deletion interrupted after the agent deleted,
+but before the host wrote that down, finish. Any other refusal is returned as
+it is, `AgentError::Provider`, and asked again: the list names the session, or
+could not be read in full — refused, past its budget, too large, a page without
+`sessions`, an entry without a string `sessionId`, a `nextCursor` that is
+neither a string nor null or repeats one already followed, too many pages. The list's own
+failure is never what is returned: `AgentError::Provider` is only ever the
+agent's error answer to `initialize` or to the delete — a refusal of the delete
+once `initialize` succeeded — never to the list. No error's text is read.
+
+A caller that stops waiting ends the exchange; the binding still stops the
+connection's process and releases what its launch made, on a task of its own.
+`ProviderSessionDeleter::settled` resolves once those tasks are done, or their
+stop budget (`shutdown_grace` + 4 × `kill_timeout`) has passed; a host awaits it
+before its runtime ends, since a runtime that ends drops such a task mid-cleanup.
+
 The application storage port still accepts a complete snapshot. Snapshot copying
 and validation therefore still depend on history size, while file writes no longer
 repeat unchanged history. Before allocating each complete record, the decoder

@@ -43,8 +43,18 @@ import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useUpdate } from "../adapters/use-update"
 import { usePanelLinkNotice } from "../adapters/use-link-notice"
 import { UPDATE_TAB_ID } from "../application/update-surface"
+import {
+  composerHidden,
+  dropShowsDraft,
+  MESSAGES_TAB_ID,
+  stripOrder,
+  tabClosed,
+} from "../application/messages-tab"
 import { tabAfter, tabAt } from "../application/tab-navigation"
 import { UpdateTab } from "./update-tab"
+import { MessagesTab } from "./messages-tab"
+import { useMessagesTab } from "./use-messages-tab"
+import { MessagesIcon } from "./messages-icon"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
 import { useAttachmentUploads } from "./use-attachment-uploads"
@@ -138,6 +148,9 @@ export function App({
   // of its surfaces — the notice over the composer and the tab beside the
   // conversation tabs — are the panel's own chrome.
   const update = useUpdate()
+  // Panel chrome, like the update tab: the list is the conversation vertical's,
+  // that it sits in the strip as a tab is the panel's.
+  const { messages, move: moveMessages } = useMessagesTab(() => chat.forgetListNotices())
   // A link leaves the app rather than loading in here, so when one goes
   // nowhere the click is otherwise indistinguishable from a dead panel.
   const link = usePanelLinkNotice()
@@ -163,10 +176,27 @@ export function App({
     },
     attachments.draftSent,
   )
+  // A drop lands in a draft; `dropShowsDraft` decides when that shows it.
+  const revealDraft = React.useEffectEvent((target: string = chat.active.id) => {
+    if (!dropShowsDraft(messages, target, chat.active.id)) return false
+    moveMessages("leave")
+    return true
+  })
+  const intoDraft =
+    <A extends unknown[], R>(add: (...args: A) => R) =>
+    (...args: A) => {
+      revealDraft()
+      return add(...args)
+    }
+  // The composer is still hidden until the list has gone, so focus waits a frame.
+  const focusRevealed = () => {
+    if (revealDraft()) requestAnimationFrame(focusComposer)
+    else focusComposer()
+  }
   const contentDrop = useContentDrop({
-    addFolderEntries: folderDrop.addFolderEntries,
-    addImageUrl: attachments.addImageUrl,
-    focusComposer,
+    addFolderEntries: intoDraft(folderDrop.addFolderEntries),
+    addImageUrl: intoDraft(attachments.addImageUrl),
+    focusComposer: focusRevealed,
     pasteAttachment,
   })
   // Two sources, one at a time. In the app the host owns the drag — it is the
@@ -175,11 +205,13 @@ export function App({
   // there is no host, the page keeps its own drops, and nothing below fires.
   // Neither is gated on the other: each is silent where the other is live.
   const hostDrop = useHostDrop({
-    addChosenFiles: (chosen, conversationId) =>
-      void attachments.addChosenFiles(chosen, conversationId),
-    addImageUrl: (url) => void attachments.addImageUrl(url),
+    addChosenFiles: (chosen, conversationId) => {
+      revealDraft(conversationId)
+      void attachments.addChosenFiles(chosen, conversationId)
+    },
+    addImageUrl: intoDraft((url: string) => void attachments.addImageUrl(url)),
     conversationOf: attachments.conversationOf,
-    focusComposer,
+    focusComposer: focusRevealed,
     pasteAttachment,
     refuse: attachments.refuse,
   })
@@ -196,6 +228,7 @@ export function App({
   const showConversation = React.useEffectEvent((show: () => void) => {
     closePaste()
     update.setViewing(false)
+    moveMessages("leave")
     show()
   })
   const openTab = React.useEffectEvent(() =>
@@ -209,11 +242,14 @@ export function App({
     // The update tab closes like any other. What that means depends on what it
     // was doing — a running download is hidden rather than stopped, a finished
     // one is turned down — and `afterUpdate` owns that, not this.
-    if (update.viewing) {
-      update.close()
-      return
+    switch (tabClosed(update.viewing, messages)) {
+      case "update":
+        return update.close()
+      case "messages":
+        return moveMessages("close")
+      case "conversation":
+        return chat.closeConversation(chat.active.id)
     }
-    chat.closeConversation(chat.active.id)
   })
   /**
    * The strip as a person sees it, which is what the keyboard moves through.
@@ -225,20 +261,33 @@ export function App({
    * found nothing there.
    */
   const stripIds = React.useMemo(
-    () => [
-      ...chat.conversations.map((item) => item.id),
-      ...(update.tab ? [UPDATE_TAB_ID] : []),
-    ],
-    [chat.conversations, update.tab],
+    () =>
+      stripOrder(
+        messages,
+        chat.conversations.map((item) => item.id),
+        update.tab ? UPDATE_TAB_ID : null,
+      ),
+    [messages, chat.conversations, update.tab],
   )
-  const selectedId = update.viewing ? UPDATE_TAB_ID : chat.active.id
+  const selectedId = update.viewing
+    ? UPDATE_TAB_ID
+    : messages === "viewing"
+      ? MESSAGES_TAB_ID
+      : chat.active.id
 
   /** Show whichever tab the strip named, update or conversation. */
   const showTab = React.useEffectEvent((id: string | undefined) => {
     if (id === undefined) return
     if (id === UPDATE_TAB_ID) {
       closePaste()
+      moveMessages("leave")
       update.setViewing(true)
+      return
+    }
+    if (id === MESSAGES_TAB_ID) {
+      closePaste()
+      update.setViewing(false)
+      moveMessages("show")
       return
     }
     showConversation(() => chat.setActive(id))
@@ -269,7 +318,7 @@ export function App({
 
   const generating = chat.active.phase !== "idle"
 
-  const tabs: ChatTabItem[] = chat.conversations.map((item) => ({
+  const conversationTabs: ChatTabItem[] = chat.conversations.map((item) => ({
     id: item.id,
     title: item.title,
     closeable: true,
@@ -284,16 +333,31 @@ export function App({
       />
     ),
   }))
-  // After the conversations, because it arrived after them and because a strip
+  // Drawn in exactly the order the keyboard moves through, from the one list
+  // `stripOrder` makes: the Messages tab first, as the tab the conversations are
+  // opened from, and the update last, because it arrived after them and a strip
   // that reorders itself under somebody's pointer is worse than a long one.
-  if (update.tab) {
-    tabs.push({
+  const tabItems = new Map<string, ChatTabItem>(
+    conversationTabs.map((item) => [item.id, item]),
+  )
+  tabItems.set(MESSAGES_TAB_ID, {
+    id: MESSAGES_TAB_ID,
+    title: "Messages",
+    kind: "history",
+    closeable: true,
+    icon: <MessagesIcon className="nessa-messages-icon" />,
+  })
+  if (update.tab)
+    tabItems.set(UPDATE_TAB_ID, {
       id: UPDATE_TAB_ID,
       title: "Update",
       closeable: update.tab.closeable,
       icon: <span aria-hidden="true" className="nessa-update-tab-dot" />,
     })
-  }
+  const tabs = stripIds.flatMap((id) => {
+    const item = tabItems.get(id)
+    return item ? [item] : []
+  })
 
   return (
     <div className="nessa-stage" data-host={host.kind}>
@@ -317,7 +381,10 @@ export function App({
         onPointerUp={edge.releaseResize}
         className={host.westHandleClass}
       />
-      <AttachmentDropZone onFiles={attachments.addFiles} onRefused={attachments.refuse}>
+      <AttachmentDropZone
+        onFiles={intoDraft(attachments.addFiles)}
+        onRefused={attachments.refuse}
+      >
         <div
           ref={edge.panelRef}
           data-nessa-root
@@ -369,9 +436,9 @@ export function App({
           >
             <ChatTabs
               wrapTab={(tab, node) =>
-                // The update has no title to rename and no agent to describe,
-                // so the conversation menu does not belong on it.
-                tab.id === UPDATE_TAB_ID ? (
+                // The update and the list have no title to rename and no agent
+                // to describe, so the conversation menu does not belong on them.
+                tab.id === UPDATE_TAB_ID || tab.id === MESSAGES_TAB_ID ? (
                   node
                 ) : (
                   <ConversationTabMenu
@@ -390,25 +457,35 @@ export function App({
               }
               label="Conversations"
               tabs={tabs}
-              value={update.viewing ? UPDATE_TAB_ID : chat.active.id}
-              onValueChange={(id) => {
-                if (id === UPDATE_TAB_ID) {
-                  closePaste()
-                  update.setViewing(true)
-                  return
-                }
-                showConversation(() => chat.setActive(id))
-              }}
+              value={selectedId}
+              onValueChange={(id) => showTab(id)}
               onClose={(id) => {
                 closePaste()
                 if (id === UPDATE_TAB_ID) {
                   update.close()
                   return
                 }
+                if (id === MESSAGES_TAB_ID) {
+                  moveMessages("close")
+                  return
+                }
                 chat.closeConversation(id)
               }}
               onNew={() => openTab()}
               newTabLabel="New conversation"
+              trailing={
+                <button
+                  type="button"
+                  data-slot="chat-tabs-messages"
+                  aria-label="Messages"
+                  title="Messages"
+                  aria-pressed={messages === "viewing"}
+                  onClick={() => showTab(MESSAGES_TAB_ID)}
+                  className="nessa-messages-open"
+                >
+                  <MessagesIcon className="nessa-messages-icon" />
+                </button>
+              }
             />
           </div>
 
@@ -417,6 +494,11 @@ export function App({
           <div className="nessa-transcript-region relative flex min-h-0 flex-1 flex-col">
             {update.viewing && update.tab ? (
               <UpdateTab tab={update.tab} onRetry={update.install} />
+            ) : messages === "viewing" ? (
+              <MessagesTab
+                onSelect={(target) => showConversation(() => chat.openRow(target))}
+                onNew={() => openTab()}
+              />
             ) : (
               <>
                 <Transcript
@@ -484,10 +566,13 @@ export function App({
               onRename={(title) => chat.rename(tabDetails.id, title)}
             />
           )}
-          {/* Hidden rather than unmounted while the update tab is up: the
-              draft, the attachments, and the caret are all in here, and a
-              detour through an update must not cost somebody their message. */}
-          <div className="nessa-composer" hidden={update.viewing || undefined}>
+          {/* Hidden rather than unmounted while the update or Messages tab is
+              up: the draft, the attachments, and the caret are all in here,
+              and a detour through either must not cost somebody their message. */}
+          <div
+            className="nessa-composer"
+            hidden={composerHidden(update.viewing, messages) || undefined}
+          >
             {/* Everything said above the pill goes through one box, which owns
                 the order it is said in and the room it may take. A notice added
                 straight to this element instead would be unbounded again, and

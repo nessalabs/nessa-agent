@@ -212,15 +212,22 @@ body {
   min-width: 0;
 }
 
-.nessa-panel [data-slot="chat-tab"] span:has([data-slot="random-avatar"]) {
+.nessa-panel [data-slot="chat-tab"] span:has([data-slot="random-avatar"]),
+.nessa-panel [data-slot="chat-tab"] span:has(> .nessa-messages-icon) {
   width: 1.25rem;
   height: 1.25rem;
 }
 
 .nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"],
-.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"] svg {
+.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"] svg,
+.nessa-panel [data-slot="chat-tab"] .nessa-messages-icon {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+/* Square, so it is never drawn into a slot of another shape. */
+.nessa-messages-icon {
+  flex: none;
 }
 
 .nessa-panel[data-compositor="layout"] [data-slot="chat-tab-loading"] {
@@ -398,6 +405,101 @@ body {
 .nessa-update-foot {
   margin-top: auto;
   padding-top: 16px;
+}
+
+/*
+ * The Messages tab: the conversation list laid straight into the tab, as the
+ * transcript is — the search field where the first message would sit, the rows
+ * below it, and no frame of its own. The list scrolls inside.
+ */
+.nessa-messages-tab {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 4px 12px 0;
+}
+
+.nessa-messages-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/*
+ * Except on clear, where there is no panel behind the list, only somebody's
+ * wallpaper, and rows of `--foreground` over it are not text. There the list
+ * stands on `--card` for the reason the update pane does (see above): a fill,
+ * not a frame, so it still reads as the tab's content rather than a box in it.
+ * Unpositioned and unpromoted for WebKitGTK, like the update pane.
+ */
+.nessa-panel[data-surface="clear"] .nessa-messages-pane {
+  margin-bottom: 12px;
+  padding: 8px 4px 4px;
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+
+/*
+ * The Messages search field is a quiet well rather than a bordered input: an
+ * outline at the top of the tab read as a form rather than as the list's own
+ * search. Focus changes the fill instead of drawing a ring, so the field
+ * still says it is taking keys without an outline appearing on click.
+ */
+.nessa-messages-pane [data-slot="conversation-history"] input[type="search"] {
+  border-color: transparent;
+  box-shadow: none;
+  background-color: color-mix(in oklab, var(--muted) 70%, transparent);
+}
+
+.nessa-messages-pane [data-slot="conversation-history"] input[type="search"]:focus,
+.nessa-messages-pane
+  [data-slot="conversation-history"]
+  input[type="search"]:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+  outline: none;
+  background-color: var(--muted);
+}
+
+/*
+ * Opens the Messages tab from the end of the strip, with the Messages icon —
+ * the tab it opens wears the same one. Drawn as the strip's own new-tab
+ * control is, but without its transition, which a layout compositor
+ * would leave behind (see the tab rules above).
+ */
+.nessa-messages-open {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.nessa-messages-open:hover,
+.nessa-messages-open[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.nessa-messages-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.nessa-messages-open .nessa-messages-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
 }
 
 /* The tab's own glyph, where a conversation has its agent's avatar. A plain

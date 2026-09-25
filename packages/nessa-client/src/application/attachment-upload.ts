@@ -122,7 +122,8 @@ export function uploadRefusal(body: unknown): AttachmentFailureCode {
  * upload route says `storage_unavailable` where the socket says
  * `attachment_storage_unavailable`; both are here. `image_input_unsupported` is
  * an image begun on a gateway whose agent's model takes none: no ticket is
- * issued for a file no message could ever name.
+ * issued for a file no message could ever name. `conversation_deleted` is a
+ * conversation somebody deleted: nothing will ever be added to it.
  */
 export type AttachmentBeginRefusal =
   // Drawn from the generated codes rather than spelled again beside them: a
@@ -133,6 +134,7 @@ export type AttachmentBeginRefusal =
       | "invalid_request"
       | "image_input_unsupported"
       | "conversation_not_found"
+      | "conversation_deleted"
       | "attachment_capacity"
       | "attachment_storage_unavailable"
       | "audit_unavailable"
@@ -149,6 +151,7 @@ const beginRefusals: readonly AttachmentBeginRefusal[] = [
   "invalid_request",
   "image_input_unsupported",
   "conversation_not_found",
+  "conversation_deleted",
   "attachment_capacity",
   "attachment_storage_unavailable",
   "storage_unavailable",

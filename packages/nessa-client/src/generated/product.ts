@@ -542,6 +542,8 @@ export interface ConversationView {
   queueComplete: boolean
   /** Configured provider, model and working directory for this conversation. */
   runtime?: ConversationRuntime
+  /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
+  title: string | null
 }
 /** Idempotently create or reopen one named conversation. */
 export interface ConversationCreateParams {
@@ -561,6 +563,35 @@ export interface ConversationCreateResult {
 export interface ConversationReadParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
+}
+/** Which of the caller's conversations to list: those not archived, unless archived ones are asked for. */
+export interface ConversationListParams {
+  /** List only archived conversations when true; only unarchived ones when false or absent. */
+  archived?: boolean
+}
+/** One conversation as a list row: what it is called, the last thing said in it, and when. Read from stored summaries and live state; listing never opens or resumes a provider. */
+export interface ConversationSummary {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record. */
+  title: string | null
+  /** The last thing said in the conversation, as one line of plain text, or null when there is none on record. */
+  preview: string | null
+  /** When the conversation was created, in Unix milliseconds, as its creator requested it. */
+  createdAtMs: number
+  /** When something was last said in the conversation, in Unix milliseconds; the creation time until then. */
+  updatedAtMs: number
+  /** The conversation is open on this gateway and an invocation is in progress. */
+  running: boolean
+  /** Somebody archived the conversation and nothing has been said in it since. */
+  archived: boolean
+}
+/** Conversations the authenticated caller owns, newest first, at most 500, and whether that is all of them. */
+export interface ConversationListResult {
+  /** The caller's conversations, most recently updated first. Ownership is applied before the bound, so another principal's conversations never take a place in it. */
+  conversations: ConversationSummary[]
+  /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or while any conversation record on this gateway cannot be read: whose it is cannot be read either, so this is gateway-wide, not per caller, and lasts until an operator repairs it or moves it aside (or, for a record from before records named their agent, runs scripts/retrofit-conversation-agents.mjs). A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
+  complete: boolean
 }
 /** Submit one input; execution and request IDs stay fixed across retries. */
 export interface ConversationSendParams {
@@ -632,6 +663,20 @@ export interface ConversationCloseParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
+/** Archive or unarchive a conversation: whether conversation.list shows it by default. Nothing is stopped or removed, and a new message unarchives it. */
+export interface ConversationArchiveParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** Delete a conversation permanently: stop it, ask its agent to delete the agent's own session, record who deleted it, and erase its history, uploads and summary. Audit evidence is retained. The identity is never reused: its owner's later commands on it answer conversation_deleted, except deleting it again, and anyone else is told conversation_not_found. A repeat of the deciding request — the same principal, surface and requestId — is answered applied true, any other delete by its owner applied false; either repeat first carries on an erasure that has not finished. conversation_erasure_incomplete and audit_unavailable mean the conversation is deleted and its erasure did not finish; deleting again, and each gateway start, tries again. Any other error from a delete means only that it is not known whether the conversation was deleted: list it, or delete again. */
+export interface ConversationDeleteParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
 /** Stable acknowledgement of one submitted input. */
 export interface ConversationReceipt {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
@@ -695,7 +740,7 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -721,10 +766,12 @@ export const ConversationErrorCode = {
   AttachmentCapacity: "attachment_capacity",
   AttachmentStorageUnavailable: "attachment_storage_unavailable",
   AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
+  ConversationDeleted: "conversation_deleted",
+  ConversationErasureIncomplete: "conversation_erasure_incomplete",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
-/** Bounds the product schema puts on attachments, generated from it so no copy of a number can drift. */
+/** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxImageBytes: 5242880,
   imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
@@ -735,6 +782,10 @@ export const bounds = {
   maxFilePathBytes: 4096,
   filePathPattern:
     "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
+  conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+  maxConversationTitleBytes: 256,
+  maxConversationPreviewBytes: 512,
+  maxListedConversations: 500,
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
@@ -745,12 +796,16 @@ export const ProductMethod = {
   CredentialRevoke: "credential.revoke",
   ConversationCreate: "conversation.create",
   ConversationRead: "conversation.read",
+  ConversationList: "conversation.list",
   ConversationSend: "conversation.send",
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
   ConversationAnswer: "conversation.answer",
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
+  ConversationArchive: "conversation.archive",
+  ConversationUnarchive: "conversation.unarchive",
+  ConversationDelete: "conversation.delete",
   ConversationReorder: "conversation.reorder",
   AttachmentBegin: "attachment.begin",
 } as const

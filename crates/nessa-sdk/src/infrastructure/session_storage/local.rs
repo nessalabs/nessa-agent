@@ -27,6 +27,10 @@ use std::{
 /// callers drop their futures or unrelated children inherit file descriptors.
 /// Writers must honor the exclusive lease; editing the journal outside that lease
 /// while it is live is unsupported. Explicit loads always reread the actual file.
+/// Erasing a session removes its journal and syncs the directory under the
+/// lease; the empty lock file stays, named only by the identity, because it is
+/// what excludes a second writer. [`SessionStorage::open_existing`] opens only
+/// a session whose lock file is there, and creates none.
 #[derive(Clone)]
 pub struct LocalFileStorage {
     root: PathBuf,
@@ -43,32 +47,76 @@ impl LocalFileStorage {
         Ok(Self { root })
     }
 }
+impl LocalFileStorage {
+    /// Lock `id`'s lease file and return its lease. With `create` false a
+    /// session with neither a lease file nor a journal is `None` and nothing
+    /// is created: every session that was ever opened has a lease file, kept
+    /// even when the history is erased. A journal whose lease file is gone is
+    /// still a session with history — never taken for one that never was — so
+    /// its lease file is made again and the session opened
+    /// (`a_journal_whose_lock_is_gone_still_exists`).
+    fn acquire(
+        root: PathBuf,
+        id: SessionId,
+        create: bool,
+    ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
+        private::verify_directory(&root).map_err(io_error)?;
+        let paths = SessionPaths::new(&root, &id);
+        let has_history = || match std::fs::symlink_metadata(&paths.journal) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(io_error(error)),
+        };
+        let mode = if create || has_history()? {
+            OpenMode::OpenOrCreate
+        } else {
+            OpenMode::ReadWrite
+        };
+        let lock = match private::open(&paths.lock, mode) {
+            Ok(lock) => lock,
+            Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error(error)),
+        };
+        lock.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => StorageError::Busy,
+            TryLockError::Error(error) => io_error(error),
+        })?;
+        Ok(Some(Box::new(LocalStore {
+            path: paths.journal,
+            root,
+            id,
+            lease: Arc::new(Lease {
+                lock,
+                operation: Mutex::new(None),
+                #[cfg(test)]
+                fault: Mutex::new(None),
+            }),
+        }) as Box<dyn SessionStorageLease>))
+    }
+}
 impl SessionStorage for LocalFileStorage {
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let root = self.root.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                private::verify_directory(&root).map_err(io_error)?;
-                let paths = SessionPaths::new(&root, &id);
-                let lock = private::open(&paths.lock, OpenMode::OpenOrCreate).map_err(io_error)?;
-                lock.try_lock().map_err(|error| match error {
-                    TryLockError::WouldBlock => StorageError::Busy,
-                    TryLockError::Error(error) => io_error(error),
-                })?;
-                Ok(Box::new(LocalStore {
-                    path: paths.journal,
-                    root,
-                    id,
-                    lease: Arc::new(Lease {
-                        lock,
-                        operation: Mutex::new(None),
-                        #[cfg(test)]
-                        fault: Mutex::new(None),
-                    }),
-                }) as Box<dyn SessionStorageLease>)
+                // Only a lease file that is not there is `None`, and with
+                // `create` this call made it.
+                Self::acquire(root, id, true)?
+                    .ok_or_else(|| StorageError::Io("session lease file was not created".into()))
             })
             .await
             .map_err(task_error)?
+        })
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        let root = self.root.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || Self::acquire(root, id, false))
+                .await
+                .map_err(task_error)?
         })
     }
 }
@@ -135,10 +183,15 @@ impl FileStamp {
     }
 }
 impl SessionStorageLease for LocalStore {
+    /// A journal that cannot be read is logged with its path, which the
+    /// session's identity alone does not give an operator: the file is named
+    /// by an encoding of it (`SessionPaths`)
+    /// (`a_journal_that_cannot_be_read_is_logged_with_its_path`).
     fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
         let (path, id, lease) = (self.path.clone(), self.id.clone(), self.lease.clone());
+        let journal = self.path.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
+            let loaded = tokio::task::spawn_blocking(move || {
                 let mut cache = lease
                     .operation
                     .lock()
@@ -156,7 +209,16 @@ impl SessionStorageLease for LocalStore {
                 Ok(value)
             })
             .await
-            .map_err(task_error)?
+            .map_err(task_error)
+            .and_then(|loaded| loaded);
+            if let Err(error) = &loaded {
+                tracing::warn!(
+                    journal = %journal.display(),
+                    %error,
+                    "session journal could not be read"
+                );
+            }
+            loaded
         })
     }
     fn save(&self, value: SessionSnapshot) -> StorageFuture<'_, ()> {
@@ -223,6 +285,32 @@ impl SessionStorageLease for LocalStore {
                     stamp: FileStamp::read(&file)?,
                 });
                 Ok(())
+            })
+            .await
+            .map_err(task_error)?
+        })
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        let (root, path, lease) = (self.root.clone(), self.path.clone(), self.lease.clone());
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let mut cache = lease
+                    .operation
+                    .lock()
+                    .map_err(|_| StorageError::Io("file storage lock poisoned".into()))?;
+                // Forget what was read before any fallible step, so a save
+                // after a failed erase reconciles the actual file first.
+                *cache = None;
+                private::verify_directory(&root).map_err(io_error)?;
+                // Only the journal goes. The lock file is the exclusion this
+                // lease holds; unlinking it would let the next opener lock a
+                // new file while this lease still holds the old one.
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(io_error(error)),
+                }
+                private::sync_directory(&root).map_err(io_error)
             })
             .await
             .map_err(task_error)?

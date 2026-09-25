@@ -391,6 +391,7 @@ describe("why an upload failed, in words", () => {
     "unsupported-image",
     "too-large",
     "image-input-unsupported",
+    "conversation-deleted",
     "busy",
     "interrupted",
     "unavailable",
@@ -420,11 +421,12 @@ describe("why an upload failed, in words", () => {
     expect(uploadFailureSummary("unavailable")).toBe("Couldn't reach the gateway.")
   })
 
-  it("offers a retry for everything but a verdict on the image or the agent", () => {
+  it("offers a retry for everything but a verdict on the image, the agent, or a deleted conversation", () => {
     expect(reasons.filter((reason) => !worthRetrying(reason))).toEqual([
       "unsupported-image",
       "too-large",
       "image-input-unsupported",
+      "conversation-deleted",
     ])
   })
 })
@@ -542,14 +544,14 @@ describe("sending a draft that holds images", () => {
     expect(sent.conversations[0]!.turns).toMatchObject([
       { from: "user", receipt: "sending", content },
     ])
-    expect(sent.conversations[0]!.title).toBe("look")
+    expect(sent.conversations[0]!.title).toBe("New chat")
   })
 
-  it("sends a message of images alone, titled by the first image", () => {
+  it("sends a message of images alone, leaving its name to the gateway", () => {
     const tabs = stored("finder")
     const sent = beginSend(tabs, { ...submission, content: tabs.conversations[0]!.draft })
     expect(sent.conversations[0]!.turns).toHaveLength(1)
-    expect(sent.conversations[0]!.title).toBe("finder.png")
+    expect(sent.conversations[0]!.title).toBe("New chat")
     expect(sent.conversations[0]!.phase).toBe("thinking")
   })
 
@@ -654,6 +656,17 @@ describe("sending a draft that holds images", () => {
     "invalid-request",
     undefined,
   ] as const
+
+  it("says a delete that happened was deleted, whatever command met the code", () => {
+    for (const outcome of ["unknown", "refused", "applied"] as const) {
+      expect(controlFailureMessage("conversation-erasure-incomplete", outcome)).toBe(
+        "The conversation was deleted. What the gateway stored for it is not all removed yet; the gateway tries again when it next starts.",
+      )
+      expect(controlFailureMessage("deletion-unrecorded", outcome)).toBe(
+        "The conversation was deleted. The gateway could not finish recording the deletion yet; the gateway tries again when it next starts.",
+      )
+    }
+  })
 
   it("leaves a control's news to the control, and a message's to the message", () => {
     // Two commands, two kinds of news, one vocabulary. A close that could not

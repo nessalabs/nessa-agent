@@ -18,6 +18,7 @@ import { bindConversation, controlConversation, refreshConversation } from "./sl
  */
 const view = (conversationId: string): ConversationView => ({
   conversationId,
+  title: null,
   revision: "1",
   messages: [],
   pending: [],

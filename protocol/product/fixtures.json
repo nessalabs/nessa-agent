@@ -104,10 +104,43 @@
       "phase": "attached"
     },
     "truncated": false,
-    "queueComplete": true
+    "queueComplete": true,
+    "title": "Flights to Lisbon"
   },
   "ConversationReadParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001"
+  },
+  "ConversationListParams": { "archived": true },
+  "ConversationArchiveParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "archive-1"
+  },
+  "ConversationDeleteParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "delete-1"
+  },
+  "ConversationListResult": {
+    "conversations": [
+      {
+        "conversationId": "00000000-0000-4000-8000-000000000001",
+        "title": "Flights to Lisbon",
+        "preview": "Done. Confirmation K7Q2PX is in your inbox.",
+        "createdAtMs": 1790200000000,
+        "updatedAtMs": 1790200300000,
+        "running": false,
+        "archived": false
+      },
+      {
+        "conversationId": "00000000-0000-4000-8000-000000000002",
+        "title": null,
+        "preview": null,
+        "createdAtMs": 1790100000000,
+        "updatedAtMs": 1790100000000,
+        "running": false,
+        "archived": false
+      }
+    ],
+    "complete": true
   },
   "ConversationRemoveParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",

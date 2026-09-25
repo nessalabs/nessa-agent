@@ -192,6 +192,7 @@ it("refuses a file part the draft does not hold rather than dropping it", async 
 function viewSaying(imageInput: boolean): ConversationEffects["read"] {
   return async (conversationId): Promise<ConversationView> => ({
     conversationId,
+    title: null,
     revision: `image-input-${imageInput}`,
     messages: [],
     pending: [],
@@ -277,14 +278,15 @@ it("sends the reference the gateway returned, never the digest this window compu
   expect(context.draft()).toEqual([])
 })
 
-it("sends a message of images alone, and titles the tab by the image", async () => {
+it("sends a message of images alone, leaving the tab's name to the gateway", async () => {
   const context = await readyToSend()
   const result = await context.store.dispatch(sendDraft({ content: [], id: "c0" }))
   expect(result.meta.requestStatus).toBe("fulfilled")
   expect(context.effects.send).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ text: "", attachments: [stored] }),
   )
-  expect(context.current().title).toBe("finder.heic")
+  // The gateway names the conversation from its first message; the view brings it.
+  expect(context.current().title).toBe("New chat")
 })
 
 it("steers with images the same way", async () => {
@@ -606,4 +608,19 @@ it("uploads nothing for a file that is already gone", async () => {
   )
   expect(context.effects.stageAttachment).not.toHaveBeenCalled()
   expect(context.current().serverConversationId).toBeUndefined()
+})
+
+it("says an image cannot go into a conversation deleted elsewhere, and offers no retry", async () => {
+  // The gateway refuses to open a deleted conversation before any upload
+  // begins; that is a deletion, not a gateway that could not be reached.
+  const context = storeWith({
+    create: async () => {
+      throw new SubmissionRefusedError("conversation-deleted")
+    },
+  })
+  const file = image("a")
+  await attachStored(context.store, file)
+  expect(context.draft()[0]).toMatchObject({
+    upload: { status: "failed", reason: "conversation-deleted" },
+  })
 })

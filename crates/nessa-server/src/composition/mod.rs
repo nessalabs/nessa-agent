@@ -26,10 +26,9 @@ mod runtime_config;
 
 mod agent;
 
-// Where its only consumer is: the provider it configures needs Unix process
-// supervision, so elsewhere this is code nothing can reach, which -D warnings
-// rejects — including in a test build, where `mod build` is still absent.
-#[cfg(unix)]
+// Everywhere, because the conversation service's deletion budgets come from
+// it on every platform; the agent budgets inside it are Unix-only, where their
+// one consumer, the provider, is.
 mod agent_budgets;
 mod attachments;
 

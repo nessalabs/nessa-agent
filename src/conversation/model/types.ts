@@ -58,6 +58,26 @@ export type CommandFailure =
   | "agent-startup-deadline"
   | "conversation-state-unreadable"
   | "invalid-request"
+  /**
+   * The command never left this window: there was no gateway connection to
+   * send it on. Certain, and nothing was done.
+   */
+  | "not-connected"
+  /** Somebody deleted the conversation; its identity is refused from now on. */
+  | "conversation-deleted"
+  /**
+   * A delete that happened — the conversation is gone and refused — whose
+   * erasure of stored data did not finish; the gateway tries again, at the
+   * latest when it next starts. News
+   * about a delete, like `attachment-cleanup-unavailable` is about a close.
+   */
+  | "conversation-erasure-incomplete"
+  /**
+   * A delete that happened whose record of it could not be finished — the
+   * deletion record refused, or only the uploads' own evidence lost. The
+   * gateway answers a delete with `audit_unavailable` only once it is deleted.
+   */
+  | "deletion-unrecorded"
 
 /**
  * Why the panel could not refresh a conversation's view, in this panel's own
@@ -119,6 +139,12 @@ export type ReadFailure =
    * is nothing to keep trying with.
    */
   | "state-unreadable"
+  /**
+   * Somebody deleted the conversation, here or on another surface. Like
+   * `state-unreadable` there is nothing to keep trying: the gateway refuses the
+   * identity for good.
+   */
+  | "deleted"
   | "unavailable"
 
 export type Receipt =

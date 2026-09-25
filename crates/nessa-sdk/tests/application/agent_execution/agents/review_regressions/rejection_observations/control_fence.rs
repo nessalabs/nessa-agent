@@ -41,6 +41,9 @@ impl SessionStorageLease for PausedObservationLease {
             self.backing.save(snapshot).await
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

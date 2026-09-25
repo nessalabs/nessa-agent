@@ -1,6 +1,7 @@
 import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
 import { createConversationApi } from "./conversation-api.js"
+import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
 import {
   NessaConversationMutationError,
   NessaConversationControlError,
@@ -11,6 +12,7 @@ const conversationId = "00000000-0000-4000-8000-000000000001"
 
 const view: ConversationView = {
   conversationId,
+  title: "Flights to Lisbon",
   revision: "opaque-1",
   messages: [],
   pending: [],
@@ -250,12 +252,19 @@ it("routes every control with stable action and target identities", async () => 
   await api.answer(conversationId, "execution", "review", "allow")
   await api.cancel(conversationId, "execution", "review", "user withdrew")
   await api.close(conversationId)
+  await api.archive(conversationId)
+  await api.unarchive(conversationId)
+  await api.delete(conversationId)
   expect(request.mock.calls.map((call) => call[0])).toEqual([
     "conversation.remove",
     "conversation.answer",
     "conversation.cancel",
     "conversation.close",
+    "conversation.archive",
+    "conversation.unarchive",
+    "conversation.delete",
   ])
+  expect(request.mock.calls.at(-1)![1]).toEqual({ conversationId, requestId: "action" })
   expect(request.mock.calls[1][1]).toEqual({
     conversationId: conversationId,
     requestId: "action",
@@ -1065,4 +1074,141 @@ it("does not read a rejection out of an error that is not the gateway's answer",
     .send(conversationId, "look", [image])
     .catch((error) => error)
   expect(error).toMatchObject({ uncertain: true, code: undefined })
+})
+
+const summary = {
+  conversationId,
+  title: "Flights to Lisbon",
+  preview: "Done. Confirmation K7Q2PX is in your inbox.",
+  createdAtMs: 1790200000000,
+  updatedAtMs: 1790200300000,
+  running: false,
+  archived: false,
+}
+
+it("lists conversations with an empty request and keeps what the gateway has not got as null", async () => {
+  const request = vi.fn().mockResolvedValue({
+    conversations: [
+      summary,
+      {
+        ...summary,
+        conversationId: "00000000-0000-4000-8000-000000000002",
+        title: null,
+        preview: null,
+        running: true,
+        archived: false,
+      },
+    ],
+    complete: false,
+  })
+  const api = createConversationApi({ request }, () => "id")
+  const listed = await api.list()
+  // Whether the bound cut the list is the gateway's to say, and is kept.
+  expect(listed.complete).toBe(false)
+  expect(request).toHaveBeenCalledWith("conversation.list", {})
+  // Asking for archived conversations and being answered with others is a list
+  // that contradicts its own request.
+  await expect(api.list({ archived: true })).rejects.toThrow(/archived filter/)
+  expect(request).toHaveBeenLastCalledWith("conversation.list", { archived: true })
+  expect(
+    listed.conversations.map((row) => [row.title, row.preview, row.running]),
+  ).toEqual([
+    ["Flights to Lisbon", "Done. Confirmation K7Q2PX is in your inbox.", false],
+    [null, null, true],
+  ])
+})
+
+it("refuses a list row outside the schema, or one conversation listed twice", async () => {
+  const invalidRows = [
+    { ...summary, title: "" },
+    { ...summary, preview: "x".repeat(513) },
+    { ...summary, conversationId: "not-a-uuid" },
+    { ...summary, updatedAtMs: -1 },
+    { ...summary, running: "no" },
+    { ...summary, archived: undefined },
+    { ...summary, unread: 2 },
+  ]
+  for (const row of invalidRows) {
+    const api = createConversationApi(
+      { request: vi.fn().mockResolvedValue({ conversations: [row], complete: true }) },
+      () => "id",
+    )
+    await expect(api.list()).rejects.toThrow(/conversation/i)
+  }
+  const twice = createConversationApi(
+    {
+      request: vi
+        .fn()
+        .mockResolvedValue({ conversations: [summary, summary], complete: true }),
+    },
+    () => "id",
+  )
+  await expect(twice.list()).rejects.toThrow(/conversationId/)
+  const overBound = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({
+        conversations: Array.from({ length: 501 }, (_, index) => ({
+          ...summary,
+          conversationId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        })),
+        complete: false,
+      }),
+    },
+    () => "id",
+  )
+  await expect(overBound.list()).rejects.toThrow(/conversations/)
+  // A list that does not say whether it is whole cannot be read as either.
+  for (const complete of [undefined, "yes"]) {
+    const unsaid = createConversationApi(
+      { request: vi.fn().mockResolvedValue({ conversations: [summary], complete }) },
+      () => "id",
+    )
+    await expect(unsaid.list()).rejects.toThrow(/complete/)
+  }
+})
+
+it("reads a deleted conversation as refused and an unfinished erasure as a delete that happened", async () => {
+  const rejecting = (code: string) =>
+    createConversationApi(
+      { request: vi.fn().mockRejectedValue(new NessaRpcError(code, code)) },
+      () => "action",
+    )
+  const refused = await rejecting(ConversationErrorCode.ConversationDeleted)
+    .close(conversationId)
+    .catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(NessaConversationControlError)
+  expect((refused as NessaConversationControlError).uncertain).toBe(false)
+  const unfinished = await rejecting(ConversationErrorCode.ConversationErasureIncomplete)
+    .delete(conversationId)
+    .catch((error: unknown) => error)
+  expect((unfinished as NessaConversationControlError).code).toBe(
+    ConversationErrorCode.ConversationErasureIncomplete,
+  )
+  expect((unfinished as NessaConversationControlError).uncertain).toBe(true)
+})
+
+it("reads a view's title as the gateway's, null before anything was said, and refuses an empty one", async () => {
+  const reading = (title: unknown) =>
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ ...view, title }) },
+      () => "id",
+    ).read(conversationId)
+  await expect(reading(null)).resolves.toMatchObject({ title: null })
+  await expect(reading("")).rejects.toThrow(/title/)
+  await expect(reading("😀".repeat(65))).rejects.toThrow(/title/)
+  await expect(reading(undefined)).rejects.toThrow(/title/)
+})
+
+it("waits out one delete's worst case, and only for delete", async () => {
+  const request = vi.fn(
+    async (_method: string, params: unknown, _deadline?: unknown) => ({
+      requestId: (params as { requestId: string }).requestId,
+      applied: true,
+    }),
+  )
+  const api = createConversationApi({ request }, () => "action")
+  await api.delete(conversationId)
+  await api.close(conversationId)
+  expect(request.mock.calls[0]![2]).toEqual({ atLeastMs: conversationDeleteTimeoutMs })
+  expect(request.mock.calls[1]![2]).toBeUndefined()
 })
