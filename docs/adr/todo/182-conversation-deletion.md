@@ -273,6 +273,7 @@ finishes it.
 | 28 | any | Delete arrives while another attempt holds it | from the tombstone the other leaves: `applied` by row 26's rule if `erased`, else unfinished; if the other never fenced it, this delete fences it and runs its own attempt, answering as that goes | unchanged by this delete, unless it fences | nothing more, unless it runs its own attempt | — |
 | 29 | any | Caller goes away mid-delete | — | the attempt continues to its end | as the attempt goes | as the attempt goes |
 | 30 | `fenced`…`settled` | Gateway starts | — (logged) | each tried up to 3 times, 1 s then 2 s apart | as the tries go | slot and release waits handed to the worker; unreadable records and tombstones without a record counted in the log |
+| 30b | `fenced`…`settled` | A background try — the start's, or the worker's — cannot read the conversation's record: the repository fails or panics | — (logged) | unchanged | nothing | the start tries again as row 30's tries go, then leaves it; the worker leaves it. Of the repository's error, only what its contract lets a read say (agent unsupported, `Metadata`) is kept, so no error it returns is taken for a reason to wait |
 | 31a | `fenced` | Retirement while waiting for the stop | unfinished | `fenced` | nothing: not even uploads | left |
 | 31b | `fenced` or read | Retirement while waiting for the lease | unfinished | unchanged | as row 9a or 9b, by state | left |
 | 32 | `read·session` | Retirement while the agent is asked | unfinished | unchanged | as row 19 | left; the SDK still stops the agent's process, and retirement waits for that |
@@ -328,6 +329,7 @@ unless named otherwise; SDK tests in
 28. `a_delete_queued_behind_another_attempt_answers_from_its_tombstone`, `a_repeat_of_the_deciding_request_queued_behind_it_answers_applied`, `concurrent_deletes_of_one_conversation_run_one_after_the_other`, `a_delete_whose_predecessor_never_fenced_fences_it_itself`
 29. `a_delete_whose_caller_goes_away_still_finishes`
 30. `an_unfinished_deletion_is_finished_and_recorded_when_the_gateway_starts`, `a_deletion_that_still_cannot_finish_is_tried_a_bounded_number_of_times_and_reported`, `a_startup_finish_that_finds_every_slot_taken_is_finished_once_one_frees`; `an_unreadable_record_makes_every_list_incomplete` (`listing.rs`); `a_tombstone_whose_record_was_moved_aside_is_counted_not_listed` (`repository.rs`)
+30b. `a_repository_error_in_a_background_try_is_never_a_reason_to_wait`
 31a, 31b. `a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished`
 32. `a_shutdown_ends_an_agent_that_is_being_asked_and_a_later_start_finishes`, `retirement_waits_for_abandoned_agent_deletions_to_settle`; SDK: `a_deletion_abandoned_mid_exchange_still_stops_its_agent_and_releases_its_home`, `a_binding_settles_once_an_abandoned_deletion_has_released_its_home`
 33. `nothing_is_asked_once_retirement_has_begun`
