@@ -108,9 +108,7 @@ function nothingWasDone(
     // `config.json` adds one — and naming an agent there that has no adapter
     // stops the gateway starting at all, which turns one stranded conversation
     // into no gateway. The real repair belongs to whoever runs the server: a
-    // build that knows the agent the conversation was written with. (A record
-    // from before conversations named their agent no longer reaches a running
-    // gateway: the metadata move refuses it until the retrofit has run.) Same
+    // build that knows the agent the conversation was written with. Same
     // news as the client's own sentence for this code, so the panel
     // says the same thing whether you typed or clicked.
     case "agent-unsupported":

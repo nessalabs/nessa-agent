@@ -112,42 +112,14 @@ no adapter for fails startup by name, rather than being skipped.
 
 A conversation records the agent it was created on and is reopened on that same
 agent for the rest of its life, so changing `selected` moves new conversations
-only. Records written before this server knew a second agent name no agent, and
-are refused rather than read as Claude's: the reader that assumed an agent is
-what "One current contract" forbids. Bring them to the current shape once, with
-the gateway stopped:
+only.
 
-```bash
-node scripts/retrofit-conversation-agents.mjs            # --dry-run to look first
-node scripts/retrofit-conversation-agents.mjs --help     # what it takes
-```
-
-It names Claude, which is honest rather than a guess — Claude was the only agent
-that could have written a record without the field — and it leaves every record
-that already states its agent exactly as it is.
-
-An entry it cannot read or write is reported by name and the rest are converted,
-so a directory is never left half migrated with nothing saying which half. It
-exits non-zero when that happens; running it again once the obstruction is gone
-is a no-op on everything already done.
-
-Conversation metadata is now one private database,
-`conversations/metadata.sqlite3`, rather than the `conversations/metadata/` and
-`conversations/summaries/` directories earlier builds wrote
-([ADR 196](../adr/todo/196-conversation-metadata-database.md)). While either
-directory is there the gateway does not start, and its error names this and the
-directory to move, to be run once, after the retrofit, with the gateway stopped:
-
-```bash
-node scripts/move-conversation-metadata.mjs --dry-run    # what it would move
-node scripts/move-conversation-metadata.mjs              # move it
-```
-
-It commits nothing unless every file can be moved, and names each one that
-cannot — a damaged file, one from before records named their agent, a tombstone
-or summary whose record is missing — for repairing or moving aside first. Once
-committed it removes the files and directories; a run interrupted while removing
-them finishes the next time.
+Conversation metadata is one private database, `conversations/metadata.sqlite3`
+([ADR 196](../adr/todo/196-conversation-metadata-database.md)). Nessa is in
+alpha and keeps no migrations: the `conversations/metadata/` and
+`conversations/summaries/` directories earlier builds wrote are never read, and
+the conversations they held are not listed. Delete them, with the gateway
+stopped, to reclaim the space.
 
 Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,

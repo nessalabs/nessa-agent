@@ -1,6 +1,5 @@
 -- Conversation metadata. The one definition, version included (the last
--- line): the server includes this file (`store.rs`), and
--- `scripts/move-conversation-metadata.mjs` runs it to create the same file.
+-- line), which the server includes (`store.rs`).
 -- See docs/adr/todo/196-conversation-metadata-database.md.
 --
 -- Columns hold stored text and numbers, and a flag is 0 or 1, the file's

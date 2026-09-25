@@ -44,14 +44,14 @@ compares the file's `user_version` with the context's schema version: an empty
 file is given the schema in one transaction, a matching one is opened, and any
 other version is refused with a typed error. There are no in-place schema
 migrations. Under "One current contract", a schema change bumps the version and
-ships its own move, decided in its own record, exactly as this one does. Each
+ships its own move, decided in its own record. Each
 context owns its own database file and schema. Nothing shares tables across
 contexts.
 
 **The conversation store.** `LocalConversationStore` keeps
 `conversations/metadata.sqlite3` with three tables, defined once in
 `crates/nessa-server/src/conversation/infrastructure/schema.sql`. The server
-includes that file, and the move script reads it:
+includes that file:
 
 | Table | Key | Holds | Written |
 | --- | --- | --- | --- |
@@ -120,29 +120,13 @@ under that flag. Showing it bare in the other list would mean fetching both
 flags and re-sorting in the service. That precision was not asked for (gate 16),
 so the row is left out and the list says it is incomplete.
 
-### Moving the files that exist, as a table
+### No move
 
-`node scripts/move-conversation-metadata.mjs`, run with the gateway stopped,
-moves `conversations/metadata/*.json`, `conversations/metadata/deleted/*.json`
-and `conversations/summaries/*.json` into the database, then removes those
-files and directories. Until the old directories are gone, the gateway does
-not start, and says why and what to run. It does not read two shapes.
-Records from before agents were named are refused by the move with the
-retrofit script's name, so the order is: retrofit, then move.
-
-| Row | On disk when run | The script does | After |
-| --- | --- | --- | --- |
-| M1 | Old directories, no database | Creates the database from `schema.sql` in one transaction, inserts every record, tombstone and summary in a second, commits, then removes the files and directories | Database only |
-| M2 | Old directories and a database a crashed run committed | Each file whose row is already there with the same values is removed; a missing row is inserted first; a row that differs stops the run, naming it | Database only |
-| M3 | Any file unreadable, pre-agent, naming a different ID, or not private as the server required (another owner, open to others, a second name) | Nothing is committed; each such file is named; the exit is nonzero | Unchanged; the operator repairs it or moves it aside and runs again |
-| M4 | A tombstone or summary with no record, as a file or in the database | Refused as M3: the foreign key has nowhere to point | Unchanged |
-| M5 | Interrupted while removing files, in any order | Rerunning is M2; a record already in the database counts for its tombstone and summary | Database only |
-| M6 | No old directories | Nothing | Unchanged |
-| M7 | The gateway started with old directories present | — | The gateway does not start, and its error names the script and the directory to move |
-
-The script's rules for a record's shape are the server's JSON shapes of the
-build before this one. It is a mover for this one change and is deleted
-together with the refusal in M7 once no namespace predates it.
+Nessa is in alpha, and the owner decided on 2026-09-25 that this change ships
+no migration: the JSON files earlier builds wrote are deleted by hand, once,
+and nothing in this build reads, refuses or mentions them. Keeping a mover and
+the startup refusal beside it would have been a second reader of an old shape,
+which "One current contract" forbids without that decision.
 
 ### Erasure
 
@@ -191,23 +175,15 @@ gateway-wide. Pagination was asked about and deferred; see Consequences.
   rarer than a damaged file was, but it is louder when it happens: the log says
   what SQLite reported (and names the file when it cannot be opened), and
   `conversation_storage_unavailable` says so to the caller.
-- Every schema change ships a version bump and its own move. A gateway run
+- Every schema change ships a version bump, and its own move once there is
+  data worth keeping. A gateway run
   against a database of another version refuses to open it rather than guess.
-- Namespaces that already have conversations must run the move once, with the
-  gateway stopped, before this build starts them.
 - One connection serves every caller, one call at a time, as the files' write
   lock did for writes; reads now wait too. An owner with a very large history
   makes every other caller's metadata call wait for their list. The store's
   own history bounds that, not the gateway's, and it is the first thing to
   watch: more connections are the remedy if it shows.
-- The move script restates what it writes — the columns, the provider-session
-  and erasure spellings, the pragmas, and the schema version's line — rather
-  than calling the server. It is a tool for this one change, deleted with the
-  refusal, so the duplicate is bounded by that; a test runs the script and
-  reads its database back through `LocalConversationStore`
-  (`a_database_the_move_writes_is_one_this_store_reads`), so a change on
-  either side fails it.
-- New questions become new schema, each with its version bump and move. A
+- New questions become new schema, each with its version bump. A
   fact a conversation has one of — a note for the coordinator agent, a
   category — is a column, indexable alone or with others. A fact it has
   many of — tags — is a table of its own, `(conversation_id, tag)` indexed on

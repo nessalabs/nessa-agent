@@ -24,9 +24,8 @@
 //! for good must not keep a readable copy of it.
 //!
 //! A schema states its own version, as the one `PRAGMA user_version = N;`
-//! its definition runs, so anything else that creates the file from the same
-//! definition — a move script, say — runs the same line and sets the same
-//! version (`a_schema_states_its_version_once_in_its_definition`). An empty file is
+//! its definition runs, so the version is written once, beside the tables it
+//! describes (`a_schema_states_its_version_once_in_its_definition`). An empty file is
 //! given the schema, in one transaction, at that version. A file at that
 //! version is opened. Anything else — another version, or tables
 //! with no version — is refused as [`OpenError::Version`] and left untouched

@@ -89,7 +89,7 @@ fn a_schema_states_its_version_once_in_its_definition() {
         "CREATE TABLE t (id TEXT) STRICT;\nPRAGMA user_version = three;",
         "PRAGMA user_version = 1;\nPRAGMA user_version = 2;",
         "CREATE TABLE t (id TEXT) STRICT;\nPRAGMA user_version = +1;",
-        // Only ASCII spacing around the line, as the move script reads it.
+        // Only ASCII spacing around the line.
         "CREATE TABLE t (id TEXT) STRICT;\n\u{85}PRAGMA user_version = 1;",
         "CREATE TABLE t (id TEXT) STRICT;\n\u{feff}PRAGMA user_version = 1;",
     ] {

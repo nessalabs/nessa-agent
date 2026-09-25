@@ -275,44 +275,6 @@ struct BuiltConversations {
     warm_ups: Vec<StartupWarmUp>,
 }
 
-/// The conversation store under `root`, and the only way composition gets
-/// one: refused while metadata an earlier build kept as files is still on
-/// disk, since this build reads only the database and starting beside the
-/// files would show nobody their conversations. Refused before the database
-/// is opened, so none is made beside them
-/// (`metadata_an_earlier_build_kept_as_files_is_refused_with_what_moves_it`).
-#[cfg_attr(not(unix), allow(dead_code))]
-fn metadata_store(root: &Path) -> Result<Arc<LocalConversationStore>, RunError> {
-    refuse_metadata_files(root)?;
-    LocalConversationStore::open(&root.join("metadata.sqlite3"))
-        .map(Arc::new)
-        .map_err(|error| RunError::Agent(error.to_string()))
-}
-
-#[cfg_attr(not(unix), allow(dead_code))]
-fn refuse_metadata_files(root: &Path) -> Result<(), RunError> {
-    for name in ["metadata", "summaries"] {
-        let directory = root.join(name);
-        match std::fs::symlink_metadata(&directory) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(RunError::Agent(format!(
-                    "could not tell whether {} holds conversation metadata from an earlier build: {error}",
-                    directory.display()
-                )))
-            }
-            Ok(_) => {
-                return Err(RunError::Agent(format!(
-                    "conversation metadata from an earlier build is still at {}; stop the gateway and run `node scripts/move-conversation-metadata.mjs {:?}` to move it into the database",
-                    directory.display(),
-                    root.display().to_string()
-                )))
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(not(unix))]
 fn conversations(
     _agents: &AgentsConfig,
@@ -357,10 +319,12 @@ fn conversations(
     // upload needs to ask who owns a conversation: so the repository is
     // built, then attachments over it, and only then the providers.
     //
-    // Ownership, tombstones and summaries are one database. Metadata an
-    // earlier build kept as files is refused rather than read in its old
-    // shape, and the refusal names what moves it (docs/adr/todo/196-conversation-metadata-database.md).
-    let metadata = metadata_store(&root)?;
+    // Ownership, tombstones and summaries are one database
+    // (docs/adr/todo/196-conversation-metadata-database.md).
+    let metadata = Arc::new(
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let current_opencode_model = opencode
         .configured()
         .map(|profile| profile.validated().model());

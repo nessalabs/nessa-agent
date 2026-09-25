@@ -192,10 +192,7 @@ owner's list not `complete`, and nobody else's. The startup finish reads only
 unfinished deletions; one whose conversation cannot even be named is counted in
 its summary, and one whose rows cannot be read is left unfinished with its
 typed failure. A tombstone cannot outlive its record: the database's foreign key
-refuses it. The operator's remedy is to repair the row. Records from before
-records named their agent never reach the database: the move refuses them until
-`node scripts/retrofit-conversation-agents.mjs` has been run, with the gateway
-stopped.
+refuses it. The operator's remedy is to repair the row.
 
 ### The lifecycle, as a table
 

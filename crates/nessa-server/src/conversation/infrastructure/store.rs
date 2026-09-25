@@ -23,8 +23,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The tables and their version, defined once: `scripts/move-conversation-metadata.mjs`
-/// runs the same file.
+/// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
 
 /// One owner's conversations that a list shows, newest summary first, at most
