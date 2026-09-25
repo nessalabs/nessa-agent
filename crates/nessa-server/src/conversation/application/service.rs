@@ -2852,11 +2852,14 @@ enum AskFailure {
     Failed(ConversationError),
 }
 
-/// What this service keeps of a repository's failure: only what
-/// [`ConversationRepository`]'s contract lets that call answer. Every other
-/// error — one a substituted repository returns included — is
-/// [`Self::Metadata`], so none can be answered as a deletion or taken for a
-/// reason to wait
+/// What a deletion keeps of a repository's failure where that failure is
+/// its answer — the delete's fence, and a background try's read of the
+/// record: only what [`ConversationRepository`]'s contract lets that call
+/// answer. Every other error — one a substituted repository returns
+/// included — is [`Self::Metadata`], so none there can be answered as a
+/// deletion or taken for a reason to wait. Past the fence, a repository's
+/// error is kept whole inside [`DeletionFailures`], and only its own
+/// fields decide a wait ([`waiting_for`])
 /// (`a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`,
 /// `a_repository_error_in_a_background_try_is_never_a_reason_to_wait`).
 #[derive(Debug)]

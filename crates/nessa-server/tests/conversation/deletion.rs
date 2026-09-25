@@ -995,39 +995,53 @@ async fn left_for_the_background(
 
 #[tokio::test(start_paused = true)]
 async fn a_repository_error_in_a_background_try_is_never_a_reason_to_wait() {
-    // What `waiting_for` would take for a slot or a release to wait for,
-    // had they come from `finish_deletion` rather than the repository.
-    let waiting = || {
-        [
+    // What `waiting_for` would take for a slot or a release to wait for, had
+    // they come from `finish_deletion` rather than the repository, and a
+    // repository that panics. Built afresh for each read, as `Fault` is used
+    // up by it.
+    let fault = |kind: usize| match kind {
+        0 => Fault::Fail(ConversationError::DeletionIncomplete(Box::new(
             DeletionFailures {
                 no_agent_slot: true,
                 ..DeletionFailures::default()
             },
+        ))),
+        1 => Fault::Fail(ConversationError::DeletionIncomplete(Box::new(
             DeletionFailures {
                 history_held: true,
                 ..DeletionFailures::default()
             },
-        ]
-        .map(|failures| ConversationError::DeletionIncomplete(Box::new(failures)))
+        ))),
+        _ => Fault::Panic,
     };
-    // Long enough for any wait the error could have been taken for to be
-    // tried again and finish the deletion, once the faults run out.
+    let panics = |kind: usize| kind == 2;
+    // Long enough for a release wait the error could have been taken for to
+    // be tried again, and finish the deletion once the faults run out; a slot
+    // wait is never woken here, since no agent is asked, and shows as still
+    // waiting.
     let every_retry = DELETION_RETRY_DELAY * 30;
 
     // The start's finish: each of its tries reads a fault, and the deletion
-    // is reported left with the repository's error as storage, not carried on.
-    for error in waiting() {
+    // is reported left with the repository's error as storage (or a panic as
+    // unavailable), not carried on.
+    for kind in 0..3 {
         let fixture = deleting();
         let (id, repository, service) = left_for_the_background(&fixture).await;
         repository
             .loads
             .lock()
             .unwrap()
-            .extend((0..DELETION_ATTEMPTS).map(|_| Some(Fault::Fail(error.clone()))));
+            .extend((0..DELETION_ATTEMPTS).map(|_| Some(fault(kind))));
         let unfinished = service.finish_deletions().await.unwrap().unfinished;
+        // Every one of its tries was spent reading a fault.
+        assert!(repository.loads.lock().unwrap().is_empty());
         assert_eq!(unfinished.len(), 1);
         assert_eq!(unfinished[0].0, id);
-        assert!(matches!(unfinished[0].1, ConversationError::Metadata));
+        if panics(kind) {
+            assert!(matches!(unfinished[0].1, ConversationError::Unavailable));
+        } else {
+            assert!(matches!(unfinished[0].1, ConversationError::Metadata));
+        }
         tokio::time::sleep(every_retry).await;
         assert_eq!(service.inner.retries.waiting_for(&id), None);
         assert!(!tombstone(&fixture, &id).erased());
@@ -1036,14 +1050,14 @@ async fn a_repository_error_in_a_background_try_is_never_a_reason_to_wait() {
 
     // The worker: a deletion it carries for a slot reads a fault, and is
     // left rather than waiting again.
-    for error in waiting() {
+    for kind in 0..3 {
         let fixture = deleting();
         let (id, repository, service) = left_for_the_background(&fixture).await;
         repository
             .loads
             .lock()
             .unwrap()
-            .push_back(Some(Fault::Fail(error)));
+            .push_back(Some(fault(kind)));
         assert!(service.carry_on_if_it_can_finish(
             &id,
             &ConversationError::DeletionIncomplete(Box::new(DeletionFailures {
