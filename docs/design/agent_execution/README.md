@@ -13,6 +13,7 @@ unrelated future systems.
 | [Dependency injection](../dependency-injection.md) | Current composition rules shared across repository contexts |
 | [Nessa-owned policy hooks](../../adr/todo/0014-nessa-owned-policy-hooks.md) | Proposed decision for hook boundaries, disclosure, failure and attribution; implementation remains tracked by #130 |
 | [Hook capability survey](hook-capabilities.md) | Pinned Claude/Codex/Opencode source evidence, unpinned Kiro observations, and explicit limits on Nessa enforcement |
+| [Telemetry](telemetry.md) | Proposed research behind [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md): what exists, the `tracing`-as-port design, its growth costs, and the slices tracked under #195 |
 
 ```text
 current Agent --> local session snapshots + scheduling --> provider harness
