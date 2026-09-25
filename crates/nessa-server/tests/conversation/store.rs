@@ -389,6 +389,9 @@ async fn a_row_that_cannot_be_read_is_refused_and_never_read_as_absent() {
         "provider_erasure = 'deleted'",
         "provider_session = 'recorded', provider_session_id = 's', erased = 1",
         "provider_session = 'absent'",
+        // Settled as naming none, and naming one all the same.
+        "provider_session = 'absent', provider_session_id = 'x', \
+         provider_erasure = 'no_provider_session'",
         "provider_session = 'recorded', provider_session_id = 's', provider_erasure = 'shredded'",
     ] {
         change_deletion(change);

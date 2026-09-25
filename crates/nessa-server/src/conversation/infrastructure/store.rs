@@ -131,14 +131,6 @@ fn stored_time(value: u64) -> Result<i64, ConversationError> {
     i64::try_from(value).map_err(|_| ConversationError::Metadata)
 }
 
-/// The identity a row names, which must be the canonical spelling of one: a
-/// row naming it any other way is not the conversation asked for.
-fn identity(text: &str) -> Option<ConversationId> {
-    ConversationId::new(text)
-        .ok()
-        .filter(|id| id.to_string() == text)
-}
-
 /// A conversation row as its columns hold it, in [`Self::COLUMNS`] order.
 struct StoredConversation {
     id: String,
@@ -169,7 +161,7 @@ impl StoredConversation {
     /// is still its owner's to see in a list and to delete.
     fn read(self) -> Option<Conversation> {
         Conversation::restore(
-            identity(&self.id)?,
+            ConversationId::new(&self.id).ok()?,
             OrganizationId::new(self.organization).ok()?,
             PrincipalId::new(self.owner).ok()?,
             self.creator_surface,
@@ -467,7 +459,7 @@ impl ConversationRepository for LocalConversationStore {
             let mut found = UnfinishedDeletions::default();
             while let Some(row) = rows.next().map_err(failed)? {
                 let name: String = row.get(0).map_err(failed)?;
-                match identity(&name) {
+                match ConversationId::new(&name).ok() {
                     Some(id) => found.conversations.push(id),
                     None => {
                         found.unreadable += 1;
