@@ -1431,4 +1431,27 @@ mod tests {
             .command_result(LifecycleCommandResult::Accepted)
             .is_err());
     }
+
+    #[test]
+    fn accepted_label_command_keeps_a_replacement_observation_separate() {
+        let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 1).unwrap();
+        session.claim(&receipt, &intended, 1).unwrap();
+        session
+            .command_result(LifecycleCommandResult::Accepted)
+            .unwrap();
+        let replacement =
+            LifecycleObservation::new(2, Some(incarnation(target("service"), 23, 43)), true);
+        session.fresh_observation(replacement.clone()).unwrap();
+
+        assert_eq!(
+            session.settlement().unwrap(),
+            (LifecycleCommandResult::Accepted, replacement)
+        );
+        assert_ne!(
+            session.settlement().unwrap().1.incarnation(),
+            Some(&intended)
+        );
+    }
 }
