@@ -4292,7 +4292,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn native_manager_factory_refuses_an_account_without_linger_authority() {
-        assert!(NativeLinuxManagerFactory.connect(u32::MAX).is_err());
+        let temporary = tempfile::tempdir().unwrap();
+        let sentinel = temporary.path().join("must-remain-absent.service");
+        assert!(!sentinel.exists());
+        let error = NativeLinuxManagerFactory
+            .connect(u32::MAX)
+            .err()
+            .expect("an unknown account cannot satisfy the linger prerequisite");
+        assert!(pre_admission(error)
+            .to_string()
+            .ends_with("Nessa made no service or linger change"));
+        assert!(!sentinel.exists());
     }
 
     #[cfg(target_os = "linux")]
@@ -4389,6 +4399,18 @@ mod tests {
                 .map_err(|error| error.to_string())?;
             failing_file.sync_all().map_err(|error| error.to_string())?;
             drop(failing_file);
+            let verification = std::process::Command::new("systemd-analyze")
+                .args(["--user", "verify"])
+                .arg(&path)
+                .arg(&failing_path)
+                .output()
+                .map_err(|error| format!("systemd-analyze could not start: {error}"))?;
+            if !verification.status.success() {
+                return Err(format!(
+                    "systemd-analyze rejected the disposable units: {}",
+                    String::from_utf8_lossy(&verification.stderr).trim()
+                ));
+            }
             manager.reload()?;
             let start = manager.enqueue(SystemdJobOperation::Start, &unit, &clock)?;
             let start_attempt = start.attempt().clone();
