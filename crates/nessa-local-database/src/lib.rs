@@ -13,8 +13,12 @@
 //! ```
 //!
 //! Arrows are calls. The directory must already be private and this OS
-//! user's; the file is created private when absent, before SQLite ever sees
-//! it (`the_file_is_created_private_before_sqlite_opens_it`).
+//! user's; the file is created private when absent, and checked private and
+//! not a link, before SQLite opens it by name
+//! (`the_file_is_created_private_before_sqlite_opens_it`). That second open is
+//! by path, so a process running as this same user could swap the name in
+//! between; it is not guarded against, because such a process can already
+//! read and write the file itself. What this keeps out is every other user.
 //!
 //! Every connection has foreign keys enforced, a rollback journal synced in
 //! full (through the drive's cache on macOS), and `secure_delete`, so a deleted row's bytes are overwritten rather
@@ -115,6 +119,33 @@ impl From<rusqlite::Error> for OpenError {
     }
 }
 
+#[derive(PartialEq)]
+enum Accepted {
+    /// At the schema's version.
+    Current,
+    /// No version and no tables: the schema is still to be given.
+    Empty,
+}
+
+/// Whether the file is one this schema opens, or refused as another version.
+fn accepted(connection: &Connection, schema: &Schema) -> Result<Accepted, OpenError> {
+    // Read as SQLite keeps it, a signed integer, so a negative one is another
+    // version rather than a value this code cannot hold.
+    let found: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if found == i64::from(schema.version) {
+        return Ok(Accepted::Current);
+    }
+    let tables: u32 =
+        connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
+    if found != 0 || tables != 0 {
+        return Err(OpenError::Version {
+            found,
+            expected: schema.version,
+        });
+    }
+    Ok(Accepted::Empty)
+}
+
 /// Open the database at `path`, creating it privately and giving it `schema`
 /// when it is absent or empty.
 pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
@@ -139,26 +170,19 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     // On macOS a plain fsync leaves the write in the drive's cache; the
     // private files these replace were flushed past it, and so is this.
     connection.pragma_update(None, "fullfsync", true)?;
+    // A file at another version is refused before anything that persists is
+    // changed in it, its journal mode included, so it is left as it was
+    // (`another_version_is_refused_and_left_as_it_was`).
+    accepted(&connection, schema)?;
     // A file left in write-ahead mode is brought back to the rollback
     // journal (`a_file_left_in_write_ahead_mode_is_opened_in_the_rollback_journal`).
     connection.pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))?;
-    // Read and, when empty, given its schema under one write lock, so two
-    // openers of an empty file cannot both set about creating it.
+    // Asked again, and when empty given its schema, under one write lock, so
+    // two openers of an empty file cannot both set about creating it.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    // Read as SQLite keeps it, a signed integer, so a negative one is another
-    // version rather than a value this code cannot hold.
-    let found: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if found == i64::from(schema.version) {
+    if accepted(&transaction, schema)? == Accepted::Current {
         drop(transaction);
         return Ok(connection);
-    }
-    let tables: u32 =
-        transaction.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
-    if found != 0 || tables != 0 {
-        return Err(OpenError::Version {
-            found,
-            expected: schema.version,
-        });
     }
     // The definition sets its own version, inside the same transaction, and
     // what it set is what it said it would.
