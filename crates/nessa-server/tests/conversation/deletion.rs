@@ -833,6 +833,29 @@ async fn a_repository_failure_before_the_fence_is_answered_only_as_its_own_error
         );
         assert!(unfenced(&fixture, &id));
     }
+    // The read after waiting behind another attempt is a read too.
+    for (given, expected) in [
+        (ConversationError::NotFound, ConversationError::Metadata),
+        (
+            ConversationError::AgentUnsupported,
+            ConversationError::AgentUnsupported,
+        ),
+    ] {
+        repository
+            .loads
+            .lock()
+            .unwrap()
+            .extend([None, Some(Fault::Fail(given.clone()))]);
+        let error = delete_behind_another(&service, &repository, &id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&expected),
+            "{given:?} after waiting was answered {error:?}"
+        );
+        assert!(unfenced(&fixture, &id));
+    }
     service.shutdown().await.unwrap();
 }
 
