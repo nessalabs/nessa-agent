@@ -258,6 +258,14 @@ impl RetainedDirectory {
         self.open_file(name, OpenMode::CreateNew)
     }
 
+    pub fn open_reserved(&self, name: &OsStr, authority: &File) -> io::Result<File> {
+        let file = self.open_file(name, OpenMode::ReadWrite)?;
+        if self.file_identity(&file)? != self.file_identity(authority)? {
+            return Err(unsafe_file());
+        }
+        Ok(file)
+    }
+
     pub fn publish_new(&self, from: &OsStr, to: &OsStr, _: &File) -> io::Result<()> {
         let from = component(from)?;
         let to = component(to)?;
@@ -303,7 +311,15 @@ impl RetainedDirectory {
         Ok(())
     }
 
+    pub fn remove_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        self.remove_named_file(name, file)
+    }
+
     pub fn remove_reserved(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        self.remove_named_file(name, file)
+    }
+
+    fn remove_named_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
         if !self.named_file_is(name, file)? {
             return Err(unsafe_file());
         }

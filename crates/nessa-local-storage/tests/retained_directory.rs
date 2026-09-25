@@ -220,6 +220,44 @@ fn recovery_removes_only_the_name_still_bound_to_the_open_file() {
     assert!(!root.join("records/abandoned").exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn recovery_refuses_a_reservation_witness_that_still_pins_its_name() {
+    let (_temporary, root, directory) = fixture();
+    let reservation = directory.reserve_temp().unwrap();
+    let path = root.join("records").join(reservation.name());
+
+    assert_eq!(
+        directory
+            .remove_file(reservation.name(), reservation.as_file())
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert!(path.exists());
+
+    reservation.discard().unwrap();
+    assert!(!path.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn consuming_reservation_cleanup_removes_the_name_while_a_witness_remains_open() {
+    let (_temporary, root, directory) = fixture();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"reserved").unwrap();
+    let path = root.join("records").join(reservation.name());
+    let mut witness = reservation.as_file().try_clone().unwrap();
+
+    reservation.discard().unwrap();
+
+    assert!(!path.exists());
+    witness.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = Vec::new();
+    witness.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"reserved");
+}
+
 #[test]
 fn parallel_enumerations_have_independent_cursors() {
     let (_temporary, _root, directory) = fixture();
