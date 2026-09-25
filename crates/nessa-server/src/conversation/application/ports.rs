@@ -140,8 +140,8 @@ pub trait RuntimeReadiness: Send + Sync {
 /// deleted. The SDK stores execution history separately.
 ///
 /// A conversation read back carries its tombstone when it has one, so a reader
-/// does not see a deleted conversation as a live one: `load` and `list` return
-/// it with its [`Conversation::deletion`], and `create` for its identity
+/// does not see a deleted conversation as a live one: `load` returns it with
+/// its [`Conversation::deletion`], and `create` for its identity
 /// returns it as [`ConversationCreationDisposition::Existing`] rather than
 /// creating it again
 /// (`a_tombstone_outlives_reopening_and_its_identity_is_never_created_again`).
@@ -173,28 +173,71 @@ pub trait ConversationRepository: Send + Sync {
         id: &ConversationId,
         deletion: ConversationDeletion,
     ) -> ConversationFuture<'_, Conversation>;
-    /// Every conversation on record, whoever owns it, in no particular order.
+    /// Every conversation whose tombstone says its erasure has not finished,
+    /// whoever owns it: the startup finish's question
+    /// ([`super::ConversationService::finish_deletions`]).
     ///
-    /// One record that cannot be read is left out, and the implementation says
-    /// which: it is one conversation missing from a list, not a reason to show
-    /// none. How many were left out is part of the answer, since whose they
-    /// are cannot be read either. Only being unable to enumerate the records
-    /// at all is an error.
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords>;
+    /// A tombstone whose conversation cannot even be named is left out and
+    /// counted, since it may be one of them. Only being unable to ask at all
+    /// is an error.
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions>;
 }
 
-/// What [`ConversationRepository::list`] read.
+/// What [`ConversationRepository::unfinished_deletions`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ConversationRecords {
-    /// Every record that could be read.
-    pub conversations: Vec<Conversation>,
-    /// How many records are there but could not be read, so are not among
-    /// [`Self::conversations`]. Anybody's, for all a reader can tell.
+pub struct UnfinishedDeletions {
+    /// Each conversation whose tombstone says its erasure has not finished.
+    pub conversations: Vec<ConversationId>,
+    /// Tombstones of unfinished deletions whose conversation could not be
+    /// named, so are not among [`Self::conversations`].
     pub unreadable: usize,
-    /// How many tombstones have no conversation record beside them. Each is
-    /// a deleted conversation, so none is missing from a list; but its
-    /// deletion can be neither read nor finished.
-    pub orphaned_tombstones: usize,
+}
+
+/// Answers what a list of one owner's conversations shows, from ownership,
+/// tombstones and summaries together, reading only that owner's.
+///
+/// A port of its own because the answer spans [`ConversationRepository`] and
+/// [`ConversationSummaries`]: a store that keeps both answers it in one
+/// question, without reading anybody else's conversations
+/// (docs/adr/todo/196-conversation-metadata-database.md).
+pub trait ConversationListing: Send + Sync {
+    /// The conversations `organization` and `owner` hold that are not deleted
+    /// and have a summary whose archived flag is `archived`: most recently
+    /// updated first, then by identity, at most `limit` of them.
+    ///
+    /// Whose a conversation is, is [`Conversation::allows`]'s answer, and a
+    /// store gives the same one while reading only this owner's rows
+    /// (`the_list_asks_whose_a_conversation_is_as_the_domain_answers_it`,
+    /// `the_list_query_reads_only_its_owners_rows_however_many_others_there_are`).
+    /// A row of this owner's that cannot be read back is left out and counted,
+    /// since it may belong in the list. Only being unable to ask at all is an
+    /// error.
+    fn list(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        archived: bool,
+        limit: usize,
+    ) -> ConversationFuture<'_, ListedConversations>;
+}
+
+/// What [`ConversationListing::list`] read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListedConversations {
+    /// In the order listed.
+    pub conversations: Vec<ListedConversation>,
+    /// How many rows among the ones asked for could not be read, so are not
+    /// among [`Self::conversations`].
+    pub unreadable: usize,
+}
+
+/// One conversation in a list, with what the list shows about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedConversation {
+    /// The conversation, as its ownership record reads.
+    pub conversation: Conversation,
+    /// Its title, last line said, time and archived flag.
+    pub summary: ConversationSummary,
 }
 
 /// Keeps what a list of conversations shows about each one: its title, the

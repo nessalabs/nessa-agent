@@ -6,18 +6,17 @@ use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationCreation, ConversationCreationAuditRecord,
         ConversationCreationCause, ConversationDeletionBudgets, ConversationDeletionCause,
-        ConversationFuture, ConversationRecords, ProviderSessionEraser, SubmittedFile,
+        ConversationFuture, ProviderSessionEraser, SubmittedFile, UnfinishedDeletions,
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationRepository,
-        LocalConversationSummaries,
+        DurableConversationFileLinkAudit, DurableExecutionAudit, LocalConversationStore,
     },
 };
 use crate::conversation_test_support::{
-    claude_erasers, only, AcceptingCreationAudit, MemoryAttachments, MemoryRepository,
-    MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit, RecordingFileLinkAudit,
-    TestClock, DELETION_BUDGETS,
+    claude_erasers, only, AcceptingCreationAudit, MemoryAttachments, MemoryListing,
+    MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit,
+    RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_sdk::{
     application::agent_execution::sessions::StorageFuture,
@@ -139,12 +138,16 @@ fn service_over(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider))),
             storage,
-            metadata: repository,
+            metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: audit,
             attachments: Some(attachments),
-            summaries,
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository,
+                summaries,
+            }),
             provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -620,8 +623,8 @@ impl ConversationRepository for Unfenceable {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.0.load(id)
     }
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
-        self.0.list()
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        self.0.unfinished_deletions()
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.0.create(conversation)
@@ -673,6 +676,10 @@ fn service_with(
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -720,8 +727,8 @@ impl ConversationRepository for Faulty {
             None => self.repository.load(id),
         }
     }
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
-        self.repository.list()
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        self.repository.unfinished_deletions()
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.repository.create(conversation)
@@ -1208,6 +1215,10 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -1573,8 +1584,8 @@ impl ConversationRepository for PausingRepository {
             found
         })
     }
-    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
-        self.inner.list()
+    fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
+        self.inner.unfinished_deletions()
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.inner.create(conversation)
@@ -1598,6 +1609,7 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
         pause: StdMutex::new(None),
     });
     let storage = Arc::new(InMemoryStorage::new());
+    let summaries = Arc::new(MemorySummaries::default());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(provider.clone()))),
@@ -1607,7 +1619,11 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(RecordingDeletionAudit::default()),
             attachments: None,
-            summaries: Arc::new(MemorySummaries::default()),
+            summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: memory.clone(),
+                summaries,
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -1705,11 +1721,14 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         AgentId::Claude,
     )
     .unwrap();
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let database = root.join("conversations").join("metadata.sqlite3");
+    let metadata = Arc::new(LocalConversationStore::open(&database).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
             agents,
             storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
-            metadata: Arc::new(LocalConversationRepository::new(root.join("metadata")).unwrap()),
+            metadata: metadata.clone(),
             creation_audit: Arc::new(
                 DurableConversationCreationAudit::new(root.join("audit").join("creation")).unwrap(),
             ),
@@ -1725,7 +1744,8 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
                 .unwrap(),
             ),
             attachments: None,
-            summaries: Arc::new(LocalConversationSummaries::new(root.join("summaries")).unwrap()),
+            summaries: metadata.clone(),
+            listing: metadata.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock,
@@ -1762,7 +1782,11 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !root.join("summaries").join(format!("{id}.json")).exists() {
+        while ConversationSummaries::load(metadata.as_ref(), &id)
+            .await
+            .unwrap()
+            .is_none()
+        {
             tokio::task::yield_now().await;
         }
     })
@@ -1793,20 +1817,30 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             .join("deletion")
             .join(format!("conversation-deleted-{id}.json"))]
     );
-    // The summary and the history are gone; the history's lock stays, empty.
-    assert!(!root.join("summaries").join(format!("{id}.json")).exists());
+    // The summary and the history are gone — the summary's words from the
+    // database file too, not only from its rows — and the history's lock
+    // stays, empty.
+    assert_eq!(
+        ConversationSummaries::load(metadata.as_ref(), &id)
+            .await
+            .unwrap(),
+        None
+    );
+    let database = std::fs::read(&database).unwrap();
+    assert!(!database
+        .windows("read this".len())
+        .any(|window| window == b"read this"));
     let sessions = files(&root.join("sessions"));
     assert_eq!(sessions.len(), 1, "{:?}", sessions.keys());
     let (lock, bytes) = sessions.iter().next().unwrap();
     assert_eq!(lock.extension().unwrap(), "lock");
     assert!(bytes.is_empty());
     // Ownership stays, and so does the tombstone that refuses it.
-    assert!(root.join("metadata").join(format!("{id}.json")).exists());
-    assert!(root
-        .join("metadata")
-        .join("deleted")
-        .join(format!("{id}.json"))
-        .exists());
+    let kept = ConversationRepository::load(metadata.as_ref(), &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(kept.deletion().is_some_and(|deletion| deletion.erased()));
     deleted(service.create(id.clone(), caller("create"), None).await);
     service.shutdown().await.unwrap();
 }
@@ -2351,6 +2385,10 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
             deletion_audit: audit.clone(),
             attachments: None,
             summaries: summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: repository.clone(),
+                summaries: summaries.clone(),
+            }),
             provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -2466,7 +2504,10 @@ async fn a_conversation_naming_an_unknown_agent_is_listed_and_deleted_but_not_op
 async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
-    let repository = Arc::new(LocalConversationRepository::new(root.join("metadata")).unwrap());
+    nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
+    let repository = Arc::new(
+        LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
+    );
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
     let service = ConversationService::new(
         ConversationDependencies {
@@ -2482,7 +2523,8 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
                     .unwrap(),
             ),
             attachments: None,
-            summaries: Arc::new(LocalConversationSummaries::new(root.join("summaries")).unwrap()),
+            summaries: repository.clone(),
+            listing: repository.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock,
@@ -2865,6 +2907,7 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
             deletion_audit: deletions.clone(),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
@@ -2994,6 +3037,10 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions: claude_erasers(),
             deletion_budgets: short,
             clock: Arc::new(TestClock),
@@ -3057,6 +3104,10 @@ fn over_with(
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
+            listing: Arc::new(MemoryListing {
+                repository: fixture.repository.clone(),
+                summaries: fixture.summaries.clone(),
+            }),
             provider_sessions,
             deletion_budgets: budgets,
             clock: Arc::new(TestClock),
@@ -3171,7 +3222,7 @@ async fn a_desktop_stop_leaves_a_delete_asking_its_agent_alone() {
 }
 
 #[tokio::test]
-async fn a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased() {
+async fn a_list_waiting_on_its_listing_does_not_keep_a_deleted_history_leased() {
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     let (entered_tx, entered) = oneshot::channel();
@@ -3182,9 +3233,9 @@ async fn a_list_waiting_on_summaries_does_not_keep_a_deleted_history_leased() {
         async move { service.list(caller("list"), false).await }
     });
     entered.await.unwrap();
-    // The list has read whether the conversation is running and is waiting
-    // on its summary: it holds nothing of the live agent, so a delete gets
-    // the history's lease once the agent is stopped.
+    // The list is waiting on its summaries, before it has asked what is
+    // running: it holds nothing of the live agent, so a delete gets the
+    // history's lease once the agent is stopped.
     assert!(fixture
         .service
         .delete(id.clone(), caller("delete-1"))

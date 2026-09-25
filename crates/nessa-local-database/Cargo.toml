@@ -1,0 +1,12 @@
+[package]
+name = "nessa-local-database"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+nessa-local-storage = { path = "../nessa-local-storage" }
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

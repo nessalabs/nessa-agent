@@ -18,7 +18,7 @@ use crate::{
     conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, LocalConversationRepository, LocalConversationSummaries,
+        DurableConversationFileLinkAudit, LocalConversationStore,
     },
 };
 use crate::{
@@ -318,8 +318,11 @@ fn conversations(
     // bytes, reading them needs the attachment store, and beginning an
     // upload needs to ask who owns a conversation: so the repository is
     // built, then attachments over it, and only then the providers.
+    //
+    // Ownership, tombstones and summaries are one database
+    // (docs/adr/todo/196-conversation-metadata-database.md).
     let metadata = Arc::new(
-        LocalConversationRepository::new(root.join("metadata"))
+        LocalConversationStore::open(&root.join("metadata.sqlite3"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let current_opencode_model = opencode
@@ -420,12 +423,6 @@ fn conversations(
         DurableConversationDeletionAudit::new(root.join("audit").join("deletion"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
-    // Beside the ownership records rather than inside them: those are written
-    // once, and a summary is replaced on every turn.
-    let summaries = Arc::new(
-        LocalConversationSummaries::new(root.join("summaries"))
-            .map_err(|error| RunError::Agent(error.to_string()))?,
-    );
     let fixed_probe = LocalAgentProbe::from_environment(
         launch_files(Some(agents), &built.unavailable)
             .into_iter()
@@ -465,12 +462,13 @@ fn conversations(
             agents: ConversationAgents::from_source(configured, selected, resolver.clone())
                 .map_err(|error| RunError::Agent(error.to_string()))?,
             storage,
-            metadata,
+            metadata: metadata.clone(),
             creation_audit,
             file_link_audit,
             deletion_audit,
             attachments: Some(attachments.conversations),
-            summaries,
+            summaries: metadata.clone(),
+            listing: metadata,
             provider_sessions: erasers,
             deletion_budgets: super::agent_budgets::deletion(),
             clock,

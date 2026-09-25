@@ -66,6 +66,7 @@ this table. None of it changes implementation or approval status.
 | 7 | [173 — Fetch every agent runtime](todo/173-fetch-agent-runtimes.md) | Pin and fetch Claude's and Codex's native binaries the way Opencode's already are, resolve a runtime already on the machine within a supported range, and record what each install did |
 | 8 | [195 — `tracing` is the telemetry port](todo/195-tracing-is-the-telemetry-port.md) | Proposed: spans at the SDK's lifecycle sites, a layered subscriber per binary with OpenTelemetry only from composition; slices tracked as sub-issues of #195 |
 | 8 | [182 — Archiving and deleting conversations](todo/182-conversation-deletion.md) | Implemented, in review: gateway archive and permanent delete, erasing each agent's own session over ACP, and the panel's Messages list with archive, delete and undo. Remaining: an archived view, bulk delete, and what an agent's own delete leaves behind ("Not decided here") |
+| 9 | [196 — Conversation metadata in an embedded database](todo/196-conversation-metadata-database.md) | Implemented, in review: ownership, tombstones and summaries in one private SQLite file through `nessa-local-database`, and a list that reads only its caller's conversations with `complete` exact per caller. No migration: earlier files are deleted by hand. Remaining: page tokens |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides
