@@ -18,7 +18,7 @@ impl Fingerprint {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) struct RetirementRequest {
     id: String,
     target: Fingerprint,
@@ -26,7 +26,7 @@ pub(crate) struct RetirementRequest {
     running_generation: ServiceGeneration,
     target_generation: ServiceGeneration,
 }
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 impl RetirementRequest {
     pub(crate) fn new(
         id: String,
@@ -122,7 +122,7 @@ impl RunningRuntime {
     pub(crate) fn process_id(&self) -> u32 {
         self.process_id
     }
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) fn accepts(&self, request: &RetirementRequest) -> bool {
         &self.instance == request.running_instance()
             && &self.generation == request.running_generation()
@@ -134,14 +134,14 @@ impl RunningRuntime {
 /// when cleanup or audit acknowledgement failed. Confirmation separately tells
 /// the host whether it may replace the process.
 #[derive(Clone, Debug)]
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) struct RetirementFence {
     request: RetirementRequest,
     running: Fingerprint,
     cause: RetirementCause,
     confirmed: bool,
 }
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 impl RetirementFence {
     pub(crate) fn new(
         request: RetirementRequest,
@@ -190,13 +190,13 @@ impl RetirementFence {
 
 /// Original lifecycle attribution retained by an admitted retirement fence.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) struct RetirementCause {
     principal_id: String,
     surface_id: String,
     request_id: String,
 }
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 impl RetirementCause {
     const MAX_IDENTITY_BYTES: usize = 256;
 
@@ -232,7 +232,7 @@ impl RetirementCause {
 }
 
 /// Validates the complete result tuple before it crosses the persistence boundary.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) fn validate_retirement_evidence(
     request: RetirementRequest,
     running: &RunningRuntime,

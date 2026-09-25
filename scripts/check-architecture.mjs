@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
-  hasImmediateCfg,
+  hasImmediateDesktopCfg,
   hasNoImmediateCfg,
 } from "./architecture/platform-boundaries.mjs"
 import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
@@ -356,7 +356,7 @@ for (const file of [
   }
 }
 
-const macosRetirementBoundaries = [
+const desktopRetirementBoundaries = [
   {
     path: "crates/nessa-server/src/composition/root.rs",
     declaration: "use crate::desktop_runtime::{",
@@ -403,13 +403,13 @@ const macosRetirementBoundaries = [
   },
 ]
 
-for (const boundary of macosRetirementBoundaries) {
+for (const boundary of desktopRetirementBoundaries) {
   const file = join(root, boundary.path)
   const text = readFileSync(file, "utf8")
-  if (!hasImmediateCfg(text, boundary.declaration)) {
+  if (!hasImmediateDesktopCfg(text, boundary.declaration)) {
     fail(
       file,
-      "managed gateway retirement is a macOS production capability; gate its module boundary so other targets do not compile unused lifecycle code",
+      "managed gateway retirement is a native desktop capability; gate its module boundary so unsupported targets do not compile unused lifecycle code",
     )
   }
 }
