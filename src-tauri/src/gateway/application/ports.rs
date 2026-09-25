@@ -1,13 +1,32 @@
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "native gateway lifecycle authority is exercised only by the macOS adapter"
+    )
+)]
+
 use crate::gateway::domain::value_objects::{
+    AuditDeliveryReceipt, LifecycleCommandResult, LifecycleFailedPhase, LifecycleObservation,
+    LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep,
     ReconciliationAttemptRecord, ReconciliationCause, ReconciliationCleanupDecision,
     ReconciliationCorrelation, ReconciliationEffectTimingRecord, ReconciliationEvidence,
     ReconciliationHistory, ReconciliationHistoryFact, ReconciliationIncarnation,
     ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
     ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
-    ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget,
-    ReconciliationValidationFacts, SearchPath, SearchPathError,
+    ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget, SearchPath,
+    SearchPathError,
 };
-use std::{error::Error, fmt, path::Path};
+use std::{
+    error::Error,
+    fmt,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 
 /// Exact native runtime incarnation established by successful reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,12 +99,336 @@ impl ReconciledGateway {
     }
 }
 
+/// Audited automatic-quit request with one absolute monotonic deadline.
+#[derive(Clone, Debug)]
+pub struct GatewayStopRequest {
+    attempt: GatewayReconciliationAttempt,
+    intended: ReconciledGateway,
+    deadline: Instant,
+}
+
+impl GatewayStopRequest {
+    pub(crate) fn new(
+        attempt: GatewayReconciliationAttempt,
+        intended: ReconciledGateway,
+        deadline: Instant,
+    ) -> Self {
+        Self {
+            attempt,
+            intended,
+            deadline,
+        }
+    }
+
+    pub fn intended(&self) -> &ReconciledGateway {
+        &self.intended
+    }
+
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+}
+
+#[derive(Clone, Debug)]
+enum StopDispatchAuthority {
+    AvailableUnproved,
+    Proving,
+    Proved {
+        candidate: ReconciliationIncarnation,
+        observation_version: u64,
+    },
+    Claimed,
+    CommandResult(LifecycleCommandResult),
+    FreshObservation {
+        command: LifecycleCommandResult,
+        observation: LifecycleObservation,
+    },
+    OutcomeDelivery {
+        command: LifecycleCommandResult,
+        observation: LifecycleObservation,
+    },
+    Revoked,
+}
+
+/// One application-owned proof-to-dispatch authority for automatic quit.
+pub struct GatewayStopSession {
+    request: GatewayStopRequest,
+    state: Mutex<StopDispatchAuthority>,
+    latest_observation_version: AtomicU64,
+    clock: Arc<dyn MonotonicClock>,
+}
+
+impl GatewayStopSession {
+    pub(crate) fn new(request: GatewayStopRequest, clock: Arc<dyn MonotonicClock>) -> Self {
+        Self {
+            request,
+            state: Mutex::new(StopDispatchAuthority::AvailableUnproved),
+            latest_observation_version: AtomicU64::new(0),
+            clock,
+        }
+    }
+
+    pub fn request(&self) -> &GatewayStopRequest {
+        &self.request
+    }
+
+    pub fn deadline_passed(&self) -> bool {
+        self.clock.now() >= self.request.deadline
+    }
+
+    pub fn wait(&self, duration: Duration) {
+        self.clock.wait(duration);
+    }
+
+    pub fn begin_proof(&self) -> Result<(), GatewayError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        if self.deadline_passed() {
+            *state = StopDispatchAuthority::Revoked;
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed before recipient proof".into(),
+            ));
+        }
+        if !matches!(&*state, StopDispatchAuthority::AvailableUnproved) {
+            return Err(GatewayError::Stop(
+                "Gateway stop recipient proof was already started".into(),
+            ));
+        }
+        *state = StopDispatchAuthority::Proving;
+        Ok(())
+    }
+
+    pub fn prove(
+        &self,
+        candidate: ReconciliationIncarnation,
+        observation_version: u64,
+    ) -> Result<(), GatewayError> {
+        let intended = self.request.intended.audit_identity()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        if self.deadline_passed() {
+            *state = StopDispatchAuthority::Revoked;
+            return Err(GatewayError::Stop(
+                "Gateway stop recipient proof arrived after its deadline".into(),
+            ));
+        }
+        if !matches!(&*state, StopDispatchAuthority::Proving) || candidate != intended {
+            return Err(GatewayError::Stop(
+                "Gateway stop recipient differs from the intended incarnation".into(),
+            ));
+        }
+        let latest = self.latest_observation_version.load(Ordering::SeqCst);
+        if observation_version < latest {
+            return Err(GatewayError::Stop(
+                "Gateway stop proof used an obsolete observation version".into(),
+            ));
+        }
+        self.latest_observation_version
+            .store(observation_version, Ordering::SeqCst);
+        *state = StopDispatchAuthority::Proved {
+            candidate,
+            observation_version,
+        };
+        Ok(())
+    }
+
+    /// Atomically consume the proof immediately before the native call.
+    pub fn claim(
+        &self,
+        plan: &AuditDeliveryReceipt,
+        candidate: &ReconciliationIncarnation,
+        observation_version: u64,
+    ) -> Result<(), GatewayError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        if self.deadline_passed() {
+            *state = StopDispatchAuthority::Revoked;
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline revoked dispatch authority".into(),
+            ));
+        }
+        let valid_plan = plan.attempt_correlation() == self.request.attempt.correlation()
+            && plan.sequence() == 1
+            && plan.record_kind()
+                == crate::gateway::domain::value_objects::LifecycleRecordKind::EffectPlan;
+        let matches_proof = matches!(
+            &*state,
+            StopDispatchAuthority::Proved {
+                candidate: proved,
+                observation_version: proved_version,
+            } if proved == candidate && *proved_version == observation_version
+        ) && self.latest_observation_version.load(Ordering::SeqCst)
+            == observation_version;
+        if !valid_plan || !matches_proof {
+            return Err(GatewayError::Stop(
+                "Gateway stop proof, plan, or observation version changed before dispatch".into(),
+            ));
+        }
+        *state = StopDispatchAuthority::Claimed;
+        Ok(())
+    }
+
+    /// Advance the application observation version while a proof is still
+    /// revocable. A later claim for an older proof is refused.
+    #[cfg(test)]
+    pub fn observation_changed(&self, observation_version: u64) {
+        self.latest_observation_version
+            .fetch_max(observation_version, Ordering::SeqCst);
+    }
+
+    pub fn command_result(&self, result: LifecycleCommandResult) -> Result<(), GatewayError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        if !matches!(&*state, StopDispatchAuthority::Claimed) {
+            return Err(GatewayError::Stop(
+                "Gateway stop command returned without dispatch authority".into(),
+            ));
+        }
+        *state = StopDispatchAuthority::CommandResult(result);
+        Ok(())
+    }
+
+    pub fn fresh_observation(&self, observation: LifecycleObservation) -> Result<(), GatewayError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        let StopDispatchAuthority::CommandResult(command) = &*state else {
+            return Err(GatewayError::Stop(
+                "Gateway stop observation has no command result".into(),
+            ));
+        };
+        let command = command.clone();
+        *state = StopDispatchAuthority::FreshObservation {
+            command,
+            observation,
+        };
+        Ok(())
+    }
+
+    pub fn settlement(
+        &self,
+    ) -> Result<(LifecycleCommandResult, LifecycleObservation), GatewayError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        match &*state {
+            StopDispatchAuthority::FreshObservation {
+                command,
+                observation,
+            }
+            | StopDispatchAuthority::OutcomeDelivery {
+                command,
+                observation,
+            } => Ok((command.clone(), observation.clone())),
+            _ => Err(GatewayError::Stop(
+                "Gateway stop did not reach a fresh observation".into(),
+            )),
+        }
+    }
+
+    /// Authorize one immediate terminal-outcome delivery from settled facts.
+    ///
+    /// Callers invoke this again before an exact retry so the same monotonic
+    /// deadline guards every audit-port call, including a retry that starts
+    /// after the first call consumed the remaining budget.
+    pub(crate) fn begin_outcome_delivery(&self) -> Result<(), GatewayError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        if self.clock.now() >= self.request.deadline {
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed before outcome delivery".into(),
+            ));
+        }
+        let (command, observation) = match &*state {
+            StopDispatchAuthority::FreshObservation {
+                command,
+                observation,
+            }
+            | StopDispatchAuthority::OutcomeDelivery {
+                command,
+                observation,
+            } => (command.clone(), observation.clone()),
+            _ => {
+                return Err(GatewayError::Stop(
+                    "Gateway stop outcome has no settled physical facts".into(),
+                ))
+            }
+        };
+        *state = StopDispatchAuthority::OutcomeDelivery {
+            command,
+            observation,
+        };
+        Ok(())
+    }
+
+    pub fn expire_at_deadline(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            match &*state {
+                StopDispatchAuthority::AvailableUnproved
+                | StopDispatchAuthority::Proving
+                | StopDispatchAuthority::Proved { .. } => {
+                    *state = StopDispatchAuthority::Revoked;
+                }
+                StopDispatchAuthority::Claimed => {
+                    *state = StopDispatchAuthority::CommandResult(
+                        LifecycleCommandResult::Indeterminate(
+                            "gateway stop dispatch remained in flight at the quit deadline".into(),
+                        ),
+                    );
+                }
+                StopDispatchAuthority::CommandResult(_)
+                | StopDispatchAuthority::FreshObservation { .. }
+                | StopDispatchAuthority::OutcomeDelivery { .. }
+                | StopDispatchAuthority::Revoked => {}
+            }
+        }
+    }
+}
+
+/// Monotonic time used to arbitrate lifecycle deadlines.
+pub trait MonotonicClock: Send + Sync {
+    fn now(&self) -> Instant;
+
+    /// Wait between bounded retries. Test clocks may advance or coordinate
+    /// deterministically instead of sleeping the process thread.
+    fn wait(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
+/// Process monotonic clock used by desktop composition.
+pub struct SystemMonotonicClock;
+
+impl MonotonicClock for SystemMonotonicClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayPhysicalResult {
+    Succeeded,
+    Failed(Box<GatewayError>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     Registration(String),
     Audit {
         audit: String,
-        physical: Option<Box<GatewayError>>,
+        physical: Option<GatewayPhysicalResult>,
     },
     NotReconciled,
     Stop(String),
@@ -97,7 +440,14 @@ impl fmt::Display for GatewayError {
             Self::Audit { audit, physical } => {
                 write!(f, "gateway reconciliation audit failed: {audit}")?;
                 if let Some(physical) = physical {
-                    write!(f, "; physical reconciliation also failed: {physical}")?;
+                    match physical {
+                        GatewayPhysicalResult::Succeeded => {
+                            f.write_str("; physical reconciliation succeeded")?
+                        }
+                        GatewayPhysicalResult::Failed(error) => {
+                            write!(f, "; physical reconciliation also failed: {error}")?
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -168,19 +518,46 @@ pub trait GatewayStartupEvents: Send + Sync {
 pub trait GatewayReconciliationProgress: Send + Sync {
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     fn readiness_invalidated(&self);
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError>;
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     fn history_observed(&self, fact: ReconciliationHistoryFact);
+
+    fn effect_planned(
+        &self,
+        plan_id: &str,
+        primary: &LifecyclePlanStep,
+        cleanup: &[LifecyclePlanStep],
+    ) -> Result<AuditDeliveryReceipt, GatewayError>;
+
+    fn effect_completed(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        result: &LifecycleCommandResult,
+    ) -> Result<AuditDeliveryReceipt, GatewayError>;
+
+    fn physical_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        incarnation: Option<ReconciliationIncarnation>,
+        target_artifact_present: bool,
+    ) -> Result<LifecycleObservation, GatewayError>;
+
+    /// Retry the exact observation whose publication may have succeeded before
+    /// acknowledgement. Returns `None` when no observation is pending.
+    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
+        Ok(None)
+    }
 }
 
 /// One caller's immutable request to the serialized reconciliation owner.
@@ -198,7 +575,7 @@ impl GatewayReconciliationRequest {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
@@ -232,7 +609,7 @@ impl GatewayReconciliationAttempt {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn correlation(&self) -> &ReconciliationCorrelation {
         self.record.correlation()
@@ -262,7 +639,7 @@ pub struct GatewayReconciliationIntent {
 impl GatewayReconciliationIntent {
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn new(
         attempt: GatewayReconciliationAttempt,
@@ -280,7 +657,7 @@ impl GatewayReconciliationIntent {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
         &self.attempt
@@ -288,7 +665,7 @@ impl GatewayReconciliationIntent {
 
     #[cfg_attr(
         all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn target(&self) -> &ReconciliationTarget {
         self.record.target()
@@ -296,7 +673,7 @@ impl GatewayReconciliationIntent {
 
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
+        allow(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.record.before()
@@ -377,6 +754,7 @@ pub struct GatewayReconciliationOutcome {
     intent_delivery: GatewayReconciliationIntentDelivery,
     effect_timing: GatewayReconciliationEffectTiming,
     effect: GatewayReconciliationEffect,
+    failed_phase: LifecycleFailedPhase,
 }
 
 impl GatewayReconciliationOutcome {
@@ -385,6 +763,7 @@ impl GatewayReconciliationOutcome {
         intent_delivery: GatewayReconciliationIntentDelivery,
         effect_timing: GatewayReconciliationEffectTiming,
         facts: Vec<ReconciliationHistoryFact>,
+        failed_phase: LifecycleFailedPhase,
         physical: Result<ReconciliationIncarnation, GatewayError>,
     ) -> Self {
         let physical_record = match &physical {
@@ -443,37 +822,21 @@ impl GatewayReconciliationOutcome {
             intent_delivery,
             effect_timing,
             effect,
+            failed_phase,
         }
     }
 
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
-        self.intent.attempt()
-    }
-
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn intent(&self) -> &GatewayReconciliationIntent {
         &self.intent
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn intent_delivery(&self) -> &GatewayReconciliationIntentDelivery {
         &self.intent_delivery
     }
 
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn effect_timing(&self) -> GatewayReconciliationEffectTiming {
         self.effect_timing
     }
@@ -482,51 +845,179 @@ impl GatewayReconciliationOutcome {
         self.record.cleanup()
     }
 
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn physical(&self) -> &ReconciliationPhysicalRecord {
-        self.record.physical()
-    }
-
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+    #[cfg(test)]
     pub fn reported_history(&self) -> &[ReconciliationHistoryFact] {
         self.record.reported_history()
-    }
-
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
-    pub fn validation(&self) -> &ReconciliationValidationFacts {
-        self.record.validation()
     }
 
     pub fn effect(&self) -> &GatewayReconciliationEffect {
         &self.effect
     }
+
+    pub fn failed_phase(&self) -> LifecycleFailedPhase {
+        self.failed_phase
+    }
 }
 
-/// Durable audit boundary for caller coalescing and native reconciliation.
-pub trait GatewayReconciliationAudit: Send + Sync {
-    #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
-        expect(dead_code, reason = "native reconciliation is supported only on macOS")
-    )]
+/// One locked lifecycle-journal session for a serialized native attempt.
+///
+/// The session owns stage-wide ordering from restore through terminal outcome.
+/// Dropping it releases the stage lock even when audit delivery or native work
+/// fails.
+pub trait GatewayReconciliationJournalSession: Send + Sync {
+    /// Return a sole validated unresolved lifecycle restored while acquiring
+    /// this stage-wide session. A fresh session returns `None`.
+    fn recovery(&self) -> Option<GatewayLifecycleRecovery> {
+        None
+    }
+
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
 
     fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
 
-    /// Records a caller whose request joined an already-running attempt.
-    fn joined(
+    /// Records a caller whose request joined this admitted attempt.
+    fn joined(&self, joined: &GatewayReconciliationRequest) -> Result<(), GatewayError>;
+
+    fn effect_plan(
         &self,
+        plan_id: &str,
+        expected_before: Option<&ReconciliationIncarnation>,
+        target: &ReconciliationTarget,
+        primary: &LifecyclePlanStep,
+        cleanup: &[LifecyclePlanStep],
+    ) -> Result<AuditDeliveryReceipt, GatewayError>;
+
+    fn effect_completion(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        result: &LifecycleCommandResult,
+    ) -> Result<AuditDeliveryReceipt, GatewayError>;
+
+    fn observation(
+        &self,
+        source: &LifecycleObservationSource,
+        state: &LifecycleObservation,
+    ) -> Result<AuditDeliveryReceipt, GatewayError>;
+
+    fn physical_outcome(
+        &self,
+        physical: &LifecyclePhysicalOutcome,
+        last_confirmed: Option<&LifecycleObservation>,
+        cleanup: ReconciliationCleanupDecision,
+    ) -> Result<AuditDeliveryReceipt, GatewayError>;
+}
+
+/// Exact persisted authority that must settle before a fresh attempt starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayLifecycleRecovery {
+    attempt: GatewayReconciliationAttempt,
+    target: ReconciliationTarget,
+    before: Option<ReconciliationIncarnation>,
+    has_effect_plan: bool,
+    latest_observation: Option<LifecycleObservation>,
+    pending_step: Option<GatewayLifecycleRecoveryStep>,
+    pending_observation_source: Option<LifecycleObservationSource>,
+}
+
+/// Exact persisted effect boundary awaiting completion or observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayLifecycleRecoveryStep {
+    plan_id: String,
+    step: LifecyclePlanStep,
+    completion: Option<LifecycleCommandResult>,
+}
+
+impl GatewayLifecycleRecoveryStep {
+    pub(crate) fn new(
+        plan_id: String,
+        step: LifecyclePlanStep,
+        completion: Option<LifecycleCommandResult>,
+    ) -> Self {
+        Self {
+            plan_id,
+            step,
+            completion,
+        }
+    }
+
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    pub fn step(&self) -> &LifecyclePlanStep {
+        &self.step
+    }
+
+    pub fn completion(&self) -> Option<&LifecycleCommandResult> {
+        self.completion.as_ref()
+    }
+
+    pub fn source(&self) -> LifecycleObservationSource {
+        LifecycleObservationSource::Effect {
+            plan_id: self.plan_id.clone(),
+            step_id: self.step.id().to_owned(),
+        }
+    }
+}
+
+impl GatewayLifecycleRecovery {
+    pub(crate) fn new(
+        attempt: GatewayReconciliationAttempt,
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+        has_effect_plan: bool,
+        latest_observation: Option<LifecycleObservation>,
+        pending_step: Option<GatewayLifecycleRecoveryStep>,
+        pending_observation_source: Option<LifecycleObservationSource>,
+    ) -> Self {
+        Self {
+            attempt,
+            target,
+            before,
+            has_effect_plan,
+            latest_observation,
+            pending_step,
+            pending_observation_source,
+        }
+    }
+
+    pub fn attempt(&self) -> &GatewayReconciliationAttempt {
+        &self.attempt
+    }
+
+    pub fn target(&self) -> &ReconciliationTarget {
+        &self.target
+    }
+
+    pub fn before(&self) -> Option<&ReconciliationIncarnation> {
+        self.before.as_ref()
+    }
+
+    pub fn has_effect_plan(&self) -> bool {
+        self.has_effect_plan
+    }
+
+    pub fn latest_observation(&self) -> Option<&LifecycleObservation> {
+        self.latest_observation.as_ref()
+    }
+
+    pub fn pending_step(&self) -> Option<&GatewayLifecycleRecoveryStep> {
+        self.pending_step.as_ref()
+    }
+
+    pub fn pending_observation_source(&self) -> Option<&LifecycleObservationSource> {
+        self.pending_observation_source.as_ref()
+    }
+}
+
+/// Opens the single durable lifecycle journal for one serialized attempt.
+pub trait GatewayReconciliationAudit: Send + Sync {
+    fn open(
+        self: Arc<Self>,
         attempt: &GatewayReconciliationAttempt,
-        joined: &GatewayReconciliationRequest,
-    ) -> Result<(), GatewayError>;
+        deadline: Option<Instant>,
+    ) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError>;
 }
 /// Why the user's login shell did not produce a search path.
 ///
@@ -597,7 +1088,26 @@ pub trait GatewayHost: Send + Sync {
         attempt: &GatewayReconciliationAttempt,
         progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError>;
-    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError>;
+
+    /// Reobserve and settle one validated persisted lifecycle before current
+    /// configuration is allowed to allocate or mutate anything.
+    fn recover(
+        &self,
+        recovery: &GatewayLifecycleRecovery,
+        journal: &dyn GatewayReconciliationJournalSession,
+    ) -> Result<(), GatewayError> {
+        let _ = (recovery, journal);
+        Err(GatewayError::Registration(
+            "The unresolved gateway lifecycle cannot be safely settled by this host".into(),
+        ))
+    }
+
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError>;
 }
 
 /// Substitutes for these ports, beside the ports themselves, so every module
@@ -611,14 +1121,20 @@ pub trait GatewayHost: Send + Sync {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::{
-        GatewayError, GatewayReconciliationAttempt, GatewayReconciliationAudit,
-        GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationOutcome,
-        GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, LoginShellError,
-        LoginShellPath, ReconciliationCorrelation, SearchPath,
+        AuditDeliveryReceipt, GatewayError, GatewayReconciliationAttempt,
+        GatewayReconciliationAudit, GatewayReconciliationIds, GatewayReconciliationIntent,
+        GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
+        GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, LifecycleCommandResult,
+        LifecycleObservation, LifecycleObservationSource, LifecyclePhysicalOutcome,
+        LifecyclePlanStep, LoginShellError, LoginShellPath, ReconciliationCleanupDecision,
+        ReconciliationCorrelation, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     };
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
+    use std::{
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
+        time::Instant,
     };
 
     /// A login shell with a fixed answer — the path it reports, or the reason
@@ -663,7 +1179,9 @@ pub(crate) mod testing {
 
     pub(crate) struct DiscardReconciliationAudit;
 
-    impl GatewayReconciliationAudit for DiscardReconciliationAudit {
+    struct DiscardJournalSession(ReconciliationCorrelation);
+
+    impl GatewayReconciliationJournalSession for DiscardJournalSession {
         fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
             Ok(())
         }
@@ -672,12 +1190,73 @@ pub(crate) mod testing {
             Ok(())
         }
 
-        fn joined(
-            &self,
-            _: &GatewayReconciliationAttempt,
-            _: &GatewayReconciliationRequest,
-        ) -> Result<(), GatewayError> {
+        fn joined(&self, _: &GatewayReconciliationRequest) -> Result<(), GatewayError> {
             Ok(())
+        }
+
+        fn effect_plan(
+            &self,
+            _: &str,
+            _: Option<&ReconciliationIncarnation>,
+            _: &ReconciliationTarget,
+            _: &LifecyclePlanStep,
+            _: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(AuditDeliveryReceipt::new(
+                self.0.clone(),
+                1,
+                crate::gateway::domain::value_objects::LifecycleRecordKind::EffectPlan,
+            ))
+        }
+
+        fn effect_completion(
+            &self,
+            _: &str,
+            _: &str,
+            _: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(AuditDeliveryReceipt::new(
+                self.0.clone(),
+                2,
+                crate::gateway::domain::value_objects::LifecycleRecordKind::EffectCompletion,
+            ))
+        }
+
+        fn observation(
+            &self,
+            _: &LifecycleObservationSource,
+            _: &LifecycleObservation,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(AuditDeliveryReceipt::new(
+                self.0.clone(),
+                3,
+                crate::gateway::domain::value_objects::LifecycleRecordKind::Observation,
+            ))
+        }
+
+        fn physical_outcome(
+            &self,
+            _: &LifecyclePhysicalOutcome,
+            _: Option<&LifecycleObservation>,
+            _: ReconciliationCleanupDecision,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(AuditDeliveryReceipt::new(
+                self.0.clone(),
+                4,
+                crate::gateway::domain::value_objects::LifecycleRecordKind::Outcome,
+            ))
+        }
+    }
+
+    impl GatewayReconciliationAudit for DiscardReconciliationAudit {
+        fn open(
+            self: Arc<Self>,
+            attempt: &GatewayReconciliationAttempt,
+            _: Option<Instant>,
+        ) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError> {
+            Ok(Arc::new(DiscardJournalSession(
+                attempt.correlation().clone(),
+            )))
         }
     }
 
@@ -692,6 +1271,28 @@ mod tests {
     use crate::gateway::domain::value_objects::{
         BundledSurface, ReconciliationCause, ReconciliationInitiator, ReconciliationRuntimeIdentity,
     };
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    struct ControlledClock(Mutex<Instant>);
+
+    impl ControlledClock {
+        fn new(now: Instant) -> Self {
+            Self(Mutex::new(now))
+        }
+
+        fn set(&self, now: Instant) {
+            *self.0.lock().expect("controlled clock") = now;
+        }
+    }
+
+    impl MonotonicClock for ControlledClock {
+        fn now(&self) -> Instant {
+            *self.0.lock().expect("controlled clock")
+        }
+    }
 
     fn correlation(serial: u64) -> ReconciliationCorrelation {
         ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}"))
@@ -754,6 +1355,7 @@ mod tests {
             )),
             GatewayReconciliationEffectTiming::BeforeIntentAcknowledgement,
             replacement_history(),
+            LifecycleFailedPhase::NativeDispatch,
             Ok(after.clone()),
         );
         let GatewayReconciliationEffect::RejectedReport { report, error, .. } = outcome.effect()
@@ -783,6 +1385,7 @@ mod tests {
             GatewayReconciliationIntentDelivery::Acknowledged,
             GatewayReconciliationEffectTiming::BeforeIntentReservation,
             reported.clone(),
+            LifecycleFailedPhase::NativeDispatch,
             Ok(claimed.clone()),
         );
         let GatewayReconciliationEffect::RejectedReport { report, .. } = outcome.effect() else {
@@ -807,6 +1410,7 @@ mod tests {
             GatewayReconciliationIntentDelivery::Acknowledged,
             GatewayReconciliationEffectTiming::AfterIntentAcknowledgement,
             replacement_history(),
+            LifecycleFailedPhase::Observation,
             Err(GatewayError::Registration("readiness failed".into())),
         );
         assert!(matches!(
@@ -815,5 +1419,159 @@ mod tests {
                 if error == &GatewayError::Registration("readiness failed".into())
         ));
         assert_eq!(outcome.cleanup(), ReconciliationCleanupDecision::ClearPrior);
+    }
+
+    fn stop_session(
+        deadline: Instant,
+    ) -> (
+        GatewayStopSession,
+        ReconciliationIncarnation,
+        AuditDeliveryReceipt,
+    ) {
+        stop_session_with_clock(deadline, Arc::new(SystemMonotonicClock))
+    }
+
+    fn stop_session_with_clock(
+        deadline: Instant,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> (
+        GatewayStopSession,
+        ReconciliationIncarnation,
+        AuditDeliveryReceipt,
+    ) {
+        let evidence = ReconciliationEvidence::new(
+            ReconciliationCause::DesktopQuitPolicy,
+            ReconciliationInitiator::DesktopHost,
+        )
+        .unwrap();
+        let request = GatewayReconciliationRequest::new(correlation(20), evidence);
+        let attempt = GatewayReconciliationAttempt::new(correlation(21), request).unwrap();
+        let intended = incarnation(target("service"), 22, 42);
+        let gateway = ReconciledGateway::new(
+            intended.target().service().into(),
+            intended.target().runtime_fingerprint().into(),
+            intended.runtime_instance().into(),
+            intended.target().service_generation().into(),
+            intended.process_id(),
+            intended.port(),
+        );
+        let receipt = AuditDeliveryReceipt::new(
+            attempt.correlation().clone(),
+            1,
+            crate::gateway::domain::value_objects::LifecycleRecordKind::EffectPlan,
+        );
+        (
+            GatewayStopSession::new(GatewayStopRequest::new(attempt, gateway, deadline), clock),
+            intended,
+            receipt,
+        )
+    }
+
+    #[test]
+    fn stop_proof_arriving_after_deadline_cannot_claim_dispatch() {
+        let (session, intended, receipt) = stop_session(Instant::now());
+        assert!(session.begin_proof().is_err());
+        assert!(session.claim(&receipt, &intended, 1).is_err());
+    }
+
+    #[test]
+    fn stop_claim_requires_the_proved_identity_and_observation_version() {
+        let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 7).unwrap();
+        assert!(session.claim(&receipt, &intended, 8).is_err());
+        session.observation_changed(8);
+        assert!(session.claim(&receipt, &intended, 7).is_err());
+
+        let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 7).unwrap();
+        session.claim(&receipt, &intended, 7).unwrap();
+        assert!(session.claim(&receipt, &intended, 7).is_err());
+    }
+
+    #[test]
+    fn deadline_revokes_a_proof_that_finishes_late_without_a_dispatch_claim() {
+        let start = Instant::now();
+        let clock = Arc::new(ControlledClock::new(start));
+        let (session, intended, receipt) =
+            stop_session_with_clock(start + Duration::from_secs(1), clock.clone());
+        session.begin_proof().unwrap();
+        clock.set(start + Duration::from_secs(1));
+        assert!(session.prove(intended.clone(), 1).is_err());
+        assert!(session.claim(&receipt, &intended, 1).is_err());
+    }
+
+    #[test]
+    fn claim_and_deadline_use_one_clock_and_lock_in_either_order() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(1);
+
+        let clock = Arc::new(ControlledClock::new(start));
+        let (claimed, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
+        claimed.begin_proof().unwrap();
+        claimed.prove(intended.clone(), 1).unwrap();
+        claimed.claim(&receipt, &intended, 1).unwrap();
+        clock.set(deadline);
+        claimed.expire_at_deadline();
+        assert!(claimed
+            .command_result(LifecycleCommandResult::Accepted)
+            .is_err());
+
+        let clock = Arc::new(ControlledClock::new(start));
+        let (revoked, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
+        revoked.begin_proof().unwrap();
+        revoked.prove(intended.clone(), 1).unwrap();
+        clock.set(deadline);
+        assert!(revoked.claim(&receipt, &intended, 1).is_err());
+        assert!(revoked
+            .command_result(LifecycleCommandResult::Accepted)
+            .is_err());
+    }
+
+    #[test]
+    fn accepted_label_command_keeps_a_replacement_observation_separate() {
+        let (session, intended, receipt) = stop_session(Instant::now() + Duration::from_secs(60));
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 1).unwrap();
+        session.claim(&receipt, &intended, 1).unwrap();
+        session
+            .command_result(LifecycleCommandResult::Accepted)
+            .unwrap();
+        let replacement =
+            LifecycleObservation::new(2, Some(incarnation(target("service"), 23, 43)), true);
+        session.fresh_observation(replacement.clone()).unwrap();
+
+        assert_eq!(
+            session.settlement().unwrap(),
+            (LifecycleCommandResult::Accepted, replacement)
+        );
+        assert_ne!(
+            session.settlement().unwrap().1.incarnation(),
+            Some(&intended)
+        );
+    }
+
+    #[test]
+    fn outcome_start_uses_the_stop_clock_and_preserves_settled_facts_at_deadline() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(1);
+        let clock = Arc::new(ControlledClock::new(start));
+        let (session, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 1).unwrap();
+        session.claim(&receipt, &intended, 1).unwrap();
+        session
+            .command_result(LifecycleCommandResult::Accepted)
+            .unwrap();
+        let observation = LifecycleObservation::new(2, Some(intended), true);
+        session.fresh_observation(observation.clone()).unwrap();
+
+        clock.set(deadline);
+        assert!(session.begin_outcome_delivery().is_err());
+        assert_eq!(
+            session.settlement().unwrap(),
+            (LifecycleCommandResult::Accepted, observation)
+        );
     }
 }

@@ -21,6 +21,33 @@ pub struct PrivateDirectory {
 }
 
 impl PrivateDirectory {
+    /// Create and retain an absolute private directory in one transaction.
+    ///
+    /// Every newly created component from `private_root` through `directory`
+    /// remains owned by the acquisition until the retained handle and its full
+    /// binding chain have been verified. A later failure rolls back only exact,
+    /// unchanged, empty components created by this call.
+    #[cfg(unix)]
+    pub fn create_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
+        let inner = platform::create_private_directory_path_and_then(directory, || {
+            platform::RetainedDirectory::open_path(private_root, directory)
+        })?;
+        Ok(Self { inner })
+    }
+
+    /// Retain an absolute private directory through trusted locator ancestry.
+    ///
+    /// Locator ancestors before `private_root` may be owned by root or the
+    /// current user and may have ordinary read/execute permissions, but may not
+    /// be group/other writable. `private_root`, the final directory, and every
+    /// component between them must remain current-user-owned and mode `0700`.
+    #[cfg(unix)]
+    pub fn open_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::RetainedDirectory::open_path(private_root, directory)?,
+        })
+    }
+
     /// Acquire `directory` once beneath `root` and retain that exact object.
     ///
     /// `root` must be absolute. `directory` must be non-empty, relative, and
@@ -58,6 +85,22 @@ impl PrivateDirectory {
         Ok(matches)
     }
 
+    /// Remove `name` only while it still identifies the supplied open file.
+    ///
+    /// This is intended for recovery cleanup of a caller-recognized abandoned
+    /// temporary. The caller retains the file handle from inspection through
+    /// deletion, so a replacement at the same name is refused rather than
+    /// removed. On Windows, a mutation-capable handle that pins its name is
+    /// refused because the operating system cannot remove that name while the
+    /// caller retains the handle. Call [`Self::sync`] before claiming that
+    /// deletion is durable.
+    pub fn remove_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        validate_name(name)?;
+        self.verify_binding()?;
+        self.inner.remove_file(name, file)?;
+        self.verify_binding()
+    }
+
     /// Verify that every retained directory still has its original name in its
     /// original parent, including the trusted root path.
     pub fn verify_binding(&self) -> io::Result<()> {
@@ -81,10 +124,19 @@ impl PrivateDirectory {
         for _ in 0..10 {
             let name = temporary_name()?;
             match self.inner.reserve_temp(&name) {
-                Ok(file) => {
+                Ok(authority) => {
+                    let file = match self.inner.open_reserved(&name, &authority) {
+                        Ok(file) => file,
+                        Err(source) => {
+                            let cleanup = self.inner.remove_reserved(&name, &authority);
+                            drop(authority);
+                            return Err(cleanup.err().unwrap_or(source));
+                        }
+                    };
                     return Ok(PrivateDirectoryTempFile {
                         directory: self,
                         file: Some(file),
+                        authority: Some(authority),
                         name,
                         cleanup_required: true,
                     });
@@ -288,6 +340,7 @@ impl Error for PrivatePublicationFailure {
 pub struct PrivateDirectoryTempFile<'directory> {
     directory: &'directory PrivateDirectory,
     file: Option<File>,
+    authority: Option<File>,
     name: OsString,
     cleanup_required: bool,
 }
@@ -333,7 +386,11 @@ impl PrivateDirectoryTempFile<'_> {
             return Err(self.fail_before(PrivatePublicationStage::VerifyOriginBinding, error));
         }
         let file = self.file.as_ref().expect("temporary file is open");
-        match self.directory.named_file_is(&self.name, file) {
+        let authority = self
+            .authority
+            .as_ref()
+            .expect("reservation authority is open");
+        match self.directory.named_file_is(&self.name, authority) {
             Ok(true) => {}
             Ok(false) => {
                 return Err(
@@ -347,7 +404,7 @@ impl PrivateDirectoryTempFile<'_> {
         if let Err(error) = file.sync_all() {
             return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
         }
-        let identity = match self.directory.inner.file_identity(file) {
+        let identity = match self.directory.inner.file_identity(authority) {
             Ok(identity) => identity,
             Err(error) => {
                 return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
@@ -356,7 +413,7 @@ impl PrivateDirectoryTempFile<'_> {
         if let Err(error) = self
             .directory
             .inner
-            .publish_new(&self.name, destination, file)
+            .publish_new(&self.name, destination, authority)
         {
             return Err(self.fail_before(PrivatePublicationStage::Rename, error));
         }
@@ -370,6 +427,77 @@ impl PrivateDirectoryTempFile<'_> {
             file: self.file.take().expect("temporary file is open"),
         };
 
+        acknowledge_publication(
+            published,
+            |published| published.file.sync_all(),
+            |published| match self
+                .directory
+                .inner
+                .named_file_is(&published.name, &published.file)?
+            {
+                true => Ok(()),
+                false => Err(unsafe_file()),
+            },
+            || self.directory.verify_binding(),
+            || self.directory.inner.sync(),
+            || self.directory.verify_binding(),
+        )
+    }
+
+    /// Atomically replace one name in the originating retained directory.
+    ///
+    /// Rename success disarms reservation cleanup. The returned handle retains
+    /// the published identity even when a later acknowledgement step fails.
+    #[cfg(unix)]
+    pub fn replace(
+        mut self,
+        destination: &OsStr,
+    ) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
+        if let Err(error) = validate_name(destination) {
+            return Err(self.fail_before(PrivatePublicationStage::ValidateDestination, error));
+        }
+        if let Err(error) = self.directory.verify_binding() {
+            return Err(self.fail_before(PrivatePublicationStage::VerifyOriginBinding, error));
+        }
+        let file = self.file.as_ref().expect("temporary file is open");
+        let authority = self
+            .authority
+            .as_ref()
+            .expect("reservation authority is open");
+        match self.directory.named_file_is(&self.name, authority) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(
+                    self.fail_before(PrivatePublicationStage::ValidateReservation, unsafe_file())
+                );
+            }
+            Err(error) => {
+                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
+            }
+        }
+        if let Err(error) = file.sync_all() {
+            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
+        }
+        let identity = match self.directory.inner.file_identity(authority) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
+            }
+        };
+        if let Err(error) = self
+            .directory
+            .inner
+            .replace(&self.name, destination, authority)
+        {
+            return Err(self.fail_before(PrivatePublicationStage::Rename, error));
+        }
+
+        self.cleanup_required = false;
+        let published = PublishedPrivateFile {
+            name: destination.to_owned(),
+            identity,
+            file: self.file.take().expect("temporary file is open"),
+        };
         acknowledge_publication(
             published,
             |published| published.file.sync_all(),
@@ -410,7 +538,7 @@ impl PrivateDirectoryTempFile<'_> {
     fn remove_reserved(&self) -> io::Result<()> {
         self.directory
             .inner
-            .remove_reserved(&self.name, self.file.as_ref().ok_or_else(unsafe_file)?)
+            .remove_reserved(&self.name, self.authority.as_ref().ok_or_else(unsafe_file)?)
     }
 }
 

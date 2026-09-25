@@ -368,7 +368,7 @@ fn validate_private_tree(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn validate_runtime(directory: &Path, expected: &str) -> Result<(), String> {
+pub(super) fn validate_runtime(directory: &Path, expected: &str) -> Result<(), String> {
     let metadata = fs::symlink_metadata(directory).map_err(|error| error.to_string())?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("Published runtime must be a real directory".into());

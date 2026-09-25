@@ -16,6 +16,8 @@ mod windows;
 #[cfg(windows)]
 use windows as platform;
 
+#[cfg(unix)]
+pub use platform::create_private_directory_path;
 pub use platform::{
     create_directory, create_directory_beneath, open, open_beneath, remove_directory_beneath,
     remove_file_beneath, replace, replace_beneath, sync_directory, sync_directory_beneath,
@@ -752,5 +754,19 @@ mod tests {
             std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
             0o700
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_private_tree_failure_rolls_back_only_new_unchanged_empty_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let existing = root.path().join("existing");
+        create_directory(&existing).unwrap();
+        let created = existing.join("created-by-attempt");
+        let invalid_leaf = "x".repeat(300);
+
+        assert!(create_private_directory_path(&created.join(invalid_leaf)).is_err());
+        assert!(existing.is_dir());
+        assert!(!created.exists());
     }
 }

@@ -29,7 +29,10 @@ mod updater;
 use composition::HostDependencies;
 use gateway::application::Gateway;
 use settings::SettingsStore;
-use std::sync::Mutex;
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use tauri::{Manager, WindowEvent};
 
@@ -269,7 +272,7 @@ fn stop_agents_if_asked(settings: &dyn SettingsStore, gateway: Option<&Gateway>)
     if !settings.load().stop_agents_on_quit {
         return;
     }
-    if let Err(error) = gateway.stop_agents() {
+    if let Err(error) = gateway.stop_agents(Instant::now() + Duration::from_secs(5)) {
         eprintln!("[nessa] could not request agent shutdown: {error}");
     }
 }
@@ -279,9 +282,13 @@ mod tests {
     use super::*;
     use gateway::application::{
         GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-        GatewayReconciliationProgress, ReconciledGateway, ReconciliationHistoryFact,
+        GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
+        ReconciledGateway, ReconciliationHistoryFact,
     };
-    use gateway::domain::value_objects::SearchPath;
+    use gateway::domain::value_objects::{
+        AuditDeliveryReceipt, LifecycleCommandResult, LifecycleObservation,
+        LifecycleObservationSource, SearchPath,
+    };
     use settings::testing::in_memory;
     use std::path::Path;
     use std::sync::Arc;
@@ -328,12 +335,33 @@ mod tests {
             Ok(gateway)
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
             self.calls.lock().unwrap().push("stop");
-            match self.stop.lock().unwrap().clone() {
-                Some(error) => Err(error),
-                None => Ok(()),
+            if let Some(error) = self.stop.lock().unwrap().clone() {
+                return Err(error);
             }
+            let intended = session.request().intended().audit_identity()?;
+            session.begin_proof()?;
+            session.prove(intended.clone(), 1)?;
+            session.claim(plan, &intended, 1)?;
+            let command = LifecycleCommandResult::Accepted;
+            session.command_result(command.clone())?;
+            journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)?;
+            let observation = LifecycleObservation::new(2, Some(intended), true);
+            journal.observation(
+                &LifecycleObservationSource::Effect {
+                    plan_id: "stop-agents-on-desktop-quit".into(),
+                    step_id: "signal-agents".into(),
+                },
+                &observation,
+            )?;
+            session.fresh_observation(observation.clone())?;
+            Ok(observation)
         }
     }
 

@@ -130,6 +130,20 @@ impl RetainedDirectory {
         open_named(self.path(name)?, OpenMode::CreateNew, DELETE)
     }
 
+    pub fn open_reserved(&self, name: &OsStr, authority: &File) -> io::Result<File> {
+        let file = open_existing_with_sharing(
+            &self.path(name)?,
+            GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL,
+            false,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )?;
+        verify_file(&file)?;
+        if file_identity(&file)? != file_identity(authority)? {
+            return Err(unsafe_file());
+        }
+        Ok(file)
+    }
+
     pub fn publish_new(&self, _: &OsStr, to: &OsStr, file: &File) -> io::Result<()> {
         let name = wide(&self.path(to)?)?;
         let name_bytes = name
@@ -170,19 +184,34 @@ impl RetainedDirectory {
         }
     }
 
+    pub fn remove_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        if !self.named_file_is(name, file)? {
+            return Err(unsafe_file());
+        }
+        let deleting = open_existing(
+            &self.path(name)?,
+            DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL,
+            false,
+        )
+        .map_err(|error| {
+            if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) {
+                io::Error::new(io::ErrorKind::PermissionDenied, error)
+            } else {
+                error
+            }
+        })?;
+        verify_file(&deleting)?;
+        if file_identity(&deleting)? != file_identity(file)? {
+            return Err(unsafe_file());
+        }
+        mark_deleted_from_namespace(&deleting)
+    }
+
     pub fn remove_reserved(&self, name: &OsStr, file: &File) -> io::Result<()> {
         if !self.named_file_is(name, file)? {
             return Err(unsafe_file());
         }
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-        unsafe {
-            check(SetFileInformationByHandle(
-                file.as_raw_handle(),
-                FileDispositionInfo,
-                (&raw const disposition).cast(),
-                size_of::<FILE_DISPOSITION_INFO>() as u32,
-            ))
-        }
+        mark_deleted_from_namespace(file)
     }
 
     pub fn file_identity(&self, file: &File) -> io::Result<PrivateFileIdentity> {
@@ -202,6 +231,20 @@ impl RetainedDirectory {
             return Err(unsafe_file());
         }
         Ok(self.directory().path.join(name))
+    }
+}
+
+fn mark_deleted_from_namespace(file: &File) -> io::Result<()> {
+    let disposition = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+    };
+    unsafe {
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfoEx,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+        ))
     }
 }
 

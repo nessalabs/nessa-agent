@@ -6,8 +6,8 @@
 //! leaf identity check and effect.
 
 use super::{
-    open_child_directory, open_root, relative_components, verify_directory_file,
-    verify_identity_candidate,
+    open_child_directory, open_child_locator_directory, open_root, relative_components,
+    verify_directory_file, verify_identity_candidate, verify_locator_directory_file,
 };
 use crate::{
     retained_directory::{PrivateDirectoryEntry, PrivateFileIdentity, PrivateFileType},
@@ -19,7 +19,7 @@ use std::{
     io,
     os::unix::{
         ffi::{OsStrExt, OsStringExt},
-        fs::MetadataExt,
+        fs::{MetadataExt, OpenOptionsExt},
         io::{AsRawFd, FromRawFd},
     },
     path::{Path, PathBuf},
@@ -29,11 +29,24 @@ struct DirectoryBinding {
     file: File,
     identity: PrivateFileIdentity,
     name_in_parent: Option<CString>,
+    private: bool,
 }
 
 pub struct RetainedDirectory {
     root_path: PathBuf,
     chain: Vec<DirectoryBinding>,
+}
+
+fn absolute_components(path: &Path) -> io::Result<Vec<CString>> {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::RootDir => None,
+            std::path::Component::Normal(name) => {
+                Some(CString::new(name.as_bytes()).map_err(|_| unsafe_file()))
+            }
+            _ => Some(Err(unsafe_file())),
+        })
+        .collect()
 }
 
 impl RetainedDirectory {
@@ -47,6 +60,7 @@ impl RetainedDirectory {
             identity: directory_identity(&root_file)?,
             file: root_file,
             name_in_parent: None,
+            private: true,
         }];
         for component in components {
             let child = open_child_directory(&chain.last().expect("root exists").file, &component)?;
@@ -54,12 +68,57 @@ impl RetainedDirectory {
                 identity: directory_identity(&child)?,
                 file: child,
                 name_in_parent: Some(component),
+                private: true,
             });
         }
         let retained = Self {
             root_path: root.to_path_buf(),
             chain,
         };
+        retained.verify_binding()?;
+        Ok(retained)
+    }
+
+    pub fn open_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
+        if !private_root.is_absolute() || !directory.is_absolute() {
+            return Err(unsafe_file());
+        }
+        let private_components = absolute_components(private_root)?;
+        let components = absolute_components(directory)?;
+        if private_components.is_empty()
+            || components.len() < private_components.len()
+            || components[..private_components.len()] != private_components
+        {
+            return Err(unsafe_file());
+        }
+        let root_path = PathBuf::from("/");
+        let root_file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(&root_path)?;
+        verify_locator_directory_file(&root_file)?;
+        let mut chain = vec![DirectoryBinding {
+            identity: directory_identity(&root_file)?,
+            file: root_file,
+            name_in_parent: None,
+            private: false,
+        }];
+        let private_depth = private_components.len();
+        for (index, component) in components.into_iter().enumerate() {
+            let private = index + 1 >= private_depth;
+            let child = if private {
+                open_child_directory(&chain.last().expect("root exists").file, &component)?
+            } else {
+                open_child_locator_directory(&chain.last().expect("root exists").file, &component)?
+            };
+            chain.push(DirectoryBinding {
+                identity: directory_identity(&child)?,
+                file: child,
+                name_in_parent: Some(component),
+                private,
+            });
+        }
+        let retained = Self { root_path, chain };
         retained.verify_binding()?;
         Ok(retained)
     }
@@ -142,15 +201,32 @@ impl RetainedDirectory {
     }
 
     pub fn verify_binding(&self) -> io::Result<()> {
-        let current_root = open_root(&self.root_path)?;
+        let current_root = if self.chain[0].private {
+            open_root(&self.root_path)?
+        } else {
+            let root = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+                .open(&self.root_path)?;
+            verify_locator_directory_file(&root)?;
+            root
+        };
         if directory_identity(&current_root)? != self.chain[0].identity {
             return Err(unsafe_file());
         }
         for index in 1..self.chain.len() {
             let parent = &self.chain[index - 1];
             let child = &self.chain[index];
-            verify_directory_file(&parent.file)?;
-            verify_directory_file(&child.file)?;
+            if parent.private {
+                verify_directory_file(&parent.file)?;
+            } else {
+                verify_locator_directory_file(&parent.file)?;
+            }
+            if child.private {
+                verify_directory_file(&child.file)?;
+            } else {
+                verify_locator_directory_file(&child.file)?;
+            }
             let name = child.name_in_parent.as_ref().expect("child has a name");
             let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
             let result = unsafe {
@@ -182,6 +258,14 @@ impl RetainedDirectory {
         self.open_file(name, OpenMode::CreateNew)
     }
 
+    pub fn open_reserved(&self, name: &OsStr, authority: &File) -> io::Result<File> {
+        let file = self.open_file(name, OpenMode::ReadWrite)?;
+        if self.file_identity(&file)? != self.file_identity(authority)? {
+            return Err(unsafe_file());
+        }
+        Ok(file)
+    }
+
     pub fn publish_new(&self, from: &OsStr, to: &OsStr, _: &File) -> io::Result<()> {
         let from = component(from)?;
         let to = component(to)?;
@@ -211,7 +295,31 @@ impl RetainedDirectory {
         Ok(())
     }
 
+    pub fn replace(&self, from: &OsStr, to: &OsStr, _: &File) -> io::Result<()> {
+        self.verify_binding()?;
+        let from = CString::new(from.as_bytes()).map_err(|_| unsafe_file())?;
+        let to = CString::new(to.as_bytes()).map_err(|_| unsafe_file())?;
+        let directory = self
+            .chain
+            .last()
+            .expect("retained directory has a root")
+            .file
+            .as_raw_fd();
+        if unsafe { libc::renameat(directory, from.as_ptr(), directory, to.as_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn remove_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        self.remove_named_file(name, file)
+    }
+
     pub fn remove_reserved(&self, name: &OsStr, file: &File) -> io::Result<()> {
+        self.remove_named_file(name, file)
+    }
+
+    fn remove_named_file(&self, name: &OsStr, file: &File) -> io::Result<()> {
         if !self.named_file_is(name, file)? {
             return Err(unsafe_file());
         }

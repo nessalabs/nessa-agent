@@ -18,7 +18,7 @@ write-through moves after file flush; Unix callers sync the containing directory
 | --- | --- |
 | `src/lib.rs` | Crate documentation, module declarations, path-based private-storage API, and the exact reservation-name syntax classifier. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
-| `src/unix/retained_directory.rs` | Retained directory descriptors, independent `openat(".")` enumeration cursors, identity checks, exclusive rename, cleanup, and directory sync. |
+| `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
 | `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` publication, and handle disposition cleanup. |
 | `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
 
@@ -29,6 +29,13 @@ and each iterator owns an independent native cursor. Consumers that coordinate
 records with a stable lock open a fresh lock handle for each lock attempt and use
 `named_file_is` against both the originally acquired lock and the current handle.
 They never recreate a missing or replaced lock through this API.
+
+Unix callers that receive an OS-resolved application directory may instead use
+`create_private_directory_path` and `PrivateDirectory::open_path`. Those APIs walk
+from `/` with no-follow directory handles, permit root/current-user locator
+ancestors only when group and other users cannot write them, require the final
+directory to be current-user-owned and private, and retain every traversed identity
+for later binding checks.
 
 Publication never replaces a destination. Its result keeps the exact destination,
 opaque native identity, and open file handle. If rename succeeds but a later flush,

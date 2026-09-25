@@ -1,7 +1,11 @@
+#[cfg(unix)]
+use nessa_local_storage::create_private_directory_path;
 use nessa_local_storage::{
     create_directory, create_private_directory_tree_beneath, is_private_temporary_name, OpenMode,
     PrivateDirectory, PrivateFileType, PrivatePublicationStage,
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::{
@@ -38,6 +42,27 @@ fn names(directory: &PrivateDirectory) -> Vec<(OsString, PrivateFileType)> {
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_private_path_allows_safe_locator_ancestry_and_retains_every_binding() {
+    let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let locator = temporary.path().join("locator");
+    std::fs::create_dir(&locator).unwrap();
+    std::fs::set_permissions(&locator, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let private_root = locator.join("Nessa");
+    let journal = private_root.join("stage/journal");
+    create_private_directory_path(&private_root).unwrap();
+    create_private_directory_path(&journal).unwrap();
+    let retained = PrivateDirectory::open_path(&private_root, &journal).unwrap();
+    retained.verify_binding().unwrap();
+    assert_eq!(
+        std::fs::metadata(&journal).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    std::fs::set_permissions(&private_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(retained.verify_binding().is_err());
 }
 
 #[test]
@@ -111,6 +136,26 @@ fn publication_returns_the_open_destination_for_identity_acknowledgement() {
     assert_eq!(bytes, b"published");
 }
 
+#[cfg(unix)]
+#[test]
+fn retained_replacement_publishes_the_reserved_identity_atomically() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "definition", b"old");
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"new").unwrap();
+
+    let published = reservation.replace(OsStr::new("definition")).unwrap();
+
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    assert_eq!(
+        std::fs::read(root.join("records/definition")).unwrap(),
+        b"new"
+    );
+    assert_eq!(names(&directory).len(), 1);
+}
+
 #[test]
 fn dropping_a_published_handle_keeps_the_destination() {
     let (_temporary, _root, directory) = fixture();
@@ -145,6 +190,72 @@ fn named_identity_rejects_a_multiply_linked_witness() {
             .kind(),
         std::io::ErrorKind::PermissionDenied
     );
+}
+
+#[test]
+fn recovery_removes_only_the_name_still_bound_to_the_open_file() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "abandoned", b"old temporary");
+    let old = directory
+        .open_file(OsStr::new("abandoned"), OpenMode::Read)
+        .unwrap();
+    std::fs::remove_file(root.join("records/abandoned")).unwrap();
+    write_named(&directory, "abandoned", b"replacement");
+
+    assert!(directory
+        .remove_file(OsStr::new("abandoned"), &old)
+        .is_err());
+    assert_eq!(
+        std::fs::read(root.join("records/abandoned")).unwrap(),
+        b"replacement"
+    );
+
+    let replacement = directory
+        .open_file(OsStr::new("abandoned"), OpenMode::Read)
+        .unwrap();
+    directory
+        .remove_file(OsStr::new("abandoned"), &replacement)
+        .unwrap();
+    directory.sync().unwrap();
+    assert!(!root.join("records/abandoned").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn recovery_refuses_a_reservation_witness_that_still_pins_its_name() {
+    let (_temporary, root, directory) = fixture();
+    let reservation = directory.reserve_temp().unwrap();
+    let path = root.join("records").join(reservation.name());
+
+    assert_eq!(
+        directory
+            .remove_file(reservation.name(), reservation.as_file())
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert!(path.exists());
+
+    reservation.discard().unwrap();
+    assert!(!path.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn consuming_reservation_cleanup_removes_the_name_while_a_witness_remains_open() {
+    let (_temporary, root, directory) = fixture();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"reserved").unwrap();
+    let path = root.join("records").join(reservation.name());
+    let mut witness = reservation.as_file().try_clone().unwrap();
+
+    reservation.discard().unwrap();
+
+    assert!(!path.exists());
+    witness.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = Vec::new();
+    witness.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"reserved");
 }
 
 #[test]

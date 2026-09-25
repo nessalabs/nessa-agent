@@ -863,17 +863,12 @@ registration already left inactive by replacement before it adopted staging. The
 cannot prove the configuration retained by launchd; diagnostic output is not a
 supported full-definition API. This case requires explicit service management
 rather than automatic bootout inferred from unavailable health or disk contents.
-Installation failures preserve the desired definition and any loaded replacement
-for forward recovery through Retry. Before asking launchd to bootstrap a new
-definition, the host stores a private durable install-attempt record containing
-the exact service, definition, fingerprint and generation. It removes that record
-after verified readiness. If readiness fails, Retry may unload and bootstrap the
-unambiguously PID-less unavailable
-registration only while the record, current desired definition and complete plist
-still agree under the same service-label lock. A missing, malformed or mismatched
-record preserves the service, so the plist never grants replacement authority by
-itself. A bootstrap failure clears the record only after launchd positively reports
-the label unloaded. The host never restores an old plist.
+Installation failures retain their exact target, planned bootstrap, command result,
+and last confirmed physical state in the stage lifecycle journal. A later launch
+validates the complete stage store before allocating another generation or touching
+launchd. An unresolved attempt is preserved and blocks new effects unless its exact
+persisted target and plan can be settled safely; the plist never grants recovery
+authority by itself. The host never restores an old plist.
 Closing or quitting the desktop does not stop the service. The menu bar's
 **Stop active agents when quitting** checkbox writes `stopAgentsOnQuit` to the
 native `settings.json`; it defaults to `false`. When enabled, quitting sends an

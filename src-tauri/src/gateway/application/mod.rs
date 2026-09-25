@@ -5,10 +5,14 @@ pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;
 #[cfg(test)]
 pub(crate) use ports::testing;
 pub use ports::{
-    GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationAudit,
-    GatewayReconciliationEffect, GatewayReconciliationEffectTiming, GatewayReconciliationIds,
-    GatewayReconciliationIntent, GatewayReconciliationIntentDelivery, GatewayReconciliationOutcome,
+    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
+    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
+    GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
+    GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
     GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStartup,
-    GatewayStartupEvents, GatewayStartupPhase, LoginShellError, LoginShellPath, ReconciledGateway,
+    GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
+    LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway, SystemMonotonicClock,
 };
-pub use service::Gateway;
+#[cfg(target_os = "macos")]
+pub use ports::{GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep};
+pub use service::{Gateway, GatewayRuntimeDependencies};

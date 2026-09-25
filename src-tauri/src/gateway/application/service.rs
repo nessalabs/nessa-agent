@@ -1,21 +1,37 @@
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "native gateway lifecycle state is exercised only by the macOS adapter"
+    )
+)]
+
+#[cfg(test)]
+use super::SystemMonotonicClock;
 use super::{
-    GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationAudit,
-    GatewayReconciliationEffect, GatewayReconciliationEffectTiming, GatewayReconciliationIds,
-    GatewayReconciliationIntent, GatewayReconciliationIntentDelivery, GatewayReconciliationOutcome,
+    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
+    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationEffectTiming,
+    GatewayReconciliationIds, GatewayReconciliationIntent, GatewayReconciliationIntentDelivery,
+    GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
     GatewayReconciliationProgress, GatewayReconciliationRequest, GatewayStartup,
-    GatewayStartupEvents, GatewayStartupPhase, LoginShellPath, ReconciledGateway,
-    ReconciliationHistoryFact,
+    GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest, GatewayStopSession,
+    LoginShellPath, MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
-    BundledSurface, PendingReconciliation, ReconciliationCause, ReconciliationCleanupDecision,
-    ReconciliationCorrelation, ReconciliationEvidence, ReconciliationInitiator, SearchPath,
+    AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
+    LifecycleEffectPredicate, LifecycleFailedPhase, LifecycleObservation,
+    LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep, PendingReconciliation,
+    ReconciliationCause, ReconciliationCleanupDecision, ReconciliationCorrelation,
+    ReconciliationEvidence, ReconciliationIncarnation, ReconciliationInitiator, SearchPath,
 };
 #[cfg(test)]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex, OnceLock},
+    sync::{mpsc, Arc, Condvar, Mutex, OnceLock},
+    thread,
+    time::Instant,
 };
 
 struct Lifecycle {
@@ -31,6 +47,15 @@ struct AttemptReceipt {
     authority: PendingReconciliation,
     state: Mutex<AttemptState>,
     settled: Condvar,
+    journal: Mutex<JournalState>,
+    journal_ready: Condvar,
+}
+
+#[derive(Clone)]
+enum JournalState {
+    Pending,
+    Ready(Arc<dyn GatewayReconciliationJournalSession>),
+    Failed(GatewayError),
 }
 
 struct AttemptState {
@@ -197,6 +222,36 @@ impl AttemptReceipt {
                 waiters: 0,
             }),
             settled: Condvar::new(),
+            journal: Mutex::new(JournalState::Pending),
+            journal_ready: Condvar::new(),
+        }
+    }
+
+    fn publish_journal(
+        &self,
+        journal: Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError>,
+    ) -> Result<(), GatewayError> {
+        let mut state = self.journal.lock().map_err(|_| state_unavailable())?;
+        *state = match journal {
+            Ok(journal) => JournalState::Ready(journal),
+            Err(error) => JournalState::Failed(error),
+        };
+        self.journal_ready.notify_all();
+        Ok(())
+    }
+
+    fn wait_journal(&self) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError> {
+        let state = self
+            .journal_ready
+            .wait_while(
+                self.journal.lock().map_err(|_| state_unavailable())?,
+                |state| matches!(state, JournalState::Pending),
+            )
+            .map_err(|_| state_unavailable())?;
+        match &*state {
+            JournalState::Ready(journal) => Ok(journal.clone()),
+            JournalState::Failed(error) => Err(error.clone()),
+            JournalState::Pending => Err(state_unavailable()),
         }
     }
 
@@ -204,8 +259,32 @@ impl AttemptReceipt {
         self.wait_settlement()?.reported
     }
 
-    fn wait_physical(&self) -> Result<ReconciledGateway, GatewayError> {
-        self.wait_settlement()?.physical
+    fn wait_physical_until(
+        &self,
+        deadline: Instant,
+        clock: &dyn MonotonicClock,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        let state = self.state.lock().map_err(|_| state_unavailable())?;
+        let Some(remaining) = deadline.checked_duration_since(clock.now()) else {
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed while reconciliation was active".into(),
+            ));
+        };
+        let (state, timeout) = self
+            .settled
+            .wait_timeout_while(state, remaining, |state| state.settlement.is_none())
+            .map_err(|_| state_unavailable())?;
+        if timeout.timed_out() {
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed while reconciliation was active".into(),
+            ));
+        }
+        state
+            .settlement
+            .as_ref()
+            .ok_or_else(state_unavailable)?
+            .physical
+            .clone()
     }
 
     fn wait_settlement(&self) -> Result<AttemptSettlement, GatewayError> {
@@ -265,7 +344,7 @@ struct StartupProgress {
         all(not(target_os = "macos"), not(test)),
         expect(dead_code, reason = "native reconciliation is supported only on macOS")
     )]
-    audit: Arc<dyn GatewayReconciliationAudit>,
+    journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
 }
 
@@ -285,6 +364,10 @@ struct ProgressState {
     admission: IntentAdmission,
     history: Vec<ReconciliationHistoryFact>,
     effect_timing: GatewayReconciliationEffectTiming,
+    observation_version: u64,
+    latest_observation: Option<LifecycleObservation>,
+    pending_observation: Option<(LifecycleObservationSource, LifecycleObservation)>,
+    failed_phase: Option<LifecycleFailedPhase>,
 }
 
 impl GatewayReconciliationProgress for StartupProgress {
@@ -320,7 +403,9 @@ impl GatewayReconciliationProgress for StartupProgress {
             }
             state.admission = IntentAdmission::Reserved(intent.clone());
         }
-        let delivery = match catch_unwind(AssertUnwindSafe(|| self.audit.intent(&intent))) {
+        let delivery = match catch_unwind(AssertUnwindSafe(|| {
+            retry_delivery(|| self.journal.intent(&intent))
+        })) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(GatewayError::Audit {
                 audit: error.to_string(),
@@ -363,6 +448,228 @@ impl GatewayReconciliationProgress for StartupProgress {
             state.history.push(fact);
         }
     }
+
+    fn effect_planned(
+        &self,
+        plan_id: &str,
+        primary: &LifecyclePlanStep,
+        cleanup: &[LifecyclePlanStep],
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        let (before, target) = {
+            let state = self.state.lock().map_err(|_| state_unavailable())?;
+            let intent = match &state.admission {
+                IntentAdmission::Acknowledged(intent) => intent,
+                _ => {
+                    return Err(GatewayError::Registration(
+                        "Gateway effect was planned before intent acknowledgement".into(),
+                    ))
+                }
+            };
+            let before = match &state.latest_observation {
+                Some(observation) => observation.incarnation().cloned(),
+                None => intent.before().cloned(),
+            };
+            (before, intent.target().clone())
+        };
+        let result = retry_delivery(|| {
+            self.journal
+                .effect_plan(plan_id, before.as_ref(), &target, primary, cleanup)
+        });
+        if result.is_err() {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::Planning);
+        }
+        result
+    }
+
+    fn effect_completed(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        result: &LifecycleCommandResult,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        let delivery = retry_delivery(|| self.journal.effect_completion(plan_id, step_id, result));
+        if delivery.is_err() {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::NativeCompletionDelivery);
+        }
+        delivery
+    }
+
+    fn physical_observed(
+        &self,
+        source: &LifecycleObservationSource,
+        incarnation: Option<ReconciliationIncarnation>,
+        target_artifact_present: bool,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let observation = {
+            let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+            if state.pending_observation.is_some() {
+                return Err(GatewayError::Registration(
+                    "A gateway lifecycle observation still awaits exact acknowledgement".into(),
+                ));
+            }
+            state.observation_version = state.observation_version.saturating_add(1);
+            let observation = LifecycleObservation::new(
+                state.observation_version,
+                incarnation,
+                target_artifact_present,
+            );
+            state.pending_observation = Some((source.clone(), observation.clone()));
+            observation
+        };
+        if let Err(error) = retry_delivery(|| self.journal.observation(source, &observation)) {
+            self.state
+                .lock()
+                .map_err(|_| state_unavailable())?
+                .failed_phase = Some(LifecycleFailedPhase::Observation);
+            return Err(error);
+        }
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        Ok(observation)
+    }
+
+    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
+        let pending = self
+            .state
+            .lock()
+            .map_err(|_| state_unavailable())?
+            .pending_observation
+            .clone();
+        let Some((source, observation)) = pending else {
+            return Ok(None);
+        };
+        retry_delivery(|| self.journal.observation(&source, &observation))?;
+        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
+        if state.pending_observation.as_ref() != Some(&(source, observation.clone())) {
+            return Err(GatewayError::Registration(
+                "Gateway lifecycle pending observation changed during retry".into(),
+            ));
+        }
+        state.pending_observation = None;
+        state.latest_observation = Some(observation.clone());
+        if state.failed_phase == Some(LifecycleFailedPhase::Observation) {
+            state.failed_phase = None;
+        }
+        Ok(Some(observation))
+    }
+}
+
+fn retry_delivery<T>(
+    mut deliver: impl FnMut() -> Result<T, GatewayError>,
+) -> Result<T, GatewayError> {
+    match deliver() {
+        Ok(receipt) => Ok(receipt),
+        Err(_) => deliver(),
+    }
+}
+
+fn deliver_before_stop_effect<T>(
+    deliver: impl FnMut() -> Result<T, GatewayError>,
+) -> Result<T, GatewayError> {
+    match catch_unwind(AssertUnwindSafe(|| retry_delivery(deliver))) {
+        Ok(Ok(receipt)) => Ok(receipt),
+        Ok(Err(error)) => Err(GatewayError::Audit {
+            audit: error.to_string(),
+            physical: None,
+        }),
+        Err(_) => Err(GatewayError::Audit {
+            audit: "gateway stop audit adapter panicked".into(),
+            physical: None,
+        }),
+    }
+}
+
+enum StopOutcomeAttemptFailure {
+    Returned(GatewayError),
+    Panicked,
+}
+
+impl StopOutcomeAttemptFailure {
+    fn description(&self) -> String {
+        match self {
+            Self::Returned(error) => error.to_string(),
+            Self::Panicked => "gateway stop outcome audit adapter panicked".into(),
+        }
+    }
+}
+
+enum StopOutcomeRetryFailure {
+    Denied(GatewayError),
+    Attempt(StopOutcomeAttemptFailure),
+}
+
+struct StopOutcomeDeliveryFailure {
+    first: StopOutcomeAttemptFailure,
+    retry: StopOutcomeRetryFailure,
+    physical: GatewayPhysicalResult,
+}
+
+impl StopOutcomeDeliveryFailure {
+    fn into_gateway_error(self) -> GatewayError {
+        let retry = match self.retry {
+            StopOutcomeRetryFailure::Denied(error) => {
+                format!("exact retry was denied: {error}")
+            }
+            StopOutcomeRetryFailure::Attempt(error) => {
+                format!("exact retry failed: {}", error.description())
+            }
+        };
+        GatewayError::Audit {
+            audit: format!(
+                "gateway stop outcome delivery failed: first attempt failed: {}; {retry}",
+                self.first.description()
+            ),
+            physical: Some(self.physical),
+        }
+    }
+}
+
+fn invoke_stop_outcome(
+    deliver: &mut impl FnMut() -> Result<AuditDeliveryReceipt, GatewayError>,
+) -> Result<AuditDeliveryReceipt, StopOutcomeAttemptFailure> {
+    match catch_unwind(AssertUnwindSafe(deliver)) {
+        Ok(Ok(receipt)) => Ok(receipt),
+        Ok(Err(error)) => Err(StopOutcomeAttemptFailure::Returned(error)),
+        Err(_) => Err(StopOutcomeAttemptFailure::Panicked),
+    }
+}
+
+fn deliver_stop_outcome(
+    session: &GatewayStopSession,
+    physical: GatewayPhysicalResult,
+    mut deliver: impl FnMut() -> Result<AuditDeliveryReceipt, GatewayError>,
+) -> Result<AuditDeliveryReceipt, GatewayError> {
+    if let Err(authority) = session.begin_outcome_delivery() {
+        return Err(match physical {
+            GatewayPhysicalResult::Succeeded => authority,
+            GatewayPhysicalResult::Failed(error) => *error,
+        });
+    }
+    match invoke_stop_outcome(&mut deliver) {
+        Ok(receipt) => Ok(receipt),
+        Err(first) => {
+            let retry = match session.begin_outcome_delivery() {
+                Ok(()) => match invoke_stop_outcome(&mut deliver) {
+                    Ok(receipt) => return Ok(receipt),
+                    Err(error) => StopOutcomeRetryFailure::Attempt(error),
+                },
+                Err(error) => StopOutcomeRetryFailure::Denied(error),
+            };
+            Err(StopOutcomeDeliveryFailure {
+                first,
+                retry,
+                physical,
+            }
+            .into_gateway_error())
+        }
+    }
 }
 
 pub struct Gateway {
@@ -371,6 +678,7 @@ pub struct Gateway {
     startup_events: Arc<dyn GatewayStartupEvents>,
     reconciliation_ids: Arc<dyn GatewayReconciliationIds>,
     reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
+    clock: Arc<dyn MonotonicClock>,
     /// The agent's search path, resolved at most once for the life of this
     /// host process — the outcome, so a shell that could not be read is
     /// remembered as such rather than asked again.
@@ -394,6 +702,35 @@ pub struct Gateway {
     owner_launch_gate: Arc<OwnerLaunchGate>,
     #[cfg(test)]
     caller_resume_gate: Arc<CallerResumeGate>,
+}
+
+pub struct GatewayRuntimeDependencies {
+    host: Arc<dyn GatewayHost>,
+    login_shell: Arc<dyn LoginShellPath>,
+    startup_events: Arc<dyn GatewayStartupEvents>,
+    reconciliation_ids: Arc<dyn GatewayReconciliationIds>,
+    reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
+    clock: Arc<dyn MonotonicClock>,
+}
+
+impl GatewayRuntimeDependencies {
+    pub fn new(
+        host: Arc<dyn GatewayHost>,
+        login_shell: Arc<dyn LoginShellPath>,
+        startup_events: Arc<dyn GatewayStartupEvents>,
+        reconciliation_ids: Arc<dyn GatewayReconciliationIds>,
+        reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Self {
+        Self {
+            host,
+            login_shell,
+            startup_events,
+            reconciliation_ids,
+            reconciliation_audit,
+            clock,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -423,6 +760,7 @@ struct AdmittedReceipt {
     pause_caller_resume: bool,
 }
 impl Gateway {
+    #[cfg(test)]
     pub fn bootstrap(
         host: Arc<dyn GatewayHost>,
         login_shell: Arc<dyn LoginShellPath>,
@@ -432,12 +770,40 @@ impl Gateway {
         runtime: PathBuf,
         stage: String,
     ) -> Self {
+        Self::bootstrap_with_dependencies(
+            GatewayRuntimeDependencies::new(
+                host,
+                login_shell,
+                startup_events,
+                reconciliation_ids,
+                reconciliation_audit,
+                Arc::new(SystemMonotonicClock),
+            ),
+            runtime,
+            stage,
+        )
+    }
+
+    pub fn bootstrap_with_dependencies(
+        dependencies: GatewayRuntimeDependencies,
+        runtime: PathBuf,
+        stage: String,
+    ) -> Self {
+        let GatewayRuntimeDependencies {
+            host,
+            login_shell,
+            startup_events,
+            reconciliation_ids,
+            reconciliation_audit,
+            clock,
+        } = dependencies;
         Self {
             host,
             login_shell,
             startup_events,
             reconciliation_ids,
             reconciliation_audit,
+            clock,
             agent_path: Arc::new(OnceLock::new()),
             runtime,
             stage,
@@ -525,7 +891,6 @@ impl Gateway {
         };
         let receipt = Arc::new(AttemptReceipt::pending(attempt));
         let lifecycle = self.lifecycle.clone();
-        let reconciliation_audit = self.reconciliation_audit.clone();
         let startup_events = self.startup_events.clone();
         let executor = ReconciliationExecutor {
             host: self.host.clone(),
@@ -564,7 +929,7 @@ impl Gateway {
                 publish(&startup_events, starting);
             }
             if let Some(joined) = &admitted.joined {
-                audit_attached(&reconciliation_audit, &admitted.receipt.request, joined)?;
+                audit_attached(&admitted.receipt, joined)?;
             }
             Ok::<_, GatewayError>(admitted)
         })
@@ -583,7 +948,7 @@ impl Gateway {
         }
         result
     }
-    pub fn stop_agents(&self) -> Result<(), GatewayError> {
+    pub fn stop_agents(&self, deadline: Instant) -> Result<(), GatewayError> {
         let gateway = loop {
             let lifecycle = self
                 .lifecycle
@@ -596,14 +961,144 @@ impl Gateway {
                     .ok_or(GatewayError::NotReconciled)?;
             };
             drop(lifecycle);
-            let _ = attempt.wait_physical();
+            attempt.wait_physical_until(deadline, self.clock.as_ref())?;
         };
-        self.host.stop_agents(&gateway)
+        let origin = GatewayReconciliationRequest::new(
+            allocate_id(self.reconciliation_ids.as_ref())?,
+            evidence(
+                ReconciliationCause::DesktopQuitPolicy,
+                ReconciliationInitiator::DesktopHost,
+            )?,
+        );
+        let attempt = GatewayReconciliationAttempt::new(
+            allocate_id(self.reconciliation_ids.as_ref())?,
+            origin,
+        )?;
+        let intended = gateway.audit_identity()?;
+        let request = GatewayStopRequest::new(attempt.clone(), gateway, deadline);
+        let session = Arc::new(GatewayStopSession::new(request, self.clock.clone()));
+        let (receiver, _worker) = spawn_stop_request(
+            self.host.clone(),
+            self.reconciliation_audit.clone(),
+            session.clone(),
+            attempt,
+            intended,
+        );
+        let Some(remaining) = deadline.checked_duration_since(self.clock.now()) else {
+            session.expire_at_deadline();
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed before dispatch".into(),
+            ));
+        };
+        match receiver.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                session.expire_at_deadline();
+                Err(GatewayError::Stop(
+                    "Gateway stop did not settle before the desktop quit deadline".into(),
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(GatewayError::Stop(
+                "Gateway stop worker ended without settlement".into(),
+            )),
+        }
     }
 
     #[cfg(test)]
     fn wait_for_pending_receipt(&self) -> Option<Arc<AttemptReceipt>> {
         self.lifecycle_probe.wait_for_pending(&self.lifecycle)
+    }
+}
+
+fn spawn_stop_request(
+    host: Arc<dyn GatewayHost>,
+    audit: Arc<dyn GatewayReconciliationAudit>,
+    session: Arc<GatewayStopSession>,
+    attempt: GatewayReconciliationAttempt,
+    intended: ReconciliationIncarnation,
+) -> (
+    mpsc::Receiver<Result<(), GatewayError>>,
+    thread::JoinHandle<()>,
+) {
+    let (answer, receiver) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let result = execute_stop_request(host, audit, session, attempt, intended);
+        let _ = answer.send(result);
+    });
+    (receiver, worker)
+}
+
+fn execute_stop_request(
+    host: Arc<dyn GatewayHost>,
+    audit: Arc<dyn GatewayReconciliationAudit>,
+    session: Arc<GatewayStopSession>,
+    attempt: GatewayReconciliationAttempt,
+    intended: ReconciliationIncarnation,
+) -> Result<(), GatewayError> {
+    let target = intended.target().clone();
+    let journal = audit
+        .clone()
+        .open(&attempt, Some(session.request().deadline()))?;
+    let intent = GatewayReconciliationIntent::new(attempt, target.clone(), Some(intended.clone()))?;
+    deliver_before_stop_effect(|| journal.intent(&intent))?;
+    let primary = LifecyclePlanStep::new(
+        "signal-agents".into(),
+        LifecycleEffect::StopAgents {
+            incarnation: intended.clone(),
+        },
+        LifecycleEffectPredicate::Always,
+    )
+    .map_err(|error| GatewayError::Stop(error.to_string()))?;
+    let plan = deliver_before_stop_effect(|| {
+        journal.effect_plan(
+            "stop-agents-on-desktop-quit",
+            Some(&intended),
+            &target,
+            &primary,
+            &[],
+        )
+    })?;
+    let result = host.stop_agents(&session, journal.as_ref(), &plan);
+    match result {
+        Ok(observation) => {
+            let (command, observed) = session.settlement()?;
+            debug_assert_eq!(observation, observed);
+            let physical = LifecyclePhysicalOutcome::StopAgentsSettled {
+                intended,
+                command,
+                observed: observation,
+            };
+            deliver_stop_outcome(session.as_ref(), GatewayPhysicalResult::Succeeded, || {
+                journal.physical_outcome(
+                    &physical,
+                    Some(&observed),
+                    ReconciliationCleanupDecision::RetainPrior,
+                )
+            })?;
+            Ok(())
+        }
+        Err(error) => {
+            session.expire_at_deadline();
+            let Ok((_, last_confirmed)) = session.settlement() else {
+                return Err(error);
+            };
+            let physical = LifecyclePhysicalOutcome::Failed {
+                phase: LifecycleFailedPhase::NativeDispatch,
+                message: error.to_string(),
+            };
+            let outcome = deliver_stop_outcome(
+                session.as_ref(),
+                GatewayPhysicalResult::Failed(Box::new(error.clone())),
+                || {
+                    journal.physical_outcome(
+                        &physical,
+                        Some(&last_confirmed),
+                        ReconciliationCleanupDecision::RetainPrior,
+                    )
+                },
+            );
+            outcome.and(Err(error))
+        }
     }
 }
 
@@ -692,11 +1187,11 @@ fn evidence(
 }
 
 fn audit_attached(
-    audit: &Arc<dyn GatewayReconciliationAudit>,
-    attempt: &GatewayReconciliationAttempt,
+    receipt: &Arc<AttemptReceipt>,
     joined: &GatewayReconciliationRequest,
 ) -> Result<(), GatewayError> {
-    match catch_unwind(AssertUnwindSafe(|| audit.joined(attempt, joined))) {
+    let journal = receipt.wait_journal()?;
+    match catch_unwind(AssertUnwindSafe(|| journal.joined(joined))) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => Err(GatewayError::Audit {
             audit: error.to_string(),
@@ -726,7 +1221,7 @@ fn intent_delivery_report(
     };
     Err(GatewayError::Audit {
         audit,
-        physical: physical_error.map(Box::new),
+        physical: physical_error.map(|error| GatewayPhysicalResult::Failed(Box::new(error))),
     })
 }
 
@@ -771,15 +1266,83 @@ fn execute_attempt(
     executor: &ReconciliationExecutor,
     receipt: &Arc<AttemptReceipt>,
 ) -> AttemptExecution {
+    let open_journal = || match catch_unwind(AssertUnwindSafe(|| {
+        executor
+            .reconciliation_audit
+            .clone()
+            .open(&receipt.request, None)
+    })) {
+        Ok(result) => result.map_err(|error| GatewayError::Audit {
+            audit: error.to_string(),
+            physical: None,
+        }),
+        Err(_) => Err(GatewayError::Audit {
+            audit: "gateway reconciliation journal adapter panicked".into(),
+            physical: None,
+        }),
+    };
+    let mut journal = open_journal();
+    let restored = journal.as_ref().ok().cloned();
+    if let Some(recovery) = restored.as_ref().and_then(|session| session.recovery()) {
+        if let Some(restored) = restored {
+            let recovery_result = catch_unwind(AssertUnwindSafe(|| {
+                executor.host.recover(&recovery, restored.as_ref())
+            }))
+            .unwrap_or_else(|_| {
+                Err(GatewayError::Registration(
+                    "gateway host panicked during lifecycle recovery".into(),
+                ))
+            });
+            drop(restored);
+            drop(journal);
+            journal = match recovery_result {
+                Ok(()) => open_journal(),
+                Err(error) => Err(error),
+            };
+            if journal
+                .as_ref()
+                .ok()
+                .and_then(|session| session.recovery())
+                .is_some()
+            {
+                journal = Err(GatewayError::Registration(
+                    "Gateway lifecycle recovery returned without terminal settlement".into(),
+                ));
+            }
+        }
+    }
+    if let Err(error) = receipt.publish_journal(journal.clone()) {
+        return AttemptExecution {
+            physical: Err(error.clone()),
+            reported: Err(error),
+            cleanup: CleanupUpdate::Keep,
+            ready_gateway: None,
+        };
+    }
+    let journal = match journal {
+        Ok(journal) => journal,
+        Err(error) => {
+            return AttemptExecution {
+                physical: Err(error.clone()),
+                reported: Err(error),
+                cleanup: CleanupUpdate::Keep,
+                ready_gateway: None,
+            }
+        }
+    };
     let progress = StartupProgress {
         lifecycle: executor.lifecycle.clone(),
         attempt: receipt.clone(),
         events: executor.startup_events.clone(),
-        audit: executor.reconciliation_audit.clone(),
+        journal: journal.clone(),
         state: Arc::new(Mutex::new(ProgressState {
             admission: IntentAdmission::Vacant,
             history: Vec::new(),
             effect_timing: GatewayReconciliationEffectTiming::NoEffectsObserved,
+            observation_version: 0,
+            latest_observation: None,
+            pending_observation: None,
+            failed_phase: None,
         })),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -806,8 +1369,13 @@ fn execute_attempt(
         .map(|state| state.history.clone())
         .unwrap_or_default();
     let effect_timing = state
+        .as_ref()
         .map(|state| state.effect_timing)
         .unwrap_or(GatewayReconciliationEffectTiming::NoEffectsObserved);
+    let mut failed_phase = state
+        .as_ref()
+        .and_then(|state| state.failed_phase)
+        .unwrap_or(LifecycleFailedPhase::NativeDispatch);
     if physical.is_ok() && matches!(&admission, None | Some(IntentAdmission::Vacant)) {
         physical = Err(GatewayError::Registration(
             "gateway host completed without an admitted audit intent".into(),
@@ -843,9 +1411,30 @@ fn execute_attempt(
             (intent, GatewayReconciliationIntentDelivery::Acknowledged)
         }
         IntentAdmission::Failed { intent, error } => {
+            failed_phase = LifecycleFailedPhase::IntentDelivery;
             (intent, GatewayReconciliationIntentDelivery::Failed(error))
         }
     };
+    if matches!(
+        failed_phase,
+        LifecycleFailedPhase::Planning
+            | LifecycleFailedPhase::NativeCompletionDelivery
+            | LifecycleFailedPhase::Observation
+    ) {
+        let error = physical
+            .clone()
+            .err()
+            .unwrap_or_else(|| GatewayError::Audit {
+                audit: "gateway lifecycle delivery failed with an unresolved effect".into(),
+                physical: Some(GatewayPhysicalResult::Succeeded),
+            });
+        return AttemptExecution {
+            physical,
+            reported: Err(error),
+            cleanup: CleanupUpdate::Keep,
+            ready_gateway: None,
+        };
+    }
     let identity = physical
         .as_ref()
         .map_err(Clone::clone)
@@ -855,6 +1444,7 @@ fn execute_attempt(
         delivery.clone(),
         effect_timing,
         facts,
+        failed_phase,
         identity,
     );
     let cleanup = match audit_outcome.cleanup() {
@@ -872,17 +1462,23 @@ fn execute_attempt(
     };
     let base_report = intent_delivery_report(&delivery, base_report);
     let audit_result = catch_unwind(AssertUnwindSafe(|| {
-        executor.reconciliation_audit.outcome(&audit_outcome)
+        retry_delivery(|| journal.outcome(&audit_outcome))
     }));
     let reported = match audit_result {
         Ok(Ok(())) => base_report,
         Ok(Err(error)) => Err(GatewayError::Audit {
             audit: error.to_string(),
-            physical: base_report.err().map(Box::new),
+            physical: Some(match base_report {
+                Ok(()) => GatewayPhysicalResult::Succeeded,
+                Err(error) => GatewayPhysicalResult::Failed(Box::new(error)),
+            }),
         }),
         Err(_) => Err(GatewayError::Audit {
             audit: "gateway reconciliation audit adapter panicked".into(),
-            physical: base_report.err().map(Box::new),
+            physical: Some(match base_report {
+                Ok(()) => GatewayPhysicalResult::Succeeded,
+                Err(error) => GatewayPhysicalResult::Failed(Box::new(error)),
+            }),
         }),
     };
     let ready_gateway = if ready && reported.is_ok() {

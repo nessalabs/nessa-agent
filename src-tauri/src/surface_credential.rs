@@ -260,10 +260,13 @@ mod tests {
     use super::*;
     use crate::gateway::application::{
         testing::system_login_shell, GatewayError, GatewayHost, GatewayReconciliationAttempt,
-        GatewayReconciliationIntent, GatewayReconciliationProgress, ReconciledGateway,
+        GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+        GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
         ReconciliationHistoryFact,
     };
-    use crate::gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
+    use crate::gateway::domain::value_objects::{
+        AuditDeliveryReceipt, LifecycleObservation, ReconciliationTarget, SearchPath,
+    };
     use nessa_gateway_endpoint::{
         application::EndpointDiscovery,
         domain::{EndpointIdentity, GatewayEndpoint},
@@ -375,8 +378,13 @@ mod tests {
             self.registration.clone()
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            _: &GatewayStopSession,
+            _: &dyn GatewayReconciliationJournalSession,
+            _: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            Err(GatewayError::Stop("unused test stop".into()))
         }
     }
 
