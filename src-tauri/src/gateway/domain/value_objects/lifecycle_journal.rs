@@ -111,6 +111,10 @@ pub enum LifecycleEffect {
         target: ReconciliationTarget,
         definition_digest: String,
     },
+    SettleSystemdDefinitionTransaction {
+        target: ReconciliationTarget,
+        definition_digest: String,
+    },
     CreateGatewayDataDirectory {
         target: ReconciliationTarget,
     },
@@ -122,6 +126,9 @@ pub enum LifecycleEffect {
         target: ReconciliationTarget,
     },
     PublishSystemdWantsLink {
+        target: ReconciliationTarget,
+    },
+    SettleSystemdWantsLinkTransaction {
         target: ReconciliationTarget,
     },
     StartSystemdUnit {
@@ -870,9 +877,14 @@ fn validate_primary_effect(
         | LifecycleEffect::CreateGatewayDataDirectory { target: planned }
         | LifecycleEffect::CreateSystemdWantsDirectory { target: planned }
         | LifecycleEffect::PublishSystemdWantsLink { target: planned }
+        | LifecycleEffect::SettleSystemdWantsLinkTransaction { target: planned }
         | LifecycleEffect::BootstrapService { target: planned }
         | LifecycleEffect::AdoptReadyIncarnation { target: planned } => planned == target,
         LifecycleEffect::PublishSystemdServiceDefinition {
+            target: planned,
+            definition_digest,
+        }
+        | LifecycleEffect::SettleSystemdDefinitionTransaction {
             target: planned,
             definition_digest,
         } => planned == target && valid_digest(definition_digest),

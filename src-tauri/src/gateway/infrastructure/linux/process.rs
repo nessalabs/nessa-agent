@@ -5,16 +5,33 @@ use crate::gateway::{
         SystemdRuntimeObservation,
     },
 };
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-pub(super) struct LinuxProcessHandle {
+pub(super) trait LinuxProcess: Send {
+    fn process_id(&self) -> u32;
+    fn is_live(&self) -> bool;
+    fn signal(self: Box<Self>, signal: libc::c_int) -> Result<(), LinuxProcessSignalError>;
+}
+
+pub(super) trait LinuxProcessFactory: Send + Sync {
+    fn open(&self, process_id: u32) -> Result<Box<dyn LinuxProcess>, String>;
+}
+
+pub(super) struct NativeLinuxProcessFactory;
+
+struct PidfdProcess {
     pidfd: OwnedFd,
     process_id: u32,
 }
 
+pub(super) enum LinuxProcessSignalError {
+    Exited,
+    Failed(String),
+}
+
 pub(super) struct LinuxSignalAuthority {
     token: GatewayStopProofToken,
-    pidfd: OwnedFd,
+    process: Box<dyn LinuxProcess>,
     native: SystemdRuntimeObservation,
     portable: ReconciliationIncarnation,
     observation_version: u64,
@@ -34,7 +51,7 @@ pub(super) fn verify_pidfd_support() -> Result<(), String> {
 
 impl LinuxSignalAuthority {
     pub fn corroborate(
-        handle: LinuxProcessHandle,
+        process: Box<dyn LinuxProcess>,
         token: GatewayStopProofToken,
         native: SystemdRuntimeObservation,
         portable: ReconciliationIncarnation,
@@ -42,21 +59,21 @@ impl LinuxSignalAuthority {
     ) -> Result<Self, GatewayError> {
         if native.target() != portable.target()
             || native.main_process_id() != portable.process_id()
-            || handle.process_id != portable.process_id()
+            || process.process_id() != portable.process_id()
             || observation_version == 0
         {
             return Err(GatewayError::Stop(
                 "Linux signal proof disagrees with the portable gateway incarnation".into(),
             ));
         }
-        if !handle.is_live() {
+        if !process.is_live() {
             return Err(GatewayError::Stop(
                 "The gateway process exited during exact signal proof".into(),
             ));
         }
         Ok(Self {
             token,
-            pidfd: handle.pidfd,
+            process,
             native,
             portable,
             observation_version,
@@ -71,7 +88,7 @@ impl LinuxSignalAuthority {
     ) -> Result<LifecycleCommandResult, GatewayError> {
         let Self {
             token,
-            pidfd,
+            process,
             native,
             portable,
             observation_version,
@@ -87,39 +104,48 @@ impl LinuxSignalAuthority {
         // The consume-once claim and syscall are adjacent. The guard already
         // owns the open pidfd; no D-Bus, filesystem, health, or clock read is
         // permitted between these two statements.
-        let dispatched = pidfd_send_signal(std::os::fd::AsRawFd::as_raw_fd(&pidfd), signal);
-        Ok(if dispatched == 0 {
-            LifecycleCommandResult::Accepted
-        } else {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                LifecycleCommandResult::Rejected(
-                    "The proved gateway process exited before signal dispatch".into(),
-                )
-            } else {
-                LifecycleCommandResult::Failed(error.to_string())
-            }
+        Ok(match process.signal(signal) {
+            Ok(()) => LifecycleCommandResult::Accepted,
+            Err(LinuxProcessSignalError::Exited) => LifecycleCommandResult::Rejected(
+                "The proved gateway process exited before signal dispatch".into(),
+            ),
+            Err(LinuxProcessSignalError::Failed(error)) => LifecycleCommandResult::Failed(error),
         })
     }
 }
 
-impl LinuxProcessHandle {
-    pub fn open(process_id: u32) -> Result<Self, GatewayError> {
+impl LinuxProcessFactory for NativeLinuxProcessFactory {
+    fn open(&self, process_id: u32) -> Result<Box<dyn LinuxProcess>, String> {
         let descriptor = pidfd_open(process_id);
         if descriptor < 0 {
-            return Err(GatewayError::Stop(format!(
-                "The gateway process cannot be held for exact signal delivery: {}",
-                std::io::Error::last_os_error()
-            )));
+            return Err(std::io::Error::last_os_error().to_string());
         }
-        Ok(Self {
+        Ok(Box::new(PidfdProcess {
             pidfd: unsafe { OwnedFd::from_raw_fd(descriptor as i32) },
             process_id,
-        })
+        }))
+    }
+}
+
+impl LinuxProcess for PidfdProcess {
+    fn process_id(&self) -> u32 {
+        self.process_id
     }
 
-    pub fn is_live(&self) -> bool {
-        pidfd_send_signal(std::os::fd::AsRawFd::as_raw_fd(&self.pidfd), 0) == 0
+    fn is_live(&self) -> bool {
+        pidfd_send_signal(self.pidfd.as_raw_fd(), 0) == 0
+    }
+
+    fn signal(self: Box<Self>, signal: libc::c_int) -> Result<(), LinuxProcessSignalError> {
+        if pidfd_send_signal(self.pidfd.as_raw_fd(), signal) == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Err(LinuxProcessSignalError::Exited)
+        } else {
+            Err(LinuxProcessSignalError::Failed(error.to_string()))
+        }
     }
 }
 

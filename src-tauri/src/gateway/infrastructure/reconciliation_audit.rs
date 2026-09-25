@@ -423,16 +423,26 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 _ => LifecycleEffect::AdoptReadyIncarnation { target },
             })
         }
-        "publish_systemd_service_definition" => {
+        "publish_systemd_service_definition" | "settle_systemd_definition_transaction" => {
             object_exact(object, &["kind", "target", "definitionDigest"])?;
-            Ok(LifecycleEffect::PublishSystemdServiceDefinition {
-                target: parse_target(&object["target"])?,
-                definition_digest: string(object, "definitionDigest")?,
+            let target = parse_target(&object["target"])?;
+            let definition_digest = string(object, "definitionDigest")?;
+            Ok(if kind == "publish_systemd_service_definition" {
+                LifecycleEffect::PublishSystemdServiceDefinition {
+                    target,
+                    definition_digest,
+                }
+            } else {
+                LifecycleEffect::SettleSystemdDefinitionTransaction {
+                    target,
+                    definition_digest,
+                }
             })
         }
         "create_gateway_data_directory"
         | "create_systemd_wants_directory"
-        | "publish_systemd_wants_link" => {
+        | "publish_systemd_wants_link"
+        | "settle_systemd_wants_link_transaction" => {
             object_exact(object, &["kind", "target"])?;
             let target = parse_target(&object["target"])?;
             Ok(match kind.as_str() {
@@ -442,7 +452,8 @@ fn parse_effect(value: &Value) -> Result<LifecycleEffect, GatewayError> {
                 "create_systemd_wants_directory" => {
                     LifecycleEffect::CreateSystemdWantsDirectory { target }
                 }
-                _ => LifecycleEffect::PublishSystemdWantsLink { target },
+                "publish_systemd_wants_link" => LifecycleEffect::PublishSystemdWantsLink { target },
+                _ => LifecycleEffect::SettleSystemdWantsLinkTransaction { target },
             })
         }
         "reload_systemd_manager" | "start_systemd_unit" | "stop_systemd_unit" => {
@@ -1670,6 +1681,14 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
             "target":self::target(target),
             "definitionDigest":definition_digest,
         }),
+        LifecycleEffect::SettleSystemdDefinitionTransaction {
+            target,
+            definition_digest,
+        } => json!({
+            "kind":"settle_systemd_definition_transaction",
+            "target":self::target(target),
+            "definitionDigest":definition_digest,
+        }),
         LifecycleEffect::CreateGatewayDataDirectory { target } => {
             json!({"kind":"create_gateway_data_directory", "target":self::target(target)})
         }
@@ -1683,6 +1702,9 @@ fn lifecycle_effect(effect: &LifecycleEffect) -> Value {
         }
         LifecycleEffect::PublishSystemdWantsLink { target } => {
             json!({"kind":"publish_systemd_wants_link", "target":self::target(target)})
+        }
+        LifecycleEffect::SettleSystemdWantsLinkTransaction { target } => {
+            json!({"kind":"settle_systemd_wants_link_transaction", "target":self::target(target)})
         }
         LifecycleEffect::StartSystemdUnit {
             manager,
@@ -2044,6 +2066,28 @@ mod tests {
         });
         let effect = parse_effect(&value).unwrap();
         assert_eq!(lifecycle_effect(&effect), value);
+    }
+
+    #[test]
+    fn systemd_publication_cleanup_effects_round_trip_exact_targets() {
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        for effect in [
+            LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: "c".repeat(64),
+            },
+            LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                target: target.clone(),
+            },
+        ] {
+            let value = lifecycle_effect(&effect);
+            assert_eq!(parse_effect(&value).unwrap(), effect);
+        }
     }
 
     #[test]

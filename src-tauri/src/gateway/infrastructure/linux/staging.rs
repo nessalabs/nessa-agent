@@ -716,6 +716,69 @@ pub(super) fn settle_wants_link_transaction(
     }
 }
 
+pub(super) fn wants_link_temporary_present(
+    directory: &Path,
+    transaction: &str,
+) -> Result<bool, String> {
+    validate_fingerprint(transaction)?;
+    let path = directory.join(format!(".nessa-link-{transaction}"));
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_symlink() || metadata.uid() != unsafe { libc::geteuid() } {
+                return Err("Temporary gateway link has unsafe identity".into());
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub(super) fn discard_wants_link_temporary(
+    directory: &Path,
+    link: &Path,
+    unit_file: &Path,
+    transaction: &str,
+) -> Result<(), String> {
+    use std::{
+        ffi::CString,
+        os::{fd::AsRawFd, unix::ffi::OsStrExt},
+    };
+
+    validate_fingerprint(transaction)?;
+    if !directory.try_exists().map_err(|error| error.to_string())? {
+        return Ok(());
+    }
+    if link.parent() != Some(directory) || unit_file.parent() != directory.parent() {
+        return Err("Persistent gateway link is outside its owned sibling directory".into());
+    }
+    let parent = open_owned_directory_chain_existing(directory)?;
+    let temporary = CString::new(format!(".nessa-link-{transaction}"))
+        .map_err(|_| "Temporary gateway link name contains NUL".to_string())?;
+    let Some(identity) = entry_identity_at(&parent, &temporary)? else {
+        return Ok(());
+    };
+    let expected = Path::new("..").join(
+        unit_file
+            .file_name()
+            .ok_or_else(|| "Gateway unit file has no name".to_string())?,
+    );
+    if identity.kind != libc::S_IFLNK
+        || identity.uid != unsafe { libc::geteuid() }
+        || read_link_at(parent.as_raw_fd(), &temporary)?.as_deref()
+            != Some(expected.as_os_str().as_bytes())
+    {
+        return Err("Temporary gateway link changed before cleanup".into());
+    }
+    if link.try_exists().map_err(|error| error.to_string())?
+        && !wants_link_matches(link, unit_file)?
+    {
+        return Err("Published gateway link changed before temporary cleanup".into());
+    }
+    unlink_link_if(&parent, &temporary, identity)?;
+    parent.sync_all().map_err(|error| error.to_string())
+}
+
 pub(super) fn bytes_match(path: &Path, expected: &[u8]) -> Result<bool, String> {
     read_owned_file(path).map(|observed| observed.is_some_and(|value| value == expected))
 }
@@ -1481,6 +1544,29 @@ mod tests {
         let link = wants.join("nessa-gateway-prod.service");
         assert!(!wants_link_matches(&link, &unit).unwrap());
         assert!(!wants.exists());
+    }
+
+    #[test]
+    fn wants_link_cleanup_discards_an_unpublished_temporary_without_publishing_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let unit_root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("systemd/user");
+        let wants = unit_root.join("default.target.wants");
+        let unit = unit_root.join("nessa-gateway-prod.service");
+        let link = wants.join("nessa-gateway-prod.service");
+        let generation = "b".repeat(64);
+        publish_bytes(&unit, b"unit", 0o600, &"a".repeat(64)).unwrap();
+        create_owned_directory_chain(&wants).unwrap();
+        let pending = wants.join(format!(".nessa-link-{generation}"));
+        std::os::unix::fs::symlink("../nessa-gateway-prod.service", &pending).unwrap();
+
+        discard_wants_link_temporary(&wants, &link, &unit, &generation).unwrap();
+
+        assert!(!pending.exists());
+        assert!(!link.exists());
     }
 
     #[test]

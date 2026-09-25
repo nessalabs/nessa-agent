@@ -2,23 +2,26 @@
 
 use super::{
     paths::LinuxGatewayPaths,
-    process::{verify_pidfd_support, LinuxProcessHandle, LinuxSignalAuthority},
+    process::{
+        verify_pidfd_support, LinuxProcess, LinuxProcessFactory, LinuxProcessSignalError,
+        LinuxSignalAuthority, NativeLinuxProcessFactory,
+    },
     staging::{
-        bytes_match, create_owned_directory_chain, definition_transaction, owned_file_bytes,
-        publish_bytes, publish_runtime, publish_wants_link, remove_staging_runtime,
-        replace_owned_bytes, runtime_fingerprint, settle_definition_transaction,
-        settle_wants_link_transaction, staging_runtime_present, validate_runtime,
-        wants_link_matches,
+        bytes_match, create_owned_directory_chain, definition_transaction,
+        discard_wants_link_temporary, owned_file_bytes, publish_bytes, publish_runtime,
+        publish_wants_link, remove_staging_runtime, replace_owned_bytes, runtime_fingerprint,
+        settle_definition_transaction, settle_wants_link_transaction, staging_runtime_present,
+        validate_runtime, wants_link_matches, wants_link_temporary_present,
     },
     unit::{render, rendered_agent_path, unit_name, RenderedUnit, UnitDefinition},
     user_manager::{verify_linger, JobTerminal, UnitSnapshot, UserManager},
 };
 use crate::gateway::{
     application::{
-        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayReconciliationAttempt,
-        GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-        GatewayReconciliationProgress, GatewayStopSession, MonotonicClock, ReconciledGateway,
-        ReconciliationHistoryFact,
+        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
+        GatewayReconciliationAttempt, GatewayReconciliationIntent,
+        GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
+        MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -39,7 +42,6 @@ use std::{
     ffi::OsString,
     fs,
     io::{ErrorKind, Read, Write},
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
@@ -55,6 +57,7 @@ pub(crate) struct SystemdGateway {
     clock: Arc<dyn MonotonicClock>,
     manager_factory: Arc<dyn LinuxManagerFactory>,
     runtime_context: Arc<dyn LinuxRuntimeContext>,
+    process_factory: Arc<dyn LinuxProcessFactory>,
 }
 
 trait LinuxManagerFactory: Send + Sync {
@@ -88,6 +91,7 @@ struct RetirementAuthority<'a> {
     data: &'a Path,
     home: &'a Path,
     paths: &'a LinuxGatewayPaths,
+    process_factory: &'a dyn LinuxProcessFactory,
 }
 
 struct PreflightEvidence<'a> {
@@ -292,6 +296,7 @@ impl SystemdGateway {
             clock,
             manager_factory: Arc::new(NativeLinuxManagerFactory),
             runtime_context: Arc::new(NativeLinuxRuntimeContext),
+            process_factory: Arc::new(NativeLinuxProcessFactory),
         }
     }
 
@@ -369,29 +374,23 @@ impl GatewayHost for SystemdGateway {
         progress: &dyn GatewayReconciliationProgress,
     ) -> Result<ReconciledGateway, GatewayError> {
         if stage != self.configuration.stage() {
-            return Err(GatewayError::Registration(
-                "Gateway service configuration stage changed".into(),
-            ));
+            return Err(pre_admission("Gateway service configuration stage changed"));
         }
         let (effective_uid, real_uid) = self.runtime_context.user_ids();
         if effective_uid != real_uid {
-            return Err(GatewayError::Registration(
-                "The packaged gateway refuses a set-user-ID process".into(),
+            return Err(pre_admission(
+                "The packaged gateway refuses a set-user-ID process",
             ));
         }
-        let unit =
-            unit_name(stage, self.configuration.instance()).map_err(GatewayError::Registration)?;
-        let paths = self.paths(&unit)?;
-        let fingerprint = runtime_fingerprint(runtime).map_err(GatewayError::Registration)?;
+        let unit = unit_name(stage, self.configuration.instance()).map_err(pre_admission)?;
+        let paths = self.paths(&unit).map_err(pre_admission)?;
+        let fingerprint = runtime_fingerprint(runtime).map_err(pre_admission)?;
         let manager = self
             .manager_factory
             .connect(effective_uid)
-            .map_err(GatewayError::Registration)?;
-        verify_systemd_authority(manager.as_ref(), &paths, &unit)
-            .map_err(GatewayError::Registration)?;
-        let installed = manager
-            .snapshot(&unit)
-            .map_err(GatewayError::Registration)?;
+            .map_err(pre_admission)?;
+        verify_systemd_authority(manager.as_ref(), &paths, &unit).map_err(pre_admission)?;
+        let installed = manager.snapshot(&unit).map_err(pre_admission)?;
         let data = data_directory_path(
             self.configuration.data_root(),
             stage,
@@ -400,24 +399,23 @@ impl GatewayHost for SystemdGateway {
         let advertisement = self
             .runtime_context
             .discover_endpoint(&data)
-            .map_err(GatewayError::Registration)?;
-        let before = portable_incarnation(&unit, installed.as_ref(), advertisement.as_ref())?;
+            .map_err(pre_admission)?;
+        let before = portable_incarnation(&unit, installed.as_ref(), advertisement.as_ref())
+            .map_err(pre_admission)?;
         let prior_definition = match (installed.as_ref(), before.as_ref()) {
             (Some(snapshot), Some(prior)) => {
                 native_from_snapshot(snapshot, prior.target(), &unit, true)
-                    .map_err(GatewayError::Registration)?;
+                    .map_err(pre_admission)?;
                 let prior_path = snapshot
                     .exec_start_ex
                     .first()
                     .and_then(|entry| environment_value(&entry.1, "NESSA_AGENT_PATH"))
                     .ok_or_else(|| {
-                        GatewayError::Registration(
-                            "The running systemd gateway has no retained agent path".into(),
-                        )
+                        pre_admission("The running systemd gateway has no retained agent path")
                     })
                     .and_then(|path| {
                         SearchPath::parse(path).map_err(|error| {
-                            GatewayError::Registration(format!(
+                            pre_admission(format!(
                                 "The running systemd gateway agent path is invalid: {error}"
                             ))
                         })
@@ -434,37 +432,38 @@ impl GatewayHost for SystemdGateway {
                     fingerprint: prior.target().runtime_fingerprint(),
                     generation: prior.target().service_generation(),
                 })
-                .map_err(GatewayError::Registration)?;
-                if !snapshot_matches(snapshot, manager.as_ref(), &paths, &unit, &prior_rendered)?
+                .map_err(pre_admission)?;
+                if !snapshot_matches(snapshot, manager.as_ref(), &paths, &unit, &prior_rendered)
+                    .map_err(pre_admission)?
                     || manager
                         .get_unit_by_pid(prior.process_id())
-                        .map_err(GatewayError::Registration)?
+                        .map_err(pre_admission)?
                         != snapshot.object_path
                 {
-                    return Err(GatewayError::Registration(
-                        "The running systemd gateway lacks exact owned unit identity".into(),
+                    return Err(pre_admission(
+                        "The running systemd gateway lacks exact owned unit identity",
                     ));
                 }
                 Some(prior_rendered.bytes)
             }
             (Some(_), None) => {
-                return Err(GatewayError::Registration(
-                    "An installed systemd unit has no corroborated managed endpoint; it was preserved"
-                        .into(),
+                return Err(pre_admission(
+                    "An installed systemd unit has no corroborated managed endpoint; it was preserved",
                 ));
             }
             _ => None,
         };
         let staged_runtime = paths.runtime_root.join(&fingerprint);
-        let path = chosen_agent_path(agent_path, installed.as_ref(), &staged_runtime)?;
+        let path = chosen_agent_path(agent_path, installed.as_ref(), &staged_runtime)
+            .map_err(pre_admission)?;
         let generation = reusable_generation(installed.as_ref(), &fingerprint)
-            .unwrap_or(random_digest().map_err(GatewayError::Registration)?);
+            .unwrap_or(random_digest().map_err(pre_admission)?);
         let target = ReconciliationTarget::new(
             unit.as_str().to_owned(),
             fingerprint.clone(),
             generation.clone(),
         )
-        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        .map_err(pre_admission)?;
         let rendered = render(UnitDefinition {
             unit: &unit,
             runtime: &staged_runtime,
@@ -475,7 +474,7 @@ impl GatewayHost for SystemdGateway {
             fingerprint: &fingerprint,
             generation: &generation,
         })
-        .map_err(GatewayError::Registration)?;
+        .map_err(pre_admission)?;
         let rendered_digest = definition_digest(&rendered.bytes);
 
         self.revalidate_preflight(
@@ -489,7 +488,8 @@ impl GatewayHost for SystemdGateway {
                 data: &data,
                 advertisement: advertisement.as_ref(),
             },
-        )?;
+        )
+        .map_err(pre_admission)?;
 
         progress.intent_admitted(GatewayReconciliationIntent::new(
             attempt.clone(),
@@ -540,6 +540,7 @@ impl GatewayHost for SystemdGateway {
                     data: &data,
                     home: &self.home,
                     paths: &paths,
+                    process_factory: self.process_factory.as_ref(),
                 },
                 LinuxRuntime {
                     manager: manager.as_ref(),
@@ -587,32 +588,54 @@ impl GatewayHost for SystemdGateway {
             || prepare_data_directory(self.configuration.data_root(), &data),
             || owned_directory_present(&data),
         )?;
-        planned_physical(
+        planned_physical_with_cleanup(
             progress,
             "publish-systemd-unit",
-            LifecycleEffect::PublishSystemdServiceDefinition {
-                target: target.clone(),
-                definition_digest: rendered_digest,
+            PhysicalPlanWithCleanup {
+                primary: LifecycleEffect::PublishSystemdServiceDefinition {
+                    target: target.clone(),
+                    definition_digest: rendered_digest.clone(),
+                },
+                cleanup: LifecycleEffect::SettleSystemdDefinitionTransaction {
+                    target: target.clone(),
+                    definition_digest: rendered_digest,
+                },
             },
-            || {
-                self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
-                    .map_err(|error| error.to_string())
+            PhysicalActionsWithCleanup {
+                authorize: || {
+                    self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
+                        .map_err(|error| error.to_string())
+                },
+                run: || match prior_definition.as_ref() {
+                    Some(prior) if prior != &rendered.bytes => replace_owned_bytes(
+                        &paths.unit_file,
+                        prior,
+                        &rendered.bytes,
+                        target.service_generation(),
+                    ),
+                    _ => publish_bytes(
+                        &paths.unit_file,
+                        &rendered.bytes,
+                        0o600,
+                        target.service_generation(),
+                    ),
+                },
+                present: || bytes_match(&paths.unit_file, &rendered.bytes),
+                cleanup_run: || {
+                    settle_definition_transaction(
+                        &paths.unit_file,
+                        &rendered.bytes,
+                        target.service_generation(),
+                    )
+                    .map(|_| ())
+                },
+                cleanup_present: || {
+                    let transaction =
+                        definition_transaction(&paths.unit_file, target.service_generation())?;
+                    Ok(transaction.publish_temporary.is_some()
+                        || transaction.replace_temporary.is_some())
+                },
             },
-            || match prior_definition.as_ref() {
-                Some(prior) if prior != &rendered.bytes => replace_owned_bytes(
-                    &paths.unit_file,
-                    prior,
-                    &rendered.bytes,
-                    target.service_generation(),
-                ),
-                _ => publish_bytes(
-                    &paths.unit_file,
-                    &rendered.bytes,
-                    0o600,
-                    target.service_generation(),
-                ),
-            },
-            || bytes_match(&paths.unit_file, &rendered.bytes),
         )?;
         progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionPublished);
         progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionDurable);
@@ -643,25 +666,46 @@ impl GatewayHost for SystemdGateway {
             || create_owned_directory_chain(&paths.wants_directory),
             || owned_directory_present(&paths.wants_directory),
         )?;
-        planned_physical(
+        planned_physical_with_cleanup(
             progress,
             "publish-systemd-wants-link",
-            LifecycleEffect::PublishSystemdWantsLink {
-                target: target.clone(),
+            PhysicalPlanWithCleanup {
+                primary: LifecycleEffect::PublishSystemdWantsLink {
+                    target: target.clone(),
+                },
+                cleanup: LifecycleEffect::SettleSystemdWantsLinkTransaction {
+                    target: target.clone(),
+                },
             },
-            || {
-                self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
-                    .map_err(|error| error.to_string())
+            PhysicalActionsWithCleanup {
+                authorize: || {
+                    self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
+                        .map_err(|error| error.to_string())
+                },
+                run: || {
+                    publish_wants_link(
+                        &paths.wants_directory,
+                        &paths.wants_link,
+                        &paths.unit_file,
+                        target.service_generation(),
+                    )
+                },
+                present: || wants_link_matches(&paths.wants_link, &paths.unit_file),
+                cleanup_run: || {
+                    discard_wants_link_temporary(
+                        &paths.wants_directory,
+                        &paths.wants_link,
+                        &paths.unit_file,
+                        target.service_generation(),
+                    )
+                },
+                cleanup_present: || {
+                    wants_link_temporary_present(
+                        &paths.wants_directory,
+                        target.service_generation(),
+                    )
+                },
             },
-            || {
-                publish_wants_link(
-                    &paths.wants_directory,
-                    &paths.wants_link,
-                    &paths.unit_file,
-                    target.service_generation(),
-                )
-            },
-            || wants_link_matches(&paths.wants_link, &paths.unit_file),
         )?;
         if manager
             .unit_file_state(&unit)
@@ -778,11 +822,15 @@ impl GatewayHost for SystemdGateway {
             matches!(
                 step.step().effect(),
                 LifecycleEffect::PublishSystemdServiceDefinition { target, .. }
+                    | LifecycleEffect::SettleSystemdDefinitionTransaction { target, .. }
                     if target == recovery.target()
             )
         }) {
             let definition_digest = match recovery.pending_step().unwrap().step().effect() {
                 LifecycleEffect::PublishSystemdServiceDefinition {
+                    definition_digest, ..
+                }
+                | LifecycleEffect::SettleSystemdDefinitionTransaction {
                     definition_digest, ..
                 } => definition_digest,
                 _ => unreachable!(),
@@ -790,20 +838,32 @@ impl GatewayHost for SystemdGateway {
             settle_recovered_definition(&paths, recovery.target(), definition_digest)
                 .map_err(GatewayError::Registration)?;
         }
-        if recovery.pending_step().is_some_and(|step| {
-            matches!(
-                step.step().effect(),
+        if let Some(step) = recovery.pending_step() {
+            match step.step().effect() {
                 LifecycleEffect::PublishSystemdWantsLink { target }
-                    if target == recovery.target()
-            )
-        }) {
-            settle_wants_link_transaction(
-                &paths.wants_directory,
-                &paths.wants_link,
-                &paths.unit_file,
-                recovery.target().service_generation(),
-            )
-            .map_err(GatewayError::Registration)?;
+                    if target == recovery.target() =>
+                {
+                    settle_wants_link_transaction(
+                        &paths.wants_directory,
+                        &paths.wants_link,
+                        &paths.unit_file,
+                        recovery.target().service_generation(),
+                    )
+                    .map_err(GatewayError::Registration)?;
+                }
+                LifecycleEffect::SettleSystemdWantsLinkTransaction { target }
+                    if target == recovery.target() =>
+                {
+                    discard_wants_link_temporary(
+                        &paths.wants_directory,
+                        &paths.wants_link,
+                        &paths.unit_file,
+                        recovery.target().service_generation(),
+                    )
+                    .map_err(GatewayError::Registration)?;
+                }
+                _ => {}
+            }
         }
         let observed = observe_systemd_state(
             manager.as_ref(),
@@ -954,7 +1014,14 @@ impl GatewayHost for SystemdGateway {
         // Hold the exact process from snapshot A before any corroborating read.
         // Every later proof refers to this descriptor, so PID reuse cannot
         // redirect the eventual signal.
-        let process = LinuxProcessHandle::open(snapshot.main_process_id)?;
+        let process = self
+            .process_factory
+            .open(snapshot.main_process_id)
+            .map_err(|error| {
+                GatewayError::Stop(format!(
+                    "The gateway process cannot be held for exact signal delivery: {error}"
+                ))
+            })?;
         let advertisement = self
             .runtime_context
             .discover_endpoint(&data)
@@ -1148,6 +1215,103 @@ fn planned_physical(
     result.map_err(GatewayError::Registration)
 }
 
+struct PhysicalPlanWithCleanup {
+    primary: LifecycleEffect,
+    cleanup: LifecycleEffect,
+}
+
+struct PhysicalActionsWithCleanup<Authorize, Run, Present, CleanupRun, CleanupPresent> {
+    authorize: Authorize,
+    run: Run,
+    present: Present,
+    cleanup_run: CleanupRun,
+    cleanup_present: CleanupPresent,
+}
+
+fn planned_physical_with_cleanup<Authorize, Run, Present, CleanupRun, CleanupPresent>(
+    progress: &dyn GatewayReconciliationProgress,
+    plan_id: &str,
+    plan: PhysicalPlanWithCleanup,
+    actions: PhysicalActionsWithCleanup<Authorize, Run, Present, CleanupRun, CleanupPresent>,
+) -> Result<(), GatewayError>
+where
+    Authorize: FnOnce() -> Result<(), String>,
+    Run: FnOnce() -> Result<(), String>,
+    Present: FnOnce() -> Result<bool, String>,
+    CleanupRun: FnOnce() -> Result<(), String>,
+    CleanupPresent: FnOnce() -> Result<bool, String>,
+{
+    let primary = LifecyclePlanStep::new(
+        "primary".into(),
+        plan.primary,
+        LifecycleEffectPredicate::Always,
+    )
+    .map_err(|error| GatewayError::Registration(error.to_string()))?;
+    let cleanup = LifecyclePlanStep::new(
+        "settle-transaction".into(),
+        plan.cleanup,
+        LifecycleEffectPredicate::PrimaryReturned,
+    )
+    .map_err(|error| GatewayError::Registration(error.to_string()))?;
+    progress.effect_planned(plan_id, &primary, std::slice::from_ref(&cleanup))?;
+    let result = (actions.authorize)().and_then(|()| (actions.run)());
+    let completion = match &result {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+    let completion_delivery = progress.effect_completed(plan_id, primary.id(), &completion);
+    let cleanup_result = (actions.cleanup_run)();
+    if let Err(audit) = completion_delivery {
+        return Err(cleanup_result
+            .as_ref()
+            .err()
+            .map_or(audit.clone(), |cleanup| GatewayError::Audit {
+                audit: audit.to_string(),
+                physical: Some(GatewayPhysicalResult::Failed(Box::new(
+                    GatewayError::Registration(format!(
+                        "publication contingency cleanup also failed: {cleanup}"
+                    )),
+                ))),
+            }));
+    }
+    let primary_observation = progress.physical_observed(
+        &LifecycleObservationSource::Effect {
+            plan_id: plan_id.into(),
+            step_id: primary.id().into(),
+        },
+        None,
+        (actions.present)().map_err(GatewayError::Registration)?,
+    );
+    if let Err(audit) = primary_observation {
+        return Err(cleanup_result
+            .as_ref()
+            .err()
+            .map_or(audit.clone(), |cleanup| GatewayError::Audit {
+                audit: audit.to_string(),
+                physical: Some(GatewayPhysicalResult::Failed(Box::new(
+                    GatewayError::Registration(format!(
+                        "publication contingency cleanup also failed: {cleanup}"
+                    )),
+                ))),
+            }));
+    }
+    let cleanup_completion = match &cleanup_result {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+    progress.effect_completed(plan_id, cleanup.id(), &cleanup_completion)?;
+    progress.physical_observed(
+        &LifecycleObservationSource::Effect {
+            plan_id: plan_id.into(),
+            step_id: cleanup.id().into(),
+        },
+        None,
+        (actions.cleanup_present)().map_err(GatewayError::Registration)?,
+    )?;
+    cleanup_result.map_err(GatewayError::Registration)?;
+    result.map_err(GatewayError::Registration)
+}
+
 fn recovery_artifact_present(
     effect: &LifecycleEffect,
     paths: &LinuxGatewayPaths,
@@ -1180,6 +1344,26 @@ fn recovery_artifact_present(
             Ok(owned_file_bytes(&paths.unit_file)?
                 .is_some_and(|bytes| definition_digest(&bytes) == *planned_digest))
         }
+        LifecycleEffect::SettleSystemdDefinitionTransaction {
+            target: planned,
+            definition_digest: planned_digest,
+        } => {
+            if planned != target {
+                return Err("Recovered definition cleanup targets another lifecycle".into());
+            }
+            let transaction =
+                definition_transaction(&paths.unit_file, target.service_generation())?;
+            if transaction
+                .current
+                .as_deref()
+                .is_some_and(|bytes| definition_digest(bytes) != *planned_digest)
+            {
+                return Err(
+                    "Recovered definition cleanup disagrees with the admitted digest".into(),
+                );
+            }
+            Ok(transaction.publish_temporary.is_some() || transaction.replace_temporary.is_some())
+        }
         LifecycleEffect::CreateGatewayDataDirectory { target: planned } => {
             if planned != target {
                 return Err("Recovered data-directory plan targets another lifecycle".into());
@@ -1191,6 +1375,9 @@ fn recovery_artifact_present(
         }
         LifecycleEffect::PublishSystemdWantsLink { .. } => {
             wants_link_matches(&paths.wants_link, &paths.unit_file)
+        }
+        LifecycleEffect::SettleSystemdWantsLinkTransaction { .. } => {
+            wants_link_temporary_present(&paths.wants_directory, target.service_generation())
         }
         LifecycleEffect::ReloadSystemdManager { manager, unit } => match physical.snapshot {
             Some(state)
@@ -2167,6 +2354,10 @@ fn retry<T>(mut operation: impl FnMut() -> Result<T, GatewayError>) -> Result<T,
     operation().or_else(|_| operation())
 }
 
+fn pre_admission(error: impl std::fmt::Display) -> GatewayError {
+    GatewayError::Registration(format!("{error}; Nessa made no service or linger change"))
+}
+
 fn retire_prior(
     progress: &dyn GatewayReconciliationProgress,
     unit: &SystemdUnitName,
@@ -2196,14 +2387,14 @@ fn retire_prior(
             "The retiring systemd snapshot does not identify the planned process".into(),
         ));
     }
-    let descriptor = retirement_pidfd_open(snapshot.main_process_id);
-    if descriptor < 0 {
-        return Err(GatewayError::Registration(format!(
-            "The retiring gateway process cannot be held: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor as i32) };
+    let process = authority
+        .process_factory
+        .open(snapshot.main_process_id)
+        .map_err(|error| {
+            GatewayError::Registration(format!(
+                "The retiring gateway process cannot be held: {error}"
+            ))
+        })?;
     let advertisement = runtime
         .context
         .discover_endpoint(authority.data)
@@ -2257,7 +2448,7 @@ fn retire_prior(
         &request_id,
         prior,
         target,
-        &descriptor,
+        process,
         runtime.clock,
         || {
             verify_systemd_authority(runtime.manager, authority.paths, unit)?;
@@ -2265,7 +2456,7 @@ fn retire_prior(
                 .manager
                 .snapshot(unit)?
                 .ok_or_else(|| "The retiring systemd unit vanished during proof".to_string())?;
-            if second != snapshot || !retirement_pidfd_live(descriptor.as_raw_fd()) {
+            if second != snapshot {
                 return Err(
                     "The retiring systemd process changed during exact signal proof".into(),
                 );
@@ -2385,7 +2576,7 @@ fn retire(
     request_id: &str,
     prior: &ReconciliationIncarnation,
     target: &ReconciliationTarget,
-    descriptor: &OwnedFd,
+    process: Box<dyn LinuxProcess>,
     clock: &dyn MonotonicClock,
     verify_before_signal: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
@@ -2402,9 +2593,15 @@ fn retire(
     .map_err(|error| error.to_string())?;
     atomic_write(&directory, Path::new("request.json"), &request)?;
     verify_before_signal()?;
-    let sent = retirement_pidfd_signal(descriptor.as_raw_fd());
-    if sent != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+    if !process.is_live() {
+        return Err("The retiring gateway process exited during exact signal proof".into());
+    }
+    match process.signal(libc::SIGUSR2) {
+        Ok(()) => {}
+        Err(LinuxProcessSignalError::Exited) => {
+            return Err("The retiring gateway process exited before signal dispatch".into())
+        }
+        Err(LinuxProcessSignalError::Failed(error)) => return Err(error),
     }
     let deadline = clock.now() + Duration::from_secs(75);
     while clock.now() < deadline {
@@ -2414,58 +2611,6 @@ fn retire(
         clock.wait(Duration::from_millis(100));
     }
     Err("Gateway retirement acknowledgement timed out; service was preserved".into())
-}
-
-#[cfg(target_os = "linux")]
-fn retirement_pidfd_open(process_id: u32) -> libc::c_long {
-    unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_open,
-            libc::pid_t::try_from(process_id).unwrap_or(-1),
-            0,
-        )
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn retirement_pidfd_open(_process_id: u32) -> libc::c_long {
-    -1
-}
-
-#[cfg(target_os = "linux")]
-fn retirement_pidfd_signal(descriptor: i32) -> libc::c_long {
-    unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            descriptor,
-            libc::SIGUSR2,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        )
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn retirement_pidfd_live(descriptor: i32) -> bool {
-    unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            descriptor,
-            0,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        ) == 0
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn retirement_pidfd_live(_descriptor: i32) -> bool {
-    false
-}
-
-#[cfg(not(target_os = "linux"))]
-fn retirement_pidfd_signal(_descriptor: i32) -> libc::c_long {
-    -1
 }
 
 fn retirement_acknowledged(
@@ -3037,6 +3182,38 @@ mod tests {
         assert_eq!(observed.load(Ordering::SeqCst), 1);
     }
 
+    #[test]
+    fn publication_cleanup_is_predeclared_and_runs_after_completion_delivery_failure() {
+        let (_, target, _) = fixture();
+        let progress = FailingCompletionProgress {
+            planned_cleanup: AtomicUsize::new(0),
+            physical_cleanup: AtomicUsize::new(0),
+        };
+        let result = planned_physical_with_cleanup(
+            &progress,
+            "publication",
+            PhysicalPlanWithCleanup {
+                primary: LifecycleEffect::PublishSystemdWantsLink {
+                    target: target.clone(),
+                },
+                cleanup: LifecycleEffect::SettleSystemdWantsLinkTransaction { target },
+            },
+            PhysicalActionsWithCleanup {
+                authorize: || Ok(()),
+                run: || Ok(()),
+                present: || Ok(true),
+                cleanup_run: || {
+                    progress.physical_cleanup.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                cleanup_present: || Ok(false),
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(progress.planned_cleanup.load(Ordering::SeqCst), 1);
+        assert_eq!(progress.physical_cleanup.load(Ordering::SeqCst), 1);
+    }
+
     struct OwnerChangingManager {
         identity: SystemdManagerIdentity,
         checks: AtomicUsize,
@@ -3055,6 +3232,52 @@ mod tests {
     struct FailingAttemptProgress<'a> {
         inner: RecordingProgress,
         observed: &'a AtomicUsize,
+    }
+
+    struct FailingCompletionProgress {
+        planned_cleanup: AtomicUsize,
+        physical_cleanup: AtomicUsize,
+    }
+
+    impl GatewayReconciliationProgress for FailingCompletionProgress {
+        fn readiness_invalidated(&self) {}
+        fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+        fn history_observed(&self, _: ReconciliationHistoryFact) {}
+        fn effect_planned(
+            &self,
+            _: &str,
+            _: &LifecyclePlanStep,
+            cleanup: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.planned_cleanup.store(cleanup.len(), Ordering::SeqCst);
+            Ok(AuditDeliveryReceipt::new(
+                ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000778".into())
+                    .unwrap(),
+                1,
+                LifecycleRecordKind::EffectPlan,
+            ))
+        }
+        fn effect_completed(
+            &self,
+            _: &str,
+            _: &str,
+            _: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Err(GatewayError::Audit {
+                audit: "injected completion delivery failure".into(),
+                physical: None,
+            })
+        }
+        fn physical_observed(
+            &self,
+            _: &LifecycleObservationSource,
+            _: Option<ReconciliationIncarnation>,
+            _: bool,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            unreachable!("completion failure returns after physical cleanup")
+        }
     }
 
     impl GatewayReconciliationProgress for FailingAttemptProgress<'_> {
@@ -3392,6 +3615,7 @@ mod tests {
                 advertisement: None,
                 endpoint_error: None,
             }),
+            process_factory: Arc::new(NativeLinuxProcessFactory),
         };
 
         let paths = gateway.paths(&unit).unwrap();
@@ -3401,6 +3625,69 @@ mod tests {
             paths.state_root,
             root.join("state/nessa/gateway").join(unit.as_str())
         );
+    }
+
+    #[test]
+    fn pre_admission_refusal_states_that_no_service_or_linger_change_occurred() {
+        let temporary = tempfile::tempdir().unwrap();
+        let configuration = ServiceConfiguration::new(
+            "prod".into(),
+            temporary.path().join("data"),
+            None,
+            7420,
+            None,
+        )
+        .unwrap();
+        let (unit, _, snapshot) = fixture();
+        let gateway = SystemdGateway {
+            configuration,
+            home: temporary.path().join("home"),
+            clock: Arc::new(SystemMonotonicClock),
+            manager_factory: Arc::new(FixedManagerFactory {
+                identity: snapshot.manager,
+                unit_path: vec![],
+                snapshot: None,
+                error: None,
+            }),
+            runtime_context: Arc::new(FixedRuntimeContext {
+                effective_uid: 501,
+                real_uid: 501,
+                config_home: None,
+                data_home: None,
+                state_home: None,
+                advertisement: None,
+                endpoint_error: None,
+            }),
+            process_factory: Arc::new(NativeLinuxProcessFactory),
+        };
+        let correlation =
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000777".into())
+                .unwrap();
+        let request = GatewayReconciliationRequest::new(
+            correlation.clone(),
+            ReconciliationEvidence::new(
+                ReconciliationCause::Startup,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let attempt = GatewayReconciliationAttempt::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000779".into())
+                .unwrap(),
+            request,
+        )
+        .unwrap();
+        let progress = RecordingProgress {
+            correlation: attempt.correlation().clone(),
+            sequence: AtomicUsize::new(0),
+        };
+        let error = gateway
+            .register(Path::new("/unused"), "dev", None, &attempt, &progress)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .ends_with("Nessa made no service or linger change"));
+        assert_eq!(unit.as_str(), "nessa-gateway-prod.service");
     }
 
     #[test]
@@ -3470,6 +3757,7 @@ mod tests {
                     advertisement: None,
                     endpoint_error: endpoint_error.map(str::to_owned),
                 }),
+                process_factory: Arc::new(NativeLinuxProcessFactory),
             };
             assert!(gateway.recover(&recovery, journal.as_ref()).is_err());
         }
@@ -3493,6 +3781,7 @@ mod tests {
                 advertisement: None,
                 endpoint_error: None,
             }),
+            process_factory: Arc::new(NativeLinuxProcessFactory),
         };
         assert!(gateway.recover(&recovery, journal.as_ref()).is_ok());
         assert_eq!(unit.as_str(), recovery.target().service());
@@ -3562,6 +3851,87 @@ mod tests {
         assert!(retirement_artifact_present(&data, request_id, &prior, &target, None).is_err());
     }
 
+    struct FakeHeldProcess {
+        process_id: u32,
+        live: bool,
+        signals: Arc<AtomicUsize>,
+    }
+
+    impl LinuxProcess for FakeHeldProcess {
+        fn process_id(&self) -> u32 {
+            self.process_id
+        }
+
+        fn is_live(&self) -> bool {
+            self.live
+        }
+
+        fn signal(self: Box<Self>, _: libc::c_int) -> Result<(), LinuxProcessSignalError> {
+            self.signals.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn retirement_never_signals_after_post_open_snapshot_or_liveness_change() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().canonicalize().unwrap().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        let (unit, prior_target, _) = fixture();
+        let prior = ReconciliationIncarnation::new(
+            prior_target,
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            99,
+            7420,
+        )
+        .unwrap();
+        let target =
+            ReconciliationTarget::new(unit.as_str().into(), "c".repeat(64), "d".repeat(64))
+                .unwrap();
+        for (live, verification) in [(true, Err("snapshot B changed")), (false, Ok(()))] {
+            let signals = Arc::new(AtomicUsize::new(0));
+            let result = retire(
+                &data,
+                "550e8400-e29b-41d4-a716-446655440000",
+                &prior,
+                &target,
+                Box::new(FakeHeldProcess {
+                    process_id: prior.process_id(),
+                    live,
+                    signals: signals.clone(),
+                }),
+                &SystemMonotonicClock,
+                || verification.map_err(str::to_owned),
+            );
+            assert!(result.is_err());
+            assert_eq!(signals.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn settled_definition_recovery_requires_the_admitted_digest() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let (unit, target, _) = fixture();
+        let paths = LinuxGatewayPaths::new(
+            &root.join("home"),
+            Some(root.join("config").into_os_string()),
+            Some(root.join("data").into_os_string()),
+            Some(root.join("state").into_os_string()),
+            &unit,
+        )
+        .unwrap();
+        create_owned_directory_chain(&paths.unit_root).unwrap();
+        fs::write(&paths.unit_file, b"admitted bytes").unwrap();
+        fs::set_permissions(&paths.unit_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            settle_recovered_definition(&paths, &target, &definition_digest(b"other bytes"),)
+                .is_err()
+        );
+        settle_recovered_definition(&paths, &target, &definition_digest(b"admitted bytes"))
+            .unwrap();
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn native_manager_factory_refuses_an_account_without_linger_authority() {
@@ -3570,16 +3940,79 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn native_user_manager_is_exercised_or_refuses_before_any_effect() {
+    fn native_user_manager_is_required_for_the_linux_acceptance_gate() {
+        use std::os::unix::fs::OpenOptionsExt;
+
         let effective_uid = unsafe { libc::geteuid() };
-        match NativeLinuxManagerFactory.connect(effective_uid) {
-            Ok(manager) => {
-                assert_eq!(manager.identity().user_id(), effective_uid);
-                manager.recheck_identity().unwrap();
-                assert!(!manager.unit_path().unwrap().is_empty());
+        let manager = NativeLinuxManagerFactory.connect(effective_uid).expect(
+            "Linux acceptance requires a real lingering user manager; absence is a blocker",
+        );
+        assert_eq!(manager.identity().user_id(), effective_uid);
+        manager.recheck_identity().unwrap();
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{effective_uid}")));
+        let unit_root = runtime.join("systemd/user");
+        assert!(manager
+            .unit_path()
+            .unwrap()
+            .iter()
+            .any(|candidate| Path::new(candidate) == unit_root));
+        let unit = SystemdUnitName::parse(format!(
+            "nessa-gateway-acceptance-{}.service",
+            std::process::id()
+        ))
+        .unwrap();
+        let path = unit_root.join(unit.as_str());
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .expect("disposable systemd acceptance unit must be creatable");
+        let clock = SystemMonotonicClock;
+        let result = (|| -> Result<(), String> {
+            file.write_all(
+                b"[Unit]\nDescription=Nessa disposable lifecycle acceptance fixture\n[Service]\nType=simple\nExecStart=/usr/bin/sleep 60\n",
+            )
+            .map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+            drop(file);
+            manager.reload()?;
+            let start = manager.enqueue(SystemdJobOperation::Start, &unit, &clock)?;
+            let terminal = start.wait(&clock, clock.now() + JOB_TIMEOUT)?;
+            if terminal.result != "done" {
+                return Err(format!("disposable StartUnit returned {}", terminal.result));
             }
-            Err(error) => assert!(!error.trim().is_empty()),
+            let running = manager
+                .snapshot(&unit)?
+                .ok_or_else(|| "disposable unit disappeared after StartUnit".to_string())?;
+            if running.main_process_id == 0 || running.active_state != "active" {
+                return Err("disposable unit did not reach an active process".into());
+            }
+            let stop = manager.enqueue(SystemdJobOperation::Stop, &unit, &clock)?;
+            let terminal = stop.wait(&clock, clock.now() + JOB_TIMEOUT)?;
+            if terminal.result != "done" {
+                return Err(format!("disposable StopUnit returned {}", terminal.result));
+            }
+            let stopped = manager
+                .snapshot(&unit)?
+                .ok_or_else(|| "disposable unit disappeared after StopUnit".to_string())?;
+            if stopped.main_process_id != 0 || stopped.active_state != "inactive" {
+                return Err("disposable unit did not reach inactive/dead".into());
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            if let Ok(job) = manager.enqueue(SystemdJobOperation::Stop, &unit, &clock) {
+                let _ = job.wait(&clock, clock.now() + JOB_TIMEOUT);
+            }
         }
+        let removal = fs::remove_file(&path);
+        let reload = manager.reload();
+        removal.expect("disposable systemd unit cleanup must succeed");
+        reload.expect("systemd must acknowledge disposable unit cleanup");
+        result.expect("native disposable StartUnit/StopUnit lifecycle must pass");
     }
 
     #[test]
