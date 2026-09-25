@@ -2110,10 +2110,13 @@ mod tests {
     use super::*;
 
     fn private_tempdir() -> tempfile::TempDir {
-        tempfile::Builder::new()
+        let temporary = tempfile::Builder::new()
             .prefix(".nessa-linux-staging-test-")
             .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .expect("the repository checkout provides a trusted test ancestry")
+            .expect("the repository checkout provides a trusted test ancestry");
+        fs::set_permissions(temporary.path(), Permissions::from_mode(0o700))
+            .expect("the staging fixture root must be private");
+        temporary
     }
 
     #[test]
@@ -2227,7 +2230,6 @@ mod tests {
 
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let path = root.join("definition.service");
         fs::write(&path, b"same").unwrap();
         fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
@@ -2293,7 +2295,6 @@ mod tests {
     fn directory_transactions_remove_only_the_exact_empty_directory_they_created() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
 
         let removed = root.join("removed");
         let generation = "7".repeat(64);
@@ -2344,7 +2345,6 @@ mod tests {
     fn directory_transaction_retains_every_created_ancestor_after_a_suffix_failure() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let first = root.join("created");
         let target = first.join("x".repeat(256));
         let generation = "8".repeat(64);
@@ -2365,7 +2365,6 @@ mod tests {
     fn recovered_directory_transaction_removes_the_exact_nested_chain() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let preexisting = root.join("preexisting");
         fs::create_dir(&preexisting).unwrap();
         fs::set_permissions(&preexisting, Permissions::from_mode(0o700)).unwrap();
@@ -2463,7 +2462,6 @@ mod tests {
         for variant in ["empty", "nonempty", "replaced"] {
             let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
-            fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
             let target = root.join("one").join("two");
             let generation = "4".repeat(64);
             crash_directory_transaction(&target, &generation, "create", "mkdir-completed", 1);
@@ -2499,7 +2497,6 @@ mod tests {
 
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let target = root.join("one").join("two");
         let generation = "4".repeat(64);
         crash_directory_transaction(&target, &generation, "create", "mkdir-completed", 2);
@@ -2514,7 +2511,6 @@ mod tests {
     fn crash_after_identity_recording_recovers_the_exact_empty_chain() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         for occurrence in [1, 2] {
             let target = root.join(format!("one-{occurrence}")).join("two");
             let generation = "3".repeat(64);
@@ -2536,7 +2532,6 @@ mod tests {
     fn crash_during_marker_updates_recovers_only_the_last_complete_record() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let generation = "2".repeat(64);
 
         let initial = root.join("initial").join("child");
@@ -2584,7 +2579,6 @@ mod tests {
         ] {
             let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
-            fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
             let target = root.join("one").join("two");
             let generation = "1".repeat(64);
             crash_directory_transaction(&target, &generation, "settle", boundary, 1);
@@ -2614,7 +2608,6 @@ mod tests {
         for (serial, (failed_boundary, failed_occurrence)) in cases.into_iter().enumerate() {
             let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
-            fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
             let target = root.join("one").join("two");
             let generation = format!("{serial:064x}");
             let mut occurrence = 0;
@@ -2646,7 +2639,6 @@ mod tests {
     fn marker_creation_failure_precedes_every_directory_effect() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
-        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
         let target = root.join("one").join("two");
         let generation = "5".repeat(64);
         let marker = root.join(owned_directory_marker_name(&target, &generation));
@@ -2663,8 +2655,16 @@ mod tests {
     fn exact_owned_definition_can_be_replaced_after_verified_retirement() {
         let temporary = private_tempdir();
         let root = temporary.path().canonicalize().unwrap();
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         let definition = root.join("nessa-gateway-prod.service");
         publish_bytes(&definition, b"old", 0o600, &"c".repeat(64)).unwrap();
+        assert_eq!(
+            fs::metadata(&definition).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         replace_owned_bytes(&definition, b"old", b"new", &"a".repeat(64)).unwrap();
         assert_eq!(fs::read(&definition).unwrap(), b"new");
         assert!(!root
@@ -2676,12 +2676,17 @@ mod tests {
     #[test]
     fn exact_owned_definition_replacement_preserves_a_substitute() {
         let temporary = private_tempdir();
-        let definition = temporary
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("nessa-gateway-prod.service");
+        let root = temporary.path().canonicalize().unwrap();
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let definition = root.join("nessa-gateway-prod.service");
         publish_bytes(&definition, b"substitute", 0o600, &"d".repeat(64)).unwrap();
+        assert_eq!(
+            fs::metadata(&definition).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert!(replace_owned_bytes(&definition, b"old", b"new", &"b".repeat(64)).is_err());
         assert_eq!(fs::read(&definition).unwrap(), b"substitute");
     }
