@@ -20,6 +20,8 @@ export function uploadFailureText(reason: UploadFailure): string {
       return "it could not be brought under this model's limits"
     case "image-input-unsupported":
       return "this agent's model does not take images"
+    case "conversation-deleted":
+      return "this conversation was deleted"
     case "busy":
       return "the gateway was busy with other uploads"
     case "interrupted":
@@ -45,6 +47,8 @@ export function uploadFailureSummary(reason: UploadFailure): string {
       return "The image is too large for this model."
     case "image-input-unsupported":
       return "This agent's model doesn't take images."
+    case "conversation-deleted":
+      return "This conversation was deleted."
     case "busy":
       return "The gateway is busy. Try again in a moment."
     case "interrupted":
@@ -59,13 +63,14 @@ export function uploadFailureSummary(reason: UploadFailure): string {
 /**
  * Whether trying the same bytes again could end differently. The gateway's
  * verdicts on the image, and on an agent whose model takes none, are about the
- * image and the agent, so they will be the same next time; everything else
- * might not be.
+ * image and the agent, so they will be the same next time, as a deleted
+ * conversation stays deleted; everything else might not be.
  */
 export function worthRetrying(reason: UploadFailure): boolean {
   return (
     reason !== "unsupported-image" &&
     reason !== "too-large" &&
-    reason !== "image-input-unsupported"
+    reason !== "image-input-unsupported" &&
+    reason !== "conversation-deleted"
   )
 }

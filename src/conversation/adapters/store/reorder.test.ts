@@ -15,6 +15,7 @@ function deferred<T>() {
 function view(ids: string[]): ConversationView {
   return {
     conversationId: "server",
+    title: null,
     revision: ids.join(","),
     truncated: false,
     queueComplete: true,

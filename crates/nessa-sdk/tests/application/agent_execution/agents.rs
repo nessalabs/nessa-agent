@@ -158,6 +158,12 @@ impl SessionStorageLease for MemoryStore {
             Ok(())
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async {
+            self.0.lock().unwrap().snapshot = None;
+            Ok(())
+        })
+    }
 }
 impl MemoryStorage {
     pub(super) fn pause_next_save(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {

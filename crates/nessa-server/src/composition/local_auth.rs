@@ -17,8 +17,8 @@ use crate::{
     attachments::infrastructure::ModelImageNormalizer,
     conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
     conversation::infrastructure::{
-        DurableConversationCreationAudit, DurableConversationFileLinkAudit,
-        LocalConversationRepository,
+        DurableConversationCreationAudit, DurableConversationDeletionAudit,
+        DurableConversationFileLinkAudit, LocalConversationRepository, LocalConversationSummaries,
     },
 };
 use crate::{
@@ -416,6 +416,16 @@ fn conversations(
         DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    let deletion_audit = Arc::new(
+        DurableConversationDeletionAudit::new(root.join("audit").join("deletion"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    // Beside the ownership records rather than inside them: those are written
+    // once, and a summary is replaced on every turn.
+    let summaries = Arc::new(
+        LocalConversationSummaries::new(root.join("summaries"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let fixed_probe = LocalAgentProbe::from_environment(
         launch_files(Some(agents), &built.unavailable)
             .into_iter()
@@ -444,6 +454,12 @@ fn conversations(
     }));
     let configured = resolver.configured();
     let selected = resolver.default_agent()?;
+    // The one registry of how each agent deletes its own record of a session:
+    // the fixed agents' bindings, built above, and OpenCode's, whose binding
+    // is built from the current generation each time it is asked, as a cold
+    // conversation's provider is.
+    let mut erasers = built.erasers;
+    resolver.register_session_eraser(&mut erasers);
     let service = ConversationService::new(
         ConversationDependencies {
             agents: ConversationAgents::from_source(configured, selected, resolver.clone())
@@ -452,7 +468,11 @@ fn conversations(
             metadata,
             creation_audit,
             file_link_audit,
+            deletion_audit,
             attachments: Some(attachments.conversations),
+            summaries,
+            provider_sessions: erasers,
+            deletion_budgets: super::agent_budgets::deletion(),
             clock,
         },
         ConversationLimits::default(),

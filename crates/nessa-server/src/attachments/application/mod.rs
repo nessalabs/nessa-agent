@@ -11,7 +11,8 @@
 //! ```text
 //! begin   -> ConversationOwnership, AttachmentStore::find_upload, TicketSecrets -> TicketBook
 //! receive -> TicketBook -> UploadBody -> StagedUpload -> ImageNormalizer -> StagedUpload::keep
-//!            -> AttachmentAudit (created) -> AttachmentStore::confirm | discard
+//!            -> AttachmentAudit (created) -> ConversationOwnership
+//!            -> AttachmentStore::confirm | discard
 //! release -> TicketBook (withdraw) -> AttachmentStore::release
 //! every transition -> AttachmentAudit
 //! ```
@@ -26,7 +27,7 @@ pub use error::{AuditDelivery, BeginError, ReleaseError, UploadError};
 pub use ports::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, Confirmation,
     ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,
-    NormalizeFuture, NormalizedImage, OwnershipUnavailable, PortFuture, ReceivedBytes,
+    NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable, PortFuture, ReceivedBytes,
     ReleaseCause, ReleaseEvidence, ReleaseReport, ReleasedHold, RevertCause, SecretsUnavailable,
     StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted, UploadRejection,
 };

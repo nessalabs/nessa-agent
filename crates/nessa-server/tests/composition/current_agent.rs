@@ -37,12 +37,14 @@ use crate::{
     composition::local_auth::SystemClock,
     conversation::application::{
         ConversationAgentSource, ConversationAgents, ConversationCaller, ConversationDependencies,
-        ConversationLimits, ConversationService, SubmissionMode, SubmittedMessage,
+        ConversationLimits, ConversationService, ProviderSessionErasers, SubmissionMode,
+        SubmittedMessage,
     },
     conversation::domain::ConversationId,
     conversation_test_support::{
-        AcceptingAudit, AcceptingCreationAudit, MemoryRepository, Provider, ProviderFactory,
-        RecordingFileLinkAudit, TestClock,
+        AcceptingAudit, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository,
+        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
+        DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -644,6 +646,71 @@ async fn cold_resolution_reobserves_after_readiness_in_both_directions() {
     assert_eq!(store.reads.load(Ordering::SeqCst), 4);
 }
 
+#[test]
+fn opencode_is_registered_to_delete_sessions_only_when_configured() {
+    use crate::conversation::application::ProviderSessionErasers;
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::Missing));
+    let configured = Arc::new(resolver(
+        root.path(),
+        store.clone(),
+        credentials.clone(),
+        HashMap::new(),
+    ));
+    let mut erasers = ProviderSessionErasers::default();
+    configured.register_session_eraser(&mut erasers);
+    assert!(erasers.handles(AgentId::Opencode));
+    // Standalone, with no OpenCode launch configured: nothing to register.
+    let unconfigured = Arc::new(resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config: config(root.path(), AgentId::Claude),
+            packaged: false,
+            host: host_platform(),
+            captured_environment: None,
+            store,
+            credentials,
+            fixed: HashMap::from([(AgentId::Claude, fixed_agent())]),
+        },
+    ));
+    let mut erasers = ProviderSessionErasers::default();
+    unconfigured.register_session_eraser(&mut erasers);
+    assert!(!erasers.handles(AgentId::Opencode));
+}
+
+#[tokio::test]
+async fn opencode_is_asked_to_delete_a_session_by_its_current_generation() {
+    use crate::conversation::application::{ConversationError, ProviderSessionEraser};
+    use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::ApiKey("secret".into())));
+    let resolver = Arc::new(resolver(
+        root.path(),
+        store.clone(),
+        credentials,
+        HashMap::new(),
+    ));
+    let eraser = CurrentOpenCodeEraser::new(resolver);
+    let session = || ExecutionSessionId::new("provider-session").unwrap();
+    // Not installed now: a known agent not built, so the deletion waits.
+    assert!(matches!(
+        eraser.erase(session()).await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    assert_eq!(store.reads.load(Ordering::SeqCst), 1);
+    // Installed since: observed afresh, and that generation's binding is
+    // launched to ask — here a file that is not a program, so the launch fails.
+    store.answer(StoreAnswer::Ready(executable(root.path())));
+    assert!(matches!(
+        eraser.erase(session()).await,
+        Err(ConversationError::Agent(_))
+    ));
+    assert_eq!(store.reads.load(Ordering::SeqCst), 2);
+    eraser.settled().await;
+}
+
 #[tokio::test]
 async fn cold_resolution_refuses_pin_and_credential_contradictions_without_redeciding_policy() {
     let root = tempfile::tempdir().unwrap();
@@ -909,7 +976,11 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
             metadata: Arc::new(MemoryRepository::default()),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

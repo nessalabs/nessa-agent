@@ -248,6 +248,8 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         (RevertCause::ConfirmationFailed, "confirmation_failed"),
         (RevertCause::RemovedBeforeUsable, "removed_before_usable"),
         (RevertCause::UploadUnresolved, "upload_unresolved"),
+        (RevertCause::ConversationDeleted, "conversation_deleted"),
+        (RevertCause::ConversationNotFound, "conversation_not_found"),
     ] {
         let value = record_value(&AttachmentAuditRecord::HoldReverted {
             hold: hold(),
@@ -255,6 +257,41 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         });
         assert_eq!(value["cause"], name);
         assert_eq!(value["initiator"], json!({"kind": "automatic"}));
+    }
+
+    // A release because the conversation was deleted says so, on every
+    // record it writes, and keeps the deleting caller as its initiator.
+    let deleting = ReleaseEvidence {
+        cause: ReleaseCause::ConversationDeleted,
+        ..release()
+    };
+    for (record, field) in [
+        (
+            AttachmentAuditRecord::HoldReleased {
+                hold: hold(),
+                was: HoldState::Held,
+                release: deleting.clone(),
+            },
+            "cause",
+        ),
+        (
+            AttachmentAuditRecord::TicketWithdrawn {
+                ticket: ticket(),
+                release: deleting.clone(),
+            },
+            "cause",
+        ),
+        (
+            AttachmentAuditRecord::BlobRemoved {
+                hold: hold(),
+                release: deleting.clone(),
+            },
+            "releaseCause",
+        ),
+    ] {
+        let value = record_value(&record);
+        assert_eq!(value[field], "conversation_deleted", "{record:?}");
+        assert_eq!(value["initiator"], closer());
     }
 }
 

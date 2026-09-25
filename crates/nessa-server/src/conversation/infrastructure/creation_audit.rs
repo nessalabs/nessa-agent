@@ -107,6 +107,7 @@ fn ownership(value: ConversationOwnershipState) -> &'static str {
     match value {
         ConversationOwnershipState::Absent => "absent",
         ConversationOwnershipState::Owned => "owned",
+        ConversationOwnershipState::Deleted => "deleted",
     }
 }
 

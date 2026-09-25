@@ -128,6 +128,7 @@ export type {
   ConversationApi,
   ConversationActionOptions,
   ConversationCreateOptions,
+  ConversationListOptions,
   ConversationSendOptions,
   ConversationSubmission,
 } from "./presentation/conversation-api.js"
@@ -157,6 +158,8 @@ export {
 } from "./protocol/attachment-validate.js"
 export type {
   ConversationView,
+  ConversationListResult,
+  ConversationSummary,
   ConversationLifecycle,
   ConversationLifecyclePhase,
   ConversationStartupFailure,

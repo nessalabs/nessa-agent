@@ -38,6 +38,7 @@ const PRODUCT_METHODS: &[&str] = &[
     "credential.revoke",
     "conversation.create",
     "conversation.read",
+    "conversation.list",
     "conversation.send",
     "conversation.steer",
     "conversation.remove",
@@ -45,6 +46,9 @@ const PRODUCT_METHODS: &[&str] = &[
     "conversation.answer",
     "conversation.cancel",
     "conversation.close",
+    "conversation.archive",
+    "conversation.unarchive",
+    "conversation.delete",
     "attachment.begin",
 ];
 
@@ -331,7 +335,7 @@ async fn run_authenticated<S>(
                 // Admission authorizes one operation against committed state.
                 // Its response may finish after revocation; the next request
                 // and idle liveness check observe the new revision.
-                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
+                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.archive" | "conversation.unarchive" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
                 if requests.len() >= if control { 20 } else { 16 } {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
@@ -342,8 +346,13 @@ async fn run_authenticated<S>(
                 // and so does beginning an upload: it opens no provider, so it
                 // does not wait behind a conversation that is starting, and its
                 // own storage and audit work never takes a control's place.
+                // A delete is not a control: it can take minutes and launch
+                // an agent, so it has capacity of its own and never takes a
+                // control's place.
                 let capacity = if control {
                     &state.controls
+                } else if frame.method == "conversation.delete" {
+                    &state.deletions
                 } else if frame.method == "attachment.begin" {
                     &state.upload_begins
                 } else {
@@ -600,6 +609,7 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         "server.health" => Some("server.read"),
         "conversation.create"
         | "conversation.read"
+        | "conversation.list"
         | "conversation.send"
         | "conversation.steer"
         | "conversation.remove"
@@ -607,6 +617,9 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.answer"
         | "conversation.cancel"
         | "conversation.close"
+        | "conversation.archive"
+        | "conversation.unarchive"
+        | "conversation.delete"
         // Uploading into a conversation is writing to it.
         | "attachment.begin" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),

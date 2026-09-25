@@ -3,14 +3,15 @@
 use super::{
     AttachmentReleaseCause, ConversationAttachment, ConversationCaller, ConversationDependencies,
     ConversationError, ConversationLimits, ConversationMessageStatus, ConversationRepository,
-    ConversationService, SubmissionMode, SubmittedImage, SubmittedMessage,
+    ConversationService, ProviderSessionErasers, SubmissionMode, SubmittedImage, SubmittedMessage,
 };
 use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
-        image_fixture, image_fixture_with_model, only, AcceptingCreationAudit, MemoryAttachments,
-        MemoryRepository, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
+        image_fixture, image_fixture_with_model, only, AcceptingCreationAudit,
+        AcceptingDeletionAudit, MemoryAttachments, MemoryRepository, MemorySummaries, Provider,
+        ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -263,6 +264,10 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: Some(attachments),
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -373,6 +378,10 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: Some(attachments.clone()),
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits {

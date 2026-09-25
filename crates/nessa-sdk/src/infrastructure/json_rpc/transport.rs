@@ -1,4 +1,4 @@
-use super::{parse, protocol, Envelope};
+use super::{envelope::MAX_JSON_ITEMS, parse_within, protocol, Envelope};
 use crate::application::agent_execution::agents::AgentError;
 use event_stream::ingestion::{
     CrLfPolicy, DecodeBudget, DecodeState, FinalLinePolicy, IncrementalDecoder, NewlineFramer,
@@ -25,6 +25,8 @@ pub(crate) struct Reader<R> {
     offset: usize,
     length: usize,
     limit: usize,
+    /// Values and object keys one frame may hold.
+    json_items: usize,
     failure: Option<AgentError>,
     decoding_yielded: bool,
     frame_in_progress: bool,
@@ -44,10 +46,17 @@ impl<R: AsyncRead + Unpin> Reader<R> {
             offset: 0,
             length: 0,
             limit,
+            json_items: MAX_JSON_ITEMS,
             failure: None,
             decoding_yielded: false,
             frame_in_progress: false,
         }
+    }
+    /// Take frames holding up to `items` values and keys from the next one
+    /// on, for a connection about to read one answer larger than the rest of
+    /// the protocol sends. The protocol's own bound is [`MAX_JSON_ITEMS`].
+    pub(crate) fn allow_json_items(&mut self, items: usize) {
+        self.json_items = items;
     }
     /// A pending decode yielded for fairness rather than waiting for provider input.
     pub(crate) fn decoding_yielded(&self) -> bool {
@@ -86,7 +95,7 @@ impl<R: AsyncRead + Unpin> Reader<R> {
                 }
                 if let Some(frame) = step.items.into_iter().next() {
                     if !frame.item.as_bytes().iter().all(u8::is_ascii_whitespace) {
-                        return parse(frame.item.as_bytes());
+                        return parse_within(frame.item.as_bytes(), self.json_items);
                     }
                 }
                 self.length = self
@@ -124,7 +133,7 @@ impl<R: AsyncRead + Unpin> Reader<R> {
             }
             if let Some(frame) = step.items.into_iter().next() {
                 if !frame.item.as_bytes().iter().all(u8::is_ascii_whitespace) {
-                    return parse(frame.item.as_bytes());
+                    return parse_within(frame.item.as_bytes(), self.json_items);
                 }
             }
             // Even an uninterrupted stream of whitespace leaves closure responsive.

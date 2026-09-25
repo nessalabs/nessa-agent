@@ -13,7 +13,9 @@ use crate::domain::effective_capabilities::value_objects::{
 };
 use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
-use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
+use crate::infrastructure::acp::sessions::{
+    binding as acp_binding, deletion::DeletionCleanups, identity, AcpConfig,
+};
 use crate::infrastructure::process::ProcessScope;
 use std::{ffi::OsStr, path::Path, sync::Arc};
 use tokio::process::Command;
@@ -119,6 +121,8 @@ pub struct OpencodeAcpProvider {
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
     audit: Arc<dyn ExecutionAudit>,
+    /// Deletions this binding started that are still stopping their process.
+    deletions: DeletionCleanups,
 }
 
 impl OpencodeAcpProvider {
@@ -229,6 +233,7 @@ impl OpencodeAcpProvider {
             config,
             capabilities,
             audit,
+            deletions: DeletionCleanups::default(),
         })
     }
 
@@ -407,22 +412,41 @@ impl AgentProvider for OpencodeAcpProvider {
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (restore, control) = request.into_parts();
-            let factory = self.clone();
             acp_binding::open(
-                Arc::new(move || {
-                    ProcessScope::spawn_with_private_directory(|private_home| {
-                        factory.launch_command(private_home)
-                    })
-                    .map(|(scope, _)| scope)
-                }),
+                self.process_factory(),
                 self.config.clone(),
                 self.capabilities.clone(),
-                OpencodeProfile::new(self.capabilities.model().model_id()),
+                self.profile(),
                 self.audit.clone(),
                 restore,
                 control,
             )
             .await
+        })
+    }
+}
+impl OpencodeAcpProvider {
+    /// The launch configuration every connection this provider opens uses.
+    pub(super) fn config(&self) -> &AcpConfig {
+        &self.config
+    }
+    /// Deletions this binding started that are still stopping their process.
+    pub(super) fn deletions(&self) -> &DeletionCleanups {
+        &self.deletions
+    }
+    /// The profile every connection this provider opens speaks.
+    pub(super) fn profile(&self) -> OpencodeProfile {
+        OpencodeProfile::new(self.capabilities.model().model_id())
+    }
+    /// How every connection this provider opens is launched: in a private
+    /// home of its own, retained until the process is confirmed stopped.
+    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+        let factory = self.clone();
+        Arc::new(move || {
+            ProcessScope::spawn_with_private_directory(|private_home| {
+                factory.launch_command(private_home)
+            })
+            .map(|(scope, _)| scope)
         })
     }
 }

@@ -8,6 +8,7 @@ const failureNotice =
 
 const providerFailure = (revision: string): ConversationView => ({
   conversationId: "server",
+  title: null,
   revision,
   truncated: false,
   queueComplete: true,

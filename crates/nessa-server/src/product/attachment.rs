@@ -94,6 +94,7 @@ fn error_code(error: BeginError) -> ConversationErrorCode {
     match error {
         BeginError::InvalidRequest => ConversationErrorCode::InvalidRequest,
         BeginError::ConversationNotFound => ConversationErrorCode::ConversationNotFound,
+        BeginError::ConversationDeleted => ConversationErrorCode::ConversationDeleted,
         // The same word `conversation.send` and the upload route give for the
         // same fact: this gateway's model is offered no images.
         BeginError::ImagesUnsupported => ConversationErrorCode::ImageInputUnsupported,

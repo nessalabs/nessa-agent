@@ -1,11 +1,13 @@
 import { textContent } from "../../model"
 import { describe, expect, it } from "vitest"
 import { emptyLocalTabs } from "../local-tabs"
+import { UNTITLED } from "../queries/roster"
 import {
   beginSend,
   closeConversation,
   failSend,
   openConversation,
+  openListed,
   setActive,
   setDraft,
 } from "./index"
@@ -20,7 +22,8 @@ describe("local submission evidence", () => {
   it("preserves exact content and permits a second queued draft", () => {
     const content = textContent("  code\n ")
     const pending = beginSend(emptyLocalTabs(), { ...identity, content })
-    expect(pending.conversations[0]!.title).toBe("code")
+    // Named by the gateway, not here: the view carries its title.
+    expect(pending.conversations[0]!.title).toBe("New chat")
     expect(pending.conversations[0]!.turns[0]).toMatchObject({
       from: "user",
       content,
@@ -98,5 +101,38 @@ describe("setActive / setDraft", () => {
     expect(setActive(drafted, "c0").activeId).toBe("c0")
     expect(drafted.conversations[0]!.draft).toEqual(textContent("note"))
     expect(setActive(two, "missing")).toBe(two)
+  })
+})
+
+describe("openListed", () => {
+  const listed = {
+    serverConversationId: "0b8f1c2e-1111-4a4a-8b8b-000000000001",
+    title: "Flights to Lisbon",
+  }
+
+  it("reopens a listed conversation as a ready tab named by the list", () => {
+    const opened = openListed(emptyLocalTabs(), listed)
+    const tab = opened.conversations.find((item) => item.id === opened.activeId)!
+    expect(opened.conversations).toHaveLength(2)
+    expect(tab).toMatchObject({
+      title: "Flights to Lisbon",
+      serverConversationId: listed.serverConversationId,
+      serverReady: true,
+      turns: [],
+    })
+    expect(tab.titleEdited).toBeUndefined()
+  })
+
+  it("shows the tab that already holds it rather than opening a second", () => {
+    const once = openListed(emptyLocalTabs(), listed)
+    const elsewhere = setActive(once, "c0")
+    const twice = openListed(elsewhere, { ...listed, title: null })
+    expect(twice.conversations).toHaveLength(2)
+    expect(twice.activeId).toBe(once.activeId)
+  })
+
+  it("names a conversation the gateway has no title for as its list row does", () => {
+    const opened = openListed(emptyLocalTabs(), { ...listed, title: null })
+    expect(opened.conversations.at(-1)!.title).toBe(UNTITLED)
   })
 })

@@ -29,8 +29,13 @@
 //! UserImageSource is how an adapter turns a message's image references into
 //! bytes just before dispatch, off the task that owns the provider connection;
 //! requests, queues, and snapshots only ever hold references.
+//! ProviderSessionDeleter is how one agent's binding deletes that agent's own
+//! record of a session nothing runs any more, over a connection of its own
+//! that never resumes the session; each binding says what a successful delete
+//! means for its agent (ProviderSessionDeletion).
 
 mod close;
+mod deletion;
 mod executable_use;
 mod finalized_execution;
 mod identity;
@@ -42,6 +47,9 @@ mod reports;
 mod session;
 mod steering;
 pub use close::SessionCloseRequest;
+pub use deletion::{
+    ProviderSessionDeleter, ProviderSessionDeletion, ProviderSessionDeletionFuture,
+};
 pub use executable_use::{
     ExecutableUse, ExecutableUseAdmissionFailure, ExecutableUseAdmissionOwner, ExecutableUseError,
     ExecutableUseGuard, ExecutableUseSnapshot,

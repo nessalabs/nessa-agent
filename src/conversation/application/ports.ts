@@ -1,4 +1,9 @@
-import type { ConversationView, Submission, SubmissionReceipt } from "./view"
+import type {
+  ConversationListing,
+  ConversationView,
+  Submission,
+  SubmissionReceipt,
+} from "./view"
 import {
   type CommandFailure,
   type FileAttachment,
@@ -16,6 +21,10 @@ export interface ConversationGateway {
   changeUpload(tabs: LocalTabs, change: UploadChange): LocalTabs
   forgetStoredUploads(tabs: LocalTabs, conversationId: string): LocalTabs
   openConversation(tabs: LocalTabs): LocalTabs
+  openListed(
+    tabs: LocalTabs,
+    listed: { serverConversationId: string; title: string | null },
+  ): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
   setDraft(tabs: LocalTabs, input: { draft: MessageContent; id?: string }): LocalTabs
   moveActive(tabs: LocalTabs, direction: -1 | 1): LocalTabs
@@ -31,6 +40,27 @@ export interface ConversationEffects {
    * or a sentence to find out what went wrong.
    */
   read(conversationId: string): Promise<ConversationView>
+  /**
+   * The caller's conversations as the gateway lists them, newest first: the
+   * archived ones when `archived`, the rest otherwise. A read:
+   * it rejects with {@link ConversationReadFailedError} for the same reasons.
+   */
+  list(archived: boolean): Promise<ConversationListing>
+  /**
+   * Archive (`true`) or unarchive a conversation: whether the list shows it.
+   * Resolves with whether anything changed — false when it already was, or
+   * when the gateway has no summary for it (nothing was said in it, or its
+   * summary was never written), since it archives only what it lists. Rejects as a control does, with
+   * {@link ControlFailedError}.
+   */
+  archive(conversationId: string, archived: boolean): Promise<boolean>
+  /**
+   * Delete a conversation permanently. Rejects as a control does; a rejection
+   * whose reason is `conversation-erasure-incomplete` or `deletion-unrecorded`
+   * is a delete that happened; any other, but for `not-connected`, has the
+   * outcome `unknown`, since that is all the gateway promises.
+   */
+  delete(conversationId: string): Promise<void>
   send(input: Submission): Promise<SubmissionReceipt>
   steer(input: Submission): Promise<SubmissionReceipt>
   /**

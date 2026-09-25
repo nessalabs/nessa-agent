@@ -1,10 +1,16 @@
 {
-  "note": "Budgets that have to agree across the wire when a conversation command opens or restores an agent. The gateway spends launchMs waiting for a freshly staged runtime to answer at all — that interval is the operating system scanning it on first execution, not protocol work — then startupMs on the rest of the handshake, then up to shutdownGraceMs + killTimeoutMs tearing a failed process down before it can answer. A client that gives up sooner deletes the request and drops the typed answer when it finally arrives, and the caller is told 'command failed' for a failure the gateway described exactly. One table, so the two sides cannot drift: crates/nessa-server/src/composition/agent_budgets.rs and packages/nessa-client/src/application/agent-budgets.ts read these same bytes.",
+  "note": "Budgets that have to agree across the wire when a conversation command waits on an agent. The gateway spends launchMs waiting for a freshly staged runtime to answer at all — that interval is the operating system scanning it on first execution, not protocol work — then startupMs on each exchange after it, then up to shutdownGraceMs + killTimeoutMs tearing a process down. A client that gives up sooner deletes the request and drops the typed answer when it finally arrives, and the caller is told 'command failed' for a failure the gateway described exactly. One table, so the two sides cannot drift: crates/nessa-server/src/composition/agent_budgets.rs compiles it into what the gateway spends, and packages/nessa-client/src/application/agent-budgets.ts states how long the client waits, checked against these same bytes by its test.",
   "agent": {
     "launchMs": 120000,
     "startupMs": 45000,
     "shutdownGraceMs": 3000,
     "killTimeoutMs": 2000
+  },
+  "deletion": {
+    "note": "What conversation.delete spends before it asks the agent to delete its own session: stopping the conversation's live agent (a stop still unconfirmed after stopMs leaves the deletion to be finished by the running gateway, not the delete), then waiting for the stopped agent to let go of the saved history. The agent exchange that follows is launchMs + startupMs (delete) + startupMs (listing, read only when the agent refuses) + shutdownGraceMs + 4 × killTimeoutMs — terminate, kill, reap, and releasing the agent's own launch directory — which the SDK states once as AcpConfig::session_deletion_limit. worstCaseMs is that whole bound for one delete, stated once here: a gateway test checks it against stopMs + historyLeaseMs + session_deletion_limit(), and the client waits it out plus client.marginMs. stopMs is also the one bound on stopping each conversation's agent when the gateway retires or the desktop app quits: every stop of one owner, a delete's or retirement's, waits at most stopMs.",
+    "stopMs": 10000,
+    "historyLeaseMs": 2000,
+    "worstCaseMs": 233000
   },
   "client": {
     "note": "Added to the gateway's worst case to cover audit writes, the response write, and scheduling. The client budget is a backstop against a gateway that has stopped answering at all, not a second opinion about how long a launch may take.",

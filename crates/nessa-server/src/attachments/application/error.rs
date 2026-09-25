@@ -8,6 +8,8 @@ pub enum BeginError {
     /// No such conversation for this caller. Another owner's conversation and
     /// one that does not exist are deliberately the same answer.
     ConversationNotFound,
+    /// The caller's conversation was deleted. Nothing is uploaded into it again.
+    ConversationDeleted,
     /// The upload says it is an image, and the selected model is offered none,
     /// so no image is prepared for it. Nothing is wrong with the file; there is
     /// simply no message that could ever name it.

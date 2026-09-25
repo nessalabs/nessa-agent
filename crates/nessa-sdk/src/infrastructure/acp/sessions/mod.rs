@@ -14,10 +14,13 @@
 //! Failed startup and live teardown retain uncertain resource ownership for
 //! cleanup retry; confirmation cannot erase a separately failed audit delivery.
 //! Losing the final recovery handle transfers the resource to a physical cleanup
-//! supervisor, including when an opening caller disappears.
+//! supervisor, including when an opening caller disappears. `deletion` opens a
+//! connection of its own, never resuming the session it asks the agent to
+//! delete.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
 pub(crate) mod configuration;
+pub(crate) mod deletion;
 pub(crate) mod identity;
 pub use config::{AcpConfig, StdioMcpServer};

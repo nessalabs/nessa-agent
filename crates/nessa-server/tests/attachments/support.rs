@@ -6,9 +6,10 @@ use crate::{
             AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
             AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
             BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
-            Kept, NormalizeError, NormalizeFuture, NormalizedImage, OwnershipUnavailable,
-            PortFuture, ReceivedBytes, ReleaseReport, ReleasedHold, SecretsUnavailable,
-            StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted,
+            Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
+            OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseReport, ReleasedHold,
+            SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
+            UploadInterrupted,
         },
         domain::{Attachment, Hold, HoldState, MediaType},
     },
@@ -162,10 +163,11 @@ impl AttachmentAudit for RecordingAudit {
     }
 }
 
-/// Who owns which conversation, or no answer at all.
+/// Who owns which conversation, which were deleted, or no answer at all.
 #[derive(Default)]
 pub(crate) struct FixedOwnership {
     pub(crate) owners: Mutex<HashMap<ConversationId, (OrganizationId, PrincipalId)>>,
+    pub(crate) deleted: Mutex<Vec<ConversationId>>,
     pub(crate) unavailable: AtomicBool,
     pub(crate) asked: AtomicUsize,
 }
@@ -183,20 +185,27 @@ impl ConversationOwnership for FixedOwnership {
         organization_id: &'a OrganizationId,
         principal_id: &'a PrincipalId,
         conversation_id: &'a ConversationId,
-    ) -> PortFuture<'a, bool, OwnershipUnavailable> {
+    ) -> PortFuture<'a, Ownership, OwnershipUnavailable> {
         Box::pin(async move {
             self.asked.fetch_add(1, Ordering::SeqCst);
             if self.unavailable.load(Ordering::SeqCst) {
                 return Err(OwnershipUnavailable);
             }
-            Ok(self
+            let owned = self
                 .owners
                 .lock()
                 .unwrap()
                 .get(conversation_id)
                 .is_some_and(|(organization, owner)| {
                     organization == organization_id && owner == principal_id
-                }))
+                });
+            Ok(if !owned {
+                Ownership::NotFound
+            } else if self.deleted.lock().unwrap().contains(conversation_id) {
+                Ownership::Deleted
+            } else {
+                Ownership::Owned
+            })
         })
     }
 }

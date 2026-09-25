@@ -29,6 +29,10 @@ pub struct ConversationView {
     pub queue_complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_view_error: Option<String>,
+    /// The name the gateway gave the conversation from its first message —
+    /// the same title `conversation.list` shows, from the same summary — or
+    /// `None` before anything was said. Always on the wire, as `null` then.
+    pub title: Option<String>,
 }
 /// Current provider attachment lifecycle. It grants no operation authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -338,6 +342,40 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
             },
         }
     }
+}
+/// The conversations one list names, and whether they are all of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationList {
+    /// Most recently updated first, at most
+    /// [`MAX_LISTED_CONVERSATIONS`](super::MAX_LISTED_CONVERSATIONS).
+    pub conversations: Vec<ConversationListEntry>,
+    /// Whether these are every conversation the caller has under the list's
+    /// filter: `false` when the bound left some out, or while any conversation
+    /// record on the gateway cannot be read. Whose it is cannot be read
+    /// either, so that is gateway-wide, not per caller, and lasts until an
+    /// operator repairs or moves the record aside, or runs
+    /// `scripts/retrofit-conversation-agents.mjs` for one from before records
+    /// named their agent. A
+    /// conversation missing from a complete list is not there under that
+    /// filter: deleted, under the other filter, or one the gateway has no
+    /// summary for (nothing was said in it, or its summary was never
+    /// written).
+    pub complete: bool,
+}
+/// One conversation as a row in a list of them: what it is called, the last
+/// thing said in it, and when. The product boundary maps it to the wire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationListEntry {
+    pub conversation_id: String,
+    pub title: Option<String>,
+    pub preview: Option<String>,
+    pub created_at_ms: u64,
+    /// When something was last said in it; its creation time until then.
+    pub updated_at_ms: u64,
+    /// Open on this gateway with a turn under way.
+    pub running: bool,
+    /// Somebody archived it, and nothing has been said in it since.
+    pub archived: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

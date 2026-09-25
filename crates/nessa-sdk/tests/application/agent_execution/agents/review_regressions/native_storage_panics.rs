@@ -42,6 +42,9 @@ impl SessionStorageLease for PanicLease {
             Ok(())
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 
 #[tokio::test]

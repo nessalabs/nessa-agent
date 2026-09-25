@@ -2,10 +2,12 @@ import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
-import type { RpcRequester } from "../application/session-port.js"
+import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
+import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
 import { ProductMethod } from "../generated/product.js"
 import type {
   ConversationCreateResult,
+  ConversationListResult,
   ConversationView,
   ConversationReceipt,
   ConversationMutationResult,
@@ -19,11 +21,19 @@ import {
 } from "../protocol/attachment-validate.js"
 import {
   conversationId,
+  conversationIdPattern,
+  conversationList,
   conversationView,
   conversationReceipt,
   conversationMutation,
   conversationReorder,
 } from "../protocol/conversation-validate.js"
+
+/** Which of the caller's conversations `list()` returns. */
+export type ConversationListOptions = {
+  /** True for archived conversations only; false or omitted for the rest. */
+  archived?: boolean
+}
 
 /** Optional caller-managed action identity. The client generates it when omitted. */
 export type ConversationActionOptions = {
@@ -57,6 +67,14 @@ export type ConversationApi = {
   create: (options?: ConversationCreateOptions) => Promise<ConversationCreateResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
+  /**
+   * List the conversations the authenticated caller owns, most recently
+   * updated first, at most 500: each with its title, the last thing said in
+   * it, when, and whether it is running. Closed conversations are included;
+   * archived ones only when `options.archived` asks for them, and then only
+   * they. Listing opens no provider, so it is cheap to call when a list is shown.
+   */
+  list: (options?: ConversationListOptions) => Promise<ConversationListResult>
   /**
    * Queue a message for this conversation without waiting for provider
    * attachment: text, images, linked files, or any combination of them.
@@ -123,11 +141,40 @@ export type ConversationApi = {
     conversationId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /** Archive a conversation: `list()` stops showing it unless archived ones are asked for. Nothing is stopped or removed, and a new message unarchives it. `applied` is false when it was already archived, or when the gateway has no summary for it (nothing was said in it, or its summary was never written) — such a conversation is never listed, so there is nothing to archive. */
+  archive: (
+    conversationId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /** Undo `archive`. `applied` is false when it was not archived. */
+  unarchive: (
+    conversationId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /**
+   * Delete a conversation permanently: the gateway stops it, asks its agent to
+   * delete the agent's own session, records who deleted it, and erases its
+   * history, uploads and summary; audit evidence is kept. Every later command
+   * on it rejects with `conversation_deleted` — except its owner deleting it
+   * again, which resolves with `applied: true` for a repeat of the deciding
+   * request (same caller, surface and `requestId`) and `applied: false`
+   * otherwise — so a surface holding it
+   * should let it go; anyone else is told `conversation_not_found`. A rejection
+   * with `conversation_erasure_incomplete` means it *was* deleted and some
+   * stored data remains; one with `audit_unavailable` means it *was* deleted
+   * and what did not finish is the record of it — the deletion record, or the
+   * uploads' own evidence. Any other rejection from a delete means only that
+   * whether it was deleted is not known: list it, or delete again. Deleting again, and each gateway start, tries the
+   * erasure again; an agent that keeps refusing to delete its own session, or
+   * a damaged history, needs the operator.
+   */
+  delete: (
+    conversationId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
 }
 
 const utf8 = new TextEncoder()
-const conversationIdPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function boundedText(value: string, name: string, maxBytes: number): string {
   if (!value.trim() || utf8.encode(value).byteLength > maxBytes)
     throw new TypeError(`${name} must contain 1-${maxBytes} UTF-8 bytes`)
@@ -156,11 +203,16 @@ export function createConversationApi(
     validate: (value: unknown) => T,
     retryable = true,
     permissionAnswer = false,
+    deadline?: RequestDeadline,
   ): Promise<T> {
     const command = Object.freeze({ ...params })
     const perform = async (): Promise<T> => {
       try {
-        return validate(await session.request(method, command))
+        return validate(
+          await (deadline === undefined
+            ? session.request(method, command)
+            : session.request(method, command, deadline)),
+        )
       } catch (cause) {
         if (!retryable) {
           throw new NessaConversationControlError(
@@ -226,6 +278,7 @@ export function createConversationApi(
     fields: Record<string, string>,
     options: ConversationActionOptions = {},
     permissionAnswer = false,
+    deadline?: RequestDeadline,
   ) {
     validConversationId(conversationId)
     const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
@@ -237,6 +290,7 @@ export function createConversationApi(
       (value) => conversationMutation(value, requestId),
       false,
       permissionAnswer,
+      deadline,
     )
   }
   return {
@@ -260,6 +314,14 @@ export function createConversationApi(
         (value) => conversationId(value, id),
       )
     },
+    list: async (options = {}) =>
+      conversationList(
+        await session.request(
+          ProductMethod.ConversationList,
+          options.archived === undefined ? {} : { archived: options.archived },
+        ),
+        options.archived ?? false,
+      ),
     read: async (id) =>
       conversationView(
         await session.request(ProductMethod.ConversationRead, {
@@ -311,5 +373,12 @@ export function createConversationApi(
         options,
       ),
     close: (id, options) => action(ProductMethod.ConversationClose, id, {}, options),
+    archive: (id, options) => action(ProductMethod.ConversationArchive, id, {}, options),
+    unarchive: (id, options) =>
+      action(ProductMethod.ConversationUnarchive, id, {}, options),
+    delete: (id, options) =>
+      action(ProductMethod.ConversationDelete, id, {}, options, false, {
+        atLeastMs: conversationDeleteTimeoutMs,
+      }),
   }
 }

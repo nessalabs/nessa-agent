@@ -3,7 +3,9 @@
 use super::*;
 use crate::agents::domain::AgentId;
 use crate::{
-    attachments::application::{AttachmentLimits, AttachmentStore, ConversationOwnership},
+    attachments::application::{
+        AttachmentLimits, AttachmentStore, ConversationOwnership, Ownership,
+    },
     attachments_test_support::{
         conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
         OTHER_CONVERSATION,
@@ -13,7 +15,7 @@ use crate::{
             AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
             ConversationRepository,
         },
-        domain::Conversation,
+        domain::{Conversation, ConversationDeletion},
     },
     conversation_test_support::MemoryRepository,
 };
@@ -148,7 +150,7 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
         )
         .await
         .unwrap();
-    let ownership = RepositoryOwnership::new(repository);
+    let ownership = RepositoryOwnership::new(repository.clone());
     let owns = |organization_id: &'static str, principal_id: &'static str, id: &'static str| {
         let ownership = &ownership;
         async move {
@@ -161,10 +163,45 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
                 .await
         }
     };
-    assert_eq!(owns("org", "owner", CONVERSATION).await, Ok(true));
-    assert_eq!(owns("org", "other", CONVERSATION).await, Ok(false));
-    assert_eq!(owns("other", "owner", CONVERSATION).await, Ok(false));
-    assert_eq!(owns("org", "owner", OTHER_CONVERSATION).await, Ok(false));
+    assert_eq!(
+        owns("org", "owner", CONVERSATION).await,
+        Ok(Ownership::Owned)
+    );
+    assert_eq!(
+        owns("org", "other", CONVERSATION).await,
+        Ok(Ownership::NotFound)
+    );
+    assert_eq!(
+        owns("other", "owner", CONVERSATION).await,
+        Ok(Ownership::NotFound)
+    );
+    assert_eq!(
+        owns("org", "owner", OTHER_CONVERSATION).await,
+        Ok(Ownership::NotFound)
+    );
+    // Deleted: its owner is told so, and anybody else is told nothing.
+    repository
+        .record_deletion(
+            &conversation(CONVERSATION),
+            ConversationDeletion::new(
+                organization("org"),
+                principal("owner"),
+                "panel".into(),
+                "delete".into(),
+                2,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        owns("org", "owner", CONVERSATION).await,
+        Ok(Ownership::Deleted)
+    );
+    assert_eq!(
+        owns("org", "other", CONVERSATION).await,
+        Ok(Ownership::NotFound)
+    );
 }
 
 #[tokio::test]

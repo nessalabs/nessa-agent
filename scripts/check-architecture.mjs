@@ -84,6 +84,7 @@ const srcRootAllowed = new Set([
   "store.ts",
   "icon-preview.tsx",
   "transcript-preview.tsx",
+  "messages-preview.tsx",
 ])
 for (const name of readdirSync(src)) {
   const path = join(src, name)

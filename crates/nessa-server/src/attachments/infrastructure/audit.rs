@@ -89,6 +89,7 @@ fn rejection(reason: UploadRejection) -> &'static str {
 fn release_cause(cause: ReleaseCause) -> &'static str {
     match cause {
         ReleaseCause::ConversationClosed => "conversation_closed",
+        ReleaseCause::ConversationDeleted => "conversation_deleted",
     }
 }
 
@@ -98,6 +99,8 @@ fn revert_cause(cause: RevertCause) -> &'static str {
         RevertCause::ConfirmationFailed => "confirmation_failed",
         RevertCause::RemovedBeforeUsable => "removed_before_usable",
         RevertCause::UploadUnresolved => "upload_unresolved",
+        RevertCause::ConversationDeleted => "conversation_deleted",
+        RevertCause::ConversationNotFound => "conversation_not_found",
     }
 }
 

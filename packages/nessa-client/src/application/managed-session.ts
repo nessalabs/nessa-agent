@@ -1,5 +1,5 @@
 import type { ProductSessionReady } from "../protocol/product-types.js"
-import type { SessionTransport } from "./session-port.js"
+import type { RequestDeadline, RpcRequester, SessionTransport } from "./session-port.js"
 import type { NessaClientConfig } from "./client-config.js"
 import { NessaConnectionClosedError } from "./connection-closed-error.js"
 import { isRetryableConnectionError } from "./connect-retry.js"
@@ -27,7 +27,7 @@ export class NessaSessionUnavailableError extends Error {
 }
 
 /** Owns transport replacement and persistent subscriptions; dependencies are injected. */
-export class ManagedSession {
+export class ManagedSession implements RpcRequester {
   private current: ConnectedSession | undefined
   private readonly lifetime = new AbortController()
   private readonly events = new Set<{
@@ -62,9 +62,13 @@ export class ManagedSession {
     return this.current?.url
   }
 
-  request(method: string, params: unknown): Promise<unknown> {
+  /**
+   * Sent on the current transport, with the caller's deadline: dropping it
+   * here would give up on a command the gateway is still answering.
+   */
+  request(method: string, params: unknown, deadline?: RequestDeadline): Promise<unknown> {
     return (
-      this.current?.wire.request(method, params) ??
+      this.current?.wire.request(method, params, deadline) ??
       Promise.reject(new NessaSessionUnavailableError())
     )
   }

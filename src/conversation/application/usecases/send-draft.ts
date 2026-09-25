@@ -2,7 +2,6 @@ import {
   contentText,
   messageFiles,
   messageImages,
-  messageLabel,
   MAX_SEND_FILES,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
@@ -47,7 +46,6 @@ export function beginSend(
   const text = contentText(input.content)
   const attached = sendable.images.length + messageFiles(input.content).length
   if (!text.trim() && attached === 0) return tabs
-  const firstImage = input.content.find((part) => part.type === "file")
   const taken = takeTurnId(tabs)
   const userTurn: UserTurn = {
     id: taken.id,
@@ -61,12 +59,9 @@ export function beginSend(
   return replaceConversation(taken.tabs, {
     ...conv,
     cancellationStatus: undefined,
-    title:
-      conv.turns.length === 0 && !conv.titleEdited
-        ? // A message of attachments alone is titled by what was attached,
-          // whether those travelled as bytes or as paths.
-          messageLabel(text, attached, firstImage?.name).slice(0, 48)
-        : conv.title,
+    // Not renamed here: the gateway derives a conversation's title from its
+    // first message and the view carries it (see `applyView`), so the tab and
+    // the Messages list say the same thing by one rule.
     turns: [...conv.turns, userTurn],
     draft: [],
     phase: "thinking",
@@ -127,6 +122,9 @@ export function imageRefusalMessage(
  * `attachment-cleanup-unavailable` is a close's news, which no message is ever
  * refused with; it is named only so the gateway's vocabulary stays accounted
  * for here.
+ * `not-connected` is a control's word for a command that never left the window;
+ * a message's own offline answer is the client's sentence, already worded for
+ * a message.
  */
 export function submissionRefusalMessage(reason: CommandFailure): string | undefined {
   switch (reason) {
@@ -142,12 +140,17 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
     case "conversation-state-unreadable":
       return "Nessa cannot read this conversation's saved state, so the message was not sent. It is back in the draft; start a new conversation to send it."
+    case "conversation-deleted":
+      return "This conversation was deleted, so the message was not sent. It is back in the draft; start a new conversation to send it."
     case "agent-not-configured":
     case "agent-unsupported":
     case "conversations-not-configured":
     case "agent-startup-deadline":
+    case "not-connected":
     case "invalid-request":
     case "attachment-cleanup-unavailable":
+    case "conversation-erasure-incomplete":
+    case "deletion-unrecorded":
       return undefined
   }
 }

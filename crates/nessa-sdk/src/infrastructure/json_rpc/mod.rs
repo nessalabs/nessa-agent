@@ -13,7 +13,7 @@
 mod envelope;
 mod transport;
 pub(crate) use envelope::{
-    notification, parse, request, success, unsupported, Envelope, RpcError, RpcId,
+    notification, parse_within, request, success, unsupported, Envelope, RpcError, RpcId,
 };
 pub(crate) use transport::{encode, large_frame_allowance, send_encoded, write_allowance, Reader};
 mod error;

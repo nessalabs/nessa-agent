@@ -14,6 +14,10 @@ struct Entry {
 }
 
 /// Clones share snapshots and writer leases. Independent instances are isolated.
+/// Erasing a session clears its snapshot and keeps its lease entry, so the
+/// session stays excluded until the erasing lease is dropped.
+/// [`SessionStorage::open_existing`] opens only a session with an entry, and
+/// adds none.
 #[derive(Clone, Default)]
 pub struct InMemoryStorage {
     entries: Arc<Mutex<HashMap<String, Entry>>>,
@@ -40,6 +44,22 @@ impl SessionStorage for InMemoryStorage {
                 id,
                 entries: self.entries.clone(),
             }) as Box<dyn SessionStorageLease>)
+        })
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move {
+            let exists = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?
+                .contains_key(id.as_str());
+            if !exists {
+                return Ok(None);
+            }
+            self.open(id).await.map(Some)
         })
     }
 }
@@ -85,6 +105,19 @@ impl SessionStorageLease for MemoryStore {
                 ));
             }
             entry.snapshot = Some(snapshot);
+            Ok(())
+        })
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
+            // The entry stays: it carries this lease's exclusion.
+            if let Some(entry) = entries.get_mut(self.id.as_str()) {
+                entry.snapshot = None;
+            }
             Ok(())
         })
     }

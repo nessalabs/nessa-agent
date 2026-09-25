@@ -208,6 +208,33 @@ impl CompositionRoot {
         for warm_up in &warm_ups {
             warm_up.start();
         }
+        // Deletions a tombstone says did not finish — interrupted by the last
+        // run's exit, or stopped short — are finished now, in the background:
+        // a deletion that cannot finish is reported, never a reason to hold up
+        // startup. Asking an agent about its own record of a session does not
+        // wait for the warm-up just above; it spends its own launch budget.
+        if let Some(service) = conversations.clone() {
+            tokio::spawn(async move {
+                match service.finish_deletions().await {
+                    Ok(left)
+                        if left.unfinished.is_empty()
+                            && left.unreadable == 0
+                            && left.orphaned_tombstones == 0 => {}
+                    // A record that could not be read may be a deletion that
+                    // cannot even be seen, so it is counted here too.
+                    Ok(left) => tracing::warn!(
+                        unfinished = left.unfinished.len(),
+                        unreadable = left.unreadable,
+                        orphaned_tombstones = left.orphaned_tombstones,
+                        "some deleted conversations are still not fully erased, or conversation records could not be read"
+                    ),
+                    Err(error) => tracing::error!(
+                        %error,
+                        "deleted conversations could not be listed to finish their erasure"
+                    ),
+                }
+            });
+        }
 
         #[cfg(target_os = "macos")]
         if bundle.is_some() {

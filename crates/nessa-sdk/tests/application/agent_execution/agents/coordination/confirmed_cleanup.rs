@@ -42,6 +42,9 @@ impl SessionStorageLease for TrackedLease {
     fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
         self.backing.save(snapshot)
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 fn confirmed(audit_failed: bool) -> CleanupReport {
     CleanupReport::new(

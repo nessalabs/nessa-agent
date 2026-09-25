@@ -907,7 +907,8 @@ applying the record to its view. Saving a cursor is useful only if the matching
 view is saved too. The initial UI keeps its view in memory, so a reload replays
 from the beginning. Show missing history, gaps, and slow-consumer errors explicitly,
 and keep the view marked out of date until recovery catches up. Snapshots and
-history retention rules are deferred.
+history retention rules are deferred; deleting a conversation, and what that
+erases and keeps, is settled in [ADR 182](182-conversation-deletion.md).
 
 The record store cannot recover provider output it never saved. It also cannot
 promise automatic agent resumption after a crash or exactly-once external tool

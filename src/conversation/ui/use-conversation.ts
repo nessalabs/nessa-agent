@@ -11,6 +11,7 @@ import {
   takeUploadStep,
   closeTab,
   openConversation,
+  openListed,
   sendDraft,
   setActive,
   moveActive,
@@ -19,8 +20,10 @@ import {
   refreshConversation,
   invalidateRead,
 } from "../adapters/store/slice"
+import { commandErrorCleared } from "../adapters/store/history"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 import { canUseGateway } from "../../session"
+import type { RosterTarget } from "../application/queries/roster"
 
 export function useConversation() {
   const [deliveryMode, setDeliveryMode] = useState<"queue" | "steer">("queue")
@@ -115,6 +118,13 @@ export function useConversation() {
       )
       if (!sendDraft.rejected.match(finished)) return true
       return finished.payload === undefined
+    },
+    /** The Messages tab was left: what its list said about earlier actions is past. */
+    forgetListNotices: () => dispatch(commandErrorCleared()),
+    /** Show what a Messages row stands for: its open tab, or the conversation reopened as one. */
+    openRow: (target: RosterTarget) => {
+      if ("tabId" in target) dispatch(setActive(target.tabId))
+      else dispatch(openListed(target))
     },
     openConversation: () => {
       dispatch(openConversation())

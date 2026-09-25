@@ -11,7 +11,13 @@ use tokio::runtime::Builder;
 
 #[test]
 fn abandoned_file_operations_retain_the_lease_until_io_finishes() {
-    for save in [false, true] {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Operation {
+        Load,
+        Save,
+        Erase,
+    }
+    for kind in [Operation::Load, Operation::Save, Operation::Erase] {
         let runtime = Builder::new_multi_thread()
             .worker_threads(2)
             .max_blocking_threads(1)
@@ -33,7 +39,7 @@ fn abandoned_file_operations_retain_the_lease_until_io_finishes() {
         };
         runtime.block_on(lease.save(value.clone())).unwrap();
 
-        // Occupy the only blocking worker so load/save cannot finish before
+        // Occupy the only blocking worker so the operation cannot finish before
         // the caller future and its lease handle have both been dropped.
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -43,10 +49,10 @@ fn abandoned_file_operations_retain_the_lease_until_io_finishes() {
         });
         entered_rx.recv().unwrap();
         let mut operation = Box::pin(async {
-            if save {
-                lease.save(value).await
-            } else {
-                lease.load().await.map(|_| ())
+            match kind {
+                Operation::Load => lease.load().await.map(|_| ()),
+                Operation::Save => lease.save(value).await,
+                Operation::Erase => lease.erase().await,
             }
         });
         runtime.block_on(poll_fn(|cx| {
@@ -71,7 +77,11 @@ fn abandoned_file_operations_retain_the_lease_until_io_finishes() {
         let runtime = Builder::new_current_thread().build().unwrap();
         assert!(excluded, "abandoned I/O released the writer lock too early");
         let reopened = runtime.block_on(storage.open(id)).unwrap();
-        assert!(runtime.block_on(reopened.load()).unwrap().is_some());
+        // The abandoned erase still finished, under the lease it retained.
+        assert_eq!(
+            runtime.block_on(reopened.load()).unwrap().is_some(),
+            kind != Operation::Erase
+        );
     }
 }
 
@@ -211,4 +221,56 @@ async fn failed_append_and_sync_retry_reconcile_disk_before_acknowledgement() {
             assert_eq!(std::fs::read(&store.path).unwrap(), saved);
         }
     }
+}
+
+#[tokio::test]
+async fn a_journal_that_cannot_be_read_is_logged_with_its_path() {
+    use std::io::Write;
+    #[derive(Clone, Default)]
+    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    private::create_directory(&root.path().join("private")).unwrap();
+    let storage = LocalFileStorage::new(root.path().join("private")).unwrap();
+    let id = SessionId::new("damaged").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let journal = SessionPaths::new(&storage.root, &id).journal;
+    // A private journal whose bytes are not one.
+    private::open(&journal, OpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"{broken}\n")
+        .unwrap();
+    // The process's one subscriber, not a scoped one: a call site another
+    // test's thread reached first would otherwise be cached as uninteresting
+    // to it. Nothing else in this binary sets one.
+    static LOGS: std::sync::OnceLock<Capture> = std::sync::OnceLock::new();
+    let captured = LOGS.get_or_init(|| {
+        let captured = Capture::default();
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_writer(captured.clone())
+                .with_ansi(false)
+                .finish(),
+        )
+        .unwrap();
+        captured
+    });
+    assert!(matches!(lease.load().await, Err(StorageError::Corrupt(_))));
+    let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    // The file an operator would move aside, by the name it has on disk.
+    assert!(logged.contains(&journal.display().to_string()), "{logged}");
 }

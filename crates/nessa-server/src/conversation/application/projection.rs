@@ -131,6 +131,8 @@ impl Projection {
                 truncated: false,
                 queue_complete: true,
                 permission_view_error: None,
+                // Not the projection's: the service fills it from the summary.
+                title: None,
             },
         };
         if let Some(snapshot) = snapshot {

@@ -14,7 +14,9 @@ use crate::domain::effective_capabilities::value_objects::{
 };
 use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
-use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
+use crate::infrastructure::acp::sessions::{
+    binding as acp_binding, deletion::DeletionCleanups, identity, AcpConfig,
+};
 use crate::infrastructure::process::ProcessScope;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -26,6 +28,8 @@ pub struct ClaudeAcpProvider {
     capabilities: EffectiveCapabilities,
     system_prompt: Option<SystemPrompt>,
     audit: Arc<dyn ExecutionAudit>,
+    /// Deletions this binding started that are still stopping their process.
+    deletions: DeletionCleanups,
     #[cfg(test)]
     process: Option<acp_binding::ProcessFactory>,
 }
@@ -91,6 +95,7 @@ impl ClaudeAcpProvider {
             capabilities,
             system_prompt: None,
             audit,
+            deletions: DeletionCleanups::default(),
             #[cfg(test)]
             process: None,
         })
@@ -152,24 +157,38 @@ impl AgentProvider for ClaudeAcpProvider {
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
             let (restore, control) = request.into_parts();
-            let factory = self.clone();
-            #[cfg(test)]
-            let process = self.process.clone().unwrap_or_else(|| {
-                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
-            });
-            #[cfg(not(test))]
-            let process =
-                Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into));
             acp_binding::open(
-                process,
+                self.process_factory(),
                 self.config.clone(),
                 self.capabilities.clone(),
-                ClaudeProfile::new(self.system_prompt.clone()).with_mcp_servers(&self.config),
+                self.profile(),
                 self.audit.clone(),
                 restore,
                 control,
             )
             .await
         })
+    }
+}
+impl ClaudeAcpProvider {
+    /// The launch configuration every connection this provider opens uses.
+    pub(super) fn config(&self) -> &AcpConfig {
+        &self.config
+    }
+    /// Deletions this binding started that are still stopping their process.
+    pub(super) fn deletions(&self) -> &DeletionCleanups {
+        &self.deletions
+    }
+    /// How every connection this provider opens is launched.
+    pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {
+        let factory = self.clone();
+        #[cfg(test)]
+        if let Some(process) = self.process.clone() {
+            return process;
+        }
+        Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
+    }
+    pub(super) fn profile(&self) -> ClaudeProfile {
+        ClaudeProfile::new(self.system_prompt.clone()).with_mcp_servers(&self.config)
     }
 }

@@ -42,6 +42,7 @@ fn every_refusal_has_its_own_code() {
     let codes = [
         (BeginError::InvalidRequest, "invalid_request"),
         (BeginError::ConversationNotFound, "conversation_not_found"),
+        (BeginError::ConversationDeleted, "conversation_deleted"),
         (BeginError::ImagesUnsupported, "image_input_unsupported"),
         (BeginError::Capacity, "attachment_capacity"),
         (BeginError::Storage, "attachment_storage_unavailable"),

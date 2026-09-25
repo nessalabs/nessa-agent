@@ -4,13 +4,13 @@
 use super::{
     ConversationCaller, ConversationDependencies, ConversationError, ConversationFileLinkCause,
     ConversationFileLinkState, ConversationLimits, ConversationMessageStatus, ConversationService,
-    SubmissionMode, SubmittedFile, SubmittedMessage,
+    ProviderSessionErasers, SubmissionMode, SubmittedFile, SubmittedMessage,
 };
 use crate::{
     conversation::{domain::ConversationId, infrastructure::DurableConversationFileLinkAudit},
     conversation_test_support::{
-        only, AcceptingCreationAudit, MemoryRepository, Provider, ProviderFactory,
-        RecordingFileLinkAudit, TestClock,
+        only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
+        Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -57,6 +57,10 @@ async fn conversation() -> (
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: audit.clone(),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -419,6 +423,9 @@ impl SessionStorageLease for RefuseFirstInputLease {
         }
         self.inner.save(snapshot)
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
 }
 
 /// One submission, dispatched twice, because the first dispatch failed after
@@ -455,6 +462,10 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
                 DurableConversationFileLinkAudit::new(directory.clone()).unwrap(),
             ),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

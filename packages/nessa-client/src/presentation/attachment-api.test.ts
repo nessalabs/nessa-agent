@@ -123,6 +123,7 @@ it.each([
 it.each([
   "invalid_request",
   "conversation_not_found",
+  "conversation_deleted",
   "attachment_capacity",
   "attachment_storage_unavailable",
   "storage_unavailable",

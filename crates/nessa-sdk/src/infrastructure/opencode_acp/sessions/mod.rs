@@ -12,6 +12,9 @@
 //! Credentials can enter only through the caller-supplied
 //! [`crate::infrastructure::acp::sessions::AcpConfig`]
 //! credential environment; this module does not discover an account itself.
+//! `deletion` reports a successful `session/delete` as acknowledged only: what
+//! Opencode does on it is not known to this binding.
 mod binding;
+mod deletion;
 mod profile;
 pub use binding::OpencodeAcpProvider;

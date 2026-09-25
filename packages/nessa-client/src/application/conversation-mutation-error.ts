@@ -37,6 +37,8 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     'This gateway is not set up for the agent this conversation asked for: its config.json names no runtime under that name. Add one under "agents.runtimes" and restart the gateway \u2014 from a Nessa checkout, `just server` writes one.',
   agent_unsupported:
     "This conversation runs on an agent this version of Nessa cannot open.",
+  conversation_deleted:
+    "This conversation was deleted. Its identity is never used again, so start a new conversation.",
   // Not a guarantee: a launch whose process could not be confirmed stopped
   // keeps its conversation blocked, and the gateway cannot tell the two apart
   // in this code. Retry is still the right next step, and normally succeeds.
@@ -109,10 +111,16 @@ function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     // nothing was admitted and nothing can have been applied.
     case ConversationErrorCode.ConversationStateUnreadable:
       return true
+    // A deleted conversation's identity is refused from its tombstone, which
+    // the gateway reads before it resolves the conversation or admits
+    // anything, so nothing was taken and nothing applied.
+    case ConversationErrorCode.ConversationDeleted:
+      return true
     // `temporarily_unavailable` is the one worth naming: a supervising task
     // also reports it when work it had already admitted was lost, so it is not
     // a refusal at all. The rest are either certainly after dispatch, or not
-    // proven to be before it.
+    // proven to be before it — `conversation_erasure_incomplete` certainly
+    // after: the delete happened, and only its erasure did not finish.
     case ConversationErrorCode.UnknownMethod:
     case ConversationErrorCode.ConversationClosed:
     case ConversationErrorCode.ConversationConfigurationChanged:
@@ -126,6 +134,7 @@ function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AttachmentCapacity:
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
+    case ConversationErrorCode.ConversationErasureIncomplete:
       return false
   }
 }

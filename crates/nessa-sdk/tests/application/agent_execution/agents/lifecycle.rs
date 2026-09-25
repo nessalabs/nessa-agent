@@ -98,6 +98,9 @@ impl SessionStorageLease for CommitThenPauseLease {
             Ok(())
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 #[tokio::test]
 async fn cancelled_caller_during_admission_still_executes_committed_input() {

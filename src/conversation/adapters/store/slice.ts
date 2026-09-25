@@ -47,6 +47,8 @@ import {
   type SavedConversationTabs,
 } from "../../application/saved-tabs"
 import { localConversationGateway as gateway } from "../gateway/local"
+import { forgetDeleted } from "../../application/usecases"
+import { conversationDeleted } from "./history"
 
 type ThunkConfig = {
   state: { conversation: LocalTabs }
@@ -256,10 +258,16 @@ export const stageAttachment = createAsyncThunk<
       dispatch(uploadChanged({ fileId: input.fileId, to: "stored", image }))
     } catch (error) {
       // Only a staging refusal says the gateway looked at these bytes and said
-      // no. Anything else — not connected, conversation not created, no answer —
-      // is the gateway being away, and may work if tried again.
+      // no, and a conversation deleted, here or elsewhere, stays deleted.
+      // Anything else — not connected, conversation not created, no answer — is
+      // the gateway being away, and may work if tried again.
       const reason: UploadFailure =
-        error instanceof AttachmentStagingError ? error.reason : "unavailable"
+        error instanceof AttachmentStagingError
+          ? error.reason
+          : error instanceof SubmissionRefusedError &&
+              error.reason === "conversation-deleted"
+            ? "conversation-deleted"
+            : "unavailable"
       dispatch(uploadChanged({ fileId: input.fileId, to: "failed", reason }))
     }
   },
@@ -540,6 +548,12 @@ const conversationSlice = createSlice({
     openConversation(state) {
       return gateway.openConversation(state)
     },
+    openListed(
+      state,
+      action: PayloadAction<{ serverConversationId: string; title: string | null }>,
+    ) {
+      return gateway.openListed(state, action.payload)
+    },
     closeConversation(state, action: PayloadAction<string>) {
       return gateway.closeConversation(state, action.payload)
     },
@@ -658,6 +672,11 @@ const conversationSlice = createSlice({
       if (current) current.controlPending = false
     },
   },
+  extraReducers: (builder) => {
+    builder.addCase(conversationDeleted, (state, action) =>
+      forgetDeleted(state, action.payload),
+    )
+  },
 })
 export const {
   restoreConversations,
@@ -671,6 +690,7 @@ export const {
   moveActive,
   setDraft,
   openConversation,
+  openListed,
   closeConversation,
   bindConversation,
   conversationReady,
@@ -686,3 +706,5 @@ export const {
   controlFinished,
 } = conversationSlice.actions
 export const conversationReducer = conversationSlice.reducer
+// Mounted beside the tabs by the store, which reaches this vertical through this module alone.
+export { conversationHistoryReducer } from "./history"

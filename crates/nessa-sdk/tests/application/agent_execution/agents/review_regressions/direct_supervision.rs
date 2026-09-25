@@ -195,6 +195,9 @@ impl SessionStorageLease for PanicOnSettlementLease {
             self.backing.save(snapshot).await
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 
 #[tokio::test]

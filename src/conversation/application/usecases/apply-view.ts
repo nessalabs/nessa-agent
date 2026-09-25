@@ -117,6 +117,10 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     view.messages.some((message) => ["queued", "running"].includes(message.status))
   return {
     ...current,
+    // The gateway names a conversation; a person may rename their tab, and
+    // that name is theirs to keep. Before the gateway has a name, the tab keeps
+    // the one it has.
+    title: current.titleEdited ? current.title : (view.title ?? current.title),
     turns: projected,
     revision: view.revision,
     readRequest: undefined,

@@ -15,7 +15,10 @@
 //!                                      └─▶ automatic warm-up lane
 //! ```
 //!
-//! Arrows are calls. OpenCode's blocking observation has one bounded lane. The
+//! Arrows are calls. OpenCode's blocking observation has one bounded lane.
+//! Deleting OpenCode's own record of a session observes the current generation
+//! the same way, in the same lane, and asks that generation's binding
+//! ([`CurrentOpenCodeEraser`]). The
 //! blocking task owns its permit through actual completion, even when its
 //! awaiting caller times out or is dropped. A different warm-up fingerprint
 //! waits without retaining that observation, then resolves every external fact
@@ -53,8 +56,12 @@ use crate::{
         domain::AgentId,
         infrastructure::LocalAgentProbe,
     },
-    conversation::application::{
-        ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
+    conversation::{
+        application::{
+            ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationError,
+            ConversationFuture, ProviderSessionEraser,
+        },
+        domain::ProviderSessionErasure,
     },
     core::RunError,
 };
@@ -124,6 +131,21 @@ impl CurrentAgentResolver {
         configured
     }
 
+    /// Register how OpenCode deletes its own record of a session, when it is
+    /// configured here: by its current generation, observed on each ask
+    /// (`opencode_is_registered_to_delete_sessions_only_when_configured`).
+    pub(super) fn register_session_eraser(
+        self: &Arc<Self>,
+        erasers: &mut crate::conversation::application::ProviderSessionErasers,
+    ) {
+        if self.opencode.configured().is_some() {
+            erasers.register(
+                AgentId::Opencode,
+                Arc::new(CurrentOpenCodeEraser::new(self.clone())),
+            );
+        }
+    }
+
     pub(super) fn default_agent(&self) -> Result<AgentId, RunError> {
         self.config.selected_from(&self.configured())
     }
@@ -152,8 +174,7 @@ impl CurrentAgentResolver {
         let mut configured = true;
         let provider = match (launch, credential) {
             (Ok(Some(runtime)), Ok(Some(credential))) => {
-                let environment =
-                    BTreeMap::from([(OsString::from("OPENCODE_API_KEY"), credential)]);
+                let environment = opencode_environment(credential);
                 match agent::provider_for(
                     AgentId::Opencode,
                     &self.config,
@@ -178,6 +199,36 @@ impl CurrentAgentResolver {
         Observation {
             evidence: configured.then_some(evidence),
             provider,
+        }
+    }
+
+    /// How the current OpenCode generation deletes its own record of a
+    /// session: `None` when it is not installed or has no credential now.
+    fn opencode_session_eraser(
+        &self,
+    ) -> Result<Option<Arc<dyn ProviderSessionEraser>>, ConversationError> {
+        let Some(profile) = self.opencode.configured() else {
+            return Ok(None);
+        };
+        match (
+            self.opencode_runtime(profile),
+            self.opencode_credential(profile),
+        ) {
+            (Ok(Some(runtime)), Ok(Some(credential))) => agent::session_eraser_for(
+                AgentId::Opencode,
+                &self.config,
+                &runtime,
+                &self.provider,
+                opencode_environment(credential),
+                profile.validated(),
+            )
+            .map(Some)
+            .map_err(|error| {
+                tracing::error!(%error, "current OpenCode binding could not be built to delete a session");
+                ConversationError::AgentNotConfigured
+            }),
+            (Ok(None), _) | (_, Ok(None)) => Ok(None),
+            (Err(_), _) | (_, Err(_)) => Err(ConversationError::Unavailable),
         }
     }
 
@@ -323,6 +374,74 @@ impl ConversationAgentSource for CurrentAgentResolver {
                 .map_err(|_| crate::conversation::application::ConversationError::Unavailable)?
         })
     }
+}
+
+/// OpenCode's current generation, asked to delete its own record of a session.
+///
+/// Built from a fresh observation on every ask, in the resolver's one blocking
+/// lane, as a cold conversation's provider is: not installed, or with no
+/// credential now, is [`ConversationError::AgentNotConfigured`] — a known agent
+/// not built this run, whose deletion stays unfinished until it is. Every
+/// binding it launched is kept until it has settled.
+pub(super) struct CurrentOpenCodeEraser {
+    resolver: Arc<CurrentAgentResolver>,
+    launched: std::sync::Mutex<Vec<Arc<dyn ProviderSessionEraser>>>,
+}
+
+impl CurrentOpenCodeEraser {
+    pub(super) fn new(resolver: Arc<CurrentAgentResolver>) -> Self {
+        Self {
+            resolver,
+            launched: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ProviderSessionEraser for CurrentOpenCodeEraser {
+    fn erase(
+        &self,
+        session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+    ) -> ConversationFuture<'_, ProviderSessionErasure> {
+        Box::pin(async move {
+            let resolver = self.resolver.clone();
+            let permit = resolver
+                .slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| ConversationError::Unavailable)?;
+            let eraser = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                resolver.opencode_session_eraser()
+            })
+            .await
+            .map_err(|_| ConversationError::Unavailable)??
+            .ok_or(ConversationError::AgentNotConfigured)?;
+            self.launched
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(eraser.clone());
+            eraser.erase(session).await
+        })
+    }
+    fn settled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let launched = std::mem::take(
+                &mut *self
+                    .launched
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            for eraser in launched {
+                eraser.settled().await;
+            }
+        })
+    }
+}
+
+/// The environment the current OpenCode generation is launched with.
+fn opencode_environment(credential: OsString) -> BTreeMap<OsString, OsString> {
+    BTreeMap::from([(OsString::from("OPENCODE_API_KEY"), credential)])
 }
 
 fn path_is_file(path: &Path) -> Result<bool, ProbeFailure> {

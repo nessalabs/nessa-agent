@@ -152,6 +152,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
         },
         read: async () => ({
           conversationId: "server",
+          title: null,
           revision: "running",
           queueComplete: true,
           truncated: false,

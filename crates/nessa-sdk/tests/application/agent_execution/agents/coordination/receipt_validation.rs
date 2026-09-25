@@ -53,6 +53,9 @@ impl SessionStorageLease for Lease {
             self.backing.save(snapshot).await
         })
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
 }
 
 #[tokio::test(start_paused = true)]

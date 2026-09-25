@@ -1,9 +1,9 @@
 use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
     BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
-    NormalizeError, ReceivedBytes, ReleaseCause, ReleaseError, ReleaseEvidence, RevertCause,
-    StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError,
-    UploadRejection,
+    NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
+    ReleaseEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets,
+    UploadBody, UploadError, UploadRejection,
 };
 use crate::{
     attachments::domain::{
@@ -274,8 +274,10 @@ impl AttachmentService {
         if unrecorded != 0 {
             return Err(BeginError::Audit);
         }
-        if !self.owns(&caller, &upload.conversation_id).await? {
-            return Err(BeginError::ConversationNotFound);
+        match self.owns(&caller, &upload.conversation_id).await? {
+            Ownership::Owned => {}
+            Ownership::NotFound => return Err(BeginError::ConversationNotFound),
+            Ownership::Deleted => return Err(BeginError::ConversationDeleted),
         }
         // An image nothing will ever be prepared from is refused here, before
         // a ticket for it exists. Issuing one would invite bytes to be
@@ -306,7 +308,7 @@ impl AttachmentService {
         &self,
         caller: &AttachmentCaller,
         conversation_id: &ConversationId,
-    ) -> Result<bool, BeginError> {
+    ) -> Result<Ownership, BeginError> {
         self.inner
             .ownership
             .owns(
@@ -524,6 +526,37 @@ impl AttachmentService {
                 .await;
             return Err(UploadError::AuditUnavailable);
         }
+        // Asked again now that the hold is written. A delete writes its
+        // tombstone before it lets go of the conversation's holds, so either
+        // this sees the tombstone, or the hold was written before the release
+        // that removes it: an upload still transferring when its conversation
+        // was deleted cannot leave a hold under it
+        // (`an_upload_finishing_after_its_conversation_was_deleted_keeps_nothing`).
+        match self
+            .inner
+            .ownership
+            .owns(
+                hold.organization_id(),
+                hold.uploaded_by().principal_id(),
+                hold.conversation_id(),
+            )
+            .await
+        {
+            Ok(Ownership::Owned) => {}
+            Ok(Ownership::Deleted) => {
+                self.take_back(&hold, &claim, RevertCause::ConversationDeleted)
+                    .await;
+                return Err(UploadError::NotKept);
+            }
+            // Not a deletion: nothing says one happened, so the record says
+            // what was found instead (`an_upload_whose_conversation_is_no_longer_found_is_reverted_as_not_found`).
+            Ok(Ownership::NotFound) => {
+                self.take_back(&hold, &claim, RevertCause::ConversationNotFound)
+                    .await;
+                return Err(UploadError::NotKept);
+            }
+            Err(OwnershipUnavailable) => return Err(self.not_confirmed(&hold, &claim).await),
+        }
         match self.inner.store.confirm(&hold, &claim).await {
             Ok(Confirmation::Confirmed | Confirmation::AlreadyKept) => Ok(hold.stored().clone()),
             Ok(Confirmation::Gone) => {
@@ -539,27 +572,30 @@ impl AttachmentService {
                 }
                 Err(UploadError::NotKept)
             }
-            Err(StoreUnavailable) => {
-                match self
-                    .take_back(&hold, &claim, RevertCause::ConfirmationFailed)
-                    .await
-                {
-                    TakenBack::Removed => Err(UploadError::Rejected {
-                        reason: UploadRejection::StorageUnavailable,
-                        evidence: AuditDelivery::Recorded,
-                    }),
-                    TakenBack::RemovedUnrecorded | TakenBack::Stranded => {
-                        Err(UploadError::Rejected {
-                            reason: UploadRejection::StorageUnavailable,
-                            evidence: AuditDelivery::Unavailable,
-                        })
-                    }
-                    // The hold is not this upload's any more, so this upload
-                    // neither kept it nor has anything of its own to undo.
-                    // Whoever owns it now records that for itself.
-                    TakenBack::NothingLeft => Err(UploadError::NotKept),
-                }
-            }
+            Err(StoreUnavailable) => Err(self.not_confirmed(&hold, &claim).await),
+        }
+    }
+
+    /// The hold could not be made usable, or whether its conversation may
+    /// still keep it could not be asked: take it back, and say how far that
+    /// got.
+    async fn not_confirmed(&self, hold: &Hold, claim: &HoldClaim) -> UploadError {
+        match self
+            .take_back(hold, claim, RevertCause::ConfirmationFailed)
+            .await
+        {
+            TakenBack::Removed => UploadError::Rejected {
+                reason: UploadRejection::StorageUnavailable,
+                evidence: AuditDelivery::Recorded,
+            },
+            TakenBack::RemovedUnrecorded | TakenBack::Stranded => UploadError::Rejected {
+                reason: UploadRejection::StorageUnavailable,
+                evidence: AuditDelivery::Unavailable,
+            },
+            // The hold is not this upload's any more, so this upload
+            // neither kept it nor has anything of its own to undo.
+            // Whoever owns it now records that for itself.
+            TakenBack::NothingLeft => UploadError::NotKept,
         }
     }
 

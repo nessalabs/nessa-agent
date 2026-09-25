@@ -43,11 +43,15 @@ pub(crate) struct RpcError {
     #[serde(default)]
     pub message: Option<String>,
 }
+/// [`parse_within`] with the protocol's usual budget, [`MAX_JSON_ITEMS`].
+#[cfg(test)]
 pub(crate) fn parse(frame: &[u8]) -> Result<Envelope, AgentError> {
+    parse_within(frame, MAX_JSON_ITEMS)
+}
+/// Parse one frame, charging each value and key against a budget of `items`.
+pub(crate) fn parse_within(frame: &[u8], items: usize) -> Result<Envelope, AgentError> {
     let mut decoder = serde_json::Deserializer::from_slice(frame);
-    let mut budget = JsonBudget {
-        remaining: MAX_JSON_ITEMS,
-    };
+    let mut budget = JsonBudget { remaining: items };
     let value = UniqueValue(&mut budget)
         .deserialize(&mut decoder)
         .map_err(|_| protocol("invalid or over-budget JSON-RPC frame"))?;
@@ -90,7 +94,7 @@ fn present_result<'de, D: serde::Deserializer<'de>>(
 
 // A frame's byte limit bounds strings, but tiny collections can allocate far more
 // than their wire size. Count every value and object key before allocating it.
-const MAX_JSON_ITEMS: usize = 65_536;
+pub(crate) const MAX_JSON_ITEMS: usize = 65_536;
 struct JsonBudget {
     remaining: usize,
 }

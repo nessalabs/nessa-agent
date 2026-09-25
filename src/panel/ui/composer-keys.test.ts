@@ -43,6 +43,7 @@ function view(
 ): ConversationView {
   return {
     conversationId,
+    title: null,
     revision,
     queueComplete: true,
     truncated: false,

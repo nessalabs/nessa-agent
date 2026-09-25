@@ -214,6 +214,9 @@ impl SessionStorageLease for FailPublicationLease {
         }
         self.inner.save(snapshot)
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
 }
 
 #[tokio::test]

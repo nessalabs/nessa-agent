@@ -10,6 +10,8 @@ import { NessaRpcError } from "./rpc-error.js"
 import { RetryableConnectError } from "./connect-retry.js"
 import type { SessionTransport } from "./session-port.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
+import { createConversationApi } from "../presentation/conversation-api.js"
+import { conversationDeleteTimeoutMs } from "./agent-budgets.js"
 
 class Transport implements SessionTransport {
   termination: NessaConnectionClosedError | undefined
@@ -522,5 +524,22 @@ describe("persistent session", () => {
           item.active().wire.listeners.size === 0 && item.active().wire.events.size === 0,
       ),
     ).toBe(true)
+  })
+})
+
+describe("request deadlines", () => {
+  it("carries a command's own deadline to the transport", async () => {
+    // Through the session the client really builds its API on, not a mocked
+    // requester: a delete that waits on an agent must not give up at the
+    // connection's default while the gateway is still answering.
+    const session = connected()
+    const client = new ManagedSession(session, config, vi.fn(), timing())
+    const api = createConversationApi(client, () => "request-1")
+    await api.delete("0b8f1c2e-1111-4a4a-8b8b-000000000001").catch(() => {})
+    expect(session.wire.request).toHaveBeenCalledWith(
+      "conversation.delete",
+      expect.anything(),
+      { atLeastMs: conversationDeleteTimeoutMs },
+    )
   })
 })

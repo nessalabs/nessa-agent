@@ -1,6 +1,7 @@
 import { imageAttachmentsProblem, linkedFilesProblem } from "@nessa/client"
 import {
   AttachmentStagingError,
+  ControlFailedError,
   ConversationReadFailedError,
   SubmissionRefusedError,
   type ConversationEffects,
@@ -11,6 +12,15 @@ import { STORED_IMAGE_TYPES } from "../../model"
 /** Explicit development/test injection only; production composition always uses the gateway. */
 export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffects {
   const views = new Map<string, ConversationView>()
+  const archived = new Set<string>()
+  // Deleted identities are refused for good, as the gateway's tombstones are.
+  const deleted = new Set<string>()
+  const control = (id: string) => {
+    // Offline is a gateway that cannot be reached: the command never leaves.
+    if (scenario === "offline") throw new ControlFailedError("not-connected", "refused")
+    if (deleted.has(id)) throw new ControlFailedError("conversation-deleted", "refused")
+    if (!views.has(id)) throw new ControlFailedError("conversation-not-found", "refused")
+  }
   const get = (id: string) => {
     if (scenario === "offline") throw new Error("Scenario: backend offline")
     const view = views.get(id)
@@ -18,6 +28,10 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     return view
   }
   const send = async (input: Submission) => {
+    if (deleted.has(input.conversationId))
+      throw new SubmissionRefusedError("conversation-deleted")
+    // A conversation somebody is writing in is not archived, as on the gateway.
+    archived.delete(input.conversationId)
     // A substitute that cannot refuse is a substitute that proves nothing. The
     // gateway adapter is held to the client's verdict on a message's images, so
     // this one asks the client the same question and refuses the same way.
@@ -53,9 +67,14 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
   return {
     async create(conversationId) {
       if (scenario === "offline") throw new Error("Scenario: backend offline")
+      // A deleted identity is never reopened, as the gateway's tombstone refuses it.
+      if (deleted.has(conversationId))
+        throw new SubmissionRefusedError("conversation-deleted")
       if (!views.has(conversationId))
         views.set(conversationId, {
           conversationId,
+          // The gateway derives titles; a scenario has no rule to derive one by.
+          title: null,
           revision: "0",
           messages: [],
           pending: [],
@@ -88,12 +107,68 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
         })
       return { conversationId }
     },
+    async list(listArchived) {
+      if (scenario === "offline")
+        throw new ConversationReadFailedError(
+          "unavailable",
+          new Error("Scenario: backend offline"),
+        )
+      // Newest first, as the gateway lists them; a scenario keeps no clock, so
+      // the order conversations were created in stands in for recency. It keeps
+      // no titles either — the gateway derives those — so it has none to give.
+      const rows = [...views.values()].reverse().map((view, index) => {
+        const last = view.messages.at(-1)
+        const said =
+          last?.parts.filter((part) => part.kind === "text").at(-1)?.text ||
+          last?.userText
+        // As the gateway says of a message that carried files and no text.
+        const folded = said ? said.replace(/\s+/g, " ").trim() : ""
+        return {
+          conversationId: view.conversationId,
+          title: null,
+          preview: folded || (last ? "Attachment" : null),
+          updatedAtMs: views.size - index,
+          running: false,
+          archived: archived.has(view.conversationId),
+        }
+      })
+      // As the gateway does: a conversation nothing was said in is not listed.
+      // A scenario holds far fewer than the gateway's bound: its list is whole.
+      return {
+        conversations: rows.filter(
+          (row) => row.archived === listArchived && row.preview !== null,
+        ),
+        complete: true,
+      }
+    },
+    async archive(id, archive) {
+      control(id)
+      // As on the gateway: a conversation nothing was said in is not archived.
+      if (!views.get(id)?.messages.length) return false
+      const changed = archived.has(id) !== archive
+      if (archive) archived.add(id)
+      else archived.delete(id)
+      return changed
+    },
+    async delete(id) {
+      // The owner deleting it again is answered as the gateway answers: done.
+      if (deleted.has(id)) return
+      // As the gateway's delete contract says: any code but its two news codes
+      // means only that whether it was deleted is not known.
+      if (scenario !== "offline" && !views.has(id))
+        throw new ControlFailedError(undefined, "unknown")
+      control(id)
+      views.delete(id)
+      archived.delete(id)
+      deleted.add(id)
+    },
     async read(id) {
       // The port promises a typed reason for every rejected read, and a
       // substitute that answers with anything else is a substitute the panel
       // could not have been written against. An offline scenario and a
       // conversation this one never opened are both "no view, and nothing more
       // to say about it".
+      if (deleted.has(id)) throw new ConversationReadFailedError("deleted")
       try {
         return structuredClone(get(id))
       } catch (error) {

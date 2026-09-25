@@ -164,6 +164,9 @@ impl SessionStorageLease for PanickingQueueLease {
         }
         self.inner.save(snapshot)
     }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
 }
 
 async fn prepared(storage: Arc<dyn SessionStorage>, audit: Arc<dyn ExecutionAudit>) -> Agent {

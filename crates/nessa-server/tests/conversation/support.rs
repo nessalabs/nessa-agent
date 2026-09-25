@@ -3,11 +3,15 @@ use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     AttachmentRelease, ConversationAgent, ConversationAgents, ConversationAttachments,
     ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
-    ConversationCreationDisposition, ConversationDependencies, ConversationError,
+    ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
+    ConversationDeletionBudgets, ConversationDependencies, ConversationError,
     ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFuture,
-    ConversationLimits, ConversationRepository, ConversationService,
+    ConversationLimits, ConversationRecords, ConversationRepository, ConversationService,
+    ConversationSummaries, ProviderSessionEraser, ProviderSessionErasers,
 };
-use crate::conversation::domain::{Conversation, ConversationId};
+use crate::conversation::domain::{
+    Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
+};
 use nessa_auth::domain::OrganizationId;
 use nessa_sdk::{
     application::{
@@ -73,11 +77,27 @@ use tokio::sync::{mpsc, oneshot, Notify};
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
+    /// Refuse to write a tombstone that says the deletion finished.
+    pub(crate) refuse_finishing: AtomicBool,
+    /// Refuse to write a tombstone that settles the provider session.
+    pub(crate) refuse_settling: AtomicBool,
+    /// Refuse to keep what a deletion read of its history.
+    pub(crate) refuse_keeping_the_read: AtomicBool,
 }
 impl ConversationRepository for MemoryRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let value = self.records.lock().unwrap().get(id).cloned();
         Box::pin(async move { Ok(value) })
+    }
+    fn list(&self) -> ConversationFuture<'_, ConversationRecords> {
+        let conversations = self.records.lock().unwrap().values().cloned().collect();
+        Box::pin(async move {
+            Ok(ConversationRecords {
+                conversations,
+                unreadable: 0,
+                orphaned_tombstones: 0,
+            })
+        })
     }
     fn create(&self, value: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let mut records = self.records.lock().unwrap();
@@ -98,6 +118,101 @@ impl ConversationRepository for MemoryRepository {
             })
         })
     }
+    fn record_deletion(
+        &self,
+        id: &ConversationId,
+        deletion: ConversationDeletion,
+    ) -> ConversationFuture<'_, Conversation> {
+        let mut records = self.records.lock().unwrap();
+        let result = match records.get(id).cloned() {
+            None => Err(ConversationError::NotFound),
+            Some(stored)
+                if self.refuse_keeping_the_read.load(Ordering::SeqCst)
+                    && stored.deletion().is_some_and(|stored| {
+                        stored.provider_session()
+                            == &crate::conversation::domain::ProviderSessionLink::Unread
+                    })
+                    && deletion.provider_session()
+                        != &crate::conversation::domain::ProviderSessionLink::Unread =>
+            {
+                Err(ConversationError::Metadata)
+            }
+            Some(_) if deletion.erased() && self.refuse_finishing.load(Ordering::SeqCst) => {
+                Err(ConversationError::Metadata)
+            }
+            Some(_)
+                if !deletion.erased()
+                    && deletion.provider_erasure().is_some()
+                    && self.refuse_settling.load(Ordering::SeqCst) =>
+            {
+                Err(ConversationError::Metadata)
+            }
+            // Only persists what the domain says the deletion becomes.
+            Some(conversation) => conversation
+                .deleted(deletion)
+                .map_err(|_| ConversationError::Metadata)
+                .inspect(|deleted| {
+                    records.insert(id.clone(), deleted.clone());
+                }),
+        };
+        Box::pin(async move { result })
+    }
+}
+
+/// Summaries kept in memory. Can refuse to read or to write, so a command's
+/// behaviour when the list cannot be kept current is testable.
+#[derive(Default)]
+pub(crate) struct MemorySummaries {
+    pub(crate) summaries: Mutex<HashMap<ConversationId, ConversationSummary>>,
+    pub(crate) writes: AtomicUsize,
+    pub(crate) load_fails: AtomicBool,
+    pub(crate) record_fails: AtomicBool,
+    pub(crate) erase_fails: AtomicBool,
+    /// Holds the next `load` after it has read, saying so on the first
+    /// sender, until the second channel is let go.
+    pub(crate) load_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+impl ConversationSummaries for MemorySummaries {
+    fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>> {
+        let value = self.summaries.lock().unwrap().get(id).cloned();
+        let fails = self.load_fails.load(Ordering::SeqCst);
+        let gate = self.load_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+            if fails {
+                return Err(ConversationError::Metadata);
+            }
+            Ok(value)
+        })
+    }
+    fn record(
+        &self,
+        id: &ConversationId,
+        summary: ConversationSummary,
+    ) -> ConversationFuture<'_, ()> {
+        let id = id.clone();
+        Box::pin(async move {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            if self.record_fails.load(Ordering::SeqCst) {
+                return Err(ConversationError::Metadata);
+            }
+            self.summaries.lock().unwrap().insert(id, summary);
+            Ok(())
+        })
+    }
+    fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.clone();
+        Box::pin(async move {
+            if self.erase_fails.load(Ordering::SeqCst) {
+                return Err(ConversationError::Metadata);
+            }
+            self.summaries.lock().unwrap().remove(&id);
+            Ok(())
+        })
+    }
 }
 
 #[derive(Default)]
@@ -105,6 +220,37 @@ pub(crate) struct AcceptingCreationAudit;
 impl ConversationCreationAudit for AcceptingCreationAudit {
     fn record(&self, _: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+/// Acknowledges every deletion record without keeping it.
+pub(crate) struct AcceptingDeletionAudit;
+impl ConversationDeletionAudit for AcceptingDeletionAudit {
+    fn record(&self, _: ConversationDeletionAuditRecord) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Keeps every deletion record it is given, and can refuse instead.
+#[derive(Default)]
+pub(crate) struct RecordingDeletionAudit {
+    pub(crate) records: Mutex<Vec<ConversationDeletionAuditRecord>>,
+    pub(crate) refuses: AtomicBool,
+    /// Fall over instead of answering.
+    pub(crate) panics: AtomicBool,
+}
+impl ConversationDeletionAudit for RecordingDeletionAudit {
+    fn record(&self, record: ConversationDeletionAuditRecord) -> ConversationFuture<'_, ()> {
+        let refuses = self.refuses.load(Ordering::SeqCst);
+        let panics = self.panics.load(Ordering::SeqCst);
+        Box::pin(async move {
+            assert!(!panics, "the deletion record's sink fell over");
+            if refuses {
+                return Err(ConversationError::Audit);
+            }
+            self.records.lock().unwrap().push(record);
+            Ok(())
+        })
     }
 }
 
@@ -216,6 +362,28 @@ impl ConversationAttachments for MemoryAttachments {
     }
 }
 
+/// The deletion budgets every test service runs with. Test values, not the
+/// table's: composition's own test holds the gateway to the table.
+pub(crate) const DELETION_BUDGETS: ConversationDeletionBudgets = ConversationDeletionBudgets {
+    stop: std::time::Duration::from_secs(10),
+    history_lease: std::time::Duration::from_secs(2),
+};
+
+/// An agent that offers no way to delete its own record of a session.
+pub(crate) struct NotSupportedEraser;
+impl ProviderSessionEraser for NotSupportedEraser {
+    fn erase(&self, _: ExecutionSessionId) -> ConversationFuture<'_, ProviderSessionErasure> {
+        Box::pin(async { Ok(ProviderSessionErasure::NotSupported) })
+    }
+}
+/// The one configured agent, registered as offering no delete of its own
+/// record: what these fixtures delete needs an agent that can be asked.
+pub(crate) fn claude_erasers() -> ProviderSessionErasers {
+    let mut erasers = ProviderSessionErasers::default();
+    erasers.register(AgentId::Claude, Arc::new(NotSupportedEraser));
+    erasers
+}
+
 /// A service whose agent takes images when `image_input`, over `attachments`.
 pub(crate) fn image_fixture(
     image_input: bool,
@@ -252,6 +420,10 @@ pub(crate) fn image_fixture_with_model(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -299,6 +471,10 @@ pub(crate) fn fixture(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
             clock: Arc::new(TestClock),
         },
         limits,

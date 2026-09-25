@@ -592,6 +592,7 @@ pub struct ConversationView {
     pub queue_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
+    pub title: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -610,6 +611,29 @@ pub struct ConversationCreateResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationReadParams {
     pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub title: Option<String>,
+    pub preview: Option<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub running: bool,
+    pub archived: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationListResult {
+    pub conversations: Vec<ConversationSummary>,
+    pub complete: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -670,6 +694,18 @@ pub struct ConversationCancelParams {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationCloseParams {
+    pub conversation_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationArchiveParams {
+    pub conversation_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDeleteParams {
     pub conversation_id: String,
     pub request_id: String,
 }
@@ -761,6 +797,8 @@ pub enum ConversationErrorCode {
     AttachmentCapacity,
     AttachmentStorageUnavailable,
     AttachmentCleanupUnavailable,
+    ConversationDeleted,
+    ConversationErasureIncomplete,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -789,6 +827,8 @@ impl ConversationErrorCode {
             Self::AttachmentCapacity => "attachment_capacity",
             Self::AttachmentStorageUnavailable => "attachment_storage_unavailable",
             Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
+            Self::ConversationDeleted => "conversation_deleted",
+            Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
         }
     }
 }

@@ -31,6 +31,14 @@ pub struct ProductRouteState {
     /// holds, and writes audit records, so it must never be what keeps a
     /// permission answer or a close from being admitted.
     pub(crate) upload_begins: Arc<Semaphore>,
+    /// Deleting a conversation has capacity of its own, apart from the
+    /// controls. A delete can take minutes — it may launch the agent to ask it
+    /// about its own record of the session — and a burst of them must never be
+    /// what keeps a permission answer, a cancel, or a close from being
+    /// admitted (`deletes_and_controls_never_take_each_others_place`). How
+    /// many agents are asked at once is bounded again, and lower, by the
+    /// conversation service.
+    pub(crate) deletions: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -103,6 +111,7 @@ impl ProductRouteState {
             requests: Arc::new(Semaphore::new(128)),
             controls: Arc::new(Semaphore::new(32)),
             upload_begins: Arc::new(Semaphore::new(16)),
+            deletions: Arc::new(Semaphore::new(8)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,

@@ -141,6 +141,7 @@ mod gateway {
             for method in [
                 "conversation.create",
                 "conversation.read",
+                "conversation.list",
                 "conversation.send",
                 "conversation.steer",
                 "conversation.remove",
@@ -148,6 +149,9 @@ mod gateway {
                 "conversation.answer",
                 "conversation.cancel",
                 "conversation.close",
+                "conversation.archive",
+                "conversation.unarchive",
+                "conversation.delete",
             ] {
                 let response = chat_request(&state, &session, method, json!({})).await;
                 assert!(!response.ok);
@@ -192,22 +196,96 @@ mod gateway {
             response(&mut peer).await["error"]["code"],
             "temporarily_unavailable"
         );
-        send_command(
-            &peer,
-            "control",
+        // Archiving is a control too: a person tidying their list is not made
+        // to wait behind reads and provider opens. So is deleting, in a pool
+        // of its own.
+        for method in [
             "conversation.close",
-            json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"close"}),
-        );
-        let value = response(&mut peer).await;
-        assert_eq!(value["id"], "control");
-        assert_eq!(
-            value["error"]["code"], "conversations_not_configured",
-            "reserved control capacity must reach the handler"
-        );
+            "conversation.archive",
+            "conversation.unarchive",
+            "conversation.delete",
+        ] {
+            send_command(
+                &peer,
+                method,
+                method,
+                json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"control"}),
+            );
+            let value = response(&mut peer).await;
+            assert_eq!(value["id"], method);
+            assert_eq!(
+                value["error"]["code"], "conversations_not_configured",
+                "reserved control capacity must reach the handler for {method}"
+            );
+        }
         drop(peer.input);
         task.await.unwrap();
         drop(held);
         assert_eq!(state.controls.available_permits(), 32);
+    }
+    #[tokio::test]
+    async fn deletes_and_controls_never_take_each_others_place() {
+        let state = chat_state();
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
+        let target = |request: &str| {
+            json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":request})
+        };
+        let answer = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"answer","executionId":"turn","permissionId":"p","optionId":"allow"});
+        let cancel = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"cancel","executionId":"turn","permissionId":"p","reason":"no"});
+
+        // Every delete slot taken, as a burst of slow deletes would leave
+        // them: another delete is turned away, and a permission answer, a
+        // cancel and a close are still admitted and reach the service.
+        let deletes = state.deletions.clone().acquire_many_owned(8).await.unwrap();
+        send_command(&peer, "delete", "conversation.delete", target("delete"));
+        assert_eq!(
+            response(&mut peer).await["error"]["code"],
+            "temporarily_unavailable"
+        );
+        for (id, method, params) in [
+            ("answer", "conversation.answer", answer.clone()),
+            ("cancel", "conversation.cancel", cancel),
+            ("close", "conversation.close", target("close")),
+        ] {
+            send_command(&peer, id, method, params);
+            assert_eq!(
+                response(&mut peer).await["error"]["code"],
+                "conversations_not_configured",
+                "{method} was not admitted"
+            );
+        }
+        assert_eq!(state.controls.available_permits(), 32);
+        drop(deletes);
+
+        // And the other way about: with every control slot taken, a delete is
+        // still admitted.
+        let controls = state.controls.clone().acquire_many_owned(32).await.unwrap();
+        send_command(&peer, "answer-2", "conversation.answer", answer);
+        assert_eq!(
+            response(&mut peer).await["error"]["code"],
+            "temporarily_unavailable"
+        );
+        // Archiving and unarchiving are controls: they wait for the control
+        // pool, not the requests' or the deletes'.
+        for method in ["conversation.archive", "conversation.unarchive"] {
+            send_command(&peer, method, method, target(method));
+            assert_eq!(
+                response(&mut peer).await["error"]["code"],
+                "temporarily_unavailable",
+                "{method} is a control"
+            );
+        }
+        send_command(&peer, "delete-2", "conversation.delete", target("delete-2"));
+        assert_eq!(
+            response(&mut peer).await["error"]["code"],
+            "conversations_not_configured"
+        );
+        drop(controls);
+        drop(peer.input);
+        task.await.unwrap();
+        assert_eq!(state.deletions.available_permits(), 8);
     }
     #[tokio::test]
     async fn client_metadata_cannot_replace_verified_principal() {
@@ -296,6 +374,199 @@ mod gateway {
             assert!(reply.payload.is_none());
             assert_eq!(reply.error.unwrap().code, code);
         }
+    }
+
+    #[tokio::test]
+    async fn listing_answers_each_caller_with_their_own_conversations_only() {
+        let (service, provider, _, _) =
+            conversation_support::fixture(ConversationLimits::default());
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-000000000007";
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"create"}),
+            )
+            .await
+            .ok
+        );
+        // Nothing said yet: nothing to list, and a read says there is no
+        // title yet — `null`, not left out.
+        let listed = chat_request(&state, &owner, "conversation.list", json!({})).await;
+        assert_eq!(
+            listed.payload.unwrap(),
+            json!({"conversations": [], "complete": true})
+        );
+        let read = chat_request(&state, &owner, "conversation.read", json!({"conversationId":id})).await;
+        assert_eq!(read.payload.unwrap()["title"], serde_json::Value::Null);
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.send",
+                json!({"conversationId":id,"requestId":"send","executionId":"turn","text":"Plan the trip","attachments":[],"files":[]}),
+            )
+            .await
+            .ok
+        );
+        let opened = provider.open_calls.load(Ordering::SeqCst);
+        // Every surface of the owner sees it, as the wire describes it, with
+        // the title a read of it carries too.
+        for credential in ["owner-phone", "owner-panel"] {
+            let session = chat_session(&state, credential).await;
+            let listed = chat_request(&state, &session, "conversation.list", json!({})).await;
+            assert!(listed.ok, "{credential}");
+            let payload = listed.payload.unwrap();
+            assert_eq!(payload["conversations"].as_array().unwrap().len(), 1);
+            let row = &payload["conversations"][0];
+            assert_eq!(row["conversationId"], id);
+            assert_eq!(row["title"], "Plan the trip");
+            assert!(row["preview"].is_string());
+            assert_eq!(row["archived"], false);
+            let read = chat_request(
+                &state,
+                &session,
+                "conversation.read",
+                json!({"conversationId":id}),
+            )
+            .await;
+            assert_eq!(read.payload.unwrap()["title"], "Plan the trip");
+        }
+        // Another principal in the same organization is told of none, and an
+        // organization this grant is not for is refused before the service.
+        let other = chat_session(&state, "other").await;
+        let listed = chat_request(&state, &other, "conversation.list", json!({})).await;
+        assert_eq!(
+            listed.payload.unwrap(),
+            json!({"conversations": [], "complete": true})
+        );
+        let foreign = chat_session(&state, "foreign").await;
+        let refused = chat_request(&state, &foreign, "conversation.list", json!({})).await;
+        assert_eq!(refused.error.unwrap().code, "forbidden");
+        // Parameters are the generated shape, decoded strictly: nothing else
+        // may be named in them, and the filter is a boolean or absent.
+        for params in [
+            json!({"conversationId":id}),
+            json!(null),
+            json!({"archived":"yes"}),
+        ] {
+            let refused = chat_request(&state, &owner, "conversation.list", params).await;
+            assert_eq!(refused.error.unwrap().code, "invalid_request");
+        }
+        assert_eq!(provider.open_calls.load(Ordering::SeqCst), opened);
+    }
+
+    #[tokio::test]
+    async fn archive_and_delete_answer_as_mutations_and_a_deleted_id_is_refused_by_name() {
+        let (service, provider, _, _) =
+            conversation_support::fixture(ConversationLimits::default());
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-000000000009";
+        let target = |request: &str| json!({"conversationId":id,"requestId":request});
+        assert!(
+            chat_request(&state, &owner, "conversation.create", target("create"))
+                .await
+                .ok
+        );
+        // Nothing said yet, so nothing listed, and nothing to archive.
+        let reply = chat_request(&state, &owner, "conversation.archive", target("archive-0")).await;
+        assert_eq!(
+            reply.payload,
+            Some(json!({"requestId": "archive-0", "applied": false}))
+        );
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.send",
+                json!({"conversationId":id,"requestId":"send","executionId":"turn","text":"hello","attachments":[],"files":[]}),
+            )
+            .await
+            .ok
+        );
+        for (method, request, applied) in [
+            ("conversation.archive", "archive-1", true),
+            ("conversation.archive", "archive-1", false),
+            ("conversation.unarchive", "unarchive-1", true),
+            ("conversation.archive", "archive-2", true),
+        ] {
+            let reply = chat_request(&state, &owner, method, target(request)).await;
+            assert_eq!(
+                reply.payload,
+                Some(json!({"requestId": request, "applied": applied})),
+                "{method} {request}"
+            );
+        }
+        let listed = chat_request(&state, &owner, "conversation.list", json!({})).await;
+        assert_eq!(
+            listed.payload.unwrap(),
+            json!({"conversations": [], "complete": true})
+        );
+        let listed = chat_request(
+            &state,
+            &owner,
+            "conversation.list",
+            json!({"archived": true}),
+        )
+        .await
+        .payload
+        .unwrap();
+        assert_eq!(listed["conversations"][0]["conversationId"], id);
+        assert_eq!(listed["conversations"][0]["archived"], true);
+
+        // Somebody else cannot delete it, and is told nothing about it.
+        let other = chat_session(&state, "other").await;
+        let refused = chat_request(&state, &other, "conversation.delete", target("delete")).await;
+        assert_eq!(refused.error.unwrap().code, "conversation_not_found");
+        let deleted = chat_request(&state, &owner, "conversation.delete", target("delete-1")).await;
+        assert_eq!(
+            deleted.payload,
+            Some(json!({"requestId": "delete-1", "applied": true}))
+        );
+        // Every later command on it, from any of the owner's surfaces, is
+        // refused by name, so a surface holding it knows to let it go.
+        let panel = chat_session(&state, "owner-panel").await;
+        for (method, params) in [
+            ("conversation.create", target("create-again")),
+            ("conversation.read", json!({"conversationId":id})),
+            (
+                "conversation.send",
+                json!({"conversationId":id,"requestId":"send","executionId":"turn","text":"hi","attachments":[],"files":[]}),
+            ),
+            ("conversation.close", target("close")),
+            ("conversation.archive", target("archive-3")),
+        ] {
+            let refused = chat_request(&state, &panel, method, params).await;
+            assert_eq!(refused.error.unwrap().code, "conversation_deleted", "{method}");
+        }
+        for archived in [false, true] {
+            let listed = chat_request(
+                &state,
+                &panel,
+                "conversation.list",
+                json!({"archived": archived}),
+            )
+            .await;
+            assert_eq!(
+            listed.payload.unwrap(),
+            json!({"conversations": [], "complete": true})
+        );
+        }
+        // The deciding request, repeated, answers as it did; a later one did
+        // not delete it.
+        for (request, applied) in [("delete-1", true), ("delete-2", false)] {
+            let repeated =
+                chat_request(&state, &owner, "conversation.delete", target(request)).await;
+            assert_eq!(
+                repeated.payload,
+                Some(json!({"requestId": request, "applied": applied}))
+            );
+        }
+        assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

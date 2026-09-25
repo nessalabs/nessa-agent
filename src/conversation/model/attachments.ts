@@ -17,6 +17,7 @@ export type UploadFailure =
   | "unsupported-image"
   | "too-large"
   | "image-input-unsupported"
+  | "conversation-deleted"
   | "busy"
   | "interrupted"
   | "unavailable"
@@ -432,11 +433,11 @@ export function imageReferenceLabel(mimeType: StoredImageType, size: number): st
   return `${kind[mimeType]} image, ${humanSize(size)}`
 }
 
-/** What to call a message where only text fits — a tab title, a queue row. */
-export function messageLabel(text: string, imageCount: number, firstImageName?: string) {
+/** What to call a message where only text fits — a queue row. */
+export function messageLabel(text: string, imageCount: number) {
   const trimmed = text.trim()
   if (trimmed) return trimmed
   if (imageCount === 0) return ""
-  if (imageCount === 1) return firstImageName?.trim() || "1 image"
+  if (imageCount === 1) return "1 image"
   return `${imageCount} images`
 }

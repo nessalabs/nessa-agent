@@ -360,6 +360,10 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
     // asked for it and leaves every other conversation alone.
     assert!(built.providers.contains_key(&AgentId::Claude));
     assert!(!built.providers.contains_key(&AgentId::Opencode));
+    // Each agent built registers how it deletes its own record of a session,
+    // at the one place composition registers them; one not built does not.
+    assert!(built.erasers.handles(AgentId::Claude));
+    assert!(!built.erasers.handles(AgentId::Opencode));
 }
 
 /// Fixed composition builds every configured bundled provider.
@@ -390,6 +394,52 @@ fn every_configured_bundled_agent_that_can_be_built_is() {
     assert_eq!(built.providers.len(), 1);
     assert!(built.providers.contains_key(&AgentId::Claude));
     assert!(!built.providers.contains_key(&AgentId::Opencode));
+    // The fixed agents register their erasers here; OpenCode's is registered
+    // where its current generation is resolved, not by this fixed build.
+    assert!(built.erasers.handles(AgentId::Claude));
+    assert!(!built.erasers.handles(AgentId::Opencode));
+}
+
+/// Deleting Claude's own record of a session launches Claude with the
+/// credential read at that launch, as an opening does: a store that cannot be
+/// read refuses the ask before any process starts.
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_is_asked_to_delete_a_session_with_the_credential_read_then() {
+    use crate::conversation::application::{ConversationError, ProviderSessionHandler};
+    use nessa_sdk::{
+        application::agent_execution::agents::AgentError,
+        domain::agent_execution::sessions::ExecutionSessionId,
+    };
+    struct Unreadable;
+    impl AgentCredentialSource for Unreadable {
+        fn read(&self, _: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+            Err(AgentCredentialFailure::Unavailable)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Claude);
+    std::fs::write(root.path().join(AgentId::Claude.name()), "fixture").unwrap();
+    nessa_local_storage::create_directory(&conversations).unwrap();
+    let built = providers(
+        &config,
+        &conversations,
+        Arc::new(SystemClock),
+        Arc::new(NoImages),
+        Arc::new(Unreadable),
+        &HashSet::new(),
+    )
+    .unwrap();
+    let Ok(ProviderSessionHandler::Ask(eraser)) = built.erasers.handler(Some(AgentId::Claude))
+    else {
+        panic!("Claude's eraser is registered");
+    };
+    assert!(matches!(
+        eraser
+            .erase(ExecutionSessionId::new("provider-session").unwrap())
+            .await,
+        Err(ConversationError::Agent(AgentError::Configuration(_)))
+    ));
 }
 
 /// The packaged OpenCode policy validates against the catalog Nessa ships.
