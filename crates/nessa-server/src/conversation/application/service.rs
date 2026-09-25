@@ -2291,7 +2291,7 @@ impl ConversationService {
             // erasing under its own lease is only storage failing
             // (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`).
             Err(ConversationError::Storage(StorageError::Busy)) => {
-                failures.history_held = true;
+                failures.history_leased_elsewhere = true;
                 None
             }
             Err(error) => {
@@ -2812,7 +2812,7 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
         return Some(Waiting::ForSlot);
     }
     let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
-    (still_stopping || failures.history_held).then_some(Waiting::ForRelease)
+    (still_stopping || failures.history_leased_elsewhere).then_some(Waiting::ForRelease)
 }
 
 /// An agent slot taken for one ask. Released on drop, however the ask ends,

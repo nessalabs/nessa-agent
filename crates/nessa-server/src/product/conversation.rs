@@ -400,7 +400,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     let DeletionFailures {
         stop,
         history,
-        history_held,
+        history_leased_elsewhere,
         provider,
         no_agent_slot,
         audit,
@@ -412,7 +412,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     } = failures;
     let evidence_only = stop.is_none()
         && history.is_none()
-        && !history_held
+        && !history_leased_elsewhere
         && provider.is_none()
         && !no_agent_slot
         && summary.is_none()
