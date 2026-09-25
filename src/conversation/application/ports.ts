@@ -1,6 +1,5 @@
 import type {
   ConversationListing,
-  ConversationSummary,
   ConversationView,
   Submission,
   SubmissionReceipt,
