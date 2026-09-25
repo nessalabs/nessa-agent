@@ -169,6 +169,27 @@ fn create_private_directory_path_with(
     mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
     mut sync: impl FnMut(&File) -> io::Result<()>,
 ) -> io::Result<()> {
+    create_private_directory_path_transaction_with(path, &mut open_child, &mut sync, || Ok(()))
+}
+
+pub(crate) fn create_private_directory_path_and_then<T>(
+    path: &Path,
+    finish: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    create_private_directory_path_transaction_with(
+        path,
+        open_child_locator_directory,
+        File::sync_all,
+        finish,
+    )
+}
+
+fn create_private_directory_path_transaction_with<T>(
+    path: &Path,
+    mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
+    mut sync: impl FnMut(&File) -> io::Result<()>,
+    finish: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
     if !path.is_absolute() {
         return Err(unsafe_file());
     }
@@ -226,10 +247,11 @@ fn create_private_directory_path_with(
             }
             parent = child;
         }
-        sync(&parent)
+        sync(&parent)?;
+        finish()
     })();
     let Err(primary) = result else {
-        return Ok(());
+        return result;
     };
     let cleanup_failures = rollback_created_directories(created);
     if cleanup_failures.is_empty() {
@@ -573,27 +595,30 @@ mod tests {
     #[test]
     fn sync_failure_rolls_back_the_exact_new_leaf() {
         let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
-        let child = root.path().join("child");
-        let mut failed = false;
+        let private_root = root.path().join("private-root");
+        let child = private_root.join("child");
+        let mut syncs = 0;
         let error =
             create_private_directory_path_with(&child, open_child_locator_directory, |_| {
-                if failed {
-                    Ok(())
-                } else {
-                    failed = true;
+                syncs += 1;
+                if syncs == 2 {
                     Err(io::Error::other("injected sync failure"))
+                } else {
+                    Ok(())
                 }
             })
             .unwrap_err();
 
         assert_eq!(error.to_string(), "injected sync failure");
         assert!(!child.exists());
+        assert!(!private_root.exists());
     }
 
     #[test]
     fn reopen_failure_after_creation_rolls_back_the_exact_new_leaf() {
         let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
-        let child = root.path().join("child");
+        let private_root = root.path().join("private-root");
+        let child = private_root.join("child");
         let mut target_opens = 0;
         let error = create_private_directory_path_with(
             &child,
@@ -612,6 +637,78 @@ mod tests {
 
         assert_eq!(error.to_string(), "injected reopen failure");
         assert!(!child.exists());
+        assert!(!private_root.exists());
+    }
+
+    #[test]
+    fn retained_open_failure_rolls_back_root_and_child_as_one_transaction() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        let directory = private_root.join("journal");
+
+        let error = create_private_directory_path_and_then(&directory, || {
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected retained-open failure");
+        assert!(!directory.exists());
+        assert!(!private_root.exists());
+    }
+
+    #[test]
+    fn retained_open_failure_preserves_a_preexisting_private_root() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        create_directory(&private_root).unwrap();
+        let directory = private_root.join("journal");
+
+        create_private_directory_path_and_then(&directory, || {
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert!(private_root.is_dir());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn retained_open_failure_preserves_replacement_and_reports_cleanup_failure() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        let directory = private_root.join("journal");
+
+        let error = create_private_directory_path_and_then(&directory, || {
+            fs::remove_dir(&directory)?;
+            create_directory(&directory)?;
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert!(directory.is_dir());
+        let message = error.to_string();
+        assert!(message.contains("injected retained-open failure"));
+        assert!(message.contains("created private directory was replaced before rollback"));
+        assert!(message.contains("private directory rollback failed"));
+    }
+
+    #[test]
+    fn retained_open_failure_preserves_nonempty_tree_and_combines_diagnostics() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        let directory = private_root.join("journal");
+        let occupant = directory.join("record");
+
+        let error = create_private_directory_path_and_then(&directory, || {
+            fs::write(&occupant, b"occupied")?;
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert!(occupant.is_file());
+        let message = error.to_string();
+        assert!(message.contains("injected retained-open failure"));
+        assert!(message.contains("private directory rollback failed"));
     }
 
     #[test]

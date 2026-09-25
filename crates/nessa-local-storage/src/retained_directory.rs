@@ -21,6 +21,20 @@ pub struct PrivateDirectory {
 }
 
 impl PrivateDirectory {
+    /// Create and retain an absolute private directory in one transaction.
+    ///
+    /// Every newly created component from `private_root` through `directory`
+    /// remains owned by the acquisition until the retained handle and its full
+    /// binding chain have been verified. A later failure rolls back only exact,
+    /// unchanged, empty components created by this call.
+    #[cfg(unix)]
+    pub fn create_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
+        let inner = platform::create_private_directory_path_and_then(directory, || {
+            platform::RetainedDirectory::open_path(private_root, directory)
+        })?;
+        Ok(Self { inner })
+    }
+
     /// Retain an absolute private directory through trusted locator ancestry.
     ///
     /// Locator ancestors before `private_root` may be owned by root or the

@@ -135,6 +135,10 @@ enum StopDispatchAuthority {
         command: LifecycleCommandResult,
         observation: LifecycleObservation,
     },
+    OutcomeDelivery {
+        command: LifecycleCommandResult,
+        observation: LifecycleObservation,
+    },
     Revoked,
 }
 
@@ -312,11 +316,52 @@ impl GatewayStopSession {
             StopDispatchAuthority::FreshObservation {
                 command,
                 observation,
+            }
+            | StopDispatchAuthority::OutcomeDelivery {
+                command,
+                observation,
             } => Ok((command.clone(), observation.clone())),
             _ => Err(GatewayError::Stop(
                 "Gateway stop did not reach a fresh observation".into(),
             )),
         }
+    }
+
+    /// Authorize one immediate terminal-outcome delivery from settled facts.
+    ///
+    /// Callers invoke this again before an exact retry so the same monotonic
+    /// deadline guards every audit-port call, including a retry that starts
+    /// after the first call consumed the remaining budget.
+    pub(crate) fn begin_outcome_delivery(&self) -> Result<(), GatewayError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayError::Stop("Gateway stop authority is unavailable".into()))?;
+        if self.clock.now() >= self.request.deadline {
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed before outcome delivery".into(),
+            ));
+        }
+        let (command, observation) = match &*state {
+            StopDispatchAuthority::FreshObservation {
+                command,
+                observation,
+            }
+            | StopDispatchAuthority::OutcomeDelivery {
+                command,
+                observation,
+            } => (command.clone(), observation.clone()),
+            _ => {
+                return Err(GatewayError::Stop(
+                    "Gateway stop outcome has no settled physical facts".into(),
+                ))
+            }
+        };
+        *state = StopDispatchAuthority::OutcomeDelivery {
+            command,
+            observation,
+        };
+        Ok(())
     }
 
     pub fn expire_at_deadline(&self) {
@@ -336,6 +381,7 @@ impl GatewayStopSession {
                 }
                 StopDispatchAuthority::CommandResult(_)
                 | StopDispatchAuthority::FreshObservation { .. }
+                | StopDispatchAuthority::OutcomeDelivery { .. }
                 | StopDispatchAuthority::Revoked => {}
             }
         }
@@ -1506,6 +1552,29 @@ mod tests {
         assert_ne!(
             session.settlement().unwrap().1.incarnation(),
             Some(&intended)
+        );
+    }
+
+    #[test]
+    fn outcome_start_uses_the_stop_clock_and_preserves_settled_facts_at_deadline() {
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(1);
+        let clock = Arc::new(ControlledClock::new(start));
+        let (session, intended, receipt) = stop_session_with_clock(deadline, clock.clone());
+        session.begin_proof().unwrap();
+        session.prove(intended.clone(), 1).unwrap();
+        session.claim(&receipt, &intended, 1).unwrap();
+        session
+            .command_result(LifecycleCommandResult::Accepted)
+            .unwrap();
+        let observation = LifecycleObservation::new(2, Some(intended), true);
+        session.fresh_observation(observation.clone()).unwrap();
+
+        clock.set(deadline);
+        assert!(session.begin_outcome_delivery().is_err());
+        assert_eq!(
+            session.settlement().unwrap(),
+            (LifecycleCommandResult::Accepted, observation)
         );
     }
 }

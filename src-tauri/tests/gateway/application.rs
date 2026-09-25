@@ -25,6 +25,24 @@ fn login_shell(path: &str) -> Arc<FixedLoginShell> {
     Arc::new(FixedLoginShell(Ok(SearchPath::parse(path).unwrap())))
 }
 
+struct ControlledOutcomeClock(Mutex<Instant>);
+
+impl ControlledOutcomeClock {
+    fn new(now: Instant) -> Self {
+        Self(Mutex::new(now))
+    }
+
+    fn set(&self, now: Instant) {
+        *self.0.lock().unwrap() = now;
+    }
+}
+
+impl MonotonicClock for ControlledOutcomeClock {
+    fn now(&self) -> Instant {
+        *self.0.lock().unwrap()
+    }
+}
+
 fn admit(
     attempt: &GatewayReconciliationAttempt,
     progress: &dyn GatewayReconciliationProgress,
@@ -989,6 +1007,205 @@ impl TestAuditBehavior for RecordingAudit {
         self.observations.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
+}
+
+#[test]
+fn settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery() {
+    struct DeadlineAtSettlementHost {
+        clock: Arc<ControlledOutcomeClock>,
+        deadline: Instant,
+        rejected: bool,
+    }
+
+    impl GatewayHost for DeadlineAtSettlementHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            _: &GatewayReconciliationAttempt,
+            _: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            unreachable!("the focused stop test does not register")
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let result = complete_stop(session, journal, plan, || {
+                if self.rejected {
+                    Err(GatewayError::Stop("native stop rejected".into()))
+                } else {
+                    Ok(())
+                }
+            });
+            self.clock.set(self.deadline);
+            result
+        }
+    }
+
+    for rejected in [false, true] {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+        let clock = Arc::new(ControlledOutcomeClock::new(now));
+        let request = GatewayReconciliationRequest::new(
+            correlation(if rejected { 301 } else { 201 }),
+            ReconciliationEvidence::new(
+                ReconciliationCause::DesktopQuitPolicy,
+                ReconciliationInitiator::DesktopHost,
+            )
+            .unwrap(),
+        );
+        let attempt = GatewayReconciliationAttempt::new(
+            correlation(if rejected { 302 } else { 202 }),
+            request,
+        )
+        .unwrap();
+        let gateway = reconciled(if rejected {
+            "deadline-rejected"
+        } else {
+            "deadline-accepted"
+        });
+        let intended = gateway.audit_identity().unwrap();
+        let session = Arc::new(GatewayStopSession::new(
+            GatewayStopRequest::new(attempt.clone(), gateway, deadline),
+            clock.clone(),
+        ));
+        let audit = Arc::new(RecordingAudit::default());
+        let result = execute_stop_request(
+            Arc::new(DeadlineAtSettlementHost {
+                clock,
+                deadline,
+                rejected,
+            }),
+            audit.clone(),
+            session.clone(),
+            attempt,
+            intended,
+        );
+
+        if rejected {
+            assert_eq!(
+                result,
+                Err(GatewayError::Stop("native stop rejected".into()))
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(GatewayError::Stop(message))
+                    if message.contains("deadline passed before outcome delivery")
+            ));
+        }
+        assert_eq!(audit.physical_outcomes.load(Ordering::SeqCst), 0);
+        assert!(session.settlement().is_ok());
+    }
+}
+
+#[test]
+fn stop_outcome_retry_rechecks_the_deadline_before_the_second_port_call() {
+    struct RetryDeadlineAudit {
+        clock: Arc<ControlledOutcomeClock>,
+        deadline: Instant,
+        physical_outcomes: AtomicUsize,
+    }
+
+    impl TestAuditBehavior for RetryDeadlineAudit {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn joined(
+            &self,
+            _: &GatewayReconciliationAttempt,
+            _: &GatewayReconciliationRequest,
+        ) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn physical_outcome(
+            &self,
+            _: &LifecyclePhysicalOutcome,
+            _: Option<&LifecycleObservation>,
+            _: ReconciliationCleanupDecision,
+        ) -> Result<(), GatewayError> {
+            self.physical_outcomes.fetch_add(1, Ordering::SeqCst);
+            self.clock.set(self.deadline);
+            Err(GatewayError::Registration(
+                "first outcome acknowledgement failed".into(),
+            ))
+        }
+    }
+
+    struct SettledHost;
+
+    impl GatewayHost for SettledHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            _: &GatewayReconciliationAttempt,
+            _: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            unreachable!("the focused stop test does not register")
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            complete_stop(session, journal, plan, || Ok(()))
+        }
+    }
+
+    let now = Instant::now();
+    let deadline = now + Duration::from_secs(1);
+    let clock = Arc::new(ControlledOutcomeClock::new(now));
+    let request = GatewayReconciliationRequest::new(
+        correlation(401),
+        ReconciliationEvidence::new(
+            ReconciliationCause::DesktopQuitPolicy,
+            ReconciliationInitiator::DesktopHost,
+        )
+        .unwrap(),
+    );
+    let attempt = GatewayReconciliationAttempt::new(correlation(402), request).unwrap();
+    let gateway = reconciled("deadline-retry");
+    let intended = gateway.audit_identity().unwrap();
+    let session = Arc::new(GatewayStopSession::new(
+        GatewayStopRequest::new(attempt.clone(), gateway, deadline),
+        clock.clone(),
+    ));
+    let audit = Arc::new(RetryDeadlineAudit {
+        clock,
+        deadline,
+        physical_outcomes: AtomicUsize::new(0),
+    });
+
+    let result = execute_stop_request(
+        Arc::new(SettledHost),
+        audit.clone(),
+        session.clone(),
+        attempt,
+        intended,
+    );
+
+    assert!(matches!(
+        result,
+        Err(GatewayError::Stop(message))
+            if message.contains("deadline passed before outcome delivery")
+    ));
+    assert_eq!(audit.physical_outcomes.load(Ordering::SeqCst), 1);
+    assert!(session.settlement().is_ok());
 }
 
 #[derive(Clone, Copy, Debug)]

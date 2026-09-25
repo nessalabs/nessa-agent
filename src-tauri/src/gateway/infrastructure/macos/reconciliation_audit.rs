@@ -60,12 +60,8 @@ impl FileReconciliationAudit {
                 "Application config storage is required for gateway audit".into(),
             )
         })?;
-        nessa_local_storage::create_private_directory_path(&root)
-            .map_err(|error| GatewayError::Registration(error.to_string()))?;
         let directory = root.join(DIRECTORY);
-        nessa_local_storage::create_private_directory_path(&directory)
-            .map_err(|error| GatewayError::Registration(error.to_string()))?;
-        PrivateDirectory::open_path(&root, &directory)
+        PrivateDirectory::create_path(&root, &directory)
             .map_err(|error| GatewayError::Registration(error.to_string()))
     }
 }

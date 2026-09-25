@@ -577,6 +577,37 @@ fn deliver_before_stop_effect<T>(
     }
 }
 
+enum StopOutcomeDeliveryError {
+    Authority(GatewayError),
+    Audit(GatewayError),
+}
+
+impl StopOutcomeDeliveryError {
+    fn into_gateway_error(self) -> GatewayError {
+        match self {
+            Self::Authority(error) | Self::Audit(error) => error,
+        }
+    }
+}
+
+fn deliver_stop_outcome(
+    session: &GatewayStopSession,
+    mut deliver: impl FnMut() -> Result<AuditDeliveryReceipt, GatewayError>,
+) -> Result<AuditDeliveryReceipt, StopOutcomeDeliveryError> {
+    session
+        .begin_outcome_delivery()
+        .map_err(StopOutcomeDeliveryError::Authority)?;
+    match deliver() {
+        Ok(receipt) => Ok(receipt),
+        Err(_) => {
+            session
+                .begin_outcome_delivery()
+                .map_err(StopOutcomeDeliveryError::Authority)?;
+            deliver().map_err(StopOutcomeDeliveryError::Audit)
+        }
+    }
+}
+
 pub struct Gateway {
     host: Arc<dyn GatewayHost>,
     login_shell: Arc<dyn LoginShellPath>,
@@ -955,13 +986,14 @@ fn execute_stop_request(
                 command,
                 observed: observation,
             };
-            retry_delivery(|| {
+            deliver_stop_outcome(session.as_ref(), || {
                 journal.physical_outcome(
                     &physical,
                     Some(&observed),
                     ReconciliationCleanupDecision::RetainPrior,
                 )
-            })?;
+            })
+            .map_err(StopOutcomeDeliveryError::into_gateway_error)?;
             Ok(())
         }
         Err(error) => {
@@ -973,7 +1005,7 @@ fn execute_stop_request(
                 phase: LifecycleFailedPhase::NativeDispatch,
                 message: error.to_string(),
             };
-            let outcome = retry_delivery(|| {
+            let outcome = deliver_stop_outcome(session.as_ref(), || {
                 journal.physical_outcome(
                     &physical,
                     Some(&last_confirmed),
@@ -982,7 +1014,8 @@ fn execute_stop_request(
             });
             match outcome {
                 Ok(_) => Err(error),
-                Err(audit) => Err(GatewayError::Audit {
+                Err(StopOutcomeDeliveryError::Authority(_)) => Err(error),
+                Err(StopOutcomeDeliveryError::Audit(audit)) => Err(GatewayError::Audit {
                     audit: audit.to_string(),
                     physical: Some(GatewayPhysicalResult::Failed(Box::new(error))),
                 }),
