@@ -6,8 +6,8 @@ use crate::gateway::domain::value_objects::{
     ReconciliationHistory, ReconciliationHistoryFact, ReconciliationIncarnation,
     ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
     ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
-    ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget,
-    ReconciliationValidationFacts, SearchPath, SearchPathError,
+    ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget, SearchPath,
+    SearchPathError,
 };
 use std::{
     error::Error,
