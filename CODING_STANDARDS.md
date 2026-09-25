@@ -88,6 +88,20 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     that declaration. "It passed" is not a result without "where, and under what
     load"; a green run in the wrong environment has told you nothing.
 
+15. **Design the order before the code.** Anything with retries, lost answers,
+    or more than one action in flight on the same thing is designed before it
+    is built: its states, the events that move between them, and the orderings
+    that can arrive, written as a table in the ADR or design document. Tests
+    are written from that table, one row at least one test. A new state or
+    ordering found later goes back into the table before it goes into code;
+    patching the code alone grows a machine nobody wrote down.
+16. **The simplest honest behaviour first.** Prefer the least behaviour that
+    tells the truth — "not confirmed; the list shows where it stands" — over a
+    precise account that has to infer what happened. A more precise design is
+    built only after its owner agrees it is worth the states it adds, and the
+    agreement is recorded in the ADR. Precision nobody asked for is where the
+    edge cases live.
+
 If a gate fails, fix it in the same PR.
 
 ## Local code review gate
@@ -123,6 +137,34 @@ field order must construct that order explicitly rather than assume a serializer
 default map order. Read effective package metadata and explicit inheritance when
 checking toolchain support; a workspace default alone does not establish every
 member package's minimum version. Verify a claimed mismatch at the reviewed head.
+
+### Before handing off
+
+The implementer runs this gate on their own diff before asking anyone else to
+review it, and hands over the result with the change:
+
+- Every applicable dimension below, the agreement check, and gates 15 and 16.
+- **Break it on purpose.** Change each rule the diff adds or touches — one at a
+  time — and confirm a test fails, as a revert probe under
+  [evidence and closure](#evidence-and-closure). A rule that fails no test is
+  untested: add the test, or the rule is not load-bearing and goes.
+- The checks from gate 6, run on the tree being handed over.
+
+A reviewer is the second pair of eyes, not the first.
+
+### The review loop
+
+- **Priority.** Findings are addressed in order — blocker, major, minor, nit.
+  That every priority is addressed is [evidence and closure](#evidence-and-closure)'s rule.
+- **Scope holds.** A fix stays inside what the change claims (gate 4). A finding
+  outside that claim becomes its own issue or task with a disposition, not part
+  of this fix.
+- **Design before patch.** A fix that adds a state, an ordering, or a rule goes
+  through gate 15's table first. When two rounds in a row find new cases in the
+  same component, stop patching it: revisit its design with its owner, and
+  prefer removing behaviour to adding it.
+- **Stop rule.** The loop ends when a full round reports nothing at any
+  priority. Each round gets a fresh reviewer and the current dispositions.
 
 ### Agreement across fields and layers
 
@@ -284,7 +326,9 @@ that their combination describes a possible execution.
   its fix, verify the edit landed before trusting the run — print the hunk, or
   assert the file changed — and restore the tree afterwards. A revert that
   silently fails to apply reads exactly like a test that does not bite, and a
-  green run then retires a guarantee nobody checked. A regression should exercise the reported trigger and distinguish
+  green run then retires a guarantee nobody checked. Give a restored file a
+  fresh modification time, so a build cache cannot keep the broken version. A
+  regression should exercise the reported trigger and distinguish
   the broken behavior from the fix; assert typed outcomes and authoritative state,
   not merely completion without a panic. Label uncertain hypotheses; a plausible narrative alone is not a
   confirmed bug. Do not infer repository-wide absence from one file or one PR.

@@ -19,7 +19,7 @@ examples.
 
 ## Before you edit
 
-- [Gates](CODING_STANDARDS.md#gates) — the fourteen conditions a change is merged
+- [Gates](CODING_STANDARDS.md#gates) — the sixteen conditions a change is merged
   on. Read them first; most review findings are one of these.
 - [Organization across the repository](CODING_STANDARDS.md#organization-across-the-repository)
   — where a change belongs, and what else moves with it. Applies to source,
@@ -60,6 +60,10 @@ examples.
 
 ## Reviewing, locally and delegated
 
+- [Before handing off](CODING_STANDARDS.md#before-handing-off) — the gate run on
+  your own diff before anyone else reviews it.
+- [The review loop](CODING_STANDARDS.md#the-review-loop) — how rounds repeat, in
+  what order findings are fixed, and when the loop ends.
 - [Local code review gate](CODING_STANDARDS.md#local-code-review-gate) — every
   local review, and every review delegated to a subagent.
 - [Required review brief](CODING_STANDARDS.md#required-review-brief) — what each
