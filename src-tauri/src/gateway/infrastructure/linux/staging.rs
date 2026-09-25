@@ -322,7 +322,7 @@ pub(super) fn publish_bytes(
     }
     let mut file = unsafe { File::from_raw_fd(descriptor) };
     if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        let _ = unlink_named_file_if(&directory, &temporary, &file);
         let _ = directory.sync_all();
         return Err(error.to_string());
     }
@@ -334,7 +334,7 @@ pub(super) fn publish_bytes(
     ) != 0
     {
         let error = std::io::Error::last_os_error();
-        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        let _ = unlink_named_file_if(&directory, &temporary, &file);
         let _ = directory.sync_all();
         return Err(error.to_string());
     }
@@ -371,7 +371,9 @@ pub(super) fn replace_owned_bytes(
             .as_bytes(),
     )
     .map_err(|_| "Gateway definition name contains NUL".to_string())?;
-    if read_owned_file_at(&directory, &destination)?.as_deref() != Some(expected) {
+    let prior = open_owned_file_at(&directory, &destination)?
+        .ok_or_else(|| "The prior gateway definition disappeared before replacement".to_string())?;
+    if prior.bytes != expected {
         return Err("The prior gateway definition changed before replacement".into());
     }
     let temporary = CString::new(format!(".nessa-replace-{generation}"))
@@ -392,12 +394,12 @@ pub(super) fn replace_owned_bytes(
         .write_all(replacement)
         .and_then(|()| new_file.sync_all())
     {
-        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        let _ = unlink_named_file_if(&directory, &temporary, &new_file);
         let _ = directory.sync_all();
         return Err(error.to_string());
     }
-    if read_owned_file_at(&directory, &destination)?.as_deref() != Some(expected) {
-        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+    if !named_file_is(&directory, &destination, &prior.file)? {
+        let _ = unlink_named_file_if(&directory, &temporary, &new_file);
         let _ = directory.sync_all();
         return Err("The prior gateway definition changed before atomic replacement".into());
     }
@@ -409,27 +411,16 @@ pub(super) fn replace_owned_bytes(
     ) != 0
     {
         let error = std::io::Error::last_os_error();
-        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        let _ = unlink_named_file_if(&directory, &temporary, &new_file);
         let _ = directory.sync_all();
         return Err(error.to_string());
     }
     let new_is_current = named_file_is(&directory, &destination, &new_file)?;
-    let displaced = read_owned_file_at(&directory, &temporary)?;
-    if !new_is_current || displaced.as_deref() != Some(expected) {
-        if new_is_current && displaced.is_some() {
-            let _ = renameat_exchange(
-                directory.as_raw_fd(),
-                &temporary,
-                directory.as_raw_fd(),
-                &destination,
-            );
-            let _ = directory.sync_all();
-        }
+    let displaced_is_prior = named_file_is(&directory, &temporary, &prior.file)?;
+    if !new_is_current || !displaced_is_prior {
         return Err("The prior gateway definition was substituted during replacement".into());
     }
-    if unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
+    unlink_named_file_if(&directory, &temporary, &prior.file)?;
     directory.sync_all().map_err(|error| error.to_string())?;
     if !named_file_is(&directory, &destination, &new_file)? {
         return Err("The replacement gateway definition changed before acknowledgement".into());
@@ -437,7 +428,15 @@ pub(super) fn replace_owned_bytes(
     Ok(())
 }
 
-fn read_owned_file_at(directory: &File, name: &std::ffi::CStr) -> Result<Option<Vec<u8>>, String> {
+struct OpenedOwnedFile {
+    file: File,
+    bytes: Vec<u8>,
+}
+
+fn open_owned_file_at(
+    directory: &File,
+    name: &std::ffi::CStr,
+) -> Result<Option<OpenedOwnedFile>, String> {
     use std::os::fd::{AsRawFd, FromRawFd};
 
     let descriptor = unsafe {
@@ -466,7 +465,27 @@ fn read_owned_file_at(directory: &File, name: &std::ffi::CStr) -> Result<Option<
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
-    Ok(Some(bytes))
+    Ok(Some(OpenedOwnedFile { file, bytes }))
+}
+
+fn read_owned_file_at(directory: &File, name: &std::ffi::CStr) -> Result<Option<Vec<u8>>, String> {
+    open_owned_file_at(directory, name).map(|opened| opened.map(|opened| opened.bytes))
+}
+
+fn unlink_named_file_if(
+    directory: &File,
+    name: &std::ffi::CStr,
+    expected: &File,
+) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+
+    if !named_file_is(directory, name, expected)? {
+        return Err("Gateway temporary file changed before cleanup".into());
+    }
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 fn named_file_is(directory: &File, name: &std::ffi::CStr, expected: &File) -> Result<bool, String> {
@@ -544,9 +563,13 @@ pub(super) fn publish_wants_link(
     let target = Path::new("..").join(unit_name);
     let target_bytes = target.as_os_str().as_bytes();
     if let Some(observed) = read_link_at(directory_file.as_raw_fd(), &link_name)? {
-        return (observed == target_bytes)
-            .then_some(())
-            .ok_or_else(|| "A conflicting persistent gateway link already exists".into());
+        let identity = entry_identity_at(&directory_file, &link_name)?
+            .ok_or_else(|| "Persistent gateway link disappeared during verification".to_string())?;
+        return (observed == target_bytes
+            && identity.kind == libc::S_IFLNK
+            && identity.uid == unsafe { libc::geteuid() })
+        .then_some(())
+        .ok_or_else(|| "A conflicting or foreign persistent gateway link already exists".into());
     }
     validate_fingerprint(transaction)?;
     let temporary_name = CString::new(format!(".nessa-link-{transaction}"))
@@ -563,6 +586,8 @@ pub(super) fn publish_wants_link(
     {
         return Err(std::io::Error::last_os_error().to_string());
     }
+    let temporary_identity = entry_identity_at(&directory_file, &temporary_name)?
+        .ok_or_else(|| "Temporary gateway link disappeared after creation".to_string())?;
     let renamed = renameat_noreplace(
         directory_file.as_raw_fd(),
         &temporary_name,
@@ -570,9 +595,7 @@ pub(super) fn publish_wants_link(
         &link_name,
     );
     if renamed != 0 {
-        unsafe {
-            libc::unlinkat(directory_file.as_raw_fd(), temporary_name.as_ptr(), 0);
-        }
+        let _ = unlink_link_if(&directory_file, &temporary_name, temporary_identity);
         return Err(std::io::Error::last_os_error().to_string());
     }
     directory_file
@@ -580,7 +603,9 @@ pub(super) fn publish_wants_link(
         .map_err(|error| error.to_string())?;
     let observed = read_link_at(directory_file.as_raw_fd(), &link_name)?
         .ok_or_else(|| "Published gateway link disappeared before acknowledgement".to_string())?;
-    (observed == target_bytes)
+    let published_identity = entry_identity_at(&directory_file, &link_name)?
+        .ok_or_else(|| "Published gateway link disappeared before acknowledgement".to_string())?;
+    (observed == target_bytes && published_identity == temporary_identity)
         .then_some(())
         .ok_or_else(|| "Published gateway link changed before acknowledgement".into())
 }
@@ -610,7 +635,85 @@ pub(super) fn wants_link_matches(link: &Path, unit_file: &Path) -> Result<bool, 
     )
     .map_err(|_| "Persistent gateway link name contains NUL".to_string())?;
     let observed = read_link_at(directory.as_raw_fd(), &name)?;
-    Ok(observed.as_deref() == Some(expected.as_os_str().as_bytes()))
+    let identity = entry_identity_at(&directory, &name)?;
+    Ok(observed.as_deref() == Some(expected.as_os_str().as_bytes())
+        && identity.is_some_and(|identity| {
+            identity.kind == libc::S_IFLNK && identity.uid == unsafe { libc::geteuid() }
+        }))
+}
+
+pub(super) fn settle_wants_link_transaction(
+    directory: &Path,
+    link: &Path,
+    unit_file: &Path,
+    transaction: &str,
+) -> Result<bool, String> {
+    use std::{
+        ffi::CString,
+        os::{fd::AsRawFd, unix::ffi::OsStrExt},
+    };
+
+    validate_fingerprint(transaction)?;
+    if !directory.try_exists().map_err(|error| error.to_string())? {
+        return Ok(false);
+    }
+    if link.parent() != Some(directory) || unit_file.parent() != directory.parent() {
+        return Err("Persistent gateway link is outside its owned sibling directory".into());
+    }
+    let parent = open_owned_directory_chain_existing(directory)?;
+    let link_name = CString::new(
+        link.file_name()
+            .ok_or_else(|| "Persistent gateway link has no name".to_string())?
+            .as_bytes(),
+    )
+    .map_err(|_| "Persistent gateway link name contains NUL".to_string())?;
+    let temporary = CString::new(format!(".nessa-link-{transaction}"))
+        .map_err(|_| "Temporary gateway link name contains NUL".to_string())?;
+    let target = Path::new("..").join(
+        unit_file
+            .file_name()
+            .ok_or_else(|| "Gateway unit file has no name".to_string())?,
+    );
+    let expected = target.as_os_str().as_bytes();
+    let current = read_link_at(parent.as_raw_fd(), &link_name)?;
+    let pending = read_link_at(parent.as_raw_fd(), &temporary)?;
+    if current.as_deref().is_some_and(|value| value != expected)
+        || pending.as_deref().is_some_and(|value| value != expected)
+    {
+        return Err("Persistent gateway link transaction has contradictory content".into());
+    }
+    let pending_identity = entry_identity_at(&parent, &temporary)?;
+    match (current, pending, pending_identity) {
+        (None, None, None) => Ok(false),
+        (Some(_), None, None) => wants_link_matches(link, unit_file),
+        (None, Some(_), Some(identity)) => {
+            if identity.kind != libc::S_IFLNK || identity.uid != unsafe { libc::geteuid() } {
+                return Err("Temporary gateway link has unsafe identity".into());
+            }
+            if renameat_noreplace(
+                parent.as_raw_fd(),
+                &temporary,
+                parent.as_raw_fd(),
+                &link_name,
+            ) != 0
+            {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            parent.sync_all().map_err(|error| error.to_string())?;
+            (entry_identity_at(&parent, &link_name)? == Some(identity))
+                .then_some(true)
+                .ok_or_else(|| "Recovered gateway link changed during publication".into())
+        }
+        (Some(_), Some(_), Some(identity)) => {
+            if !wants_link_matches(link, unit_file)? {
+                return Err("Published gateway link changed during recovery".into());
+            }
+            unlink_link_if(&parent, &temporary, identity)?;
+            parent.sync_all().map_err(|error| error.to_string())?;
+            Ok(true)
+        }
+        _ => Err("Persistent gateway link transaction changed during recovery".into()),
+    }
 }
 
 pub(super) fn bytes_match(path: &Path, expected: &[u8]) -> Result<bool, String> {
@@ -709,21 +812,25 @@ pub(super) fn settle_definition_transaction(
     .map_err(|_| "Gateway definition name contains NUL".to_string())?;
     let temporary = CString::new(temporary)
         .map_err(|_| "Gateway definition temporary name contains NUL".to_string())?;
-    let current = read_owned_file_at(&directory, &current_name)?;
-    let fresh = read_owned_file_at(&directory, &temporary)?
+    let current = open_owned_file_at(&directory, &current_name)?;
+    let fresh = open_owned_file_at(&directory, &temporary)?
         .ok_or_else(|| "Gateway definition temporary changed before cleanup".to_string())?;
-    let safe = current == transaction.current
-        && (fresh == expected
-            || (current.as_deref() == Some(expected)
-                && transaction.replace_temporary.as_deref() == Some(fresh.as_slice())));
+    let current_bytes = current.as_ref().map(|file| file.bytes.as_slice());
+    let safe = current_bytes == transaction.current.as_deref()
+        && (fresh.bytes == expected
+            || (current_bytes == Some(expected)
+                && transaction.replace_temporary.as_deref() == Some(fresh.bytes.as_slice())));
     if !safe {
         return Err("Gateway definition temporary changed before cleanup".into());
     }
-    if unsafe { libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+    if let Some(current) = &current {
+        if !named_file_is(&directory, &current_name, &current.file)? {
+            return Err("Gateway definition changed before transaction cleanup".into());
+        }
     }
+    unlink_named_file_if(&directory, &temporary, &fresh.file)?;
     directory.sync_all().map_err(|error| error.to_string())?;
-    Ok(current.as_deref() == Some(expected))
+    Ok(current_bytes == Some(expected))
 }
 
 pub(super) fn staging_runtime_present(root: &Path, generation: &str) -> Result<bool, String> {
@@ -804,6 +911,61 @@ fn read_link_at(
     }
     buffer.truncate(length as usize);
     Ok(Some(buffer))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EntryIdentity {
+    device: libc::dev_t,
+    inode: libc::ino_t,
+    kind: libc::mode_t,
+    uid: libc::uid_t,
+}
+
+fn entry_identity_at(
+    directory: &File,
+    name: &std::ffi::CStr,
+) -> Result<Option<EntryIdentity>, String> {
+    use std::{mem::MaybeUninit, os::fd::AsRawFd};
+
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    if unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(error.to_string());
+    }
+    let stat = unsafe { stat.assume_init() };
+    Ok(Some(EntryIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+        kind: stat.st_mode & libc::S_IFMT,
+        uid: stat.st_uid,
+    }))
+}
+
+fn unlink_link_if(
+    directory: &File,
+    name: &std::ffi::CStr,
+    expected: EntryIdentity,
+) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+
+    if entry_identity_at(directory, name)? != Some(expected) {
+        return Err("Gateway link identity changed before cleanup".into());
+    }
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 pub(super) fn create_owned_directory_chain(path: &Path) -> Result<(), String> {
@@ -1047,6 +1209,8 @@ fn remove_exact_tree_linux(path: &Path) -> Result<bool, String> {
     } else {
         return Ok(false);
     };
+    let source_identity = entry_identity_at(&parent, source)?
+        .ok_or_else(|| "Temporary gateway runtime disappeared before cleanup".to_string())?;
     let child_descriptor = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -1059,7 +1223,11 @@ fn remove_exact_tree_linux(path: &Path) -> Result<bool, String> {
     }
     let child = unsafe { File::from_raw_fd(child_descriptor) };
     let opened = child.metadata().map_err(|error| error.to_string())?;
-    if !opened.is_dir() || opened.uid() != unsafe { libc::geteuid() } {
+    if !opened.is_dir()
+        || opened.uid() != unsafe { libc::geteuid() }
+        || opened.dev() != source_identity.device
+        || opened.ino() != source_identity.inode
+    {
         return Err("Temporary gateway runtime identity changed".into());
     }
 
@@ -1158,9 +1326,25 @@ fn remove_exact_tree_linux(path: &Path) -> Result<bool, String> {
                     return Err(std::io::Error::last_os_error().to_string());
                 }
                 let child = unsafe { File::from_raw_fd(descriptor) };
+                let child_metadata = child.metadata().map_err(|error| error.to_string())?;
+                if child_metadata.dev() != moved.st_dev || child_metadata.ino() != moved.st_ino {
+                    unsafe { libc::closedir(stream) };
+                    return Err("Temporary gateway directory changed before cleanup".into());
+                }
                 if let Err(error) = remove_children(&child, effective_uid) {
                     unsafe { libc::closedir(stream) };
                     return Err(error);
+                }
+                if entry_identity_at(directory, &quarantine)?
+                    != Some(EntryIdentity {
+                        device: moved.st_dev,
+                        inode: moved.st_ino,
+                        kind,
+                        uid: moved.st_uid,
+                    })
+                {
+                    unsafe { libc::closedir(stream) };
+                    return Err("Temporary gateway directory changed before removal".into());
                 }
                 if unsafe {
                     libc::unlinkat(
@@ -1174,6 +1358,17 @@ fn remove_exact_tree_linux(path: &Path) -> Result<bool, String> {
                     return Err(std::io::Error::last_os_error().to_string());
                 }
             } else if kind == libc::S_IFREG || kind == libc::S_IFLNK {
+                if entry_identity_at(directory, &quarantine)?
+                    != Some(EntryIdentity {
+                        device: moved.st_dev,
+                        inode: moved.st_ino,
+                        kind,
+                        uid: moved.st_uid,
+                    })
+                {
+                    unsafe { libc::closedir(stream) };
+                    return Err("Temporary gateway entry changed before removal".into());
+                }
                 if unsafe { libc::unlinkat(directory.as_raw_fd(), quarantine.as_ptr(), 0) } != 0 {
                     unsafe { libc::closedir(stream) };
                     return Err(std::io::Error::last_os_error().to_string());
@@ -1190,6 +1385,9 @@ fn remove_exact_tree_linux(path: &Path) -> Result<bool, String> {
     }
 
     remove_children(&child, unsafe { libc::geteuid() })?;
+    if entry_identity_at(&parent, source)? != Some(source_identity) {
+        return Err("Temporary gateway runtime changed before final removal".into());
+    }
     if unsafe { libc::unlinkat(parent.as_raw_fd(), source.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
@@ -1283,6 +1481,55 @@ mod tests {
         let link = wants.join("nessa-gateway-prod.service");
         assert!(!wants_link_matches(&link, &unit).unwrap());
         assert!(!wants.exists());
+    }
+
+    #[test]
+    fn wants_link_recovery_settles_every_deterministic_temporary_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let unit_root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("systemd/user");
+        let wants = unit_root.join("default.target.wants");
+        create_owned_directory_chain(&wants).unwrap();
+        let unit = unit_root.join("nessa-gateway-prod.service");
+        publish_bytes(&unit, b"unit", 0o600, &"a".repeat(64)).unwrap();
+        let link = wants.join("nessa-gateway-prod.service");
+        let generation = "b".repeat(64);
+        let pending = wants.join(format!(".nessa-link-{generation}"));
+        std::os::unix::fs::symlink("../nessa-gateway-prod.service", &pending).unwrap();
+
+        assert!(settle_wants_link_transaction(&wants, &link, &unit, &generation).unwrap());
+        assert!(wants_link_matches(&link, &unit).unwrap());
+        assert!(!pending.exists());
+
+        std::os::unix::fs::symlink("../nessa-gateway-prod.service", &pending).unwrap();
+        assert!(settle_wants_link_transaction(&wants, &link, &unit, &generation).unwrap());
+        assert!(wants_link_matches(&link, &unit).unwrap());
+        assert!(!pending.exists());
+    }
+
+    #[test]
+    fn retained_file_identity_rejects_an_equal_content_replacement() {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("definition.service");
+        fs::write(&path, b"same").unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+        let directory = open_owned_directory_chain_existing(&root).unwrap();
+        let name = CString::new(path.file_name().unwrap().as_bytes()).unwrap();
+        let retained = open_owned_file_at(&directory, &name).unwrap().unwrap();
+        let replacement = root.join("replacement");
+        fs::write(&replacement, b"same").unwrap();
+        fs::set_permissions(&replacement, Permissions::from_mode(0o600)).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+
+        assert_eq!(retained.bytes, b"same");
+        assert!(!named_file_is(&directory, &name, &retained.file).unwrap());
     }
 
     #[test]

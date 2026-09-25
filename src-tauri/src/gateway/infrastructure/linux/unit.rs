@@ -266,4 +266,51 @@ mod tests {
         contradictory.extend_from_slice(b"ExecStart=:\"/usr/bin/env\"\n");
         assert!(rendered_agent_path(&contradictory).is_err());
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemd_analyze_accepts_the_rendered_user_unit() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let runtime = root.join("runtime");
+        let data = root.join("data");
+        fs::create_dir(&runtime).unwrap();
+        fs::create_dir(&data).unwrap();
+        let executable = runtime.join("nessa");
+        fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let unit = unit_name("prod", None).unwrap();
+        let rendered = render(UnitDefinition {
+            unit: &unit,
+            runtime: &runtime,
+            configuration: &ServiceConfiguration::new(
+                "prod".into(),
+                data.clone(),
+                None,
+                7420,
+                None,
+            )
+            .unwrap(),
+            data: &data,
+            home: &root,
+            agent_path: &SearchPath::parse("/usr/bin").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        let path = root.join(unit.as_str());
+        fs::write(&path, rendered.bytes).unwrap();
+        let output = Command::new("systemd-analyze")
+            .args(["--user", "verify"])
+            .arg(&path)
+            .output()
+            .expect("Ubuntu desktop CI must provide systemd-analyze");
+        assert!(
+            output.status.success(),
+            "systemd-analyze rejected the rendered unit: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

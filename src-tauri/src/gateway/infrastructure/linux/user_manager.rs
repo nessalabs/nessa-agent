@@ -120,13 +120,6 @@ impl UserManager {
             .map_err(|error| error.to_string())
     }
 
-    pub fn environment(&self) -> Result<Vec<String>, String> {
-        self.recheck_identity()?;
-        manager_proxy(&self.connection, self.identity.unique_name())?
-            .get_property("Environment")
-            .map_err(|error| error.to_string())
-    }
-
     pub fn reload(&self) -> Result<(), String> {
         self.recheck_identity()?;
         manager_proxy(&self.connection, self.identity.unique_name())?
