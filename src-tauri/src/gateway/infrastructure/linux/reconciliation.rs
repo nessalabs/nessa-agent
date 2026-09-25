@@ -4500,15 +4500,36 @@ mod tests {
             }
 
             let stop = manager.enqueue(SystemdJobOperation::Stop, &unit, &clock)?;
+            let stop_attempt = stop.attempt().clone();
             let terminal = stop.wait(&clock, clock.now() + JOB_TIMEOUT)?;
             if terminal.result != "done" {
                 return Err(format!("disposable StopUnit returned {}", terminal.result));
             }
-            let stopped = manager
-                .snapshot(&unit)?
-                .ok_or_else(|| "disposable unit disappeared after StopUnit".to_string())?;
-            if stopped.main_process_id != 0 || stopped.active_state != "inactive" {
-                return Err("disposable unit did not reach inactive/dead".into());
+            let terminal_evidence = SystemdJobTerminal::new(
+                terminal.manager.clone(),
+                terminal.object_path.clone(),
+                terminal.job_id,
+                terminal.unit.clone(),
+                terminal.result.clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            if stop_attempt.classify_terminal(
+                manager.identity(),
+                SystemdJobOperation::Stop,
+                SystemdJobMode::Fail,
+                &unit,
+                &terminal_evidence,
+            ) != SystemdJobConclusion::Accepted
+            {
+                return Err("real StopUnit evidence did not classify as accepted".into());
+            }
+            if let Some(stopped) = manager.snapshot(&unit)? {
+                if stopped.main_process_id != 0
+                    || stopped.active_state != "inactive"
+                    || stopped.sub_state != "dead"
+                {
+                    return Err("disposable unit did not settle as absent or inactive/dead".into());
+                }
             }
             let absent = SystemdUnitName::parse(format!(
                 "nessa-gateway-absent-{}.service",
