@@ -796,18 +796,31 @@ async fn a_conversation_that_cannot_be_read_is_answered_only_as_its_own_error() 
     let id = created(&service).await;
     // What the repository may say before the fence is what the delete says;
     // it is never one of the two answers that promise a deletion.
-    for (fault, expected) in [
-        (ConversationError::Metadata, "Metadata"),
-        (ConversationError::NotFound, "NotFound"),
-        (ConversationError::AgentUnsupported, "AgentUnsupported"),
+    for fault in [
+        ConversationError::Metadata,
+        ConversationError::NotFound,
+        ConversationError::AgentUnsupported,
     ] {
+        let given = fault.clone();
         repository
             .loads
             .lock()
             .unwrap()
             .push_back(Some(Fault::Fail(fault)));
         let answered = service.delete(id.clone(), caller("delete-1")).await;
-        assert_eq!(format!("{:?}", answered.unwrap_err()), expected);
+        let error = answered.unwrap_err();
+        assert!(
+            matches!(
+                (&given, &error),
+                (ConversationError::Metadata, ConversationError::Metadata)
+                    | (ConversationError::NotFound, ConversationError::NotFound)
+                    | (
+                        ConversationError::AgentUnsupported,
+                        ConversationError::AgentUnsupported
+                    )
+            ),
+            "{given:?} was answered {error:?}"
+        );
         assert!(unfenced(&fixture, &id));
     }
     service.shutdown().await.unwrap();
