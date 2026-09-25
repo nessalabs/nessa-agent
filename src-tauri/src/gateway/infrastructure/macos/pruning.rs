@@ -12,7 +12,7 @@
 //! entry it is about to remove once more against the filesystem.
 //!
 //! ```text
-//! register -> prune_runtimes -> removable          (pure: which names)
+//! register -> removable_runtime_names -> removable (pure: which names)
 //!                            -> RuntimeVersions    (effect: read and remove)
 //! ```
 //! Arrows mean calls. Nothing here returns a failure to `register`: a gateway
@@ -136,6 +136,7 @@ pub(super) enum Skipped {
     /// for the log, never a path: it may name nothing at all.
     Unnamed(String),
     /// A removal was attempted for this name and failed.
+    #[cfg(test)]
     Removal { name: String, reason: String },
 }
 
@@ -190,6 +191,7 @@ pub(super) trait RuntimeVersions {
 }
 
 /// What one collection did, so the caller can say it out loud.
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Collected {
     pub removed: Vec<String>,
@@ -206,6 +208,7 @@ pub(super) struct Collected {
 /// cannot be named, is reported and stepped over, never a reason to collect
 /// nothing. Only a directory that cannot be listed at all ends the pass, because
 /// then there is nothing to decide about.
+#[cfg(test)]
 pub(super) fn collect(versions: &impl RuntimeVersions, retained: &RetainedRuntimes) -> Collected {
     let mut collected = Collected::default();
     let listing = match versions.list() {
@@ -274,32 +277,28 @@ impl RuntimeVersions for LabelDirectory {
 /// only where one was really worked on: an entry with no usable name is
 /// reported against its directory, and its lossy rendering is given as what it
 /// looked like, never as somewhere to go and look.
-pub(super) fn prune_runtimes(installations: &Path, retained: &RetainedRuntimes) {
-    let collected = collect(&LabelDirectory::at(installations), retained);
-    let directory = installations.display();
-    for name in &collected.removed {
-        eprintln!(
-            "[nessa] Removed staged gateway runtime {}",
-            installations.join(name).display()
-        );
+/// Exact runtime entries that are currently safe to remove.
+pub(super) fn removable_runtime_names(
+    installations: &Path,
+    retained: &RetainedRuntimes,
+) -> Result<Vec<String>, String> {
+    let listing = LabelDirectory::at(installations).list()?;
+    for skipped in listing.passed_over {
+        eprintln!("[nessa] Staged runtime entry was preserved during planned pruning: {skipped:?}");
     }
-    for skipped in &collected.skipped {
-        match skipped {
-            Skipped::Directory(reason) => eprintln!(
-                "[nessa] Could not list staged gateway runtimes in {directory}; none were removed: {reason}"
-            ),
-            Skipped::Unreadable(reason) => eprintln!(
-                "[nessa] An entry of {directory} could not be read and was left in place; no removal was attempted: {reason}"
-            ),
-            Skipped::Unnamed(lossy) => eprintln!(
-                "[nessa] An entry of {directory} has no valid text name and was left in place; no removal was attempted. Its name reads approximately as {lossy:?}, which is not a path"
-            ),
-            Skipped::Removal { name, reason } => eprintln!(
-                "[nessa] Could not remove staged gateway runtime {}: {reason}",
-                installations.join(name).display()
-            ),
-        }
+    Ok(listing
+        .names
+        .into_iter()
+        .filter(|name| removable(name, retained))
+        .collect())
+}
+
+/// Remove one exact published runtime selected before effect dispatch.
+pub(super) fn prune_runtime(installations: &Path, fingerprint: &str) -> Result<(), String> {
+    if !sha256(fingerprint) && !fingerprint.strip_prefix(STAGING_PREFIX).is_some_and(sha256) {
+        return Err("Invalid staged runtime entry".into());
     }
+    LabelDirectory::at(installations).remove(fingerprint)
 }
 #[cfg(test)]
 #[path = "../../../../tests/gateway/infrastructure/pruning.rs"]

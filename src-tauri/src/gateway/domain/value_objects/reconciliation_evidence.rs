@@ -22,6 +22,8 @@ pub enum ReconciliationCause {
     ExplicitRetry,
     /// A person changed Claude's explicit configuration directory.
     ClaudeConfigurationChanged,
+    /// The desktop host is applying the automatic quit policy.
+    DesktopQuitPolicy,
 }
 
 /// A bundled surface whose native window label was verified by the host seam.
@@ -59,6 +61,9 @@ impl ReconciliationEvidence {
                 ReconciliationInitiator::DesktopHost
             ) | (
                 ReconciliationCause::ClaudeConfigurationChanged,
+                ReconciliationInitiator::DesktopHost
+            ) | (
+                ReconciliationCause::DesktopQuitPolicy,
                 ReconciliationInitiator::DesktopHost
             ) | (
                 ReconciliationCause::CredentialLoad | ReconciliationCause::ExplicitRetry,

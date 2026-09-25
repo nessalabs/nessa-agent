@@ -1,7 +1,11 @@
+#[cfg(unix)]
+use nessa_local_storage::create_private_directory_path;
 use nessa_local_storage::{
     create_directory, create_private_directory_tree_beneath, is_private_temporary_name, OpenMode,
     PrivateDirectory, PrivateFileType, PrivatePublicationStage,
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::{
@@ -38,6 +42,27 @@ fn names(directory: &PrivateDirectory) -> Vec<(OsString, PrivateFileType)> {
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_private_path_allows_safe_locator_ancestry_and_retains_every_binding() {
+    let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let locator = temporary.path().join("locator");
+    std::fs::create_dir(&locator).unwrap();
+    std::fs::set_permissions(&locator, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let private_root = locator.join("Nessa");
+    let journal = private_root.join("stage/journal");
+    create_private_directory_path(&private_root).unwrap();
+    create_private_directory_path(&journal).unwrap();
+    let retained = PrivateDirectory::open_path(&private_root, &journal).unwrap();
+    retained.verify_binding().unwrap();
+    assert_eq!(
+        std::fs::metadata(&journal).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    std::fs::set_permissions(&private_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(retained.verify_binding().is_err());
 }
 
 #[test]

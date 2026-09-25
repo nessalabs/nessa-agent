@@ -5,8 +5,9 @@ use crate::gateway::{
         GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellError,
     },
     domain::value_objects::{
-        ReconciliationCause, ReconciliationCorrelation, ReconciliationEvidence,
-        ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget, SearchPathError,
+        LifecycleRecordKind, ReconciliationCause, ReconciliationCorrelation,
+        ReconciliationEvidence, ReconciliationIncarnation, ReconciliationInitiator,
+        ReconciliationTarget, SearchPathError,
     },
 };
 use std::{
@@ -16,7 +17,7 @@ use std::{
         mpsc, Condvar, Mutex, Weak,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn login_shell(path: &str) -> Arc<FixedLoginShell> {
@@ -32,6 +33,36 @@ fn admit(
     let before = reconciled(service).audit_identity().unwrap();
     let intent = GatewayReconciliationIntent::new(attempt.clone(), target, Some(before)).unwrap();
     progress.intent_admitted(intent).unwrap();
+}
+
+fn complete_stop(
+    session: &GatewayStopSession,
+    journal: &dyn GatewayReconciliationJournalSession,
+    plan: &AuditDeliveryReceipt,
+    run: impl FnOnce() -> Result<(), GatewayError>,
+) -> Result<LifecycleObservation, GatewayError> {
+    session.begin_proof()?;
+    let candidate = session.request().intended().audit_identity()?;
+    session.prove(candidate.clone(), 1)?;
+    session.claim(plan, &candidate, 1)?;
+    let physical = run();
+    let command = match &physical {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.to_string()),
+    };
+    session.command_result(command.clone())?;
+    journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)?;
+    let observation = LifecycleObservation::new(2, Some(candidate), true);
+    journal.observation(
+        &LifecycleObservationSource::Effect {
+            plan_id: "stop-agents-on-desktop-quit".into(),
+            step_id: "signal-agents".into(),
+        },
+        &observation,
+    )?;
+    session.fresh_observation(observation.clone())?;
+    physical?;
+    Ok(observation)
 }
 
 fn admit_fresh(
@@ -97,12 +128,20 @@ impl GatewayHost for FakeHost {
         admit(attempt, progress, service);
         registration
     }
-    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(format!("stop:{}", gateway.service()));
-        self.stop_result.clone()
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let gateway = session.request().intended();
+        complete_stop(session, journal, plan, || {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("stop:{}", gateway.service()));
+            self.stop_result.clone()
+        })
     }
 }
 #[test]
@@ -124,7 +163,7 @@ fn gateway_instances_use_only_their_injected_service_and_surface_stop_failure() 
         );
         tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
         assert_eq!(
-            gateway.stop_agents(),
+            gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
             Err(GatewayError::Stop("delivery failed".into()))
         );
         assert_eq!(
@@ -158,7 +197,10 @@ fn failed_registration_is_retried_and_never_derives_a_service_to_stop() {
     ));
     assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
     assert!(tauri::async_runtime::block_on(gateway.retry(BundledSurface::Main)).is_err());
-    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+    assert_eq!(
+        gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+        Err(GatewayError::NotReconciled)
+    );
     assert_eq!(
         *host.calls.lock().unwrap(),
         ["register:ci:/opt/homebrew/bin:/usr/bin"; 3]
@@ -187,12 +229,20 @@ fn later_failed_reconciliation_preserves_candidate_for_native_revalidation() {
             admit(attempt, progress, service);
             registration
         }
-        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(gateway.service().to_owned());
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(gateway.service().to_owned());
+                Ok(())
+            })
         }
     }
     let host = Arc::new(ChangingHost {
@@ -213,7 +263,9 @@ fn later_failed_reconciliation_preserves_candidate_for_native_revalidation() {
     );
     tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
     assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
-    gateway.stop_agents().unwrap();
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
     assert_eq!(*host.calls.lock().unwrap(), ["gui/501/exact-reconciled"]);
 }
 
@@ -343,6 +395,97 @@ fn reconciled(service: &str) -> ReconciledGateway {
     )
 }
 
+trait TestAuditBehavior: Send + Sync {
+    fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError>;
+    fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError>;
+    fn joined(
+        &self,
+        attempt: &GatewayReconciliationAttempt,
+        joined: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError>;
+}
+
+struct TestJournal<T> {
+    audit: Arc<T>,
+    attempt: GatewayReconciliationAttempt,
+    sequence: AtomicUsize,
+}
+
+impl<T: TestAuditBehavior> TestJournal<T> {
+    fn receipt(&self, kind: LifecycleRecordKind) -> AuditDeliveryReceipt {
+        AuditDeliveryReceipt::new(
+            self.attempt.correlation().clone(),
+            self.sequence.fetch_add(1, Ordering::SeqCst) as u64,
+            kind,
+        )
+    }
+}
+
+impl<T: TestAuditBehavior> GatewayReconciliationJournalSession for TestJournal<T> {
+    fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+        self.audit.intent(intent)
+    }
+
+    fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        self.audit.outcome(outcome)
+    }
+
+    fn joined(&self, joined: &GatewayReconciliationRequest) -> Result<(), GatewayError> {
+        self.audit.joined(&self.attempt, joined)
+    }
+
+    fn effect_plan(
+        &self,
+        _: &str,
+        _: Option<&ReconciliationIncarnation>,
+        _: &ReconciliationTarget,
+        _: &LifecyclePlanStep,
+        _: &[LifecyclePlanStep],
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        Ok(self.receipt(LifecycleRecordKind::EffectPlan))
+    }
+
+    fn effect_completion(
+        &self,
+        _: &str,
+        _: &str,
+        _: &LifecycleCommandResult,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        Ok(self.receipt(LifecycleRecordKind::EffectCompletion))
+    }
+
+    fn observation(
+        &self,
+        _: &LifecycleObservationSource,
+        _: &LifecycleObservation,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        Ok(self.receipt(LifecycleRecordKind::Observation))
+    }
+
+    fn physical_outcome(
+        &self,
+        _: &LifecyclePhysicalOutcome,
+        _: Option<&LifecycleObservation>,
+        _: ReconciliationCleanupDecision,
+    ) -> Result<AuditDeliveryReceipt, GatewayError> {
+        Ok(self.receipt(LifecycleRecordKind::Outcome))
+    }
+}
+
+impl<T: TestAuditBehavior + 'static> GatewayReconciliationAudit for T {
+    fn open(
+        self: Arc<Self>,
+        attempt: &GatewayReconciliationAttempt,
+        _: Option<Instant>,
+    ) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError> {
+        Ok(Arc::new(TestJournal {
+            audit: self,
+            attempt: attempt.clone(),
+            sequence: AtomicUsize::new(1),
+        }))
+    }
+}
+
 #[derive(Default)]
 struct RecordingAudit {
     intents: Mutex<Vec<GatewayReconciliationIntent>>,
@@ -413,6 +556,7 @@ fn attempt_and_outcome_constructors_reject_contradictory_correlations_and_target
         GatewayReconciliationIntentDelivery::Acknowledged,
         GatewayReconciliationEffectTiming::NoEffectsObserved,
         Vec::new(),
+        LifecycleFailedPhase::NativeDispatch,
         Ok(after),
     );
     let GatewayReconciliationEffect::RejectedReport { report, .. } = outcome.effect() else {
@@ -422,7 +566,7 @@ fn attempt_and_outcome_constructors_reject_contradictory_correlations_and_target
     assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
 }
 
-impl GatewayReconciliationAudit for RecordingAudit {
+impl TestAuditBehavior for RecordingAudit {
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         self.intents.lock().unwrap().push(intent.clone());
         assert!(!self.panic_intent, "intent audit panic");
@@ -498,8 +642,14 @@ impl GatewayHost for ConfigurationChangedHost {
         Ok(reconciled("configured"))
     }
 
-    fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-        Ok(())
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let gateway = session.request().intended();
+        complete_stop(session, journal, plan, || Ok(()))
     }
 }
 
@@ -539,9 +689,17 @@ impl GatewayHost for AuditedHost {
         }
     }
 
-    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-        self.stopped.lock().unwrap().push(gateway.service().into());
-        Ok(())
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let gateway = session.request().intended();
+        complete_stop(session, journal, plan, || {
+            self.stopped.lock().unwrap().push(gateway.service().into());
+            Ok(())
+        })
     }
 }
 
@@ -579,7 +737,7 @@ fn confirmed_refused_and_partial_effects_are_audited_with_delivery_failures_sepa
                     true,
                     Err(GatewayError::Audit { physical, .. }),
                 ) => {
-                    assert!(physical.is_none());
+                    assert_eq!(physical, &Some(GatewayPhysicalResult::Succeeded));
                 }
                 (
                     AuditedPhysicalResult::Refused | AuditedPhysicalResult::Partial,
@@ -654,10 +812,15 @@ fn confirmed_refused_and_partial_effects_are_audited_with_delivery_failures_sepa
             drop(intents);
 
             if matches!(physical, AuditedPhysicalResult::Confirmed) {
-                gateway.stop_agents().unwrap();
+                gateway
+                    .stop_agents(Instant::now() + Duration::from_secs(30))
+                    .unwrap();
                 assert_eq!(*host.stopped.lock().unwrap(), ["confirmed"]);
             } else {
-                assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+                assert_eq!(
+                    gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+                    Err(GatewayError::NotReconciled)
+                );
             }
         }
     }
@@ -936,9 +1099,17 @@ fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
             Ok(gateway)
         }
 
-        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-            self.stopped.lock().unwrap().push(gateway.service().into());
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || {
+                self.stopped.lock().unwrap().push(gateway.service().into());
+                Ok(())
+            })
         }
     }
 
@@ -994,7 +1165,9 @@ fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
         gateway.startup().unwrap().phase(),
         &GatewayStartupPhase::Ready
     );
-    gateway.stop_agents().unwrap();
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["active-owner"]);
     assert_eq!(audit.intents.lock().unwrap().len(), 1);
     assert_eq!(audit.outcomes.lock().unwrap().len(), 1);
@@ -1027,9 +1200,17 @@ fn failed_intent_delivery_is_terminally_audited_and_cannot_be_replaced() {
             Ok(gateway)
         }
 
-        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-            self.0.lock().unwrap().push(gateway.service().into());
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || {
+                self.0.lock().unwrap().push(gateway.service().into());
+                Ok(())
+            })
         }
     }
 
@@ -1073,7 +1254,9 @@ fn failed_intent_delivery_is_terminally_audited_and_cannot_be_replaced() {
             gateway.startup().unwrap().phase(),
             GatewayStartupPhase::Failed(_)
         ));
-        gateway.stop_agents().unwrap();
+        gateway
+            .stop_agents(Instant::now() + Duration::from_secs(30))
+            .unwrap();
         assert_eq!(*host.0.lock().unwrap(), ["ignored-intent-failure"]);
     }
 }
@@ -1113,7 +1296,7 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
         }
     }
 
-    impl GatewayReconciliationAudit for BlockingIntentAudit {
+    impl TestAuditBehavior for BlockingIntentAudit {
         fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(
@@ -1198,8 +1381,14 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
             Ok(gateway)
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -1269,7 +1458,7 @@ fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgem
         }
     }
 
-    impl GatewayReconciliationAudit for TimingAudit {
+    impl TestAuditBehavior for TimingAudit {
         fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
             if self.block_intent {
                 *self.entered.lock().unwrap() = true;
@@ -1348,9 +1537,17 @@ fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgem
             Ok(gateway)
         }
 
-        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-            self.stopped.lock().unwrap().push(gateway.service().into());
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || {
+                self.stopped.lock().unwrap().push(gateway.service().into());
+                Ok(())
+            })
         }
     }
 
@@ -1408,7 +1605,9 @@ fn effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgem
             gateway.startup().unwrap().phase(),
             GatewayStartupPhase::Failed(_)
         ));
-        gateway.stop_agents().unwrap();
+        gateway
+            .stop_agents(Instant::now() + Duration::from_secs(30))
+            .unwrap();
         assert_eq!(*host.stopped.lock().unwrap(), ["early-effects"]);
     }
 }
@@ -1437,7 +1636,9 @@ fn panicking_outcome_audit_is_reported_without_losing_confirmed_stop_identity() 
         tauri::async_runtime::block_on(gateway.start()),
         Err(GatewayError::Audit { physical: None, .. })
     ));
-    gateway.stop_agents().unwrap();
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["confirmed"]);
 }
 
@@ -1470,8 +1671,14 @@ fn joined_audit_failure_rejects_only_the_joiner_and_does_not_cancel_the_owner() 
             Ok(gateway)
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -1531,7 +1738,7 @@ struct DelayedJoinedAudit {
     joined_release: Mutex<mpsc::Receiver<()>>,
 }
 
-impl GatewayReconciliationAudit for DelayedJoinedAudit {
+impl TestAuditBehavior for DelayedJoinedAudit {
     fn intent(&self, intent: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         self.intents.lock().unwrap().push(intent.clone());
         Ok(())
@@ -1603,8 +1810,14 @@ impl GatewayHost for InterleavedHost {
         }
     }
 
-    fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-        Ok(())
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let gateway = session.request().intended();
+        complete_stop(session, journal, plan, || Ok(()))
     }
 }
 
@@ -1777,8 +1990,14 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
             Ok(gateway)
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -1983,8 +2202,14 @@ fn a_later_credential_load_retries_failed_startup_with_revisioned_events() {
             registration
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -2042,12 +2267,20 @@ fn a_changed_identity_advances_ready_even_if_native_progress_was_missed() {
             Ok(registration)
         }
 
-        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-            self.stopped
-                .lock()
-                .unwrap()
-                .push(gateway.service().to_owned());
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || {
+                self.stopped
+                    .lock()
+                    .unwrap()
+                    .push(gateway.service().to_owned());
+                Ok(())
+            })
         }
     }
 
@@ -2075,7 +2308,9 @@ fn a_changed_identity_advances_ready_even_if_native_progress_was_missed() {
     tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
 
     assert!(host.registrations.lock().unwrap().is_empty());
-    gateway.stop_agents().unwrap();
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["replacement"]);
     let mut observations = events.wait_for(2);
     observations.sort_by_key(GatewayStartup::revision);
@@ -2113,8 +2348,14 @@ fn native_restart_progress_transitions_ready_through_starting() {
             }
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -2219,8 +2460,14 @@ fn panicking_host_and_event_adapters_cannot_strand_startup() {
             panic!("adapter panic")
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
     struct PanickingEvents;
@@ -2284,8 +2531,14 @@ fn panicking_predecessor_settles_and_promotes_the_exact_pending_receipt() {
             admit(attempt, progress, gateway.service());
             Ok(gateway)
         }
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -2352,8 +2605,14 @@ fn concurrent_waiters_run_one_registration_and_share_its_ready_identity() {
             Ok(gateway)
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -2426,8 +2685,14 @@ fn caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_re
             Ok(gateway)
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -2488,7 +2753,7 @@ struct FailSecondAudit {
     fail_intent: bool,
 }
 
-impl GatewayReconciliationAudit for FailSecondAudit {
+impl TestAuditBehavior for FailSecondAudit {
     fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
         let call = self.intent_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_intent && call == 2 {
@@ -2580,9 +2845,17 @@ impl GatewayHost for RetainedIdentityHost {
         }
     }
 
-    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-        self.stopped.lock().unwrap().push(gateway.service().into());
-        Ok(())
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        let gateway = session.request().intended();
+        complete_stop(session, journal, plan, || {
+            self.stopped.lock().unwrap().push(gateway.service().into());
+            Ok(())
+        })
     }
 }
 
@@ -2619,7 +2892,9 @@ fn retained_cleanup_identity_tracks_native_and_audit_facts_separately() {
     let (gateway, host) = retained_identity_gateway(SecondReconciliation::IntentOnlyFailure, audit);
     tauri::async_runtime::block_on(gateway.start()).unwrap();
     assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
-    gateway.stop_agents().unwrap();
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["old"]);
 
     let (gateway, _) = retained_identity_gateway(
@@ -2628,7 +2903,10 @@ fn retained_cleanup_identity_tracks_native_and_audit_facts_separately() {
     );
     tauri::async_runtime::block_on(gateway.start()).unwrap();
     assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
-    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+    assert_eq!(
+        gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+        Err(GatewayError::NotReconciled)
+    );
 
     let audit = Arc::new(FailSecondAudit {
         intent_calls: AtomicUsize::new(0),
@@ -2642,7 +2920,9 @@ fn retained_cleanup_identity_tracks_native_and_audit_facts_separately() {
         tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)),
         Err(GatewayError::Audit { physical: None, .. })
     ));
-    gateway.stop_agents().unwrap();
+    gateway
+        .stop_agents(Instant::now() + Duration::from_secs(30))
+        .unwrap();
     assert_eq!(*host.stopped.lock().unwrap(), ["replacement"]);
 }
 
@@ -2668,8 +2948,14 @@ fn partial_outcomes_preserve_each_confirmed_native_boundary() {
             }
             Err(GatewayError::Registration("boundary failure".into()))
         }
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -2734,9 +3020,17 @@ fn malformed_success_is_audited_as_rejected_and_never_projects_ready() {
             progress.history_observed(ReconciliationHistoryFact::BootstrapCommandSucceeded);
             Ok(gateway)
         }
-        fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
-            self.0.lock().unwrap().push(gateway.service().into());
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || {
+                self.0.lock().unwrap().push(gateway.service().into());
+                Ok(())
+            })
         }
     }
     let audit = Arc::new(RecordingAudit {
@@ -2778,7 +3072,10 @@ fn malformed_success_is_audited_as_rejected_and_never_projects_ready() {
     );
     assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
     drop(outcomes);
-    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+    assert_eq!(
+        gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+        Err(GatewayError::NotReconciled)
+    );
     assert!(host.0.lock().unwrap().is_empty());
 }
 
@@ -2807,8 +3104,14 @@ fn invalid_history_cannot_hide_an_ineligible_claimed_identity() {
             Ok(reconciled("wrong-target"))
         }
 
-        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
-            Ok(())
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            let gateway = session.request().intended();
+            complete_stop(session, journal, plan, || Ok(()))
         }
     }
 
@@ -2836,5 +3139,8 @@ fn invalid_history_cannot_hide_an_ineligible_claimed_identity() {
     assert!(!report.validation().candidate_eligible());
     assert_eq!(report.cleanup(), ReconciliationCleanupDecision::RetainPrior);
     drop(outcomes);
-    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+    assert_eq!(
+        gateway.stop_agents(Instant::now() + Duration::from_secs(30)),
+        Err(GatewayError::NotReconciled)
+    );
 }

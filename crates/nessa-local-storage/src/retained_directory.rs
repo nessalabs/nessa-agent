@@ -21,6 +21,19 @@ pub struct PrivateDirectory {
 }
 
 impl PrivateDirectory {
+    /// Retain an absolute private directory through trusted locator ancestry.
+    ///
+    /// Locator ancestors before `private_root` may be owned by root or the
+    /// current user and may have ordinary read/execute permissions, but may not
+    /// be group/other writable. `private_root`, the final directory, and every
+    /// component between them must remain current-user-owned and mode `0700`.
+    #[cfg(unix)]
+    pub fn open_path(private_root: &Path, directory: &Path) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::RetainedDirectory::open_path(private_root, directory)?,
+        })
+    }
+
     /// Acquire `directory` once beneath `root` and retain that exact object.
     ///
     /// `root` must be absolute. `directory` must be non-empty, relative, and

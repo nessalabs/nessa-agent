@@ -1,10 +1,14 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-    GatewayReconciliationProgress, ReconciledGateway, ReconciliationHistoryFact,
+    GatewayError, GatewayHost, GatewayPhysicalResult, GatewayReconciliationAttempt,
+    GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+    GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
+    ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
-    ReconciliationCause, ReconciliationTarget, SearchPath, ServiceConfiguration,
+    AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
+    LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, ReconciliationCause,
+    ReconciliationIncarnation, ReconciliationTarget, SearchPath, ServiceConfiguration,
 };
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
@@ -24,7 +28,6 @@ use std::{
 
 mod control;
 mod generation;
-mod install_attempt;
 mod pruning;
 mod reconciliation_audit;
 mod staging;
@@ -35,10 +38,7 @@ use control::{
     Health, InstallFailure, ManagedRuntime, Registration, ServiceState, ServiceStatus,
 };
 use generation::service_generation;
-use install_attempt::{
-    authorizes_rebootstrap, clear as clear_install_attempt, publish as publish_install_attempt,
-};
-use pruning::{prune_runtimes, retained_runtimes};
+use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
 pub(in crate::gateway::infrastructure) use reconciliation_audit::FileReconciliationAudit;
 use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
 
@@ -85,7 +85,14 @@ impl GatewayHost for Launchd {
             RegisterFailure::Audit(error) => error,
         })
     }
-    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
+    fn stop_agents(
+        &self,
+        session: &GatewayStopSession,
+        journal: &dyn GatewayReconciliationJournalSession,
+        plan: &AuditDeliveryReceipt,
+    ) -> Result<LifecycleObservation, GatewayError> {
+        session.begin_proof()?;
+        let gateway = session.request().intended();
         let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
         let running = health(gateway.port());
         if !matches_reconciled_gateway(gateway, &status, running.as_ref()) {
@@ -93,19 +100,97 @@ impl GatewayHost for Launchd {
                 "Gateway runtime identity changed; no agent stop request was sent".into(),
             ));
         }
-        // Address the revalidated registered service, never a PID discovered by port scanning.
-        let result = Command::new("/bin/launchctl")
-            .args(["kill", "SIGUSR1", gateway.service()])
-            .output()
-            .map_err(|error| GatewayError::Stop(error.to_string()))?;
-        if result.status.success() {
-            Ok(())
-        } else {
-            Err(GatewayError::Stop(
-                String::from_utf8_lossy(&result.stderr).trim().to_owned(),
-            ))
+        let candidate = gateway.audit_identity()?;
+        let observation_version = 1;
+        session.prove(candidate.clone(), observation_version)?;
+        session.claim(plan, &candidate, observation_version)?;
+        // Claim and spawn are adjacent: no filesystem, lock, health, or manager
+        // query can invalidate an unconsumed proof between them.
+        let command = dispatch_stop_command(gateway.service(), session.request().deadline());
+        session.command_result(command.clone())?;
+        journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)?;
+        if matches!(command, LifecycleCommandResult::Indeterminate(_)) {
+            return Err(GatewayError::Stop(
+                "Gateway stop command was indeterminate at the quit deadline".into(),
+            ));
+        }
+        if Instant::now() >= session.request().deadline() {
+            return Err(GatewayError::Stop(
+                "Gateway stop deadline passed before fresh observation".into(),
+            ));
+        }
+        let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
+        let running = health(gateway.port());
+        let observed = observed_incarnation(gateway.service(), gateway.port(), &status, running);
+        let observation = LifecycleObservation::new(2, observed, status.loaded);
+        journal.observation(
+            &LifecycleObservationSource::Effect {
+                plan_id: "stop-agents-on-desktop-quit".into(),
+                step_id: "signal-agents".into(),
+            },
+            &observation,
+        )?;
+        session.fresh_observation(observation.clone())?;
+        match command {
+            LifecycleCommandResult::Accepted => Ok(observation),
+            LifecycleCommandResult::Rejected(message) | LifecycleCommandResult::Failed(message) => {
+                Err(GatewayError::Stop(message))
+            }
+            LifecycleCommandResult::Indeterminate(_) => unreachable!(),
         }
     }
+}
+
+fn dispatch_stop_command(service: &str, deadline: Instant) -> LifecycleCommandResult {
+    let mut child = match Command::new("/bin/launchctl")
+        .args(["kill", "SIGUSR1", service])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => return LifecycleCommandResult::Failed(error.to_string()),
+    };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return LifecycleCommandResult::Accepted,
+            Ok(Some(_)) => {
+                let output = child.wait_with_output();
+                return LifecycleCommandResult::Rejected(
+                    output
+                        .map(|output| String::from_utf8_lossy(&output.stderr).trim().to_owned())
+                        .unwrap_or_else(|error| error.to_string()),
+                );
+            }
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return LifecycleCommandResult::Indeterminate(
+                    "launchctl did not return before the quit deadline".into(),
+                );
+            }
+            Err(error) => return LifecycleCommandResult::Indeterminate(error.to_string()),
+        }
+    }
+}
+
+fn observed_incarnation(
+    service: &str,
+    port: u16,
+    status: &ServiceStatus,
+    health: Option<Health>,
+) -> Option<ReconciliationIncarnation> {
+    let Health::Managed(runtime) = health? else {
+        return None;
+    };
+    if !status.loaded || !status.process_identity_known || status.pid != Some(runtime.pid) {
+        return None;
+    }
+    let target =
+        ReconciliationTarget::new(service.to_owned(), runtime.fingerprint, runtime.generation)
+            .ok()?;
+    ReconciliationIncarnation::new(target, runtime.instance, runtime.pid, port).ok()
 }
 
 fn matches_reconciled_gateway(
@@ -164,6 +249,121 @@ fn bootstrap_succeeded(progress: &dyn GatewayReconciliationProgress) {
     progress.history_observed(ReconciliationHistoryFact::BootstrapCommandSucceeded);
 }
 
+fn run_planned_effect<T>(
+    progress: &dyn GatewayReconciliationProgress,
+    plan_id: &str,
+    effect: LifecycleEffect,
+    run: impl FnOnce() -> Result<T, String>,
+    observe: impl FnOnce() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
+) -> Result<T, RegisterFailure> {
+    let step = LifecyclePlanStep::new("primary".into(), effect, LifecycleEffectPredicate::Always)
+        .map_err(|error| RegisterFailure::Physical(error.to_string()))?;
+    progress
+        .effect_planned(plan_id, &step, &[])
+        .map_err(RegisterFailure::Audit)?;
+    let result = run();
+    let completion = match &result {
+        Ok(_) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+    };
+    if let Err(audit) = progress.effect_completed(plan_id, step.id(), &completion) {
+        return Err(audit_after_physical(audit, &result));
+    }
+    let (incarnation, target_artifact_present) = observe()?;
+    if let Err(audit) = progress.physical_observed(
+        &LifecycleObservationSource::Effect {
+            plan_id: plan_id.into(),
+            step_id: step.id().into(),
+        },
+        incarnation,
+        target_artifact_present,
+    ) {
+        return Err(audit_after_physical(audit, &result));
+    }
+    result.map_err(RegisterFailure::Physical)
+}
+
+fn audit_after_physical<T, E: Display>(
+    audit: GatewayError,
+    physical: &Result<T, E>,
+) -> RegisterFailure {
+    let physical = match physical {
+        Ok(_) => GatewayPhysicalResult::Succeeded,
+        Err(error) => {
+            GatewayPhysicalResult::Failed(Box::new(GatewayError::Registration(error.to_string())))
+        }
+    };
+    RegisterFailure::Audit(GatewayError::Audit {
+        audit: audit.to_string(),
+        physical: Some(physical),
+    })
+}
+fn prune_planned(
+    progress: &dyn GatewayReconciliationProgress,
+    installations: &Path,
+    retained: &RetainedRuntimes,
+    running: &ReconciliationIncarnation,
+) -> Result<(), RegisterFailure> {
+    let names = match removable_runtime_names(installations, retained) {
+        Ok(names) => names,
+        Err(error) => {
+            eprintln!("[nessa] Could not list staged gateway runtimes; none were removed: {error}");
+            return Ok(());
+        }
+    };
+    for name in names {
+        let (plan_id, effect) = match name.strip_prefix(".staging-") {
+            Some(generation) => (
+                format!("remove-staging-runtime-{generation}"),
+                LifecycleEffect::RemoveStagingRuntime {
+                    generation: generation.into(),
+                },
+            ),
+            None => (
+                format!("prune-runtime-{name}"),
+                LifecycleEffect::PruneRuntime {
+                    fingerprint: name.clone(),
+                },
+            ),
+        };
+        let step =
+            LifecyclePlanStep::new("primary".into(), effect, LifecycleEffectPredicate::Always)
+                .map_err(|error| RegisterFailure::Physical(error.to_string()))?;
+        progress
+            .effect_planned(&plan_id, &step, &[])
+            .map_err(RegisterFailure::Audit)?;
+        let removal = prune_runtime(installations, &name);
+        let completion = match &removal {
+            Ok(()) => LifecycleCommandResult::Accepted,
+            Err(error) => LifecycleCommandResult::Failed(error.clone()),
+        };
+        if let Err(audit) = progress.effect_completed(&plan_id, step.id(), &completion) {
+            return Err(audit_after_physical(audit, &removal));
+        }
+        if let Err(audit) = progress.physical_observed(
+            &LifecycleObservationSource::Effect {
+                plan_id,
+                step_id: step.id().into(),
+            },
+            Some(running.clone()),
+            true,
+        ) {
+            return Err(audit_after_physical(audit, &removal));
+        }
+        match removal {
+            Ok(()) => eprintln!(
+                "[nessa] Removed staged gateway runtime {}",
+                installations.join(&name).display()
+            ),
+            Err(error) => eprintln!(
+                "[nessa] Could not remove staged gateway runtime {}: {error}",
+                installations.join(&name).display()
+            ),
+        }
+    }
+    Ok(())
+}
+
 fn register(
     host: &Launchd,
     runtime: &Path,
@@ -211,18 +411,13 @@ fn register(
     nessa_local_storage::create_directory(&runtime_root).map_err(|error| error.to_string())?;
     nessa_local_storage::sync_directory(&private_root).map_err(|error| error.to_string())?;
     let installations = runtime_root.join(&label);
-    let staged_runtime = stage_runtime_cached(
-        runtime,
-        &installations,
-        &fingerprint,
-        &host.validated_runtimes,
-    )?;
-    let runtime = staged_runtime.as_path();
-    let arguments = launch_settings(runtime);
+    let planned_runtime = installations.join(&fingerprint);
+    let runtime_for_definition = planned_runtime.as_path();
+    let arguments = launch_settings(runtime_for_definition);
     let agents = home.join("Library/LaunchAgents");
     let path = agents.join(format!("{label}.plist"));
     let installed = read_definition(&path).ok();
-    let agent_path = registered_agent_path(agent_path, installed.as_ref(), runtime);
+    let agent_path = registered_agent_path(agent_path, installed.as_ref(), runtime_for_definition);
     let environment = service_environment(configuration, home, &agent_path, &fingerprint);
     // `KeepAlive: true` restarts the service whatever it did, so a server that
     // could never start was relaunched every five seconds for as long as the
@@ -314,19 +509,50 @@ fn register(
     let target =
         ReconciliationTarget::new(service.clone(), fingerprint.clone(), generation.clone())
             .map_err(|error| error.to_string())?;
-    let intent = GatewayReconciliationIntent::new(attempt.clone(), target, before)
+    let intent = GatewayReconciliationIntent::new(attempt.clone(), target.clone(), before.clone())
         .map_err(|error| error.to_string())?;
     progress
         .intent_admitted(intent)
         .map_err(RegisterFailure::Audit)?;
+    let staged_runtime = run_planned_effect(
+        progress,
+        "stage-runtime",
+        LifecycleEffect::StageRuntime {
+            fingerprint: fingerprint.clone(),
+        },
+        || {
+            stage_runtime_cached(
+                runtime,
+                &installations,
+                &fingerprint,
+                &host.validated_runtimes,
+            )
+        },
+        || {
+            let status = service_status(&service)?;
+            Ok((
+                observed_incarnation(&service, port, &status, health(port)),
+                fs::symlink_metadata(&planned_runtime).is_ok(),
+            ))
+        },
+    )?;
+    let runtime = staged_runtime.as_path();
     match state {
         ServiceState::ManagedCurrent(running) => {
-            clear_install_attempt(&lock_directory)?;
             // The loaded service already advertises the staged runtime, so the
             // versions nothing can be running are known here too. Collecting
             // only after a replacement would leave an ordinary launch holding
             // whatever the last update left behind until the next one.
-            prune_runtimes(
+            let gateway = ReconciledGateway::new(
+                service.clone(),
+                running.fingerprint.clone(),
+                running.instance.clone(),
+                running.generation.clone(),
+                running.pid,
+                port,
+            );
+            prune_planned(
+                progress,
                 &installations,
                 &retained_runtimes(
                     &fingerprint,
@@ -334,15 +560,9 @@ fn register(
                     pending.as_ref(),
                     fence.as_ref(),
                 ),
-            );
-            return Ok(ReconciledGateway::new(
-                service,
-                running.fingerprint,
-                running.instance,
-                running.generation,
-                running.pid,
-                port,
-            ));
+                &gateway.audit_identity().map_err(RegisterFailure::Audit)?,
+            )?;
+            return Ok(gateway);
         }
         ServiceState::ManagedStale(running) => {
             progress.readiness_invalidated();
@@ -353,8 +573,21 @@ fn register(
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute())
                 .ok_or("Loaded definition has no absolute data namespace")?;
-            retire_then_unload(
+            run_planned_effect(
                 progress,
+                "retire-current-runtime",
+                LifecycleEffect::RequestRetirement {
+                    incarnation: ReconciledGateway::new(
+                        service.clone(),
+                        running.fingerprint.clone(),
+                        running.instance.clone(),
+                        running.generation.clone(),
+                        running.pid,
+                        port,
+                    )
+                    .audit_identity()
+                    .map_err(RegisterFailure::Audit)?,
+                },
                 || {
                     retire(
                         &old_data,
@@ -366,18 +599,53 @@ fn register(
                         &generation,
                     )
                 },
-                || launchctl(&["bootout", &service]),
+                || {
+                    let status = service_status(&service)?;
+                    Ok((
+                        observed_incarnation(&service, port, &status, health(port)),
+                        fs::symlink_metadata(&path).is_ok(),
+                    ))
+                },
             )?;
-            clear_install_attempt(&lock_directory)?;
+            progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
+            run_planned_effect(
+                progress,
+                "unload-stale-service",
+                LifecycleEffect::UnloadService {
+                    service: service.clone(),
+                },
+                || launchctl(&["bootout", &service]),
+                || {
+                    let status = service_status(&service)?;
+                    Ok((
+                        observed_incarnation(&service, port, &status, health(port)),
+                        fs::symlink_metadata(&path).is_ok(),
+                    ))
+                },
+            )?;
+            progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
         }
         ServiceState::LegacyExactService => {
             // This exact pre-upgrade registration has no retirement protocol.
             // SIGTERM cancels its active agents; never send it SIGUSR2.
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
             progress.readiness_invalidated();
-            launchctl(&["bootout", &service])?;
+            run_planned_effect(
+                progress,
+                "unload-legacy-service",
+                LifecycleEffect::UnloadService {
+                    service: service.clone(),
+                },
+                || launchctl(&["bootout", &service]),
+                || {
+                    let status = service_status(&service)?;
+                    Ok((
+                        observed_incarnation(&service, port, &status, health(port)),
+                        fs::symlink_metadata(&path).is_ok(),
+                    ))
+                },
+            )?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
-            clear_install_attempt(&lock_directory)?;
         }
         ServiceState::ForeignPort => {
             return Err(format!(
@@ -398,12 +666,7 @@ fn register(
             if !process_identity_known {
                 return Err(unreadable_process_identity().into());
             }
-            if !incomplete_install_retry(
-                loaded_pid,
-                process_identity_known,
-                authorizes_rebootstrap(&lock_directory, &service, &definition, installed.as_ref())?,
-            ) && !gave_up_retry(loaded_pid, process_identity_known, recorded.is_some())
-            {
+            if !gave_up_retry(loaded_pid, process_identity_known, recorded.is_some()) {
                 return Err(unavailable_service(recorded.as_ref(), port).into());
             }
             if let Some(recorded) = &recorded {
@@ -416,19 +679,31 @@ fn register(
                 );
             }
             progress.readiness_invalidated();
-            launchctl(&["bootout", &service])?;
+            run_planned_effect(
+                progress,
+                "unload-unavailable-service",
+                LifecycleEffect::UnloadService {
+                    service: service.clone(),
+                },
+                || launchctl(&["bootout", &service]),
+                || {
+                    let status = service_status(&service)?;
+                    Ok((
+                        observed_incarnation(&service, port, &status, health(port)),
+                        fs::symlink_metadata(&path).is_ok(),
+                    ))
+                },
+            )?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
             if recorded.is_some() {
                 startup::forget_recorded_failure(&installed_logs);
             }
-            clear_install_attempt(&lock_directory)?;
         }
         ServiceState::Unloaded => {
             progress.readiness_invalidated();
-            clear_install_attempt(&lock_directory)?;
         }
     }
-    let installation = (|| -> Result<ManagedRuntime, InstallFailure> {
+    let installation = (|| -> Result<ManagedRuntime, RegisterFailure> {
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
         let logs = log.parent().ok_or("invalid log directory")?;
         nessa_local_storage::create_directory(logs).map_err(|e| e.to_string())?;
@@ -456,12 +731,41 @@ fn register(
             .map_err(|e| e.to_string())?
             .sync_all()
             .map_err(|e| e.to_string())?;
-        publish_definition(
+        run_planned_effect(
             progress,
-            || fs::rename(&next, &path).map_err(|error| error.to_string()),
-            || nessa_local_storage::sync_directory(&agents).map_err(|error| error.to_string()),
+            "publish-service-definition",
+            LifecycleEffect::PublishServiceDefinition {
+                target: target.clone(),
+            },
+            || {
+                publish_definition(
+                    progress,
+                    || fs::rename(&next, &path).map_err(|error| error.to_string()),
+                    || {
+                        nessa_local_storage::sync_directory(&agents)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            },
+            || {
+                let status = service_status(&service)?;
+                Ok((
+                    observed_incarnation(&service, port, &status, health(port)),
+                    fs::symlink_metadata(&path).is_ok(),
+                ))
+            },
         )?;
-        publish_install_attempt(&lock_directory, &service, &definition)?;
+        let bootstrap_step = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::BootstrapService {
+                target: target.clone(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .map_err(|error| error.to_string())?;
+        progress
+            .effect_planned("bootstrap-service", &bootstrap_step, &[])
+            .map_err(RegisterFailure::Audit)?;
         let bootstrap = run_bootstrap(progress, || {
             Command::new("/bin/launchctl")
                 .args(["bootstrap", &domain])
@@ -470,21 +774,120 @@ fn register(
         })
         .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
         .and_then(bootstrap_result);
+        let bootstrap_completion = match &bootstrap {
+            Ok(()) => LifecycleCommandResult::Accepted,
+            Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
+        };
+        if let Err(audit) = progress.effect_completed(
+            "bootstrap-service",
+            bootstrap_step.id(),
+            &bootstrap_completion,
+        ) {
+            return Err(audit_after_physical(audit, &bootstrap));
+        }
+        let status_after_bootstrap = service_status(&service)?;
+        let running_after_bootstrap = health(port);
+        if let Err(audit) = progress.physical_observed(
+            &LifecycleObservationSource::Effect {
+                plan_id: "bootstrap-service".into(),
+                step_id: "primary".into(),
+            },
+            observed_incarnation(
+                &service,
+                port,
+                &status_after_bootstrap,
+                running_after_bootstrap,
+            ),
+            status_after_bootstrap.loaded,
+        ) {
+            return Err(audit_after_physical(audit, &bootstrap));
+        }
         finish_bootstrap(
             bootstrap,
             || service_status(&service).map(|status| status.loaded),
             || host.disabled_services.is_disabled(&domain, &label),
-            || clear_install_attempt(&lock_directory),
         )?;
         bootstrap_succeeded(progress);
-        let running = wait_fingerprint(&service, (&fingerprint, &generation), port, &log)?;
-        clear_install_attempt(&lock_directory)?;
+        let readiness_step = LifecyclePlanStep::new(
+            "primary".into(),
+            LifecycleEffect::AdoptReadyIncarnation {
+                target: target.clone(),
+            },
+            LifecycleEffectPredicate::Always,
+        )
+        .map_err(|error| error.to_string())?;
+        progress
+            .effect_planned("adopt-ready-incarnation", &readiness_step, &[])
+            .map_err(RegisterFailure::Audit)?;
+        let running = match wait_fingerprint(&service, (&fingerprint, &generation), port, &log) {
+            Ok(running) => {
+                progress
+                    .effect_completed(
+                        "adopt-ready-incarnation",
+                        readiness_step.id(),
+                        &LifecycleCommandResult::Accepted,
+                    )
+                    .map_err(RegisterFailure::Audit)?;
+                running
+            }
+            Err(error) => {
+                progress
+                    .effect_completed(
+                        "adopt-ready-incarnation",
+                        readiness_step.id(),
+                        &LifecycleCommandResult::Failed(format!("{error:?}")),
+                    )
+                    .map_err(RegisterFailure::Audit)?;
+                let status = service_status(&service)?;
+                let observed = observed_incarnation(&service, port, &status, health(port));
+                progress
+                    .physical_observed(
+                        &LifecycleObservationSource::Effect {
+                            plan_id: "adopt-ready-incarnation".into(),
+                            step_id: "primary".into(),
+                        },
+                        observed,
+                        status.loaded,
+                    )
+                    .map_err(RegisterFailure::Audit)?;
+                return Err(error.into());
+            }
+        };
+        let running_identity = ReconciledGateway::new(
+            service.clone(),
+            running.fingerprint.clone(),
+            running.instance.clone(),
+            running.generation.clone(),
+            running.pid,
+            port,
+        )
+        .audit_identity()
+        .map_err(|error| error.to_string())?;
+        progress
+            .physical_observed(
+                &LifecycleObservationSource::Effect {
+                    plan_id: "adopt-ready-incarnation".into(),
+                    step_id: "primary".into(),
+                },
+                Some(running_identity),
+                true,
+            )
+            .map_err(RegisterFailure::Audit)?;
         Ok(running)
     })();
-    let running = forward_recovery(installation)?;
-    // Only past `forward_recovery`: an installation that failed leaves the old
-    // registration, and possibly an old process, alive for a retry.
-    prune_runtimes(
+    let running = installation?;
+    // An installation that failed leaves the old registration, and possibly an
+    // old process, alive for a retry.
+    let gateway = ReconciledGateway::new(
+        service,
+        running.fingerprint,
+        running.instance,
+        running.generation,
+        running.pid,
+        port,
+    );
+    prune_planned(
+        progress,
         &installations,
         &retained_runtimes(
             &fingerprint,
@@ -492,15 +895,9 @@ fn register(
             pending.as_ref(),
             fence.as_ref(),
         ),
-    );
-    Ok(ReconciledGateway::new(
-        service,
-        running.fingerprint,
-        running.instance,
-        running.generation,
-        running.pid,
-        port,
-    ))
+        &gateway.audit_identity().map_err(RegisterFailure::Audit)?,
+    )?;
+    Ok(gateway)
 }
 
 fn service_environment(
@@ -576,6 +973,13 @@ impl From<String> for RegisterFailure {
 impl From<&str> for RegisterFailure {
     fn from(message: &str) -> Self {
         Self::Physical(message.into())
+    }
+}
+impl From<InstallFailure> for RegisterFailure {
+    fn from(failure: InstallFailure) -> Self {
+        let message = forward_recovery::<()>(Err(failure))
+            .expect_err("install failure cannot become a successful value");
+        Self::Physical(message)
     }
 }
 fn prepare_data_directory(
@@ -683,14 +1087,6 @@ fn read_definition(path: &Path) -> Result<Value, String> {
 fn address(port: u16) -> SocketAddr {
     ([127, 0, 0, 1], port).into()
 }
-fn incomplete_install_retry(
-    loaded_pid: Option<u32>,
-    process_identity_known: bool,
-    host_attempt_matches: bool,
-) -> bool {
-    process_identity_known && loaded_pid.is_none() && host_attempt_matches
-}
-
 /// Whether a loaded service that gave up may be replaced with a fresh attempt.
 ///
 /// launchd will not start it again — that is what giving up means — so it would
@@ -698,7 +1094,7 @@ fn incomplete_install_retry(
 /// the thing it gave up over. Booting out a registration with no process of its
 /// own destroys nothing; what has to be established is that there is no process,
 /// unambiguously, and that the record is this registration's own. The same
-/// shape as `incomplete_install_retry`, from different evidence.
+/// Its authority is the gateway's own startup-failure record, from different evidence.
 fn gave_up_retry(
     loaded_pid: Option<u32>,
     process_identity_known: bool,
@@ -730,7 +1126,7 @@ fn unavailable_service(recorded: Option<&startup::RecordedFailure>, port: u16) -
 }
 
 fn unreadable_process_identity() -> &'static str {
-    "Nessa could not read launchd's process identity, so the background service was preserved rather than risking a live gateway. Quit Nessa and open it again to retry; Nessa will replace the registration only if launchd then proves it has no process and the saved install attempt still matches."
+    "Nessa could not read launchd's process identity, so the background service was preserved rather than risking a live gateway. Quit Nessa and open it again to retry; unresolved lifecycle evidence must be settled before any replacement."
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -846,7 +1242,6 @@ fn finish_bootstrap(
     bootstrap: Result<(), BootstrapFailure>,
     loaded_after_failure: impl FnOnce() -> Result<bool, String>,
     disabled_after_failure: impl FnOnce() -> Result<bool, String>,
-    clear_attempt: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let Err(error) = bootstrap else {
         return Ok(());
@@ -869,55 +1264,48 @@ fn finish_bootstrap(
                 .err()
                 .map(|diagnosis| format!("; disabled-item diagnosis also failed: {diagnosis}"))
                 .unwrap_or_default();
-            let cleared = clear_attempt();
             if blocked {
-                return match cleared {
-                    Ok(()) => Err(
-                        "macOS disabled Nessa's background item. Open System Settings → General → Login Items and allow Nessa to run in the background, then choose Retry. The incomplete install attempt was cleared."
-                            .into(),
-                    ),
-                    Err(clear) => Err(format!(
-                        "macOS disabled Nessa's background item. Open System Settings → General → Login Items and allow Nessa to run in the background, then choose Retry. The incomplete install attempt could not be cleared: {clear}"
-                    )),
-                };
+                return Err(
+                    "macOS disabled Nessa's background item. Open System Settings → General → Login Items and allow Nessa to run in the background, then choose Retry. The lifecycle attempt remains unresolved."
+                        .into(),
+                );
             }
-            match cleared {
-                Ok(()) => Err(format!(
-                    "{error}; launchd reports no loaded service and the install attempt was cleared{diagnosis}"
-                )),
-                Err(clear) => Err(format!(
-                    "{error}; launchd reports no loaded service, but the install attempt could not be cleared: {clear}{diagnosis}"
-                )),
-            }
+            Err(format!(
+                "{error}; launchd reports no loaded service and the lifecycle attempt remains unresolved{diagnosis}"
+            ))
         }
         Ok(true) => Err(format!(
-            "{error}; launchd reports a loaded service and the install attempt was preserved for verified retry"
+            "{error}; launchd reports a loaded service and the lifecycle attempt remains unresolved"
         )),
         Err(status) => Err(format!(
-            "{error}; loaded service state could not be verified and the install attempt was preserved: {status}"
+            "{error}; loaded service state could not be verified and the lifecycle attempt remains unresolved: {status}"
         )),
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::{
         bootstrap_succeeded, disabled_service, finish_bootstrap, gave_up_retry,
-        incomplete_install_retry, installed_generation, matches_reconciled_gateway,
-        prepare_data_directory, publish_definition, registered_agent_path, retire_then_unload,
-        run_bootstrap, runtime_fingerprint, service_environment, service_matches, startup,
-        unavailable_service, unreadable_process_identity, BootstrapFailure, SearchPath,
+        installed_generation, matches_reconciled_gateway, prepare_data_directory,
+        publish_definition, registered_agent_path, retire_then_unload, run_bootstrap,
+        runtime_fingerprint, service_environment, service_matches, startup, unavailable_service,
+        unreadable_process_identity, BootstrapFailure, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
         ReconciledGateway, ReconciliationHistoryFact,
     };
-    use crate::gateway::domain::value_objects::ServiceConfiguration;
+    use crate::gateway::domain::value_objects::{
+        AuditDeliveryReceipt, LifecycleCommandResult, LifecycleObservation,
+        LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
+        ReconciliationCorrelation, ReconciliationIncarnation, ServiceConfiguration,
+    };
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
     use crate::gateway::infrastructure::macos::staging::launch_settings;
     use crate::gateway::infrastructure::macos::startup::LastExit;
     use serde_json::{json, Value};
     use std::{
-        cell::Cell,
         fs,
         path::{Path, PathBuf},
         sync::Mutex,
@@ -936,6 +1324,46 @@ mod tests {
         fn history_observed(&self, fact: ReconciliationHistoryFact) {
             self.0.lock().unwrap().push(fact);
         }
+
+        fn effect_planned(
+            &self,
+            _: &str,
+            _: &LifecyclePlanStep,
+            _: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(test_receipt(1, LifecycleRecordKind::EffectPlan))
+        }
+
+        fn effect_completed(
+            &self,
+            _: &str,
+            _: &str,
+            _: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(test_receipt(2, LifecycleRecordKind::EffectCompletion))
+        }
+
+        fn physical_observed(
+            &self,
+            _: &LifecycleObservationSource,
+            incarnation: Option<ReconciliationIncarnation>,
+            target_artifact_present: bool,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            Ok(LifecycleObservation::new(
+                1,
+                incarnation,
+                target_artifact_present,
+            ))
+        }
+    }
+
+    fn test_receipt(sequence: u64, kind: LifecycleRecordKind) -> AuditDeliveryReceipt {
+        AuditDeliveryReceipt::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000001".into())
+                .unwrap(),
+            sequence,
+            kind,
+        )
     }
 
     #[test]
@@ -1128,21 +1556,11 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_install_retry_requires_no_process_and_exact_host_authority() {
-        assert!(incomplete_install_retry(None, true, true));
-        assert!(!incomplete_install_retry(None, true, false));
-        assert!(!incomplete_install_retry(None, false, true));
-        assert!(!incomplete_install_retry(Some(42), true, true));
-        assert!(!incomplete_install_retry(Some(42), false, true));
-    }
-
-    #[test]
     fn unreadable_process_identity_preserves_the_service_and_names_safe_recovery() {
         let message = unreadable_process_identity();
         assert!(message.contains("preserved rather than risking a live gateway"));
         assert!(message.contains("Quit Nessa and open it again"));
-        assert!(message.contains("saved install attempt still matches"));
-        assert!(!incomplete_install_retry(None, false, true));
+        assert!(message.contains("lifecycle journal"));
     }
 
     /// A service that gave up is loaded, has no process, and launchd will
@@ -1210,54 +1628,29 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_failure_clears_evidence_only_when_launchd_is_unloaded() {
-        let called = Cell::new(false);
-        assert_eq!(
-            finish_bootstrap(
-                Ok(()),
-                || Ok(false),
-                || Ok(false),
-                || {
-                    called.set(true);
-                    Ok(())
-                }
-            ),
-            Ok(())
-        );
-        assert!(!called.get());
+    fn bootstrap_failure_keeps_the_lifecycle_attempt_unresolved() {
+        assert_eq!(finish_bootstrap(Ok(()), || Ok(false), || Ok(false)), Ok(()));
 
         let error = finish_bootstrap(
             Err(BootstrapFailure::CouldNotRun("bootstrap failed".into())),
             || Ok(false),
             || Ok(false),
-            || {
-                called.set(true);
-                Ok(())
-            },
         )
         .unwrap_err();
-        assert!(called.get());
-        assert!(error.contains("install attempt was cleared"));
+        assert!(error.contains("lifecycle attempt remains unresolved"));
 
-        called.set(false);
         let error = finish_bootstrap(
             Err(BootstrapFailure::CouldNotRun("bootstrap failed".into())),
             || Ok(true),
             || Ok(false),
-            || {
-                called.set(true);
-                Ok(())
-            },
         )
         .unwrap_err();
-        assert!(!called.get());
-        assert!(error.contains("preserved for verified retry"));
+        assert!(error.contains("lifecycle attempt remains unresolved"));
 
         let error = finish_bootstrap(
             Err(BootstrapFailure::CouldNotRun("bootstrap failed".into())),
             || Err("ambiguous status".into()),
             || Ok(false),
-            || Ok(()),
         )
         .unwrap_err();
         assert!(error.contains("could not be verified"));
@@ -1270,8 +1663,7 @@ mod tests {
             status: Some(5),
             detail: "Bootstrap failed: 5: Input/output error".into(),
         };
-        let blocked =
-            finish_bootstrap(Err(refusal), || Ok(false), || Ok(true), || Ok(())).unwrap_err();
+        let blocked = finish_bootstrap(Err(refusal), || Ok(false), || Ok(true)).unwrap_err();
         assert!(blocked.contains("System Settings → General → Login Items"));
 
         for (status, loaded, disabled) in [
@@ -1286,7 +1678,6 @@ mod tests {
                 }),
                 || Ok(loaded),
                 || Ok(disabled),
-                || Ok(()),
             )
             .unwrap_err();
             assert!(!error.contains("System Settings"), "{error}");
@@ -1299,7 +1690,6 @@ mod tests {
             }),
             || Ok(false),
             || Err("print-disabled exceeded its deadline".into()),
-            || Ok(()),
         )
         .unwrap_err();
         assert!(diagnosis_failed.contains("original bootstrap refusal"));

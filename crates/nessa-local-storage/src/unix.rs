@@ -95,6 +95,17 @@ fn verify_directory_file(directory: &File) -> io::Result<()> {
     }
     Ok(())
 }
+fn verify_locator_directory_file(directory: &File) -> io::Result<()> {
+    let metadata = directory.metadata()?;
+    let owner = metadata.uid();
+    if !metadata.is_dir()
+        || (owner != 0 && owner != unsafe { libc::geteuid() })
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
 fn relative_components(relative: &Path) -> io::Result<Vec<CString>> {
     let components = relative
         .components()
@@ -130,6 +141,66 @@ fn open_child_directory(parent: &File, component: &CString) -> io::Result<File> 
     let child = unsafe { File::from_raw_fd(descriptor) };
     verify_directory_file(&child)?;
     Ok(child)
+}
+fn open_child_locator_directory(parent: &File, component: &CString) -> io::Result<File> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            component.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let child = unsafe { File::from_raw_fd(descriptor) };
+    verify_locator_directory_file(&child)?;
+    Ok(child)
+}
+
+/// Create an absolute private leaf without requiring system locator ancestry
+/// such as `/Users` and `Application Support` to use private modes.
+pub fn create_private_directory_path(path: &Path) -> io::Result<()> {
+    if !path.is_absolute() {
+        return Err(unsafe_file());
+    }
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::RootDir => None,
+            Component::Normal(name) => {
+                Some(CString::new(name.as_bytes()).map_err(|_| unsafe_file()))
+            }
+            _ => Some(Err(unsafe_file())),
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if components.is_empty() {
+        return Err(unsafe_file());
+    }
+    let mut parent = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(Path::new("/"))?;
+    verify_locator_directory_file(&parent)?;
+    for (index, component) in components.iter().enumerate() {
+        let last = index + 1 == components.len();
+        let child = match open_child_locator_directory(&parent, component) {
+            Ok(child) => child,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if unsafe { libc::mkdirat(parent.as_raw_fd(), component.as_ptr(), 0o700) } != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                parent.sync_all()?;
+                open_child_locator_directory(&parent, component)?
+            }
+            Err(error) => return Err(error),
+        };
+        if last {
+            verify_directory_file(&child)?;
+        }
+        parent = child;
+    }
+    parent.sync_all()
 }
 fn open_parent_beneath(root: &Path, relative: &Path) -> io::Result<(File, CString)> {
     let mut components = relative_components(relative)?;
