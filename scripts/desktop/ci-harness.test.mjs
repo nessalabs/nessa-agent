@@ -80,6 +80,26 @@ test("the existing Linux matrix leg uniquely owns real runtime assembly", () => 
   assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
 })
 
+test("the disposable user manager proves the same session bus and cleans its exact runtime", () => {
+  const script = readFileSync("scripts/desktop/check-systemd-user-service.sh", "utf8")
+  assert.match(script, /SYSTEMD_LOG_LEVEL=debug SYSTEMD_LOG_TARGET=console/)
+  assert.match(script, /kill -0 "\$manager_pid"/)
+  assert.match(script, /-S "\$XDG_RUNTIME_DIR\/systemd\/private"/)
+  assert.match(script, /busctl --address="\$DBUS_SESSION_BUS_ADDRESS"/)
+  assert.match(script, /status org\.freedesktop\.systemd1/)
+  assert.match(script, /2>"\$bus_error"/)
+  assert.doesNotMatch(script, /busctl --user/)
+  assert.match(
+    script,
+    /inaccessible_directory="\$runtime_directory\/systemd\/inaccessible\/dir"/,
+  )
+  assert.match(script, /chmod 700 "\$inaccessible_directory"/)
+  assert.doesNotMatch(script, /chmod -R|find .* -delete/)
+  assert.match(script, /primary_status=\$\?/)
+  assert.match(script, /if \[ "\$primary_status" -eq 0 \]/)
+  assert.equal(script.match(/print_manager_diagnostics/g)?.length, 3)
+})
+
 test("the frontend job owns top-level script tests and their just dependency", () => {
   const root = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
