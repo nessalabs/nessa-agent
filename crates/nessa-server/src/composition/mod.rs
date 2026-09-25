@@ -36,9 +36,9 @@ mod runtime_config;
 
 mod agent;
 
-// Everywhere, because the conversation service's deletion budgets come from
-// it on every platform; the agent budgets inside it are Unix-only, where their
-// one consumer, the provider, is.
+// Where its consumers are: the provider's agent budgets and the conversation
+// service's deletion budgets are both built only with Unix process supervision.
+#[cfg(unix)]
 mod agent_budgets;
 #[cfg(unix)]
 mod attachments;

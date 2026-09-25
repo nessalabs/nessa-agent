@@ -53,7 +53,7 @@ impl ProviderSessionErasers {
         self.erasers.insert(agent, eraser);
     }
     /// Whether an eraser is registered for `agent`.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn handles(&self, agent: AgentId) -> bool {
         self.erasers.contains_key(&agent)
     }

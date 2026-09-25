@@ -10,10 +10,10 @@
 //! deletion budgets it gives the conversation service. Nothing reads them at
 //! request time.
 //!
-//! The agent budgets are compiled where their only consumer is: the provider
-//! they configure needs Unix process supervision, so on other platforms they
-//! would be code nothing can reach, which `-D warnings` rejects. The deletion
-//! budgets are read on every platform, where the service is built.
+//! Compiled where its consumers are: the provider these configure needs Unix
+//! process supervision, and so does the conversation service the deletion
+//! budgets are given to, so on other platforms this would be code nothing can
+//! reach, which `-D warnings` rejects.
 
 use crate::conversation::application::ConversationDeletionBudgets;
 use serde::Deserialize;
@@ -23,7 +23,6 @@ const BUDGETS_JSON: &str = include_str!("../../../../protocol/defaults/agent-sta
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(not(unix), allow(dead_code))]
 struct AgentBudgets {
     launch_ms: u64,
     startup_ms: u64,
@@ -39,7 +38,6 @@ struct DeletionBudgets {
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(not(unix), allow(dead_code))]
 struct Budgets {
     agent: AgentBudgets,
     deletion: DeletionBudgets,
@@ -52,25 +50,21 @@ static BUDGETS: LazyLock<Budgets> = LazyLock::new(|| {
 
 /// Deadline for the child to answer `initialize`, which is mostly the operating
 /// system's first-execution scan rather than protocol work.
-#[cfg(unix)]
 pub(super) fn launch_timeout() -> Duration {
     Duration::from_millis(BUDGETS.agent.launch_ms)
 }
 
 /// Deadline for protocol work after the child has answered.
-#[cfg(unix)]
 pub(super) fn startup_timeout() -> Duration {
     Duration::from_millis(BUDGETS.agent.startup_ms)
 }
 
 /// Grace interval for cooperative cancellation and process exit during teardown.
-#[cfg(unix)]
 pub(super) fn shutdown_grace() -> Duration {
     Duration::from_millis(BUDGETS.agent.shutdown_grace_ms)
 }
 
 /// Wait interval for forced process cleanup and child reaping.
-#[cfg(unix)]
 pub(super) fn kill_timeout() -> Duration {
     Duration::from_millis(BUDGETS.agent.kill_timeout_ms)
 }
