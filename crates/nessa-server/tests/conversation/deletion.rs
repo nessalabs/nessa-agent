@@ -1148,7 +1148,7 @@ async fn busy_under_the_deletion_s_own_lease_is_left_not_carried_on() {
         );
         let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
         // The deletion holds the lease, so `Busy` here is storage failing, not
-        // a lease held elsewhere: row 9c, not 9a or 9b.
+        // a history leased elsewhere: row 9c, not 9a or 9b.
         assert!(!failures.history_held);
         assert!(matches!(
             failures.history,

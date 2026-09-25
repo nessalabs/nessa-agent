@@ -2280,7 +2280,7 @@ impl ConversationService {
         let lease = match leased {
             Ok(lease) => Some(lease),
             // Still held after the wait for it: the one place a deletion
-            // learns its history is held elsewhere. `Busy` from reading or
+            // learns its history is leased elsewhere. `Busy` from reading or
             // erasing under its own lease is only storage failing
             // (`busy_under_the_deletion_s_own_lease_is_left_not_carried_on`).
             Err(ConversationError::Storage(StorageError::Busy)) => {
