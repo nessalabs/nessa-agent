@@ -604,3 +604,91 @@ fn an_ask_recovered_after_lag_is_offered_by_a_running_message() {
     projection.queue_order(&[]);
     assert_eq!(offers_only_running_asks(&mut projection), 1);
 }
+
+/// Saved turns in order, each settled as completed or left as the gateway
+/// stopped it.
+fn saved_turns(turns: Vec<(&str, Vec<ExecutionEvent>, bool)>) -> SessionSnapshot {
+    let mut snapshot = review_snapshot(vec![]);
+    let template = snapshot.invocations.remove(0);
+    for (id, events, settled) in turns {
+        let mut record = template.clone();
+        record.request.execution_id = ExecutionId::new(id).unwrap();
+        record.events = events;
+        if settled {
+            record.result = Some(Ok(ExecutionOutcome::Completed));
+        }
+        snapshot.invocations.push(record);
+    }
+    snapshot
+}
+fn restored(snapshot: &SessionSnapshot) -> Projection {
+    Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+        },
+        Some(snapshot),
+    )
+}
+
+#[test]
+fn recovery_does_not_bring_back_a_turn_from_before_a_restart() {
+    // An ask left open when the gateway stopped, from a turn now older than
+    // the view shows. Recovery recreated its message as running, offered an ask
+    // nothing in this process could answer, and pushed a real message out.
+    let names: Vec<String> = (0..24).map(|index| format!("done-{index}")).collect();
+    let mut turns = vec![("stale", vec![asked("stale", "1")], false)];
+    turns.extend(names.iter().map(|name| (name.as_str(), vec![], true)));
+    let snapshot = saved_turns(turns);
+    let mut projection = restored(&snapshot);
+    let before: Vec<_> = projection
+        .read()
+        .messages
+        .iter()
+        .map(|message| message.execution_id.clone())
+        .collect();
+    projection.lagged();
+    projection.recover_permissions(Some(&snapshot));
+    let view = projection.read();
+    assert!(view.questions.is_empty());
+    assert_eq!(
+        view.messages
+            .iter()
+            .map(|message| message.execution_id.clone())
+            .collect::<Vec<_>>(),
+        before,
+        "no message recreated, none pushed out"
+    );
+}
+
+#[test]
+fn asks_nobody_can_answer_do_not_crowd_out_one_somebody_can() {
+    // Eight unanswerable asks — from turns before a restart, or turns whose
+    // receipts failed — held every open slot while hidden from view, so a live
+    // ask was dropped and its agent waited with nothing on screen.
+    let names: Vec<String> = (0..8).map(|index| format!("stale-{index}")).collect();
+    let snapshot = saved_turns(
+        names
+            .iter()
+            .map(|name| (name.as_str(), vec![asked(name, "1")], false))
+            .collect(),
+    );
+    let mut after_restart = restored(&snapshot);
+    after_restart.lagged();
+    after_restart.recover_permissions(Some(&snapshot));
+    after_restart.admitted("live", &said("go"), ConversationPendingMode::Queued);
+    after_restart.event(&asked("live", "1"));
+    assert_eq!(offers_only_running_asks(&mut after_restart), 1);
+
+    let mut failed_receipts = projection();
+    for name in &names {
+        failed_receipts.event(&asked(name, "1"));
+        failed_receipts.receipt_failed(name);
+    }
+    failed_receipts.event(&asked("live", "1"));
+    assert_eq!(offers_only_running_asks(&mut failed_receipts), 1);
+}

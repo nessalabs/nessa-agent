@@ -228,8 +228,9 @@ impl Projection {
             for event in &record.events {
                 match event.update() {
                     ExecutionUpdate::PermissionRequested { .. } => {
-                        self.recovered_waiting(execution);
-                        self.observe_permission(event)
+                        if self.recovered_waiting(execution) {
+                            self.observe_permission(event)
+                        }
                     }
                     ExecutionUpdate::PermissionCancelled(cancellation) => {
                         let permission = cancellation.request().id().as_str();
@@ -248,8 +249,9 @@ impl Projection {
                             .retain(|question| question.execution_id != execution);
                     }
                     ExecutionUpdate::QuestionAsked { .. } => {
-                        self.recovered_waiting(execution);
-                        self.observe_question(event)
+                        if self.recovered_waiting(execution) {
+                            self.observe_question(event)
+                        }
                     }
                     ExecutionUpdate::QuestionClosed { id } => {
                         self.answered_questions
@@ -283,14 +285,47 @@ impl Projection {
     /// dispatch, leaving the message queued; the evidence says otherwise, so the
     /// message runs and leaves the queue, rather than the ask being hidden from
     /// the only person who could answer it.
-    fn recovered_waiting(&mut self, execution: &str) {
-        let index = self.ensure_message(execution);
-        if self.view.messages[index].status == ConversationMessageStatus::Queued {
-            self.view.messages[index].status = ConversationMessageStatus::Running;
-            self.view
-                .pending
-                .retain(|item| item.execution_id != execution);
+    ///
+    /// Returns whether the execution is waiting, so its evidence may be offered.
+    /// Only a message this view already holds as queued or running can be: a
+    /// message is never created here, and one shown unresolved is a turn from
+    /// before a restart that nothing in this process can answer for. Recreating
+    /// it would put a dead turn back on screen as running, and push a live one
+    /// out to make room.
+    fn recovered_waiting(&mut self, execution: &str) -> bool {
+        let Some(index) = self
+            .view
+            .messages
+            .iter()
+            .position(|message| message.execution_id == execution)
+        else {
+            return false;
+        };
+        match self.view.messages[index].status {
+            ConversationMessageStatus::Running => true,
+            ConversationMessageStatus::Queued => {
+                self.view.messages[index].status = ConversationMessageStatus::Running;
+                self.view
+                    .pending
+                    .retain(|item| item.execution_id != execution);
+                true
+            }
+            _ => false,
         }
+    }
+
+    /// An execution's message has stopped running, so nothing it asked or
+    /// wanted reviewed is waiting any more. Removed here, on every path a
+    /// status leaves running, rather than only hidden when the view is read:
+    /// left in place, a stale entry still counted against the open limits and
+    /// crowded out an ask somebody could answer.
+    fn stop_waiting(&mut self, execution: &str) {
+        self.view
+            .permissions
+            .retain(|permission| permission.execution_id != execution);
+        self.view
+            .questions
+            .retain(|question| question.execution_id != execution);
     }
 
     /// Put one question into the view, unless it has already been answered or
@@ -312,7 +347,14 @@ impl Projection {
         {
             return;
         }
-        if self.view.questions.len() >= MAX_OPEN_QUESTIONS {
+        if self
+            .view
+            .questions
+            .iter()
+            .filter(|open| offered(&self.view, &open.execution_id))
+            .count()
+            >= MAX_OPEN_QUESTIONS
+        {
             self.view.truncated = true;
             return;
         }
@@ -405,7 +447,13 @@ impl Projection {
                 .collect(),
         };
         let size = serde_json::to_vec(&value).map_or(usize::MAX, |bytes| bytes.len());
-        if size > 16_000 || self.view.permissions.len() >= MAX_PERMISSIONS {
+        let open = self
+            .view
+            .permissions
+            .iter()
+            .filter(|known| offered(&self.view, &known.execution_id))
+            .count();
+        if size > 16_000 || open >= MAX_PERMISSIONS {
             self.view.permission_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
             self.view.truncated = true;
         } else if !self.view.permissions.iter().any(|known| {
@@ -520,12 +568,7 @@ impl Projection {
             ExecutionUpdate::Finished(result) => {
                 self.view.messages[index].status = outcome(*result);
                 self.terminal_executions.insert(id.to_owned());
-                self.view
-                    .permissions
-                    .retain(|permission| permission.execution_id != id);
-                self.view
-                    .questions
-                    .retain(|question| question.execution_id != id);
+                self.stop_waiting(id);
             }
             ExecutionUpdate::PermissionCancelled(cancellation) => {
                 self.resolved_permission(id, cancellation.request().id().as_str())
@@ -675,20 +718,11 @@ impl Projection {
         if record.result.as_ref().is_some_and(Result::is_err) {
             self.view.messages[index].error = Some("The agent operation failed. Retry with the same submission identity to inspect its saved result.".into());
         }
-        if record.result.is_some() || restoring {
-            self.view
-                .permissions
-                .retain(|permission| permission.execution_id != id);
-        }
-        // Only a running execution is waiting on anybody. An ask whose closure
-        // never reached storage — the gateway stopped while it was open — would
-        // otherwise come back beside a settled or unresolved message, and the
-        // client refuses a view that offers one: the conversation would fail to
-        // load on every restart. The status is the authority, so it decides.
+        // An ask whose closure never reached storage — the gateway stopped
+        // while it was open — would otherwise come back beside a settled or
+        // unresolved message; the status is the authority, so it decides.
         if self.view.messages[index].status != ConversationMessageStatus::Running {
-            self.view
-                .questions
-                .retain(|question| question.execution_id != id);
+            self.stop_waiting(id);
         }
         self.view.pending.retain(|value| value.execution_id != id);
     }
@@ -724,6 +758,7 @@ impl Projection {
         if self.view.messages[index].status != ConversationMessageStatus::Cancelled {
             self.view.messages[index].status = ConversationMessageStatus::Failed;
         }
+        self.stop_waiting(id);
         self.view.messages[index].error = Some("The invocation could not complete all required work. Its provider result and audit evidence remain saved separately.".into());
         self.bump();
     }
@@ -776,24 +811,16 @@ impl Projection {
         // it was enough to make a conversation unreadable. An execution whose
         // message is not in the view is left as the client allows: only in a
         // view that says it was truncated.
-        let offered = |execution: &str| {
-            view.messages
-                .iter()
-                .find(|message| message.execution_id == execution)
-                .map_or(view.truncated, |message| {
-                    message.status == ConversationMessageStatus::Running
-                })
-        };
         let questions = view
             .questions
             .iter()
-            .filter(|question| offered(&question.execution_id))
+            .filter(|question| offered(&view, &question.execution_id))
             .cloned()
             .collect();
         let permissions = view
             .permissions
             .iter()
-            .filter(|permission| offered(&permission.execution_id))
+            .filter(|permission| offered(&view, &permission.execution_id))
             .cloned()
             .collect();
         view.questions = questions;
@@ -830,4 +857,17 @@ impl Projection {
         }
         view
     }
+}
+
+/// Whether `view` may offer an ask or review from `execution`: only while its
+/// message is running, or — where the message is no longer in the view — only
+/// in a view that says it was truncated. The client's own rule, in one place,
+/// used both to decide what is offered and what counts against the limits.
+fn offered(view: &ConversationView, execution: &str) -> bool {
+    view.messages
+        .iter()
+        .find(|message| message.execution_id == execution)
+        .map_or(view.truncated, |message| {
+            message.status == ConversationMessageStatus::Running
+        })
 }
