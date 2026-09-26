@@ -548,7 +548,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                     commands
                         .send(Command::Steer(
                             ExecutionId::new("active").unwrap(),
-                            steered(request()),
+                            steered(&*worker.config.clock, request()),
                             steer_reply,
                         ))
                         .await
@@ -771,13 +771,14 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
         // advancement after the first poll deterministically wins before dispatch.
         let (mut worker, commands, _close, _events) =
             worker_with_flushed_ready_frames(&frames, &" ".repeat(500)).await;
+        let clock = manual_clock(&mut worker.config);
         let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
         let (reply, result) = oneshot::channel();
         let (steer_reply, steer_result) = oneshot::channel();
         let limit = if matches!(dispatch, Dispatch::Prompt) {
             commands
                 .send(Command::ExecutionRequest(
-                    dispatched(request(), Some(Instant::now() + Duration::from_secs(1))),
+                    dispatched(request(), Some(clock.now() + Duration::from_secs(1))),
                     reply,
                 ))
                 .await
@@ -796,14 +797,13 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
             commands
                 .send(Command::Steer(
                     ExecutionId::new("active").unwrap(),
-                    steered(request()),
+                    steered(&*worker.config.clock, request()),
                     steer_reply,
                 ))
                 .await
                 .unwrap();
             steering::RESPONSE_TIMEOUT
         };
-        tokio::time::pause();
         let failure = {
             let drive = worker.drive(&mut execution);
             tokio::pin!(drive);
@@ -812,10 +812,9 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
                 Poll::Ready(())
             })
             .await;
-            tokio::time::advance(limit).await;
-            drive.await.map_err(WorkerFailure::into_error)
+            clock.advance(limit);
+            promptly(drive).await.map_err(WorkerFailure::into_error)
         };
-        tokio::time::resume();
         worker
             .scope
             .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -876,14 +875,11 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
         deadline: None,
     });
     let (reply, result) = oneshot::channel();
+    let steering = steered(&*worker.config.clock, request());
     let operation = worker
         .command(
             &mut execution,
-            Command::Steer(
-                ExecutionId::new("active").unwrap(),
-                steered(request()),
-                reply,
-            ),
+            Command::Steer(ExecutionId::new("active").unwrap(), steering, reply),
         )
         .await;
     worker
@@ -922,27 +918,24 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
                 id: 99,
                 execution_id: ExecutionId::new("active").unwrap(),
                 reply,
-                deadline: Some(Instant::now()),
+                // Already passed, on whatever clock the worker has.
+                deadline: Some(worker.config.clock.now()),
             });
         } else {
             drop(events.take());
         }
         let (reply, result) = oneshot::channel();
+        let steering = steered(&*worker.config.clock, request());
         assert_eq!(
-            worker
-                .command(
-                    &mut execution,
-                    Command::Steer(
-                        ExecutionId::new("active").unwrap(),
-                        steered(request()),
-                        reply,
-                    )
-                )
-                .await
-                .map_err(WorkerFailure::into_error),
+            promptly(worker.command(
+                &mut execution,
+                Command::Steer(ExecutionId::new("active").unwrap(), steering, reply)
+            ))
+            .await
+            .map_err(WorkerFailure::into_error),
             Ok(())
         );
-        let failure = result.await.unwrap().unwrap_err();
+        let failure = promptly(result).await.unwrap().unwrap_err();
         assert_eq!(
             failure.error(),
             &if deadline {
@@ -957,8 +950,7 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
         );
         assert_eq!(worker.sequence, 0);
         assert_eq!(
-            worker
-                .drive(&mut execution)
+            promptly(worker.drive(&mut execution))
                 .await
                 .map_err(WorkerFailure::into_error),
             Err(if deadline {

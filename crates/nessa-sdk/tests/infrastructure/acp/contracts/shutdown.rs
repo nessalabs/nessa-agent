@@ -131,15 +131,22 @@ async fn isolated_bindings_and_close_during_streaming() {
 #[tokio::test]
 async fn prompt_deadline_and_dropped_handles_cleanup() {
     let _process_slot = process_test_slot().await;
-    let (root, binding) = test_acp_binding("stall", 16);
+    let limit = Duration::from_secs(1);
+    let (root, binding, clock) =
+        test_acp_binding_on_clock("stall", Arc::new(RecordingAudit::default()), Some(limit));
     let opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
-    assert_eq!(
-        opened.session.execute(prompt("test")).await.into_result(),
-        Err(AgentError::Deadline)
-    );
+    // Once the agent has the prompt, the execution's bound passes.
+    let (answer, ()) = promptly(async {
+        tokio::join!(opened.session.execute(prompt("test")), async {
+            wait_for_file(&root, "prompt-observed").await;
+            clock.advance(limit);
+        })
+    })
+    .await;
+    assert_eq!(answer.into_result(), Err(AgentError::Deadline));
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -159,7 +166,8 @@ async fn prompt_deadline_and_dropped_handles_cleanup() {
 #[tokio::test]
 async fn force_closes_a_term_resistant_parent_and_reaps_its_child() {
     let _process_slot = process_test_slot().await;
-    let (root, binding) = test_acp_binding("ignore-stop", 16);
+    let (root, binding, clock) =
+        test_acp_binding_on_clock("ignore-stop", Arc::new(RecordingAudit::default()), None);
     let mut opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -169,16 +177,15 @@ async fn force_closes_a_term_resistant_parent_and_reaps_its_child() {
         next(&mut opened).await,
         ExecutionUpdate::Message(MessageChunk::text("running"))
     );
-    let cleanup = timeout(
-        Duration::from_secs(3),
-        opened
-            .session
-            .shutdown(SessionCloseRequest::Explicit(close_action())),
-    )
-    .await
-    .unwrap()
-    .into_result()
-    .unwrap();
+    // The agent never answers the cancellation, so its grace passes.
+    let closing = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()));
+    let cleanup = timeout(Duration::from_secs(10), clock.passing(a_grace, closing))
+        .await
+        .unwrap()
+        .into_result()
+        .unwrap();
     assert!(cleanup.forced);
     assert_eq!(active.await.unwrap().unwrap(), ExecutionOutcome::Cancelled);
     assert_gone(&root, "pid");
@@ -247,15 +254,8 @@ async fn dropping_only_the_event_reader_closes_unobservable_execution() {
 #[tokio::test]
 async fn unlimited_prompt_survives_a_day_and_still_accepts_close() {
     let _process_slot = process_test_slot().await;
-    let (root, mut config, model) = test_acp_configuration("stall", 16);
-    config.execution_timeout = None;
-    let binding = ClaudeAcpProvider::new(
-        config,
-        &model,
-        TokenLimits::new(900, 100).unwrap(),
-        Arc::new(RecordingAudit::default()),
-    )
-    .unwrap();
+    let (root, binding, clock) =
+        test_acp_binding_on_clock("stall", Arc::new(RecordingAudit::default()), None);
     let mut opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -265,12 +265,8 @@ async fn unlimited_prompt_survives_a_day_and_still_accepts_close() {
         next(&mut opened).await,
         ExecutionUpdate::Message(MessageChunk::text("running"))
     );
-    // Only advance time after real process startup, so virtual startup deadlines
-    // cannot race the operating system launching the fixture.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
-    tokio::task::yield_now().await;
-    tokio::time::resume();
+    // A day passes on the binding's clock once the prompt is running.
+    clock.advance(Duration::from_secs(24 * 60 * 60));
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!root.path().join("cancel-observed").exists());
     assert!(!active.is_finished());

@@ -24,11 +24,13 @@
 //! vendor `sessions` modules are alternatives, not a chain: a host reaches one
 //! of them, and each hands the same shared ACP runtime a profile.
 //! Provider profiles supply configuration and tool schemas. Shared ACP owns
-//! correlation, deadlines, resume, and cleanup; the domain owns invariants.
+//! correlation, deadlines, resume, and cleanup; every deadline is a moment on
+//! the injected `clock`. The domain owns invariants.
 //! Composition supplies concrete dependencies and the permission audit sink.
 
 pub mod acp;
 pub mod claude_acp;
+pub mod clock;
 pub mod codex_acp;
 pub mod model_metadata_json;
 pub mod opencode_acp;

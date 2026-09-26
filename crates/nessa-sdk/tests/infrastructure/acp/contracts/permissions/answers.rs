@@ -44,9 +44,25 @@ async fn fixture(
     tokio::task::JoinHandle<Result<ExecutionOutcome, AgentError>>,
     PermissionAnswer,
 ) {
+    fixture_on(mode, audit, None).await
+}
+/// [`fixture`], on `clock` when there is one.
+async fn fixture_on(
+    mode: &str,
+    audit: Arc<AnswerAudit>,
+    clock: Option<Arc<ManualClock>>,
+) -> (
+    TempDir,
+    OpenedProviderSession,
+    tokio::task::JoinHandle<Result<ExecutionOutcome, AgentError>>,
+    PermissionAnswer,
+) {
     let (root, mut config, model) = test_acp_configuration(mode, 16);
     config.shutdown_grace = Duration::from_secs(2);
     config.execution_timeout = None;
+    if let Some(clock) = clock {
+        config.clock = clock;
+    }
     let binding =
         ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
     let mut opened = binding
@@ -352,24 +368,30 @@ async fn stalled_answer_audit_is_bounded_and_prevents_wire_effect() {
         stall_call: Some(1),
         ..Default::default()
     });
-    let (root, opened, active, answer) = fixture("permission", audit.clone()).await;
+    let clock = Arc::new(ManualClock::default());
+    let (root, opened, active, answer) =
+        fixture_on("permission", audit.clone(), Some(clock.clone())).await;
+    // The stalled record is bounded by the grace, which passes.
+    let grace = |wait: &Wait| wait.limit() == Duration::from_secs(2);
     assert_eq!(
         timeout(
             Duration::from_secs(5),
-            opened.session.answer_permission(answer)
+            clock.passing(grace, opened.session.answer_permission(answer))
         )
         .await
         .unwrap()
         .map_err(|failure| failure.into_error()),
         Err(AgentError::AuditFailure)
     );
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
     assert_eq!(
-        opened
-            .session
-            .shutdown(SessionCloseRequest::Explicit(close_action()))
-            .await
-            .into_result(),
+        promptly(clock.passing(grace, active)).await.unwrap(),
+        Err(AgentError::AuditFailure)
+    );
+    let closing = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()));
+    assert_eq!(
+        promptly(clock.passing(grace, closing)).await.into_result(),
         Err(AgentError::AuditFailure)
     );
     assert_eq!(answers(&audit).len(), 1);

@@ -38,11 +38,13 @@
 //! error's text, and the list's own failure is never what is returned.
 //!
 //! The delete has one `startup_timeout`; the list, for the workspace this
-//! binding runs in and paged by `nextCursor`, one more. An agent may answer
-//! with its whole list in one frame — Claude's does — so a list is read with
-//! bounds of its own, far past the rest of the protocol's: values only while
-//! the list is read, bytes for the whole connection, since a stream's byte
-//! bound is fixed (the cost is stated where the connection is made).
+//! binding runs in and paged by `nextCursor`, one more, however many pages it
+//! has (`the_whole_listing_shares_one_budget`). Every budget is a moment on
+//! `AcpConfig::clock`. An agent may answer with its whole list in one frame —
+//! Claude's does — so a list is read with bounds of its own, far past the rest
+//! of the protocol's: values only while the list is read, bytes for the whole
+//! connection, since a stream's byte bound is fixed (the cost is stated where
+//! the connection is made).
 //!
 //! This is the shared exchange only. What an acknowledged delete means is
 //! decided by each agent's binding, in that binding's own module, which calls
@@ -62,6 +64,7 @@ use crate::infrastructure::acp::{
     profile::AcpProfile,
 };
 use crate::infrastructure::{
+    clock::ClockInstant,
     json_rpc::{self, Reader, RpcId},
     process::ProcessScope,
 };
@@ -73,7 +76,7 @@ use std::sync::{
 use tokio::{
     process::ChildStdout,
     sync::{oneshot, Notify},
-    time::{timeout, Instant},
+    time::timeout,
 };
 
 /// What the exchange confirmed, before an agent's binding says what it means.
@@ -229,7 +232,7 @@ async fn exchange<P: AcpProfile>(
         .request(
             "initialize",
             initialize_params(),
-            Instant::now() + config.launch_timeout,
+            config.clock.now() + config.launch_timeout,
         )
         .await?;
     check_initialize(profile, &init)?;
@@ -240,7 +243,7 @@ async fn exchange<P: AcpProfile>(
         .request(
             "session/delete",
             json!({"sessionId": session.as_str()}),
-            Instant::now() + config.startup_timeout,
+            config.clock.now() + config.startup_timeout,
         )
         .await
     {
@@ -250,7 +253,7 @@ async fn exchange<P: AcpProfile>(
     };
     // Only a refusal is read against the list, and only a list read in full
     // that does not name the session changes what it means.
-    let deadline = Instant::now() + config.startup_timeout;
+    let deadline = config.clock.now() + config.startup_timeout;
     match connection
         .lists(session, json!(config.workspace), deadline)
         .await
@@ -346,7 +349,7 @@ impl Connection<'_> {
         &mut self,
         method: &str,
         params: Value,
-        deadline: Instant,
+        deadline: ClockInstant,
     ) -> Result<Value, AgentError> {
         self.sequence += 1;
         let id = self.sequence;
@@ -354,7 +357,7 @@ impl Connection<'_> {
             .await?;
         loop {
             let message = tokio::select! { biased;
-                () = tokio::time::sleep_until(deadline) => return Err(AgentError::Deadline),
+                () = self.config.clock.sleep_until(deadline) => return Err(AgentError::Deadline),
                 message = self.reader.next() => message?,
             };
             if message.method.is_some() {
@@ -387,7 +390,7 @@ impl Connection<'_> {
         &mut self,
         session: &ExecutionSessionId,
         cwd: Value,
-        deadline: Instant,
+        deadline: ClockInstant,
     ) -> Result<bool, AgentError> {
         // Nothing is read after the list, so the bound is never lowered again.
         self.reader.allow_json_items(MAX_LISTING_ITEMS);
@@ -401,7 +404,7 @@ impl Connection<'_> {
         &mut self,
         session: &ExecutionSessionId,
         cwd: Value,
-        deadline: Instant,
+        deadline: ClockInstant,
     ) -> Result<bool, AgentError> {
         let mut cursor: Option<String> = None;
         // Every cursor followed so far: a list that comes back to one is a
@@ -439,10 +442,11 @@ impl Connection<'_> {
         }
         Err(json_rpc::protocol("session list exceeds its page bound"))
     }
-    async fn send(&mut self, value: Value, deadline: Instant) -> Result<(), AgentError> {
+    async fn send(&mut self, value: Value, deadline: ClockInstant) -> Result<(), AgentError> {
         let frame = json_rpc::encode(value, self.config.max_frame_bytes)?;
         let stdin = self.scope.stdin.as_mut().ok_or(AgentError::Closed)?;
         json_rpc::send_encoded(
+            &*self.config.clock,
             stdin,
             &frame,
             json_rpc::write_allowance(frame.len()),

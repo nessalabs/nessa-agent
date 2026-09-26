@@ -242,6 +242,7 @@ async fn steering_has_a_deadline_even_when_execution_has_none() {
     let audit = Arc::new(RecordingAudit::default());
     let (root, mut config, model) = test_acp_configuration("steering-stall", 16);
     config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
     let binding = ClaudeAcpProvider::new(
         config,
         &model,
@@ -263,9 +264,7 @@ async fn steering_has_a_deadline_even_when_execution_has_none() {
             .map_err(|failure| failure.into_error())
     });
     wait_for_file(&root, "steering-observed").await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(6)).await;
-    tokio::time::resume();
+    clock.advance(Duration::from_secs(6));
     assert_eq!(
         timeout(Duration::from_secs(5), steering)
             .await

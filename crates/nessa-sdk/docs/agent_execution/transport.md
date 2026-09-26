@@ -114,6 +114,13 @@ The operation deadline starts cleanup; it does not cap subsequent cleanup or aud
 delivery time. With no execution timeout, the one-second write bound still applies.
 Actual write failures still require cleanup because partial delivery is uncertain.
 
+Every one of these deadlines, and the audit record's bound, is a moment on
+`AcpConfig::clock` (`infrastructure::clock`): composition supplies
+`RuntimeClock`, and tests a clock that moves only when the test moves it, so a
+deadline passes exactly where a test says and never because the machine was
+slow. Waiting for the process to exit and reaping it stay on real time, since
+they wait on the operating system rather than the agent.
+
 Output queue count or byte overflow is a binding failure; events are not silently dropped while
 execution continues. The worker tears down the scope, then the reader reports the
 failure after previously queued events. Advisory usage/plan/metadata extensions

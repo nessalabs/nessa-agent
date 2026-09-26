@@ -3,12 +3,23 @@
 //! each binding saying what an acknowledged delete means for its agent.
 use super::support::*;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
-use crate::infrastructure::acp::sessions::deletion::MAX_LIST_PAGES;
+use crate::infrastructure::{
+    acp::sessions::deletion::MAX_LIST_PAGES,
+    clock::{manual::ManualClock, ClockInstant},
+};
 use serde_json::{json, Value};
 
+/// The budget `initialize` is given.
+const LAUNCH: Duration = Duration::from_secs(30);
+/// The budget the delete is given, and the whole list another: distinct from
+/// [`LAUNCH`] so a test can tell which a wait was given. Neither passes unless
+/// a test moves the [`ManualClock`] past it.
+const STARTUP: Duration = Duration::from_secs(20);
+
 /// The deletion handler in `mode`, answering as `agent`'s adapter would; a
-/// listing mode lists `session()` where the mode says.
-fn handler(config: &mut AcpConfig, mode: &str, agent: &str) {
+/// listing mode lists `session()` where the mode says, and knows the binding's
+/// page bound. Its budgets are measured on the clock returned.
+fn handler(config: &mut AcpConfig, mode: &str, agent: &str) -> Arc<ManualClock> {
     config.arguments = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/session_delete_test_handler.py")
@@ -16,12 +27,17 @@ fn handler(config: &mut AcpConfig, mode: &str, agent: &str) {
         mode.into(),
         agent.into(),
         session().as_str().into(),
+        MAX_LIST_PAGES.to_string().into(),
     ];
-    config.startup_timeout = Duration::from_millis(500);
+    config.launch_timeout = LAUNCH;
+    config.startup_timeout = STARTUP;
+    let clock = Arc::new(ManualClock::default());
+    config.clock = clock.clone();
+    clock
 }
-fn deleting(mode: &str) -> (TempDir, ClaudeAcpProvider) {
+fn deleting(mode: &str) -> (TempDir, ClaudeAcpProvider, Arc<ManualClock>) {
     let (root, mut config, model) = test_acp_configuration(mode, 16);
-    handler(&mut config, mode, "claude");
+    let clock = handler(&mut config, mode, "claude");
     let provider = ClaudeAcpProvider::new(
         config,
         &model,
@@ -29,7 +45,7 @@ fn deleting(mode: &str) -> (TempDir, ClaudeAcpProvider) {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    (root, provider)
+    (root, provider, clock)
 }
 fn session() -> ExecutionSessionId {
     ExecutionSessionId::new("provider-session-7").unwrap()
@@ -44,12 +60,47 @@ fn methods(root: &TempDir) -> Vec<String> {
         .filter_map(|message| message["method"].as_str().map(str::to_owned))
         .collect()
 }
+/// Once the agent has been sent `method` `times` times: real progress by
+/// another process, so it is bounded, generously, in real time.
+async fn asked_times(root: &TempDir, method: &str, times: usize) {
+    timeout(Duration::from_secs(10), async {
+        while !root.path().join("methods").exists()
+            || methods(root).iter().filter(|sent| *sent == method).count() < times
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the agent was not sent {method} {times} times"));
+}
+async fn asked(root: &TempDir, method: &str) {
+    asked_times(root, method, 1).await;
+}
+
+/// `provider`'s delete while `moving` moves `clock`. A clock moved short of
+/// what the delete waits for would leave it waiting for ever; a minute of
+/// real time turns that into a failure, and is never what answers it.
+async fn deleting_while(
+    provider: &ClaudeAcpProvider,
+    moving: impl std::future::Future<Output = ()>,
+) -> Result<ProviderSessionDeletion, AgentError> {
+    let (answer, ()) = timeout(Duration::from_secs(60), async {
+        tokio::join!(provider.delete_session(session()), moving)
+    })
+    .await
+    .expect("the clock was moved and nothing answered");
+    answer
+}
+/// The moment `after` past the start of a test's clock.
+fn at(after: Duration) -> ClockInstant {
+    ClockInstant::from_origin(after)
+}
 
 /// An agent that does not list its sessions is asked to delete directly.
 #[tokio::test]
 async fn claude_is_asked_once_and_a_successful_delete_is_reported_deleted() {
     let _process_slot = process_test_slot().await;
-    let (root, provider) = deleting("advertised");
+    let (root, provider, _) = deleting("advertised");
     assert_eq!(
         provider.delete_session(session()).await.unwrap(),
         ProviderSessionDeletion::Deleted
@@ -71,7 +122,7 @@ async fn claude_is_asked_once_and_a_successful_delete_is_reported_deleted() {
 #[tokio::test]
 async fn an_agent_that_does_not_offer_deletion_is_not_asked() {
     let _process_slot = process_test_slot().await;
-    let (root, provider) = deleting("not-advertised");
+    let (root, provider, _) = deleting("not-advertised");
     assert_eq!(
         provider.delete_session(session()).await.unwrap(),
         ProviderSessionDeletion::NotSupported
@@ -83,7 +134,7 @@ async fn an_agent_that_does_not_offer_deletion_is_not_asked() {
 #[tokio::test]
 async fn an_agent_that_refuses_the_delete_is_a_typed_provider_failure() {
     let _process_slot = process_test_slot().await;
-    let (root, provider) = deleting("refused");
+    let (root, provider, _) = deleting("refused");
     assert!(matches!(
         provider.delete_session(session()).await,
         Err(AgentError::Provider { code: -32603, .. })
@@ -97,7 +148,7 @@ async fn an_agent_that_refuses_initialize_is_its_provider_error_and_nothing_is_d
     let _process_slot = process_test_slot().await;
     // The other `AgentError::Provider` a delete can end in: the agent's own
     // error answer to `initialize`, before anything names the session.
-    let (root, provider) = deleting("init-refused");
+    let (root, provider, _) = deleting("init-refused");
     assert!(matches!(
         provider.delete_session(session()).await,
         Err(AgentError::Provider { code: -32002, .. })
@@ -109,19 +160,16 @@ async fn an_agent_that_refuses_initialize_is_its_provider_error_and_nothing_is_d
 #[tokio::test]
 async fn an_agent_that_never_answers_runs_out_of_the_startup_budget_and_is_stopped() {
     let _process_slot = process_test_slot().await;
-    let (root, provider) = deleting("stall");
-    let (_, mut limit_config, _) = test_acp_configuration("stall", 16);
-    limit_config.startup_timeout = Duration::from_millis(500);
-    let started = tokio::time::Instant::now();
-    assert_eq!(
-        provider.delete_session(session()).await,
-        Err(AgentError::Deadline)
-    );
-    // The configured startup budget, and the shutdown budgets after it — not
-    // the twenty seconds the agent would have taken.
-    assert!(started.elapsed() < Duration::from_secs(8));
-    // Within the bound the binding states for itself.
-    assert!(started.elapsed() <= limit_config.session_deletion_limit());
+    let (root, provider, clock) = deleting("stall");
+    // Once the agent has the delete, its startup budget passes, and only
+    // then: the launch budget, which `initialize` was given, is longer.
+    let answer = deleting_while(&provider, async {
+        asked(&root, "session/delete").await;
+        clock.advance_to(at(STARTUP));
+    })
+    .await;
+    assert_eq!(answer, Err(AgentError::Deadline));
+    assert!(clock.waits().iter().any(|wait| wait.limit() == LAUNCH));
     assert_gone(&root, "pid");
 }
 
@@ -205,7 +253,7 @@ const LIST_MODES: [&str; 14] = [
     "list-too-many-values",
     "list-stuck-cursor",
     "list-cycling-cursor",
-    "list-endless",
+    "list-past-the-bound",
     "list-malformed",
     "list-no-sessions",
     "list-bad-cursor",
@@ -220,7 +268,7 @@ async fn an_accepted_delete_never_reads_the_list() {
     // acceptance is the answer.
     for mode in LIST_MODES {
         let _process_slot = process_test_slot().await;
-        let (root, provider) = deleting(mode);
+        let (root, provider, _) = deleting(mode);
         assert_eq!(
             provider.delete_session(session()).await.unwrap(),
             ProviderSessionDeletion::Deleted,
@@ -236,7 +284,7 @@ async fn a_refused_delete_of_a_session_the_agent_does_not_list_settles_as_not_li
     let _process_slot = process_test_slot().await;
     // What an interrupted retry meets: the agent deleted it and no longer
     // lists it, and refuses to delete it again.
-    let (root, provider) = deleting("list-unlisted+refuse");
+    let (root, provider, _) = deleting("list-unlisted+refuse");
     assert_eq!(
         provider.delete_session(session()).await.unwrap(),
         ProviderSessionDeletion::NotListed
@@ -249,7 +297,7 @@ async fn a_refused_delete_of_a_session_the_agent_does_not_list_settles_as_not_li
     assert_eq!(listings(&root), [json!({"cwd": root.path()})]);
     assert_gone(&root, "pid");
     // The same refusal of a session it does list is the refusal, asked again.
-    let (root, provider) = deleting("list-listed+refuse");
+    let (root, provider, _) = deleting("list-listed+refuse");
     assert!(matches!(
         provider.delete_session(session()).await,
         Err(AgentError::Provider { code: -32603, .. })
@@ -288,7 +336,7 @@ async fn a_listing_larger_than_the_protocol_frame_is_still_read() {
 async fn the_listing_is_followed_page_by_page() {
     let _process_slot = process_test_slot().await;
     // Named only on the third page: the refusal stands.
-    let (root, provider) = deleting("list-paged+refuse");
+    let (root, provider, _) = deleting("list-paged+refuse");
     assert!(matches!(
         provider.delete_session(session()).await,
         Err(AgentError::Provider { code: -32603, .. })
@@ -300,11 +348,34 @@ async fn the_listing_is_followed_page_by_page() {
 }
 
 #[tokio::test]
+async fn the_whole_listing_shares_one_budget() {
+    let _process_slot = process_test_slot().await;
+    // The second page is held until the clock has moved half the budget, and
+    // the third never answers: the list's one budget, begun before the first
+    // page, passes at `STARTUP`, where a budget per page would not.
+    let (root, provider, clock) = deleting("list-held+refuse");
+    let answer = deleting_while(&provider, async {
+        asked_times(&root, "session/list", 2).await;
+        clock.advance(STARTUP / 2);
+        std::fs::write(root.path().join("release"), "").unwrap();
+        asked_times(&root, "session/list", 3).await;
+        clock.advance_to(at(STARTUP));
+    })
+    .await;
+    assert!(matches!(
+        answer,
+        Err(AgentError::Provider { code: -32603, .. })
+    ));
+    assert_eq!(listings(&root).len(), 3);
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
 async fn only_the_list_is_read_past_the_protocol_s_bound_on_values() {
     let _process_slot = process_test_slot().await;
     // An acceptance with 100,000 values: past the protocol's 65,536, under the
     // list's own bound, which does not apply to it.
-    let (root, provider) = deleting("bloated");
+    let (root, provider, _) = deleting("bloated");
     assert!(matches!(
         provider.delete_session(session()).await,
         Err(AgentError::Protocol(_))
@@ -316,7 +387,8 @@ async fn only_the_list_is_read_past_the_protocol_s_bound_on_values() {
 #[tokio::test]
 async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
     // A list refused (with a code of its own, -32000), too large in bytes or
-    // in values, whose cursor repeats, or that never ends: nothing
+    // in values, whose cursor repeats, longer than its page bound, or past its
+    // budget: nothing
     // is known of the session, so the delete's own refusal (-32603) is the
     // answer, never the list's failure and never a settlement.
     for mode in [
@@ -324,17 +396,15 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
         "list-unreadable+refuse",
         "list-too-many-values+refuse",
         "list-stuck-cursor+refuse",
-        "list-endless+refuse",
+        "list-past-the-bound+refuse",
         // It may name the session under another key: not read as not naming it.
         "list-malformed+refuse",
-        // A page without `sessions`, a cursor neither a string nor null, and
-        // a list that runs past its own `startup_timeout`.
+        // A page without `sessions`, and a cursor neither a string nor null.
         "list-no-sessions+refuse",
         "list-bad-cursor+refuse",
-        "list-stall+refuse",
     ] {
         let _process_slot = process_test_slot().await;
-        let (root, provider) = deleting(mode);
+        let (root, provider, _) = deleting(mode);
         assert!(
             matches!(
                 provider.delete_session(session()).await,
@@ -349,6 +419,21 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
         );
         assert_gone(&root, "pid");
     }
+    // A list that does not answer before its own budget runs out.
+    {
+        let _process_slot = process_test_slot().await;
+        let (root, provider, clock) = deleting("list-stall+refuse");
+        let answer = deleting_while(&provider, async {
+            asked(&root, "session/list").await;
+            clock.advance_to(at(STARTUP));
+        })
+        .await;
+        assert!(matches!(
+            answer,
+            Err(AgentError::Provider { code: -32603, .. })
+        ));
+        assert_gone(&root, "pid");
+    }
     // A cursor already followed is caught on the page that repeats it, not
     // read to the page bound: at once, or after others between.
     for (mode, pages) in [
@@ -356,14 +441,24 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
         ("list-cycling-cursor+refuse", 3),
     ] {
         let _process_slot = process_test_slot().await;
-        let (root, provider) = deleting(mode);
-        assert!(provider.delete_session(session()).await.is_err());
+        let (root, provider, _) = deleting(mode);
+        assert!(
+            matches!(
+                provider.delete_session(session()).await,
+                Err(AgentError::Provider { code: -32603, .. })
+            ),
+            "{mode}"
+        );
         assert_eq!(listings(&root).len(), pages, "{mode}");
     }
-    // A list that never ends is read to its bound, not forever.
+    // A list longer than its bound is read to the bound and no further: one
+    // page more would end it without naming the session, and settle.
     let _process_slot = process_test_slot().await;
-    let (root, provider) = deleting("list-endless+refuse");
-    assert!(provider.delete_session(session()).await.is_err());
+    let (root, provider, _) = deleting("list-past-the-bound+refuse");
+    assert!(matches!(
+        provider.delete_session(session()).await,
+        Err(AgentError::Provider { code: -32603, .. })
+    ));
     assert_eq!(listings(&root).len(), MAX_LIST_PAGES);
 }
 
@@ -381,15 +476,7 @@ async fn a_deletion_abandoned_mid_exchange_still_stops_its_agent_and_releases_it
     )
     .unwrap();
     let deleting = tokio::spawn(async move { provider.delete_session(session()).await });
-    timeout(Duration::from_secs(10), async {
-        while !root.path().join("methods").exists()
-            || !methods(&root).contains(&"session/delete".to_owned())
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the agent was initialized and asked");
+    asked(&root, "session/delete").await;
     let home = PathBuf::from(std::fs::read_to_string(root.path().join("home")).unwrap());
     assert!(home.exists());
     // Whoever was waiting goes away mid-exchange.
@@ -419,15 +506,7 @@ async fn a_binding_settles_once_an_abandoned_deletion_has_released_its_home() {
     .unwrap();
     let asking = provider.clone();
     let deleting = tokio::spawn(async move { asking.delete_session(session()).await });
-    timeout(Duration::from_secs(10), async {
-        while !root.path().join("methods").exists()
-            || !methods(&root).contains(&"session/delete".to_owned())
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the agent was initialized and asked");
+    asked(&root, "session/delete").await;
     let home = PathBuf::from(std::fs::read_to_string(root.path().join("home")).unwrap());
     deleting.abort();
     let _ = deleting.await;

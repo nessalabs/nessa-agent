@@ -40,9 +40,11 @@ async fn blocked_worker(
     ExecutionController,
     EventReceiver,
     Option<ProcessCleanup>,
+    Arc<ManualClock>,
 ) {
     let (_root, mut config, capabilities) = profile_setup();
     config.shutdown_grace = Duration::from_millis(20);
+    let clock = manual_clock(&mut config);
     let recovery = retain_executable_use.then(|| {
         let executable_use = config.executable.admit().unwrap();
         ProcessCleanup::new(config.clone(), executable_use)
@@ -118,16 +120,16 @@ async fn blocked_worker(
         correlation_sequence: 0,
         failure_cause: ObservationFailureCause::ExecutionFailed,
     };
-    (worker, execution, receiver, recovery)
+    (worker, execution, receiver, recovery, clock)
 }
 
 #[tokio::test]
 async fn live_nested_responses_observe_earliest_execution_or_steering_deadline() {
     for steering_first in [false, true] {
         for method in ["unsupported/test", "session/request_permission"] {
-            let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
-            tokio::time::pause();
-            let began = Instant::now();
+            let (mut worker, mut execution, _events, _recovery, clock) =
+                blocked_worker("", false).await;
+            let began = clock.now();
             let soon = began + Duration::from_millis(20);
             let later = began + Duration::from_millis(200);
             worker.active.as_mut().unwrap().deadline =
@@ -144,22 +146,20 @@ async fn live_nested_responses_observe_earliest_execution_or_steering_deadline()
             .unwrap();
             worker.config.tools_enabled = false;
             let deadline = worker.current_deadline();
-            let result = worker
-                .message(&mut execution, message, deadline)
-                .await
-                .map_err(WorkerFailure::into_error);
-            let elapsed = Instant::now() - began;
-            tokio::time::resume();
+            // The earlier of the two is the one waited for.
+            let result = ending_at(
+                &clock,
+                soon,
+                worker.message(&mut execution, message, deadline),
+            )
+            .await
+            .map_err(WorkerFailure::into_error);
             worker
                 .scope
                 .cleanup(Duration::ZERO, Duration::from_secs(2))
                 .await
                 .unwrap();
-            assert_eq!(result, Err(AgentError::Deadline));
-            assert!(
-                elapsed <= Duration::from_millis(21),
-                "{method}: {elapsed:?}"
-            );
+            assert_eq!(result, Err(AgentError::Deadline), "{method}");
             assert_eq!(
                 worker.failure_cause,
                 ObservationFailureCause::DeadlineExceeded
@@ -178,7 +178,7 @@ async fn live_nested_responses_observe_earliest_execution_or_steering_deadline()
 #[tokio::test]
 async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
     for reject_audit in [false, true] {
-        let (mut worker, mut execution, _events, recovery) = blocked_worker("", true).await;
+        let (mut worker, mut execution, _events, recovery, clock) = blocked_worker("", true).await;
         let recovery = recovery.expect("this fixture admitted executable use before spawn");
         let audit = Arc::new(Audit::default());
         worker.audit = audit.clone();
@@ -188,35 +188,33 @@ async fn completion_permission_timeout_does_not_restart_shutdown_grace() {
             .map_err(WorkerFailure::into_error)
             .unwrap();
         assert_eq!(worker.permissions.len(), 1);
-        tokio::time::pause();
-        let began = Instant::now();
+        let began = clock.now();
         let message = serde_json::from_value(
             json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}),
         )
         .unwrap();
+        let grace_ends = began + Duration::from_millis(20);
         assert_eq!(
-            worker
-                .message(&mut execution, message, None)
-                .await
-                .map_err(WorkerFailure::into_error),
+            ending_at(
+                &clock,
+                grace_ends,
+                worker.message(&mut execution, message, None)
+            )
+            .await
+            .map_err(WorkerFailure::into_error),
             Err(AgentError::Deadline)
         );
         assert_eq!(
             worker.provider_result,
             Some(Ok(ExecutionOutcome::Completed))
         );
+        assert_eq!(worker.shutdown_deadline, Some(grace_ends));
+        // Answered without the clock moving: no second grace interval.
         assert_eq!(
-            worker.shutdown_deadline,
-            Some(began + Duration::from_millis(20))
-        );
-        let expired = Instant::now();
-        assert_eq!(worker.send_cancellation("context").await, Ok(()));
-        assert_eq!(
-            Instant::now(),
-            expired,
+            promptly(worker.send_cancellation("context")).await,
+            Ok(()),
             "fallback granted another grace interval"
         );
-        tokio::time::resume();
         audit.reject.store(reject_audit, Ordering::SeqCst);
         let failure = worker.record_failure(OperationEffectPhase::Worker, AgentError::Deadline);
         let completed = worker
@@ -269,33 +267,33 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
             "{}\n",
             json!({"jsonrpc":"2.0","id":77,"method":method,"params":{"sessionId":"context"}})
         );
-        let (mut worker, _, _events, _recovery) = blocked_worker(&frames, false).await;
+        let (mut worker, _, _events, _recovery, clock) = blocked_worker(&frames, false).await;
         worker.active = None;
         let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
         let (reply, _result) = oneshot::channel();
-        tokio::time::pause();
-        let began = Instant::now();
-        let result = worker
-            .drain_ready_before_dispatch(
+        let began = clock.now();
+        let dispatch_ends = began + Duration::from_millis(20);
+        let result = ending_at(
+            &clock,
+            dispatch_ends,
+            worker.drain_ready_before_dispatch(
                 &mut execution,
                 &DispatchCaller::Execution(&reply),
-                Some(began + Duration::from_millis(20)),
-            )
-            .await;
-        let elapsed = Instant::now() - began;
-        tokio::time::resume();
+                Some(dispatch_ends),
+            ),
+        )
+        .await;
         worker
             .scope
             .cleanup(Duration::ZERO, Duration::from_secs(2))
             .await
             .unwrap();
-        assert!(matches!(
-            result.map_err(WorkerFailure::into_error),
-            Err(AgentError::Deadline)
-        ));
         assert!(
-            elapsed <= Duration::from_millis(21),
-            "{method}: {elapsed:?}"
+            matches!(
+                result.map_err(WorkerFailure::into_error),
+                Err(AgentError::Deadline)
+            ),
+            "{method}"
         );
         assert!(execution.active_execution_id().is_none());
         assert_eq!(
@@ -307,7 +305,7 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
 
 #[tokio::test]
 async fn successful_completion_releases_its_temporary_shutdown_deadline() {
-    let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
+    let (mut worker, mut execution, _events, _recovery, clock) = blocked_worker("", false).await;
     let message =
         serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}))
             .unwrap();
@@ -322,8 +320,7 @@ async fn successful_completion_releases_its_temporary_shutdown_deadline() {
     let id = ExecutionId::new("following").unwrap();
     execution.begin_execution(id.clone()).unwrap();
     let (reply, _) = oneshot::channel();
-    tokio::time::pause();
-    let began = Instant::now();
+    let began = clock.now();
     let deadline = began + Duration::from_millis(60);
     worker.active = Some(ActiveExecution {
         id: 2,
@@ -331,28 +328,29 @@ async fn successful_completion_releases_its_temporary_shutdown_deadline() {
         reply,
         deadline: Some(deadline),
     });
-    let result = worker.send(json_rpc::unsupported(&RpcId::Number(88))).await;
-    let elapsed = Instant::now() - began;
-    tokio::time::resume();
+    let result = ending_at(
+        &clock,
+        deadline,
+        worker.send(json_rpc::unsupported(&RpcId::Number(88))),
+    )
+    .await;
     worker
         .scope
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
     assert_eq!(result, Err(AgentError::Deadline));
-    assert!(elapsed >= Duration::from_millis(60) && elapsed <= Duration::from_millis(61));
 }
 
 #[tokio::test]
 async fn shutdown_grace_preserves_explicit_cause_past_old_steering_deadline() {
-    let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
+    let (mut worker, mut execution, _events, _recovery, clock) = blocked_worker("", false).await;
     let actor = ActionContext::new("owner", "phone", "close").unwrap();
     let request = SessionCloseRequest::Explicit(actor);
     let cause = (request.reason(), request.origin());
     worker.closing = true;
     worker.cancellation_cause = Some(cause.clone());
-    tokio::time::pause();
-    let began = Instant::now();
+    let began = clock.now();
     worker.begin_shutdown_grace();
     let (reply, _) = oneshot::channel();
     worker.steering = Some(PendingSteering {
@@ -360,9 +358,13 @@ async fn shutdown_grace_preserves_explicit_cause_past_old_steering_deadline() {
         reply,
         deadline: began + Duration::from_millis(5),
     });
-    let result = worker.drive(&mut execution).await;
-    let elapsed = Instant::now() - began;
-    tokio::time::resume();
+    // The grace, not the older steering deadline, is what the loop waits for.
+    let result = ending_at(
+        &clock,
+        began + Duration::from_millis(20),
+        worker.drive(&mut execution),
+    )
+    .await;
     worker
         .scope
         .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -370,7 +372,6 @@ async fn shutdown_grace_preserves_explicit_cause_past_old_steering_deadline() {
         .unwrap();
     assert!(result.is_ok());
     assert_eq!(worker.cancellation_cause, Some(cause));
-    assert!(elapsed >= Duration::from_millis(20) && elapsed <= Duration::from_millis(21));
 }
 
 fn request(id: &str) -> ExecutionRequest {
@@ -384,10 +385,9 @@ fn request(id: &str) -> ExecutionRequest {
 
 #[tokio::test]
 async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
-    let (mut worker, mut execution, _events, _recovery) = blocked_worker("", false).await;
+    let (mut worker, mut execution, _events, _recovery, clock) = blocked_worker("", false).await;
     worker.steering_supported = true;
-    tokio::time::pause();
-    let began = Instant::now();
+    let began = clock.now();
     // Most of the steering deadline went on reading this message's images
     // before its command reached the worker, and this is the rest of it.
     let remaining = Duration::from_millis(300);
@@ -398,12 +398,13 @@ async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
         dispatched(request("steer"), Some(began + remaining)),
         reply,
     );
-    let result = worker
-        .command(&mut execution, command)
-        .await
-        .map_err(WorkerFailure::into_error);
-    let elapsed = Instant::now() - began;
-    tokio::time::resume();
+    let result = ending_at(
+        &clock,
+        began + remaining,
+        worker.command(&mut execution, command),
+    )
+    .await
+    .map_err(WorkerFailure::into_error);
     worker
         .scope
         .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -415,15 +416,11 @@ async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
         Some(began + remaining),
         "a fresh steering interval was armed"
     );
-    assert!(
-        elapsed >= remaining && elapsed <= remaining + Duration::from_millis(1),
-        "{elapsed:?}"
-    );
 }
 
 #[tokio::test]
 async fn an_execution_write_is_armed_with_what_the_read_left() {
-    let (mut worker, _, _events, _recovery) = blocked_worker("", false).await;
+    let (mut worker, _, _events, _recovery, clock) = blocked_worker("", false).await;
     worker.active = None;
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     // The configured limit is longer than what is left, so arming from it
@@ -431,17 +428,17 @@ async fn an_execution_write_is_armed_with_what_the_read_left() {
     let configured = worker.config.execution_timeout.expect("a configured limit");
     let remaining = Duration::from_millis(300);
     assert!(remaining < configured);
-    tokio::time::pause();
-    let began = Instant::now();
+    let began = clock.now();
     let (reply, _result) = oneshot::channel();
     let command =
         Command::ExecutionRequest(dispatched(request("next"), Some(began + remaining)), reply);
-    let result = worker
-        .command(&mut execution, command)
-        .await
-        .map_err(WorkerFailure::into_error);
-    let elapsed = Instant::now() - began;
-    tokio::time::resume();
+    let result = ending_at(
+        &clock,
+        began + remaining,
+        worker.command(&mut execution, command),
+    )
+    .await
+    .map_err(WorkerFailure::into_error);
     worker
         .scope
         .cleanup(Duration::ZERO, Duration::from_secs(2))
@@ -452,9 +449,5 @@ async fn an_execution_write_is_armed_with_what_the_read_left() {
         worker.active.as_ref().and_then(|active| active.deadline),
         Some(began + remaining),
         "a fresh execution interval was armed"
-    );
-    assert!(
-        elapsed >= remaining && elapsed <= remaining + Duration::from_millis(1),
-        "{elapsed:?}"
     );
 }

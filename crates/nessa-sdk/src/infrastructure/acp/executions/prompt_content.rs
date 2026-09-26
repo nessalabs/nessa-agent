@@ -173,13 +173,13 @@ fn json_string_bytes(text: &str) -> u64 {
 /// - [`ImageInputRefusal::NotOffered`] without a `source`: this process has
 ///   nowhere to read bytes from, so the binding carries no image at all.
 /// - [`AgentError::Closed`] when `stopped` resolves first.
-/// - [`UserImageError::Unavailable`] when `limit` passes first or the source
-///   panics; the source's own error otherwise.
+/// - [`UserImageError::Unavailable`] when `limit_passed` resolves first or the
+///   source panics; the source's own error otherwise.
 /// - [`UserImageError::Mismatch`] when the bytes are not the referenced ones.
 pub(in crate::infrastructure::acp) async fn read_images(
     source: Option<&dyn UserImageSource>,
     message: &UserMessage,
-    limit: Duration,
+    limit_passed: impl Future<Output = ()>,
     stopped: impl Future<Output = ()>,
 ) -> Result<ImageBlocks, AgentError> {
     if message.images().is_empty() {
@@ -188,7 +188,7 @@ pub(in crate::infrastructure::acp) async fn read_images(
     let source = source.ok_or(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))?;
     tokio::select! { biased;
         () = stopped => Err(AgentError::Closed),
-        () = tokio::time::sleep(limit) => Err(AgentError::UserImage(UserImageError::Unavailable)),
+        () = limit_passed => Err(AgentError::UserImage(UserImageError::Unavailable)),
         blocks = read_all(source, message.images()) => blocks.map_err(AgentError::UserImage),
     }
 }

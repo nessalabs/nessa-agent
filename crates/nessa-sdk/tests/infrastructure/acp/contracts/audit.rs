@@ -64,27 +64,27 @@ async fn idle_close_audit_failure_is_visible_after_process_cleanup() {
             stall,
             ..Default::default()
         });
-        let (root, binding) = test_acp_binding_with_audit("echo", 16, audit);
+        // A stalled audit is bounded by the grace, which passes here.
+        let (root, binding, clock) = test_acp_binding_on_clock("echo", audit, None);
         let opened = binding
             .open(ProviderOpenRequest::without_startup_control(None))
             .await
             .unwrap();
+        let closing = opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()));
         assert_eq!(
-            timeout(
-                Duration::from_secs(3),
-                opened
-                    .session
-                    .shutdown(SessionCloseRequest::Explicit(close_action()))
-            )
-            .await
-            .unwrap()
-            .into_result(),
+            timeout(Duration::from_secs(3), clock.passing(a_grace, closing))
+                .await
+                .unwrap()
+                .into_result(),
             Err(AgentError::AuditFailure)
         );
+        let closing = opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()));
         assert_eq!(
-            opened
-                .session
-                .shutdown(SessionCloseRequest::Explicit(close_action()))
+            promptly(clock.passing(a_grace, closing))
                 .await
                 .into_result(),
             Err(AgentError::AuditFailure)
@@ -97,19 +97,21 @@ async fn idle_close_audit_failure_is_visible_after_process_cleanup() {
 async fn execution_deadline_audits_context_and_execution_cause() {
     let _slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (root, binding) = test_acp_binding_with_audit("stall", 16, audit.clone());
+    let limit = Duration::from_secs(1);
+    let (root, binding, clock) = test_acp_binding_on_clock("stall", audit.clone(), Some(limit));
     let mut opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
-    assert_eq!(
-        opened
-            .session
-            .execute(prompt("deadline"))
-            .await
-            .into_result(),
-        Err(AgentError::Deadline)
-    );
+    // Once the agent has the prompt, the execution's bound passes.
+    let (answer, ()) = promptly(async {
+        tokio::join!(opened.session.execute(prompt("deadline")), async {
+            wait_for_file(&root, "prompt-observed").await;
+            clock.advance(limit);
+        })
+    })
+    .await;
+    assert_eq!(answer.into_result(), Err(AgentError::Deadline));
     let observation_failure = loop {
         match opened.events.next().await {
             Ok(Some(_)) => continue,
@@ -216,7 +218,9 @@ async fn decline_publication_consumer_loss_keeps_its_cause_after_wire_delivery()
         accepted: RecordingAudit::default(),
         gate: Mutex::new(Some((entered, released))),
     });
-    let (root, config, model) = test_acp_configuration("declined-tool", 16);
+    let (root, mut config, model) = test_acp_configuration("declined-tool", 16);
+    // The gated audit's own bound never passes while the test holds it.
+    let _clock = manual_clock(&mut config);
     let binding = ClaudeAcpProvider::new(
         config,
         &model,
@@ -404,11 +408,9 @@ async fn every_permission_free_outcome_has_once_only_execution_evidence() {
         ),
     ] {
         let audit = Arc::new(RecordingAudit::default());
-        let (root, mut config, model) = test_acp_configuration(mode, 16);
-        // This test asserts audit semantics for completed provider outcomes. A
-        // short execution deadline turns scheduler contention into an unrelated
-        // deadline outcome when the real fixture process is under load.
-        config.execution_timeout = Some(Duration::from_secs(30));
+        // Audit semantics for completed provider outcomes: no execution bound,
+        // so no deadline outcome however loaded the machine.
+        let (root, config, model) = test_acp_configuration(mode, 16);
         let binding = ClaudeAcpProvider::new(
             config,
             &model,
@@ -636,6 +638,7 @@ async fn each_bulk_cancellation_gets_its_own_audit_deadline() {
     });
     let (root, mut config, model) = test_acp_configuration("permission-pair", 16);
     config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
     let audit_deadline = config.shutdown_grace;
     let binding = ClaudeAcpProvider::new(
         config,
@@ -657,7 +660,6 @@ async fn each_bulk_cancellation_gets_its_own_audit_deadline() {
         };
         ids.push(id);
     }
-    tokio::time::pause();
     let closing = tokio::spawn({
         let session = opened.session.clone();
         async move {
@@ -668,12 +670,16 @@ async fn each_bulk_cancellation_gets_its_own_audit_deadline() {
         }
     });
     first_started.await.unwrap();
-    // Advance only the stalled audit call. Leaving time paused while closing a
-    // real child can expire all cleanup stages before the OS schedules/reaps it.
-    tokio::time::advance(audit_deadline + Duration::from_millis(1)).await;
-    tokio::time::resume();
-    assert_eq!(closing.await.unwrap(), Err(AgentError::AuditFailure));
-    assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
+    // Only the stalled audit call's bound passes.
+    clock.advance(audit_deadline);
+    assert_eq!(
+        promptly(closing).await.unwrap(),
+        Err(AgentError::AuditFailure)
+    );
+    assert_eq!(
+        promptly(active).await.unwrap(),
+        Err(AgentError::AuditFailure)
+    );
     assert_gone(&root, "pid");
     let attempted = audit.attempted.lock().unwrap();
     let delivered = audit.delivered.lock().unwrap();
@@ -702,10 +708,9 @@ async fn malformed_startup_permission_closes_the_known_idle_context() {
     ] {
         let audit = Arc::new(RecordingAudit::default());
         let (root, mut config, model) = test_acp_configuration(mode, 16);
-        // The malformed frame is the behavior under test. Leave enough startup
-        // time for the real fixture process to run even on a contended builder.
-        config.launch_timeout = Duration::from_secs(30);
-        config.startup_timeout = Duration::from_secs(30);
+        // The malformed frame is the behavior under test. Nothing moves this
+        // clock, so no startup budget passes however slow the fixture is.
+        let _clock = manual_clock(&mut config);
         let binding = ClaudeAcpProvider::new(
             config,
             &model,

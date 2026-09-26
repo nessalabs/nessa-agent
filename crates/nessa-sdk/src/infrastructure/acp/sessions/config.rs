@@ -6,6 +6,7 @@ use crate::application::agent_execution::{
     providers::{ExecutableUseSnapshot, UserImageSource},
 };
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
+use crate::infrastructure::clock::Clock;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -160,6 +161,14 @@ pub struct AcpConfig {
     /// of them at a time. A message whose images would exceed that waits behind
     /// nothing and is refused with `AgentError::Busy` before a byte is read.
     pub images: Option<Arc<dyn UserImageSource>>,
+    /// Where every protocol deadline above is measured — `launch_timeout`,
+    /// `startup_timeout`, `execution_timeout`, the steering acknowledgement,
+    /// cooperative cancellation and audit within `shutdown_grace`, an image
+    /// read, a frame's write allowance, and session deletion's.
+    /// [`RuntimeClock`](crate::infrastructure::clock::RuntimeClock) outside
+    /// tests. Waiting for the process itself to exit is not measured on it:
+    /// see [`crate::infrastructure::clock`].
+    pub clock: Arc<dyn Clock>,
 }
 impl AcpConfig {
     /// The longest an ACP binding's

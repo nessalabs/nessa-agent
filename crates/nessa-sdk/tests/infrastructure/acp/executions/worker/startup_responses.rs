@@ -75,6 +75,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 config.max_frame_bytes = 16 * 1024 * 1024;
                 config.max_incoming_frame_bytes = 16 * 1024 * 1024;
                 config.shutdown_grace = Duration::from_millis(20);
+                let clock = manual_clock(&mut config);
                 let executable_use = config.executable.admit().unwrap();
                 let recovery = ProcessCleanup::new(config.clone(), executable_use);
                 let socket = root.path().join("control.sock");
@@ -181,16 +182,10 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 let mut execution = (method == "session/set_config_option").then(|| {
                     ExecutionController::new(ExecutionSessionId::new("restored-context").unwrap())
                 });
-                // Keep runnable work while querying the real OS under a paused
-                // clock: only this test may advance the startup deadline.
-                let clock_guard = tokio::spawn(async {
-                    loop {
-                        tokio::task::yield_now().await;
-                    }
-                });
-                tokio::time::pause();
+                // Only this test moves the clock, so the startup deadline cannot
+                // pass while the real pipe is being queried.
                 let budget = Duration::from_millis(20);
-                let deadline = Instant::now() + budget;
+                let deadline = clock.now() + budget;
                 let observed = {
                     let rpc = worker.rpc(method, params, deadline, execution.as_mut());
                     tokio::pin!(rpc);
@@ -210,25 +205,25 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                         Poll::Ready(())
                     })
                     .await;
-                    tokio::time::advance(budget + Duration::from_millis(1)).await;
-                    poll_fn(|cx| Poll::Ready(rpc.as_mut().poll(cx))).await
+                    clock.advance_to(deadline);
+                    promptly(rpc).await
                 };
-                tokio::time::resume();
-                clock_guard.abort();
-                let result = match observed.clone() {
-                    Poll::Ready(result) => result.map(|_| ()),
-                    Poll::Pending => Err(AgentError::Deadline),
-                };
-                let result = result
+                let result = observed
+                    .clone()
+                    .map(|_| ())
                     .map_err(|error| worker.record_failure(OperationEffectPhase::Worker, error));
-                let completed = worker
-                    .finish(&mut execution, result, &mut None, &recovery)
-                    .await;
+                // Stopping is not what this test is about: its grace passes.
+                let grace = worker.config.shutdown_grace;
+                let completed = promptly(clock.passing(
+                    |wait| wait.limit() == grace,
+                    worker.finish(&mut execution, result, &mut None, &recovery),
+                ))
+                .await;
                 drop(control);
                 control_thread.join().unwrap();
                 assert_eq!(
-                    observed,
-                    Poll::Ready(Err(AgentError::Deadline)),
+                    observed.map(|_| ()),
+                    Err(AgentError::Deadline),
                     "{method}, {nested}, audit={reject_audit}"
                 );
                 assert_eq!(

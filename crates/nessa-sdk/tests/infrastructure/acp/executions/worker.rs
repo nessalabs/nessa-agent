@@ -4,12 +4,44 @@ use crate::infrastructure::acp::{
     executions::event_queue::EventQueueBudget,
     tests::profile_substitution::{profile_setup, TestAcpProfile},
 };
+use crate::infrastructure::clock::manual::ManualClock;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    time::timeout,
+};
+
+/// A clock on `config` that moves only when the test moves it.
+fn manual_clock(config: &mut AcpConfig) -> Arc<ManualClock> {
+    let clock = Arc::new(ManualClock::default());
+    config.clock = clock.clone();
+    clock
+}
+/// `operation`, which must finish without waiting for a deadline the test has
+/// not reached. The real-time bound only turns such a wait into a failure.
+async fn promptly<T>(operation: impl Future<Output = T>) -> T {
+    timeout(Duration::from_secs(10), operation)
+        .await
+        .expect("it waited for a deadline the clock never reached")
+}
+
+/// `operation`, with the clock moved to `deadline` once something waits for
+/// it: it must wait for exactly that moment, and end there.
+async fn ending_at<T>(
+    clock: &ManualClock,
+    deadline: ClockInstant,
+    operation: impl Future<Output = T>,
+) -> T {
+    let (answer, _) = promptly(async {
+        tokio::join!(operation, clock.run_out(|wait| wait.deadline == deadline))
+    })
+    .await;
+    answer
+}
 
 /// A prompt as a session hands one to the worker: its images already read,
 /// and the deadline of the phase that began before that read.
-fn dispatched(input: ExecutionRequest, deadline: Option<Instant>) -> DispatchedPrompt {
+fn dispatched(input: ExecutionRequest, deadline: Option<ClockInstant>) -> DispatchedPrompt {
     DispatchedPrompt {
         input,
         images: ImageBlocks::none(),
@@ -17,8 +49,8 @@ fn dispatched(input: ExecutionRequest, deadline: Option<Instant>) -> DispatchedP
     }
 }
 /// The same for native steering, whose deadline is never absent.
-fn steered(input: ExecutionRequest) -> DispatchedPrompt {
-    dispatched(input, Some(Instant::now() + steering::RESPONSE_TIMEOUT))
+fn steered(clock: &dyn Clock, input: ExecutionRequest) -> DispatchedPrompt {
+    dispatched(input, Some(clock.now() + steering::RESPONSE_TIMEOUT))
 }
 
 struct UnexpectedAudit;
@@ -151,6 +183,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
     ] {
         let (_root, mut config, capabilities) = profile_setup();
         config.shutdown_grace = grace;
+        let clock = manual_clock(&mut config);
         let mut command = tokio::process::Command::new("/usr/bin/python3");
         command.args([
             "-c",
@@ -159,7 +192,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
         let mut scope = ProcessScope::spawn(command).unwrap();
         let mut stdout = scope.stdout.take().unwrap();
         stdout.read_exact(&mut [0]).await.unwrap();
-        // Establish actual pipe backpressure on a real clock before pausing Tokio.
+        // Establish actual pipe backpressure before the worker writes.
         // The child never reads stdin, so this write cannot finish.
         assert!(timeout(
             Duration::from_millis(100),
@@ -213,33 +246,37 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
                 .permissions
                 .insert(PermissionId::new("review").unwrap(), RpcId::Number(7));
         }
-        tokio::time::pause();
-        let began = Instant::now();
         let deadline = worker.begin_shutdown_grace();
-        let initial = worker.send_cancellation("fixture-context").await;
-        let elapsed = Instant::now() - began;
+        // The write into the full pipe is given the earlier of the grace and
+        // the write allowance, and ends only when the clock reaches it.
         let expected = grace.min(Duration::from_secs(1));
-        assert!(
-            elapsed >= expected && elapsed <= expected + Duration::from_millis(1),
-            "{elapsed:?}"
-        );
+        let (initial, _) = promptly(async {
+            tokio::join!(
+                worker.send_cancellation("fixture-context"),
+                clock.run_out(|wait| wait.limit() == expected)
+            )
+        })
+        .await;
         if grace < Duration::from_secs(1) {
             assert_eq!(initial, Ok(()));
-            let expired = Instant::now();
-            assert_eq!(worker.send_cancellation("fixture-context").await, Ok(()));
-            assert_eq!(Instant::now(), expired, "fallback restarted expired grace");
+            // Answered at once: the fallback does not start another grace.
+            assert_eq!(
+                promptly(worker.send_cancellation("fixture-context")).await,
+                Ok(())
+            );
         } else {
             assert_eq!(
                 initial,
                 Err(AgentError::Deadline),
                 "write timeout is not grace exhaustion"
             );
-            tokio::time::advance(deadline - Instant::now()).await;
-            assert_eq!(worker.send_cancellation("fixture-context").await, Ok(()));
+            clock.advance_to(deadline);
+            assert_eq!(
+                promptly(worker.send_cancellation("fixture-context")).await,
+                Ok(())
+            );
         }
         assert_eq!(worker.shutdown_deadline, Some(deadline));
-        tokio::time::resume();
-        // OS cleanup must never run under a paused/auto-advancing Tokio clock.
         worker
             .scope
             .cleanup(Duration::ZERO, Duration::from_secs(2))
