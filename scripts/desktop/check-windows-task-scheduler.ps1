@@ -445,6 +445,17 @@ function Assert-RunObservationAccepted {
     }
 }
 
+function Test-StabilizedRunSnapshot {
+    param([Parameter(Mandatory)] $Accepted, [Parameter(Mandatory)] $Snapshot)
+    if ($Snapshot.InstanceCount -ne 1 -or $Snapshot.Path -ne $Accepted.PlannedTaskPath) { return $false }
+    if ($Snapshot.CurrentAction -ne $Accepted.PlannedActionId -or $Snapshot.InstanceGuid -ne $Accepted.InstanceGuid) { return $false }
+    if ($Snapshot.EnginePid -ne $Accepted.EnginePid -or $Snapshot.RunningState -ne 4 -or $Snapshot.ProcessExited) { return $false }
+    if ($Snapshot.CreationTime -ne $Accepted.PidBoundCreationTime) { return $false }
+    if ($Snapshot.Sid -ne $Accepted.PidBoundSid -or $Snapshot.Elevated -ne $Accepted.PidBoundElevated) { return $false }
+    if ($Snapshot.ElevationType -ne $Accepted.PidBoundElevationType -or $Snapshot.IntegritySid -ne $Accepted.PidBoundIntegritySid) { return $false }
+    return $true
+}
+
 function Invoke-StopSettlement {
     param(
         [Parameter(Mandatory)] [scriptblock] $StopEffect,
@@ -551,6 +562,38 @@ function Assert-LifecycleStateProbes {
         $cleanupProbe = [pscustomobject]@{ StopCalls = 0 }
         $settlement = Invoke-StopSettlement -StopEffect { $cleanupProbe.StopCalls++ } -ProcessesSettled { $true } -InstancesSettled { $true }
         if ($cleanupProbe.StopCalls -ne 1 -or $settlement.Failures.Count -ne 0) { throw "$($sequence.Name) did not stop and settle its exact owned task" }
+    }
+    $finalObservation = New-RunAttemptObservation
+    $null = Update-RunAttemptObservation -Observation $finalObservation -Instances @($matchingInstance) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42
+    $contradictoryFinal = [pscustomobject]@{ Path = '\planned\task'; CurrentAction = 'wrong-final-action'; InstanceGuid = 'planned-guid'; EnginePID = 42 }
+    $null = Update-RunAttemptObservation -Observation $finalObservation -Instances @($contradictoryFinal) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42
+    if ($finalObservation.Rejections.Count -eq 0) { throw 'matching poll followed by a contradictory final snapshot was accepted' }
+    $finalCleanupProbe = [pscustomobject]@{ StopCalls = 0 }
+    $finalSettlement = Invoke-StopSettlement -StopEffect { $finalCleanupProbe.StopCalls++ } -ProcessesSettled { $true } -InstancesSettled { $true }
+    if ($finalCleanupProbe.StopCalls -ne 1 -or $finalSettlement.Failures.Count -ne 0) { throw 'contradictory final snapshot did not stop and settle its exact owned task' }
+    $acceptedSnapshot = [pscustomobject]@{
+        PlannedTaskPath = '\planned\task'; PlannedActionId = 'planned-action'; InstanceGuid = 'planned-guid'; EnginePid = 42
+        PidBoundCreationTime = 100; PidBoundSid = 'S-1-5-21-1'; PidBoundElevated = $false
+        PidBoundElevationType = 2; PidBoundIntegritySid = 'S-1-16-8192'
+    }
+    $matchingSnapshot = [pscustomobject]@{
+        InstanceCount = 1; Path = '\planned\task'; CurrentAction = 'planned-action'; InstanceGuid = 'planned-guid'
+        EnginePid = 42; RunningState = 4; ProcessExited = $false; CreationTime = 100; Sid = 'S-1-5-21-1'
+        Elevated = $false; ElevationType = 2; IntegritySid = 'S-1-16-8192'
+    }
+    if (-not (Test-StabilizedRunSnapshot -Accepted $acceptedSnapshot -Snapshot $matchingSnapshot)) { throw 'matching stabilized snapshot was rejected' }
+    foreach ($mutation in @(
+        [pscustomobject]@{ Field = 'Path'; Value = '\wrong-final-path' },
+        [pscustomobject]@{ Field = 'CurrentAction'; Value = 'wrong-final-action' },
+        [pscustomobject]@{ Field = 'ProcessExited'; Value = $true },
+        [pscustomobject]@{ Field = 'CreationTime'; Value = 101 }
+    )) {
+        $copy = [ordered]@{}
+        foreach ($property in $matchingSnapshot.PSObject.Properties) { $copy[$property.Name] = $property.Value }
+        $copy[$mutation.Field] = $mutation.Value
+        if (Test-StabilizedRunSnapshot -Accepted $acceptedSnapshot -Snapshot ([pscustomobject]$copy)) {
+            throw "stabilized snapshot accepted mutation of $($mutation.Field)"
+        }
     }
     $lostStop = Invoke-StopSettlement -StopEffect { throw [System.Management.Automation.MethodInvocationException]::new('lost stop reply', [System.Runtime.InteropServices.COMException]::new('lost stop reply', -2147023170)) } -ProcessesSettled { $true } -InstancesSettled { $true }
     if (-not $lostStop.StopCalled -or $lostStop.StopOutcome -ne 'lost' -or $lostStop.Failures.Count -ne 0) { throw 'lost stop reply did not settle through fresh observations' }
@@ -1004,10 +1047,23 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         return $instances.Count -eq 1 -and $instances[0].InstanceGuid -eq $firstInstance.InstanceGuid
     }
     $secondInstances = @(Get-TaskInstances -Task $ownedTask)
-    if ($secondInstances.Count -ne 1 -or $secondInstances[0].InstanceGuid -ne $firstInstance.InstanceGuid -or $secondInstances[0].EnginePID -ne $firstInstance.EnginePID) {
-        throw 'IgnoreNew did not retain the original exact singleton'
+    $null = Update-RunAttemptObservation -Observation $secondRunObservation -Instances $secondInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstInstance.InstanceGuid) -ExpectedPid ([int]$firstInstance.EnginePID)
+    Assert-RunObservationAccepted -Observation $secondRunObservation -Attempt 'second run final snapshot'
+    if ($secondInstances.Count -ne 1) { throw 'IgnoreNew final snapshot was not a singleton' }
+    $secondInstance = $secondInstances[0]
+    if (-not $script:ObservedProcesses.ContainsKey([int]$secondInstance.EnginePID)) { throw 'IgnoreNew final snapshot lost its retained process handle' }
+    $secondProcess = $script:ObservedProcesses[[int]$secondInstance.EnginePID]
+    $secondProcessExited = [NessaWindowsProofNative]::ProcessHasExited($secondProcess)
+    $secondPidFacts = [NessaWindowsProofNative]::ReadTokenFacts($secondProcess)
+    $secondSnapshot = [pscustomobject]@{
+        InstanceCount = $secondInstances.Count; Path = [string]$secondInstance.Path; CurrentAction = [string]$secondInstance.CurrentAction
+        InstanceGuid = [string]$secondInstance.InstanceGuid; EnginePid = [int]$secondInstance.EnginePID; RunningState = [int]$secondInstance.State
+        ProcessExited = $secondProcessExited; CreationTime = $secondPidFacts.CreationTime; Sid = $secondPidFacts.Sid
+        Elevated = $secondPidFacts.Elevated; ElevationType = $secondPidFacts.ElevationType; IntegritySid = $secondPidFacts.IntegritySid
     }
+    if (-not (Test-StabilizedRunSnapshot -Accepted $evidence -Snapshot $secondSnapshot)) { throw 'IgnoreNew final snapshot did not retain the complete accepted identity vector' }
     if ($secondReturned.InstanceGuid -ne $firstInstance.InstanceGuid) { throw 'second Run did not return the original IgnoreNew instance' }
+    if ([NessaWindowsProofNative]::ProcessHasExited($secondProcess)) { throw 'retained action process exited before proof completion' }
     Write-Host "Windows Task Scheduler model proved exact action PID $actionPid for $taskPath"
 }
 catch {
