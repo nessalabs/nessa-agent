@@ -516,3 +516,30 @@ async fn a_binding_settles_once_an_abandoned_deletion_has_released_its_home() {
     assert!(!home.exists(), "{} was left behind", home.display());
     assert_gone(&root, "pid");
 }
+
+/// A host asks whether an abandoned deletion still has a process to stop, as
+/// well as waiting for it: the answer holds until the process is stopped, and
+/// is false once `settled` has seen it released.
+#[tokio::test]
+async fn an_outstanding_deletion_is_reported_until_its_process_stops() {
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = opencode_configuration("stall", 16);
+    handler(&mut config, "stall", "opencode");
+    let provider = OpencodeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    assert!(!provider.cleanup_outstanding(), "nothing started");
+    let asking = provider.clone();
+    let deleting = tokio::spawn(async move { asking.delete_session(session()).await });
+    asked(&root, "session/delete").await;
+    assert!(provider.cleanup_outstanding(), "its process is running");
+    deleting.abort();
+    let _ = deleting.await;
+    provider.settled().await;
+    assert!(!provider.cleanup_outstanding(), "settled and released");
+    assert_gone(&root, "pid");
+}

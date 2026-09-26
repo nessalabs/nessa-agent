@@ -133,7 +133,7 @@ list's empty state no longer says "gateway".
 
 | `refusal` | The gateway sets it when | The host does |
 | --- | --- | --- |
-| `data_missing` | its stops failed, but nothing it started still holds resources — no agent whose release the SDK has not confirmed (`attachment_cleanup_pending`) or whose provider open is still in flight, no unsettled or holding opening, no warm-up that may hold its agent, and admission drained — and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
+| `data_missing` | its stops failed, but nothing it started still holds resources — no agent whose release the SDK has not confirmed (`attachment_cleanup_pending`) or whose provider open is still in flight, no unsettled or holding opening, no deletion whose process is still being stopped (the SDK's `cleanup_outstanding`), no warm-up scheduled, resolving or holding its agent, and admission drained — and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
 | `not_confirmed` | anything else: a stop that did not finish or was not confirmed, an admission that could not drain, or the retirement audit failing | Fails the attempt; **Try again** asks again |
 | absent | the gateway predates this field | Same as `not_confirmed` |
 

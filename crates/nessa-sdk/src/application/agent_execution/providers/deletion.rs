@@ -114,4 +114,15 @@ pub trait ProviderSessionDeleter: Send + Sync {
     fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
+
+    /// Whether a deletion this binding started, and whose caller stopped
+    /// waiting, still has a process to stop. Unlike [`Self::settled`] this is
+    /// never bounded: it stays true after `settled` gave up waiting, until the
+    /// process is actually stopped. The ACP bindings answer from the same count
+    /// `settled` waits on
+    /// (`an_outstanding_deletion_is_reported_until_its_process_stops`). The
+    /// default has nothing outstanding.
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }

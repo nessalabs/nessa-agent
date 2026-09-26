@@ -2756,7 +2756,8 @@ impl ConversationService {
     /// agent whose provider open is still in flight (the SDK arms its cleanup
     /// fact only once an open returns, and a close resets the phase first, so a
     /// process may be running before either says so), an opening that has not
-    /// settled, or a failed opening that holds what it launched. A successful stop releases its
+    /// settled, a failed opening that holds what it launched, or a deletion
+    /// whose process is still being stopped. A successful stop releases its
     /// slot, so it is not counted.
     ///
     /// It reads the SDK's own cleanup fact, `Agent::attachment_cleanup_pending`,
@@ -2784,7 +2785,9 @@ impl ConversationService {
                 return true;
             }
         }
-        false
+        // A deletion abandoned during retirement stops its own process on a
+        // task of its own, past `settled`'s bound if it must.
+        self.inner.provider_sessions.cleanup_outstanding()
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", test))]

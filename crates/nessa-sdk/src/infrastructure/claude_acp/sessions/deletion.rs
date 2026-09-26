@@ -35,4 +35,7 @@ impl ProviderSessionDeleter for ClaudeAcpProvider {
     fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(self.deletions().settled(self.config()))
     }
+    fn cleanup_outstanding(&self) -> bool {
+        self.deletions().outstanding()
+    }
 }

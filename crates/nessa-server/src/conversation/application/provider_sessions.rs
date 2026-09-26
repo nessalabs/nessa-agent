@@ -25,6 +25,12 @@ pub trait ProviderSessionEraser: Send + Sync {
     fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
+    /// Whether an ask this eraser started, and whose caller stopped waiting,
+    /// still has a process to stop, past [`Self::settled`]'s bound too. The
+    /// default has nothing outstanding.
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 
 /// Every agent's [`ProviderSessionEraser`], keyed by agent: the one authority
@@ -60,6 +66,12 @@ impl ProviderSessionErasers {
     /// Until every registered eraser has settled what it started.
     pub async fn settled(&self) {
         join_all(self.erasers.values().map(|eraser| eraser.settled())).await;
+    }
+    /// Whether any registered eraser still has a deletion process to stop.
+    pub fn cleanup_outstanding(&self) -> bool {
+        self.erasers
+            .values()
+            .any(|eraser| eraser.cleanup_outstanding())
     }
     /// Who is asked about a session of a conversation on `agent`: the
     /// decision, taken before anybody is asked, so a caller that has to spend

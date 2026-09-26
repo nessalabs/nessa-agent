@@ -4413,3 +4413,36 @@ fn a_try_that_turns_to_waiting_on_the_lease_waits_for_its_own_timer() {
     retries.due_again(&id, generation);
     assert_eq!(retries.claim_due().len(), 1);
 }
+
+/// ADR 221: a deletion abandoned during retirement stops its own process on a
+/// task of its own, past `settled`'s bound if it must; while an eraser says one
+/// is outstanding, the gateway still holds resources.
+#[tokio::test]
+async fn an_outstanding_deletion_counts_as_holding_resources() {
+    struct Outstanding(std::sync::atomic::AtomicBool);
+    impl ProviderSessionEraser for Outstanding {
+        fn erase(
+            &self,
+            _: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+        ) -> ConversationFuture<'_, ProviderSessionErasure> {
+            Box::pin(async { Ok(ProviderSessionErasure::NotSupported) })
+        }
+        fn cleanup_outstanding(&self) -> bool {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+    let eraser = Arc::new(Outstanding(std::sync::atomic::AtomicBool::new(true)));
+    let fixture = deleting();
+    let service = service_over(
+        fixture.provider.clone(),
+        fixture.repository.clone(),
+        fixture.storage.clone(),
+        fixture.summaries.clone(),
+        fixture.audit.clone(),
+        fixture.attachments.clone(),
+        Some(eraser.clone() as Arc<dyn ProviderSessionEraser>),
+    );
+    assert!(service.owns_unreleased_resources().await);
+    eraser.0.store(false, Ordering::SeqCst);
+    assert!(!service.owns_unreleased_resources().await);
+}

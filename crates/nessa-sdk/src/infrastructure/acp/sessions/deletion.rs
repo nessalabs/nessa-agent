@@ -292,6 +292,12 @@ impl DeletionCleanups {
         self.0.outstanding.fetch_add(1, Ordering::SeqCst);
         Outstanding(self.0.clone())
     }
+    /// Whether a deletion this binding started still has a process to stop.
+    /// Still true after [`Self::settled`] gave up waiting on one.
+    pub(crate) fn outstanding(&self) -> bool {
+        self.0.outstanding.load(Ordering::SeqCst) > 0
+    }
+
     /// Until no deletion this binding started still has a process to stop,
     /// or for at most the time stopping one takes with `config`'s budgets —
     /// `shutdown_grace` + 4 × `kill_timeout` — after which what is still

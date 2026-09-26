@@ -29,7 +29,10 @@ use std::{
     ffi::OsString,
     io::ErrorKind,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -79,6 +82,8 @@ pub(super) struct CurrentAgentResolver {
     credentials: Arc<dyn AgentCredentialSource>,
     provider: ProviderDependencies,
     warm_up: CurrentOpenCodeWarmUp,
+    /// Warm-up resolutions scheduled and not yet returned, shared by clones.
+    warm_up_resolving: Arc<AtomicUsize>,
     slots: Arc<Semaphore>,
 }
 
@@ -119,6 +124,7 @@ impl CurrentAgentResolver {
                 credentials: input.credentials,
             },
             warm_up: input.warm_up,
+            warm_up_resolving: Arc::new(AtomicUsize::new(0)),
             slots: Arc::new(Semaphore::new(1)),
         }
     }
@@ -324,17 +330,30 @@ impl CurrentAgentResolver {
         }
     }
 
+    /// Whether the OpenCode warm-up may still hold a provider process: it is
+    /// still being resolved, which ends in a launch, or the lane's active run
+    /// may hold one. Counted from the moment it is scheduled, so there is no
+    /// instant between "nothing yet" and a launch (ADR 221).
+    pub(super) fn warm_up_may_hold_resources(&self) -> bool {
+        self.warm_up_resolving.load(Ordering::SeqCst) > 0 || self.warm_up.may_hold_resources()
+    }
+
     /// Start proactive preparation after the listener is accepting requests.
     /// Missing installation or credentials simply means there is nothing to
     /// prepare; a later cold conversation observes again and can start it.
-    /// Whether the OpenCode warm-up lane may still hold a provider process.
-    pub(super) fn warm_up_may_hold_resources(&self) -> bool {
-        self.warm_up.may_hold_resources()
-    }
-
     pub(super) fn start_warm_up(self: &Arc<Self>) {
         let source = self.clone();
+        self.warm_up_resolving.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
+            // Released only once resolution has returned, by which time any
+            // launch it made is the lane's to answer for.
+            struct Resolving(Arc<CurrentAgentResolver>);
+            impl Drop for Resolving {
+                fn drop(&mut self) {
+                    self.0.warm_up_resolving.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _resolving = Resolving(source.clone());
             let result = tokio::time::timeout(RESOLUTION_DEADLINE, source.resolve_opencode()).await;
             match result {
                 Ok(Ok(_)) => {}
@@ -437,10 +456,27 @@ impl ProviderSessionEraser for CurrentOpenCodeEraser {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
+            let mut still_outstanding = Vec::new();
             for eraser in launched {
                 eraser.settled().await;
+                // Past its bound a deletion may still be stopping; it stays
+                // here so `cleanup_outstanding` keeps saying so.
+                if eraser.cleanup_outstanding() {
+                    still_outstanding.push(eraser);
+                }
             }
+            self.launched
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(still_outstanding);
         })
+    }
+    fn cleanup_outstanding(&self) -> bool {
+        self.launched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|eraser| eraser.cleanup_outstanding())
     }
 }
 

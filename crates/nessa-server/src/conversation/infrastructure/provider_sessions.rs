@@ -44,4 +44,7 @@ impl ProviderSessionEraser for BindingSessionEraser {
     fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.binding.settled()
     }
+    fn cleanup_outstanding(&self) -> bool {
+        self.binding.cleanup_outstanding()
+    }
 }

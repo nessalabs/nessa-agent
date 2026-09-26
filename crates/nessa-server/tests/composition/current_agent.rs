@@ -1151,6 +1151,9 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
     ));
 
     resolver.start_warm_up();
+    // ADR 221: from the moment it is scheduled, before any launch, the warm-up
+    // may hold an agent process, so a refused retirement cannot miss it.
+    assert!(resolver.warm_up_may_hold_resources());
     let launch = launched(
         &root.path().join("workspace/launch-opencode-startup.json"),
         1,
@@ -1165,6 +1168,13 @@ async fn proactive_current_warm_up_opens_and_closes_without_a_conversation_or_pr
     .await
     .expect("startup preparation closes its session and managed use");
     assert_process(pid, false);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while resolver.warm_up_may_hold_resources() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a released warm-up holds nothing");
     assert_eq!(authority.admissions.load(Ordering::SeqCst), 1);
     // No ConversationService or submission exists in this test. The fixture's
     // launch therefore covers initialize, session/new/configuration and close;
