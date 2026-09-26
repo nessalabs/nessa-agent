@@ -53,7 +53,7 @@ use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStora
 use std::collections::HashSet;
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -287,7 +287,8 @@ fn conversations(
 
 /// Where a namespace keeps its conversations. Read by composition and by the
 /// retirement that reports whether they are still there.
-pub(crate) fn conversation_root(namespace: &Path) -> PathBuf {
+#[cfg(unix)]
+pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
     namespace.join("conversations")
 }
 

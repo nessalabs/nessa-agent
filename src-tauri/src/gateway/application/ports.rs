@@ -514,6 +514,13 @@ pub enum StartupStep {
     /// Checking what is installed and running, and staging the runtime.
     Preparing,
     /// Asking the previous gateway to retire, then removing it.
+    #[cfg_attr(
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
+    )]
     Replacing,
     /// Starting the gateway and waiting until it answers.
     #[cfg_attr(
