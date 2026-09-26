@@ -827,7 +827,8 @@ mod build {
             common::value_objects::TokenLimits,
         },
         infrastructure::{
-            acp::sessions::AcpConfig, codex_acp::sessions::CodexAcpProvider,
+            acp::sessions::{AcpConfig, RuntimeClock},
+            codex_acp::sessions::CodexAcpProvider,
             opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
@@ -898,9 +899,9 @@ mod build {
     /// Everything here is a decision; nothing here reads the filesystem or this
     /// process's own environment.
     ///
-    /// `images` is the one dependency rather than a decision: the source a
-    /// binding reads a message's uploads from, and `None` is a binding that
-    /// sends none.
+    /// `images` is the one dependency passed in rather than decided: the
+    /// source a binding reads a message's uploads from, and `None` is a
+    /// binding that sends none. The clock its budgets run on is the runtime's.
     pub(super) fn launch_configuration(
         config: &AgentsConfig,
         runtime: &AgentRuntime,
@@ -937,6 +938,7 @@ mod build {
             max_frame_bytes: MAX_FRAME_BYTES,
             max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
             images,
+            clock: Arc::new(RuntimeClock),
         }
     }
 

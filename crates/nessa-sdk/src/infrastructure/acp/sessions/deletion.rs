@@ -38,11 +38,13 @@
 //! error's text, and the list's own failure is never what is returned.
 //!
 //! The delete has one `startup_timeout`; the list, for the workspace this
-//! binding runs in and paged by `nextCursor`, one more. An agent may answer
-//! with its whole list in one frame — Claude's does — so a list is read with
-//! bounds of its own, far past the rest of the protocol's: values only while
-//! the list is read, bytes for the whole connection, since a stream's byte
-//! bound is fixed (the cost is stated where the connection is made).
+//! binding runs in and paged by `nextCursor`, one more, however many pages it
+//! has (`the_listing_is_followed_page_by_page`). Every budget is started on
+//! `AcpConfig::clock`. An agent may answer with its whole list in one frame —
+//! Claude's does — so a list is read with bounds of its own, far past the rest
+//! of the protocol's: values only while the list is read, bytes for the whole
+//! connection, since a stream's byte bound is fixed (the cost is stated where
+//! the connection is made).
 //!
 //! This is the shared exchange only. What an acknowledged delete means is
 //! decided by each agent's binding, in that binding's own module, which calls
@@ -53,7 +55,7 @@
 //! the supervisor `ProcessCleanup` hands abandoned processes to. The whole
 //! bound is `AcpConfig::session_deletion_limit`.
 //! Regressions: `tests/infrastructure/acp/contracts/deletion.rs`.
-use super::{binding::ProcessFactory, cleanup::ProcessCleanup, AcpConfig};
+use super::{binding::ProcessFactory, cleanup::ProcessCleanup, AcpConfig, BudgetExpiry};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::ProviderCleanup;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
@@ -73,7 +75,7 @@ use std::sync::{
 use tokio::{
     process::ChildStdout,
     sync::{oneshot, Notify},
-    time::{timeout, Instant},
+    time::{timeout, Duration},
 };
 
 /// What the exchange confirmed, before an agent's binding says what it means.
@@ -229,7 +231,7 @@ async fn exchange<P: AcpProfile>(
         .request(
             "initialize",
             initialize_params(),
-            Instant::now() + config.launch_timeout,
+            &mut Budget::start(config, config.launch_timeout),
         )
         .await?;
     check_initialize(profile, &init)?;
@@ -240,7 +242,7 @@ async fn exchange<P: AcpProfile>(
         .request(
             "session/delete",
             json!({"sessionId": session.as_str()}),
-            Instant::now() + config.startup_timeout,
+            &mut Budget::start(config, config.startup_timeout),
         )
         .await
     {
@@ -250,9 +252,9 @@ async fn exchange<P: AcpProfile>(
     };
     // Only a refusal is read against the list, and only a list read in full
     // that does not name the session changes what it means.
-    let deadline = Instant::now() + config.startup_timeout;
+    let mut budget = Budget::start(config, config.startup_timeout);
     match connection
-        .lists(session, json!(config.workspace), deadline)
+        .lists(session, json!(config.workspace), &mut budget)
         .await
     {
         Ok(false) => Ok(AcpSessionDeletion::NotListed),
@@ -331,6 +333,28 @@ fn advertises(init: &Value, name: &str) -> bool {
         .is_some_and(Value::is_object)
 }
 
+/// One protocol budget, started on the binding's clock.
+struct Budget {
+    expiry: BudgetExpiry,
+    run_out: bool,
+}
+impl Budget {
+    fn start(config: &AcpConfig, limit: Duration) -> Self {
+        Self {
+            expiry: config.clock.budget(limit),
+            run_out: false,
+        }
+    }
+    /// Resolves once the budget has run out, at once if it already has.
+    /// Cancel-safe: a wait given up leaves the budget running.
+    async fn run_out(&mut self) {
+        if !self.run_out {
+            self.expiry.as_mut().await;
+            self.run_out = true;
+        }
+    }
+}
+
 struct Connection<'a> {
     scope: &'a mut ProcessScope,
     reader: Reader<ChildStdout>,
@@ -338,7 +362,7 @@ struct Connection<'a> {
     sequence: i64,
 }
 impl Connection<'_> {
-    /// Send one request and wait, until `deadline`, for its answer. Requests
+    /// Send one request and wait, until `budget` runs out, for its answer. Requests
     /// the agent makes meanwhile are refused as unsupported, since this
     /// connection runs nothing they could be about; notifications are read
     /// past.
@@ -346,20 +370,20 @@ impl Connection<'_> {
         &mut self,
         method: &str,
         params: Value,
-        deadline: Instant,
+        budget: &mut Budget,
     ) -> Result<Value, AgentError> {
         self.sequence += 1;
         let id = self.sequence;
-        self.send(json_rpc::request(id, method, params), deadline)
+        self.send(json_rpc::request(id, method, params), budget)
             .await?;
         loop {
             let message = tokio::select! { biased;
-                () = tokio::time::sleep_until(deadline) => return Err(AgentError::Deadline),
+                () = budget.run_out() => return Err(AgentError::Deadline),
                 message = self.reader.next() => message?,
             };
             if message.method.is_some() {
                 if let Some(request) = &message.id {
-                    self.send(json_rpc::unsupported(request), deadline).await?;
+                    self.send(json_rpc::unsupported(request), budget).await?;
                 }
                 continue;
             }
@@ -376,7 +400,7 @@ impl Connection<'_> {
     }
     /// Whether `session/list`, filtered to `cwd`, names `session`,
     /// following `nextCursor` for at most [`MAX_LIST_PAGES`] pages, all before
-    /// `deadline`.
+    /// `budget` runs out.
     ///
     /// # Errors
     /// The agent's refusal, a budget running out, a page too large to read,
@@ -387,11 +411,11 @@ impl Connection<'_> {
         &mut self,
         session: &ExecutionSessionId,
         cwd: Value,
-        deadline: Instant,
+        budget: &mut Budget,
     ) -> Result<bool, AgentError> {
         // Nothing is read after the list, so the bound is never lowered again.
         self.reader.allow_json_items(MAX_LISTING_ITEMS);
-        self.pages(session, cwd, deadline).await
+        self.pages(session, cwd, budget).await
     }
     /// [`Self::lists`], page by page. An entry without a string `sessionId`
     /// is not a list this can read, so it is a protocol failure, never taken
@@ -401,7 +425,7 @@ impl Connection<'_> {
         &mut self,
         session: &ExecutionSessionId,
         cwd: Value,
-        deadline: Instant,
+        budget: &mut Budget,
     ) -> Result<bool, AgentError> {
         let mut cursor: Option<String> = None;
         // Every cursor followed so far: a list that comes back to one is a
@@ -414,7 +438,7 @@ impl Connection<'_> {
                 params.insert("cursor".into(), json!(cursor));
             }
             let page = self
-                .request("session/list", Value::Object(params), deadline)
+                .request("session/list", Value::Object(params), budget)
                 .await?;
             let sessions = page
                 .get("sessions")
@@ -439,15 +463,19 @@ impl Connection<'_> {
         }
         Err(json_rpc::protocol("session list exceeds its page bound"))
     }
-    async fn send(&mut self, value: Value, deadline: Instant) -> Result<(), AgentError> {
+    /// Write one frame before `budget` runs out, and within the transport's
+    /// own write allowance, which is still measured on the runtime (#209).
+    async fn send(&mut self, value: Value, budget: &mut Budget) -> Result<(), AgentError> {
         let frame = json_rpc::encode(value, self.config.max_frame_bytes)?;
         let stdin = self.scope.stdin.as_mut().ok_or(AgentError::Closed)?;
-        json_rpc::send_encoded(
-            stdin,
-            &frame,
-            json_rpc::write_allowance(frame.len()),
-            Some(deadline),
-        )
-        .await
+        tokio::select! { biased;
+            () = budget.run_out() => Err(AgentError::Deadline),
+            sent = json_rpc::send_encoded(
+                stdin,
+                &frame,
+                json_rpc::write_allowance(frame.len()),
+                None,
+            ) => sent,
+        }
     }
 }

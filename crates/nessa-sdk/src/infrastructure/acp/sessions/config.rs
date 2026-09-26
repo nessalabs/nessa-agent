@@ -1,6 +1,7 @@
 //! Trusted host configuration for launching and supervising an ACP process.
 #![deny(missing_docs)]
 
+use super::AcpClock;
 use crate::application::agent_execution::{
     agents::AgentError,
     providers::{ExecutableUseSnapshot, UserImageSource},
@@ -160,6 +161,12 @@ pub struct AcpConfig {
     /// of them at a time. A message whose images would exceed that waits behind
     /// nothing and is refused with `AgentError::Busy` before a byte is read.
     pub images: Option<Arc<dyn UserImageSource>>,
+    /// Where protocol budgets are measured: [`RuntimeClock`](super::RuntimeClock)
+    /// outside tests. Session deletion's budgets — `launch_timeout` for
+    /// `initialize`, `startup_timeout` for the delete and one more for the
+    /// whole list — are started on it; see [`AcpClock`](super::AcpClock) for
+    /// what is not yet.
+    pub clock: Arc<dyn AcpClock>,
 }
 impl AcpConfig {
     /// The longest an ACP binding's

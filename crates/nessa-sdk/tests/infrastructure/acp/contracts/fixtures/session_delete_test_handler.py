@@ -28,6 +28,13 @@ root = pathlib.Path.cwd()
 methods = []
 
 
+def never_answer():
+    # Until the binding stops this process: only the test's clock runs out
+    # the wait.
+    while True:
+        time.sleep(3600)
+
+
 def send(value):
     print(json.dumps({"jsonrpc": "2.0", **value}), flush=True)
 
@@ -85,9 +92,7 @@ for line in sys.stdin:
         elif mode == "list-bad-cursor":
             send({"id": message["id"], "result": {"sessions": [other], "nextCursor": 2}})
         elif mode == "list-stall":
-            # Past the list's own startup budget.
-            time.sleep(5)
-            send({"id": message["id"], "result": {"sessions": [other]}})
+            never_answer()
         elif mode == "list-malformed":
             # Names the session, but not under `sessionId`.
             send({"id": message["id"], "result": {"sessions": [{"id": asked, "cwd": str(root)}]}})
@@ -113,7 +118,7 @@ for line in sys.stdin:
         if mode == "refused" or refuse:
             send({"id": message["id"], "error": {"code": -32603, "message": "session not found"}})
         elif mode == "stall":
-            time.sleep(20)
+            never_answer()
         elif mode == "bloated":
             # An acceptance holding more values than the protocol allows.
             send({"id": message["id"], "result": {"padding": [0] * 100000}})

@@ -281,6 +281,13 @@ connection's process and releases what its launch made, on a task of its own.
 stop budget (`shutdown_grace` + 4 × `kill_timeout`) has passed; a host awaits it
 before its runtime ends, since a runtime that ends drops such a task mid-cleanup.
 
+The delete's protocol budgets — `launch_timeout` for `initialize`,
+`startup_timeout` for the delete, and one more `startup_timeout` for the whole
+list — are started on `AcpConfig::clock`, an `AcpClock` that composition sets
+to `RuntimeClock`. Its tests supply a clock on which a budget runs out only when
+the test runs it out, so no answer they check depends on how fast the machine
+is. Opening and execution budgets are not on it yet (#209).
+
 The application storage port still accepts a complete snapshot. Snapshot copying
 and validation therefore still depend on history size, while file writes no longer
 repeat unchanged history. Before allocating each complete record, the decoder

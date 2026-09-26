@@ -179,6 +179,7 @@ pub(super) fn test_acp_configuration(
         max_frame_bytes: 8192,
         max_incoming_frame_bytes: 8192,
         images: None,
+        clock: Arc::new(crate::infrastructure::acp::sessions::RuntimeClock),
     };
     (root, config, model)
 }
