@@ -59,6 +59,13 @@ mod tests {
                 RetirementRefusal::NotConfirmed
             ]
         );
+        for refusal in [
+            RetirementRefusal::DataMissing,
+            RetirementRefusal::NotConfirmed,
+        ] {
+            assert!(names.contains(&refusal.name()), "{refusal:?} is published");
+            assert_eq!(RetirementRefusal::named(Some(refusal.name())), refusal);
+        }
         assert_eq!(
             RetirementRefusal::named(None),
             RetirementRefusal::NotConfirmed
