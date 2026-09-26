@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Ubuntu packages the desktop host compiles and bundles against: WebKitGTK
 # and GTK for the window, the appindicator library for the tray, librsvg for
-# icons, libxdo for the global shortcut, and patchelf for the AppImage. One
+# icons, libxdo for the global shortcut, and patchelf for the bundler. One
 # list for every job that builds the app on Linux, so the build CI checks and
 # the build a release ships cannot drift apart. Extra packages a job needs for
 # itself are passed as arguments.

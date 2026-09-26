@@ -13,17 +13,21 @@
  *
  *   macos-latest   ─▶ aarch64 bundle ─┐                 ┌─▶ Nessa_0.1.0_darwin-aarch64.app.tar.gz
  *   macos-15-intel ─▶ x86_64 bundle  ─┼─ stage (rename) ─┼─▶ Nessa_0.1.0_darwin-x86_64.app.tar.gz
- *   ubuntu-22.04   ─▶ .deb, AppImage ─┘                 └─▶ Nessa_0.1.0_amd64.deb, Nessa_0.1.0_amd64.AppImage
+ *   ubuntu-22.04   ─▶ .deb           ─┘                 └─▶ Nessa_0.1.0_amd64.deb
  *                                                                │
  *                                            manifest ◀──────────┘  (+ each .sig)
  *                                                │
  *                                          latest.json  ── one file, every key
  *
- * Linux publishes two update artifacts for one architecture, because the
- * plugin updates each install in its own format: a `.deb` install is replaced
- * by `dpkg`, an AppImage by writing the new file over itself. It looks for
- * `{os}-{arch}-{installer}` before `{os}-{arch}`, so each format has its own
- * key and neither is offered the other's bytes.
+ * Linux publishes the `.deb` under `{os}-{arch}-deb`. The plugin updates each
+ * install in its own format and looks for `{os}-{arch}-{installer}` before
+ * `{os}-{arch}`, so the key names the format: an install of any other kind is
+ * never offered a `.deb`.
+ *
+ * No AppImage is released. Its bundler (linuxdeploy) rewrites every ELF file
+ * under `usr/lib`, the runtime's executables included, so the runtime no
+ * longer matches its fingerprint and the Claude agent's self-contained binary
+ * can be damaged; `verify-linux-bundle.mjs` refuses such an AppImage.
  *
  * `stage` runs on each build runner and renames that target's output to the
  * name it will be published under. `manifest` runs once afterwards, over every
@@ -62,7 +66,7 @@ import { releaseManifest, updaterTarget } from "./updater-manifest.mjs"
 const TARGET_PLATFORMS = {
   "aarch64-apple-darwin": { platform: "darwin", arch: "arm64", bundles: "app,dmg" },
   "x86_64-apple-darwin": { platform: "darwin", arch: "x64", bundles: "app,dmg" },
-  "x86_64-unknown-linux-gnu": { platform: "linux", arch: "x64", bundles: "deb,appimage" },
+  "x86_64-unknown-linux-gnu": { platform: "linux", arch: "x64", bundles: "deb" },
 }
 
 /** The targets a release builds, in the order a manifest lists them. */
@@ -110,20 +114,9 @@ export function updaterArtifacts(productName, version, target) {
       },
     ]
   // The bundler already names Linux packages per version and architecture, so
-  // they are published under the names it wrote.
-  const packages = linuxBundles(productName, version, linuxBundleArchitecture(target))
-  return [
-    {
-      key: `${key}-deb`,
-      built: `${bundle}/${packages.deb}`,
-      published: basename(packages.deb),
-    },
-    {
-      key: `${key}-appimage`,
-      built: `${bundle}/${packages.appimage}`,
-      published: basename(packages.appimage),
-    },
-  ]
+  // the .deb is published under the name it wrote.
+  const { deb } = linuxBundles(productName, version, linuxBundleArchitecture(target))
+  return [{ key: `${key}-deb`, built: `${bundle}/${deb}`, published: basename(deb) }]
 }
 
 /** The disk image's published name.
@@ -315,7 +308,7 @@ function stage(root, args, config) {
       throw new Error(
         `The build produced no ${asset.built}.\n` +
           `A missing .sig means the bundler had no TAURI_SIGNING_PRIVATE_KEY and signed\n` +
-          `nothing; a missing archive, disk image, .deb or AppImage means --bundles did\n` +
+          `nothing; a missing archive, disk image or .deb means --bundles did\n` +
           `not ask for it.`,
       )
     copyFileSync(resolve(root, asset.built), resolve(into, asset.published))

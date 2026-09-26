@@ -82,7 +82,7 @@ test("the existing Linux matrix leg uniquely owns direct runtime assembly", () =
   assert.doesNotMatch(releaseWorkflow, /scripts\/desktop\/prepare\.mjs/)
   assert.match(
     releaseWorkflow,
-    /target: x86_64-unknown-linux-gnu\s+updater-target: linux-x86_64\s+bundles: deb,appimage/,
+    /target: x86_64-unknown-linux-gnu\s+updater-target: linux-x86_64\s+bundles: deb\s/,
   )
   assert.match(
     releaseWorkflow,

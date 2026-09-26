@@ -918,17 +918,17 @@ To remove the background service, boot it out with
 
 ## Installed Linux runtime
 
-Releases ship x86_64 Linux as a `.deb` (Ubuntu 22.04 or later, Debian 12 or later) and
-an AppImage. Both carry the same runtime as the macOS bundle, under
-`usr/lib/Nessa/runtime`. The `.deb` declares WebKitGTK and the tray's
-`libayatana-appindicator3-1`; the AppImage carries its libraries, but not glibc,
-so it needs one at least as new as Ubuntu 22.04's.
+Releases ship x86_64 Linux as a `.deb` for Ubuntu 22.04 or later and Debian 12
+or later. It carries the same runtime as the macOS bundle, under
+`usr/lib/Nessa/runtime`, and declares WebKitGTK and the tray's
+`libayatana-appindicator3-1`. There is no AppImage: its bundler rewrites the
+runtime's executables, so the runtime no longer matches its fingerprint, and
+`pnpm app:build` refuses such an AppImage.
 
 Staging works as on macOS, with XDG locations in place of `Application Support`:
 the runtime is copied to
 `$XDG_DATA_HOME/nessa/gateway-runtimes/<unit>/<fingerprint>/` (by default
-`~/.local/share`), so the service never runs from the package or from an
-AppImage's temporary mount. The gateway is the systemd **user** unit
+`~/.local/share`), so the service never runs from the package's files. The gateway is the systemd **user** unit
 `nessa-gateway-prod.service` in `$XDG_CONFIG_HOME/systemd/user`, enabled for
 `default.target`, and its lifecycle journal lives under `$XDG_STATE_HOME/nessa`.
 Admission, recovery, and the inactive-unit cases are described in
@@ -940,11 +940,9 @@ linger. Keeping the gateway running while logged out does, and Nessa does not
 enable it
 ([#217](https://github.com/nessalabs/nessa-agent/issues/217) tracks offering it).
 
-Updates install the same kind of package the app was installed as: a `.deb`
-install is updated through `pkexec dpkg -i`, which asks for an administrator's
-password, and an AppImage replaces its own file. `pnpm app:build --bundles
-deb,appimage` builds both and verifies the runtime inside each before
-returning success.
+Updates install the new `.deb` through `pkexec dpkg -i`, which asks for an
+administrator's password. `pnpm app:build --bundles deb` builds the package and
+verifies the runtime inside it before returning success.
 
 To remove the background service after uninstalling the package, stop and
 disable it with `systemctl --user disable --now nessa-gateway-prod.service`,

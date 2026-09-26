@@ -188,16 +188,16 @@ jobs:
             bundles: app,dmg
           # The oldest supported Ubuntu, not the newest: the app and the runtime
           # binaries link the glibc they are built against, and a package built
-          # on 24.04 refuses to start on 22.04. The AppImage carries its
-          # libraries but not glibc, so the same holds for it.
+          # on 24.04 refuses to start on 22.04. No AppImage: its bundler
+          # rewrites the runtime's executables (scripts/desktop/release-assets.mjs).
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             updater-target: linux-x86_64
-            bundles: deb,appimage
+            bundles: deb
     runs-on: ${{ matrix.runner }}
     env:
-      # Produces each update artifact's .sig beside it — the .app.tar.gz, the
-      # .deb, the AppImage. Without it the bundle is built and signs nothing,
+      # Produces each update artifact's .sig beside it — the .app.tar.gz or the
+      # .deb. Without it the bundle is built and signs nothing,
       # and staging refuses it.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -231,7 +231,7 @@ jobs:
           # given to this step alone, and promoted to the names the bundler reads
           # only when there is something to put in them. Step-level, not job-level:
           # nothing else in the job — `pnpm install`'s lifecycle scripts, the
-          # Linux row's AppImage tooling — has any use for them.
+          # Linux row's bundler — has any use for them.
           #
           # They cannot be mapped straight onto APPLE_CERTIFICATE and the rest. A
           # job's `env:` has no way to write an unset variable, and a missing secret
@@ -282,8 +282,8 @@ jobs:
       # --bundles narrows the config's "all" to the outputs a release has any
       # use for. On macOS: `app`, which createUpdaterArtifacts archives into the
       # .app.tar.gz an update installs, and `dmg`, which is what a person
-      # downloads. On Linux: the .deb and the AppImage, each both what a person
-      # downloads and what an update of that kind of install installs.
+      # downloads. On Linux: the .deb, both what a person downloads and what an
+      # update of a .deb install installs.
       - name: Build, sign and verify the bundle
         run: pnpm app:build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
       - name: Remove the App Store Connect key and the signing keychain
@@ -357,7 +357,7 @@ jobs:
           set -euo pipefail
           cat > release-notes.md <<'END'
           Nessa for macOS (Apple Silicon and Intel) and x86_64 Linux (.deb for
-          Ubuntu 22.04 or later and Debian 12 or later, AppImage elsewhere).
+          Ubuntu 22.04 or later and Debian 12 or later).
 
           Whether the macOS artifacts are notarized is decided by the
           repository's secrets, so it is stated by the build rather than

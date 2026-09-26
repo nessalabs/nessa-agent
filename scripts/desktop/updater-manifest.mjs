@@ -110,8 +110,8 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
  * The plugin installs either — it extracts the AppImage when the bytes are gzip
  * and writes them straight out when they are not — so the harness looks for
  * both rather than deciding which setting the build was made under. A release
- * publishes the AppImage as it is (`release-assets.mjs`), beside the `.deb`,
- * which this harness does not serve.
+ * publishes only the `.deb` (`release-assets.mjs` says why), which this harness
+ * does not serve.
  */
 export function defaultArtifacts(platform, version, targetDirectory = "target") {
   const { appimage } = linuxBundles("Nessa", version, "amd64")

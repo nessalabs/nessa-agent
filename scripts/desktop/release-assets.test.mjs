@@ -78,10 +78,9 @@ test("every update artifact publishes under its own name and key", () => {
     [
       ["darwin-aarch64", "Nessa_0.1.0_darwin-aarch64.app.tar.gz"],
       ["darwin-x86_64", "Nessa_0.1.0_darwin-x86_64.app.tar.gz"],
-      // The plugin looks for `{os}-{arch}-{installer}` first, so a .deb install
-      // is offered the .deb and an AppImage the AppImage.
+      // The plugin looks for `{os}-{arch}-{installer}` first, so only a .deb
+      // install is offered the .deb.
       ["linux-x86_64-deb", "Nessa_0.1.0_amd64.deb"],
-      ["linux-x86_64-appimage", "Nessa_0.1.0_amd64.AppImage"],
     ],
   )
   assert.equal(new Set(artifacts.map(({ key }) => key)).size, artifacts.length)
@@ -128,14 +127,6 @@ test("staging reads the paths a targeted build actually writes", () => {
       built: `${linux}/deb/Nessa_0.1.0_amd64.deb.sig`,
       published: "Nessa_0.1.0_amd64.deb.sig",
     },
-    {
-      built: `${linux}/appimage/Nessa_0.1.0_amd64.AppImage`,
-      published: "Nessa_0.1.0_amd64.AppImage",
-    },
-    {
-      built: `${linux}/appimage/Nessa_0.1.0_amd64.AppImage.sig`,
-      published: "Nessa_0.1.0_amd64.AppImage.sig",
-    },
   ])
 })
 
@@ -165,7 +156,6 @@ test("one manifest describes every architecture and package format", () => {
     "darwin-aarch64",
     "darwin-x86_64",
     "linux-x86_64-deb",
-    "linux-x86_64-appimage",
   ])
   assert.equal(manifest.version, "0.1.0")
   assert.equal(new Date(manifest.pub_date).toISOString(), manifest.pub_date)
@@ -183,7 +173,7 @@ test("one manifest describes every architecture and package format", () => {
     assert.equal(entry.signature, signature(key))
 })
 
-test("a missing architecture or format stops the manifest rather than shrinking it", () => {
+test("a missing platform stops the manifest rather than shrinking it", () => {
   // The failure this exists for: one runner's build fails, the release is
   // assembled from what arrived, and everyone on the missing platform is told
   // they are up to date forever.
@@ -200,13 +190,11 @@ test("a missing architecture or format stops the manifest rather than shrinking 
     () => releasePlatforms({ ...release, signatures: withoutIntel }),
     /No signature for darwin-x86_64/,
   )
-  // One Linux format is not the Linux release: AppImage installs would be told
-  // they are current while .deb installs update.
-  const withoutAppImage = signaturesFor(RELEASE_TARGETS)
-  delete withoutAppImage["linux-x86_64-appimage"]
+  const withoutDeb = signaturesFor(RELEASE_TARGETS)
+  delete withoutDeb["linux-x86_64-deb"]
   assert.throws(
-    () => releasePlatforms({ ...release, signatures: withoutAppImage }),
-    /No signature for linux-x86_64-appimage/,
+    () => releasePlatforms({ ...release, signatures: withoutDeb }),
+    /No signature for linux-x86_64-deb/,
   )
 })
 
@@ -294,7 +282,6 @@ test("published names follow the shipped product and version", () => {
       `Nessa_${config.version}_darwin-aarch64.app.tar.gz`,
       `Nessa_${config.version}_darwin-x86_64.app.tar.gz`,
       `Nessa_${config.version}_amd64.deb`,
-      `Nessa_${config.version}_amd64.AppImage`,
     ],
   )
   assert.equal(config.bundle.createUpdaterArtifacts, true)

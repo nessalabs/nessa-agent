@@ -246,7 +246,7 @@ test("a failed staple stops the build before verification", () => {
 test("a Linux build verifies its packages and staples nothing", () => {
   const calls = []
   const status = runDesktopBuild({
-    args: ["--target", "x86_64-unknown-linux-gnu", "--bundles", "deb,appimage"],
+    args: ["--target", "x86_64-unknown-linux-gnu", "--bundles", "deb"],
     environment: {},
     platform: "linux",
     spawn(command, args, options) {
@@ -258,7 +258,7 @@ test("a Linux build verifies its packages and staples nothing", () => {
   assert.equal(calls.length, 2)
   assert.deepEqual(calls[1].args, ["scripts/desktop/verify-linux-bundle.mjs"])
   assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, "x86_64-unknown-linux-gnu")
-  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb,appimage")
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
 })
 
 test("verification does not inherit artifact selectors without matching arguments", () => {

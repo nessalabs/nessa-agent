@@ -15,7 +15,7 @@ Diagrams use Mermaid and render on GitHub.
 The desktop app opens on all three systems. macOS and Linux can run the
 **gateway**, the background service that agents talk to. Linux uses a systemd
 user service and has a native disposable-manager CI proof, and releases ship it
-as a `.deb` and an AppImage ([#216](https://github.com/nessalabs/nessa-agent/issues/216));
+as a `.deb` ([#216](https://github.com/nessalabs/nessa-agent/issues/216));
 its installed logout/login acceptance remains open. Windows still stops at the
 unsupported host boundary.
 
@@ -97,11 +97,10 @@ Do these once. Linux uses them first, Windows reuses them.
    a returned cache path from a same-user process that can rewrite the cache.
    macOS signs the
    executables; native Linux x86_64 probes them and includes the tree in its
-   `.deb` and AppImage. Windows remains disabled.
+   `.deb`. Windows remains disabled.
 2. **Updater manifest for more targets (Linux complete).** `RELEASE_TARGETS`
-   includes `x86_64-unknown-linux-gnu`, published under one key per package
-   format (`linux-x86_64-deb`, `linux-x86_64-appimage`), because the updater
-   installs each kind of install from its own format. Windows still needs
+   includes `x86_64-unknown-linux-gnu`, published as `linux-x86_64-deb`,
+   because the updater installs each kind of install from its own format. Windows still needs
    `x86_64-pc-windows-msvc`.
 3. **Release workflow matrix (Linux complete).** An `ubuntu-22.04` row builds
    the Linux packages; each row carries its own `bundles`. Windows still needs
@@ -124,7 +123,7 @@ flowchart TB
     end
     subgraph Linux
         L1[systemd user unit adapter]
-        L2[.deb and AppImage packaging<br/>DONE]
+        L2[.deb packaging<br/>DONE; AppImage blocked]
         L3[Install / start / quit / reopen test]
     end
     subgraph Windows
@@ -144,8 +143,8 @@ so the macOS adapter design carries over.
 The runtime resource foundation prepares native `x86_64-unknown-linux-gnu`
 builds in the existing Ubuntu CI matrix leg. The Linux adapter now stages that
 runtime, registers and reconciles a systemd user unit, and proves its lifecycle
-against a disposable native user manager. Releases package it as a `.deb` and
-an AppImage (#216). It does not yet prove an installed logout/login lifecycle.
+against a disposable native user manager. Releases package it as a `.deb`
+(#216). It does not yet prove an installed logout/login lifecycle.
 
 What remains to validate and ship:
 
@@ -165,9 +164,12 @@ What remains to validate and ship:
   disposable session objects; the XDG specification requires it to disappear
   after a full logout and reboot. Keep the backend namespace and credentials at
   their current root until the namespace work chooses one owner for that move.
-- Packaged as `.deb` and AppImage (done, #216). The `.deb` declares WebKitGTK
-  and the tray's appindicator library; the AppImage carries the appindicator
-  library itself.
+- Packaged as a `.deb` (done, #216), which declares WebKitGTK and the tray's
+  appindicator library. An AppImage is not released: linuxdeploy rewrites every
+  ELF file under `usr/lib`, the runtime's executables included, so the runtime
+  fails its fingerprint and the Claude agent's self-contained binary can be
+  damaged. Shipping one needs the runtime placed where linuxdeploy does not
+  reach, and the app finding it there.
 - No code signing is required on Linux.
 
 ```mermaid
@@ -454,7 +456,8 @@ desktop host can replace a gateway safely.
 - [ ] Shared: Windows bundle verification
 - [ ] Shared: gate Unix-only code in the gateway adapter
 - [x] Linux: `Systemd` adapter with XDG persistent/session paths; installed logout/login acceptance remains #188
-- [x] Linux: `.deb` and AppImage packaging with WebKitGTK deps
+- [x] Linux: `.deb` packaging with WebKitGTK deps
+- [ ] Linux: AppImage, once the runtime is out of linuxdeploy's reach
 - [ ] Linux: end-to-end install / start / quit / reopen / logout test
 - [x] Windows: record the service model decision
 - [ ] Windows: prove Task Scheduler PID/restart/session behavior on native Windows
