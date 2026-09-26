@@ -1,5 +1,5 @@
 //! What a person answered, checked against what the agent actually asked.
-use super::{AgentQuestion, AnswerShape, MAX_TEXT_BYTES};
+use super::{AgentQuestion, AnswerShape, MAX_KEY_BYTES, MAX_OPTIONS, MAX_TEXT_BYTES};
 use crate::domain::agent_execution::ExecutionError;
 
 /// What was chosen for one question.
@@ -24,6 +24,26 @@ impl QuestionChoice {
         let key = key.into();
         if key.trim().is_empty() {
             return Err(ExecutionError::EmptyValue("answer key"));
+        }
+        if key.len() > MAX_KEY_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "answer key",
+                max_bytes: MAX_KEY_BYTES,
+            });
+        }
+        // A question offers at most this many answers, so choosing more than
+        // that — or the same one twice — is not a selection it could have made.
+        if values.len() > MAX_OPTIONS {
+            return Err(ExecutionError::TooManyValues {
+                field: "answers to one question",
+                max: MAX_OPTIONS,
+            });
+        }
+        let mut chosen = std::collections::HashSet::with_capacity(values.len());
+        for value in &values {
+            if !chosen.insert(value.as_str()) {
+                return Err(ExecutionError::DuplicateAnswerOption);
+            }
         }
         let own_words = match own_words {
             Some(words) if words.trim().is_empty() => None,
@@ -99,6 +119,19 @@ impl AcceptedAnswer {
                 return Err(ExecutionError::UnofferedAnswer);
             }
         }
+        // A question the asker said may not be skipped must have something in
+        // it: a choice, or words of the answerer's own. Otherwise the agent is
+        // sent content its own schema refuses, and receives an error in place
+        // of the answer it waited for.
+        for asked in question.questions().iter().filter(|asked| asked.required()) {
+            let answered = choices.iter().any(|choice| {
+                choice.key() == asked.key()
+                    && (!choice.values.is_empty() || choice.own_words().is_some())
+            });
+            if !answered {
+                return Err(ExecutionError::UnansweredQuestion);
+            }
+        }
         Ok(Self(choices))
     }
 
@@ -108,11 +141,26 @@ impl AcceptedAnswer {
     }
 }
 
-/// How an ask was answered.
+/// Why an ask stopped waiting when nobody answered it.
+///
+/// An ask that ends unanswered still ended for a reason, and the reason is the
+/// difference between a provider taking its question back and a session going
+/// away underneath it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuestionCancellation {
+    /// The provider withdrew the question it was waiting on.
+    ProviderWithdrawal,
+    /// The session holding the ask was closed or failed.
+    SessionEnded,
+}
+
+/// How an ask ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionResponse {
     /// Answered, with choices that belong to the ask.
     Answered(AcceptedAnswer),
     /// Answered by declining to answer. The agent is told, and continues.
     Declined,
+    /// Ended without an answer, for a reason nobody chose.
+    Cancelled(QuestionCancellation),
 }

@@ -1,7 +1,7 @@
 //! Mandatory permission evidence, independent of live event consumers.
 #![deny(missing_docs)]
 
-use super::PermissionResolution;
+use super::{ActionContext, PermissionResolution};
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::permissions::ReviewDecline;
@@ -125,15 +125,23 @@ pub struct QuestionAnswerRecord {
     execution_id: ExecutionId,
     question_id: QuestionId,
     response: QuestionResponse,
+    actor: Option<ActionContext>,
     delivery: PermissionAnswerDelivery,
 }
 impl QuestionAnswerRecord {
-    /// Record that `response` was given to `question_id` within `session_id`.
+    /// Record that `response` ended `question_id` within `session_id`.
+    ///
+    /// `actor` is who answered, verified by the host that took the answer.
+    /// It is present exactly when somebody chose the outcome — an answer or a
+    /// decline — and absent for a cancellation, which nobody chose: saying who
+    /// did would be inventing an initiator, and leaving one out of an explicit
+    /// answer would lose the one fact an audit of it exists to keep.
     pub fn new(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
         question_id: QuestionId,
         response: QuestionResponse,
+        actor: Option<ActionContext>,
         delivery: PermissionAnswerDelivery,
     ) -> Self {
         Self {
@@ -141,8 +149,13 @@ impl QuestionAnswerRecord {
             execution_id,
             question_id,
             response,
+            actor,
             delivery,
         }
+    }
+    /// Who answered, where somebody did; `None` when the ask was cancelled.
+    pub fn actor(&self) -> Option<&ActionContext> {
+        self.actor.as_ref()
     }
     /// Provider session whose agent asked.
     pub fn session_id(&self) -> &ExecutionSessionId {

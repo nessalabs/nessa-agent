@@ -272,6 +272,25 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
+        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow"):
+            def ask(ask_id):
+                send({"id": ask_id, "method": "elicitation/create", "params": {
+                    "sessionId": session, "mode": "form", "message": "Which environment?",
+                    "requestedSchema": {"type": "object", "properties": {
+                        "question_0": {"type": "string", "oneOf": [
+                            {"const": "staging"}, {"const": "production"}]}}}}})
+            if mode == "asks-collide":
+                # Two requests whose ids differ in type and not in text. They
+                # are two asks; answering one must not answer the other.
+                ask(1)
+                ask("1")
+            elif mode == "ask-withdrawn":
+                ask("ask")
+                send({"method": "$/cancel_request", "params": {"requestId": "ask"}})
+            else:
+                # One more than a surface can show at once.
+                for index in range(9):
+                    ask(f"a{index}")
         elif mode.startswith("question"):
             # An agent asking, the way the harness bridges its own question tool
             # into a form elicitation.
@@ -392,6 +411,22 @@ for line in sys.stdin:
             pending = None
     elif mode == "permission-pair" and msg.get("id") in ("first-review", "second-review"):
         record(msg["id"] + "-outcome", json.dumps(msg["result"]["outcome"]))
+    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow") and "result" in msg:
+        # Every answer, in the order it arrived, with its id exactly as sent —
+        # `1` and `"1"` are different requests and must stay different here.
+        seen = root / "answers"
+        prior = seen.read_text() if seen.exists() else ""
+        record("answers", prior + json.dumps({"id": msg["id"], "result": msg["result"]}) + "\n")
+        answered = prior.count("\n") + 1
+        finished = (
+            (mode == "asks-collide" and answered == 2)
+            or (mode == "ask-withdrawn")
+            or (mode == "asks-overflow" and msg["id"] == "a8")
+        )
+        if finished and pending is not None:
+            text("done asking")
+            result(pending, {"stopReason": "end_turn"})
+            pending = None
     elif mode.startswith("question") and msg.get("id") == "ask":
         # Record exactly what the answer carried, then finish the turn.
         record("question-answer", json.dumps(msg["result"]))

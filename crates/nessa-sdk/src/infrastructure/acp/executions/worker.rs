@@ -45,7 +45,8 @@ use crate::domain::agent_execution::permissions::{
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
-    AcceptedAnswer, AgentQuestion, QuestionId, QuestionResponse,
+    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionResponse,
+    MAX_OPEN_QUESTIONS,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -137,6 +138,7 @@ struct Worker<P> {
     events: EventSender,
     sequence: i64,
     permission_sequence: Arc<AtomicU64>,
+    question_sequence: Arc<AtomicU64>,
     active: Option<ActiveExecution>,
     steering: Option<PendingSteering>,
     steering_supported: bool,
@@ -160,7 +162,7 @@ struct Worker<P> {
     /// Held beside the wire request because answering one means writing a
     /// response to it, and beside what was asked because an answer is only an
     /// answer if it chooses what that question offered.
-    questions: HashMap<QuestionId, (RpcId, AgentQuestion)>,
+    questions: HashMap<QuestionId, OpenQuestion>,
     /// One request at a time is all this has to remember, because the
     /// dispatcher takes it as soon as that request's handler returns. A
     /// provider that reuses one identifier for two requests is already outside
@@ -195,6 +197,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     audit: Arc<dyn ExecutionAudit>,
     restore: Option<ExecutionSessionId>,
     permission_sequence: Arc<AtomicU64>,
+    question_sequence: Arc<AtomicU64>,
     operation_capabilities: watch::Sender<OperationCapabilities>,
     recovery: Arc<ProcessCleanup>,
 ) {
@@ -215,6 +218,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         events,
         sequence: 0,
         permission_sequence,
+        question_sequence,
         active: None,
         steering: None,
         steering_supported: false,
@@ -1407,7 +1411,7 @@ impl<P: AcpProfile> Worker<P> {
                     let result = self
                         .question(execution, id.clone(), params, response_deadline)
                         .await;
-                    if result.is_err() && !self.questions.values().any(|(held, _)| *held == id) {
+                    if result.is_err() && !self.questions.values().any(|open| open.wire_id == id) {
                         let _ = self
                             .send_before(question_wire::cancelled(&id), response_deadline)
                             .await;
@@ -1455,6 +1459,18 @@ impl<P: AcpProfile> Worker<P> {
                         response_deadline,
                     )
                     .await?;
+                } else if let Some(id) = self
+                    .questions
+                    .iter()
+                    .find_map(|(id, open)| (open.wire_id == wire_id).then(|| id.clone()))
+                {
+                    // A provider taking its question back ends the ask exactly
+                    // as a teardown does, for a different recorded reason.
+                    // Left open, a surface would keep offering it, and a later
+                    // answer would be written into a request nobody is waiting on.
+                    let open = self.questions.remove(&id).expect("question found above");
+                    self.end_question(id, open, QuestionCancellation::ProviderWithdrawal)
+                        .await?;
                 }
             }
             return Ok(());
@@ -1856,8 +1872,15 @@ impl<P: AcpProfile> Worker<P> {
                 .send_before(question_wire::cancelled(&wire_id), response_deadline)
                 .await;
         }
-        if self.questions.len() >= 32 || self.questions.values().any(|(id, _)| *id == wire_id) {
-            return Err(json_rpc::protocol("question limit or duplicate ID"));
+        // Bounded where the view that shows them is bounded: an ask nobody can
+        // see is an ask nobody can answer, so admitting more than the surface
+        // holds would strand the extras rather than queue them.
+        if self.questions.len() >= MAX_OPEN_QUESTIONS
+            || self.questions.values().any(|open| open.wire_id == wire_id)
+        {
+            return self
+                .send_before(question_wire::cancelled(&wire_id), response_deadline)
+                .await;
         }
         let question = match question_wire::question(&params) {
             Ok(question) => question,
@@ -1870,15 +1893,36 @@ impl<P: AcpProfile> Worker<P> {
                     .await
             }
         };
-        let id = QuestionId::new(wire_id.text())
+        // Minted here rather than taken from the provider's request id. That id
+        // is an attribute of one message: two asks can carry `1` and `"1"`,
+        // which are different requests and the same text, and a provider may
+        // reuse an id once its request is answered. An identity an answer names
+        // has to outlive both, so this mints its own, as a review does.
+        let sequence = self
+            .question_sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| json_rpc::protocol("question ID exhausted"))?
+            + 1;
+        let id = QuestionId::new(sequence.to_string())
             .map_err(|error| json_rpc::protocol(&error.to_string()))?;
-        let target = &self
+        let execution_id = self
             .active
             .as_ref()
             .expect("validated active prompt")
-            .execution_id;
-        let event = execution.ask_question(target, id.clone(), question.clone())?;
-        self.questions.insert(id, (wire_id, question));
+            .execution_id
+            .clone();
+        let event = execution.ask_question(&execution_id, id.clone(), question.clone())?;
+        self.questions.insert(
+            id,
+            OpenQuestion {
+                wire_id,
+                session_id: execution.id().clone(),
+                execution_id,
+                question,
+            },
+        );
         self.emit(event)
     }
 
@@ -1894,7 +1938,12 @@ impl<P: AcpProfile> Worker<P> {
         answer: QuestionAnswer,
         reply: oneshot::Sender<ProviderOperationResult<()>>,
     ) -> Result<(), AgentError> {
-        let Some((wire_id, asked)) = self.questions.get(&answer.id).cloned() else {
+        let Some(OpenQuestion {
+            wire_id,
+            question: asked,
+            ..
+        }) = self.questions.get(&answer.id).cloned()
+        else {
             let _ = reply.send(Err(ProviderOperationFailure::new(
                 AgentError::InvalidInput("no question is waiting for this answer".into()),
                 ProviderSessionState::Usable,
@@ -1936,42 +1985,46 @@ impl<P: AcpProfile> Worker<P> {
                 answer.execution_id.clone(),
                 answer.id.clone(),
                 response.clone(),
+                Some(answer.actor.clone()),
                 delivery,
             ))
         };
-        let decided = self
+        // The decision is evidence before the wire sees it, and an unrecordable
+        // decision is not sent: an answered review returns here rather than
+        // acting unaudited, and an answered question is the same decision.
+        if let Err(error) = self
             .record_audit(record(PermissionAnswerDelivery::Selected))
-            .await;
+            .await
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                error.clone(),
+                ProviderSessionState::CleanupRequired,
+            )));
+            return Err(error);
+        }
         let written = match &response {
             QuestionResponse::Answered(accepted) => {
-                let chosen = accepted
-                    .choices()
-                    .iter()
-                    .map(|choice| {
-                        (
-                            choice.key().to_owned(),
-                            choice.values().map(str::to_owned).collect::<Vec<_>>(),
-                            choice.own_words().map(str::to_owned),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                question_wire::accepted(&wire_id, &chosen)
+                question_wire::accepted(&wire_id, &asked, accepted)
             }
             QuestionResponse::Declined => question_wire::declined(&wire_id),
+            // A host answers or declines; cancelling is not something it can
+            // submit. Written as what it means on the wire all the same, so the
+            // match is total rather than trusting that it cannot happen.
+            QuestionResponse::Cancelled(_) => question_wire::cancelled(&wire_id),
         };
         let delivery = self.send(written).await;
-        // The ask has stopped waiting whatever the wire did with the answer, and
-        // a surface that did not answer it still has to see that.
-        let closed = execution.close_question(&answer.execution_id, answer.id.clone());
-        if let Ok(event) = closed {
-            let _ = self.emit(event);
-        }
+        // Closure is how a surface that did not answer learns the ask is over,
+        // so a queue that cannot take it is a failure to report, not to ignore:
+        // dropping it leaves an actionable ask whose later answers are refused.
+        let closed = execution
+            .close_question(&answer.execution_id, answer.id.clone())
+            .and_then(|event| self.emit(event));
         let observed = match &delivery {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
         };
         let recorded = self.record_audit(record(observed)).await;
-        let outcome = match (decided.and(recorded), delivery.clone()) {
+        let outcome = match (recorded.and(closed), delivery.clone()) {
             (Ok(()), delivery) => delivery,
             (Err(audit), Ok(())) => Err(audit),
             (Err(_), Err(delivery_error)) => {
@@ -2096,11 +2149,69 @@ impl<P: AcpProfile> Worker<P> {
         // pending review is: the agent is waiting on this request, and leaving
         // it unanswered leaves it waiting forever.
         let questions = std::mem::take(&mut self.questions);
-        for (wire_id, _) in questions.into_values() {
-            self.send(question_wire::cancelled(&wire_id)).await?;
+        let mut failure = None;
+        for (id, open) in questions {
+            if let Err(error) = self
+                .end_question(id, open, QuestionCancellation::SessionEnded)
+                .await
+            {
+                failure.get_or_insert(error);
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
+
+    /// End one ask that nobody answered, and leave the evidence of why.
+    ///
+    /// Every step is attempted whatever the one before it did. The provider
+    /// is told, so the agent is not left waiting; the close is observed, so a
+    /// surface still showing the ask stops offering it; and the cause is
+    /// recorded, because an ask ending is a transition like any other and a
+    /// teardown is not an exception to that. The first failure is what is
+    /// returned, and none of them stops the others.
+    async fn end_question(
+        &mut self,
+        id: QuestionId,
+        open: OpenQuestion,
+        cause: QuestionCancellation,
+    ) -> Result<(), AgentError> {
+        let delivery = self.send(question_wire::cancelled(&open.wire_id)).await;
+        let closed = ExecutionEvent::new(
+            open.execution_id.clone(),
+            ExecutionUpdate::QuestionClosed { id: id.clone() },
+        );
+        let observed = self.emit(closed);
+        let recorded = self
+            .record_audit(ExecutionAuditRecord::QuestionAnswered(
+                QuestionAnswerRecord::new(
+                    open.session_id,
+                    open.execution_id,
+                    id,
+                    QuestionResponse::Cancelled(cause),
+                    None,
+                    match &delivery {
+                        Ok(()) => PermissionAnswerDelivery::Written,
+                        Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+                    },
+                ),
+            ))
+            .await;
+        delivery.and(observed).and(recorded)
+    }
+}
+
+/// One ask this worker is holding open for an answer.
+///
+/// Named rather than a tuple because each part answers a different question:
+/// which provider request the agent is waiting on, which execution asked — so
+/// an answer or a cancellation can name it after that execution is no longer
+/// active — and what was asked, which an answer is checked against.
+#[derive(Clone)]
+struct OpenQuestion {
+    wire_id: RpcId,
+    session_id: ExecutionSessionId,
+    execution_id: ExecutionId,
+    question: AgentQuestion,
 }
 
 /// Which of the two things a profile's refusal was saying.

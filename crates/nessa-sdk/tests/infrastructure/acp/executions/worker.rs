@@ -78,6 +78,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             events,
             sequence: 0,
             permission_sequence: Arc::new(AtomicU64::new(0)),
+            question_sequence: Arc::new(AtomicU64::new(0)),
             active: None,
             steering: None,
             steering_supported: false,

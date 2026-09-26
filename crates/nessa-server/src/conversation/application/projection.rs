@@ -308,6 +308,7 @@ impl Projection {
                     header: asked.header().map(str::to_owned),
                     multi_select: asked.shape() == AnswerShape::Many,
                     free_text: asked.free_text(),
+                    required: asked.required(),
                     options: asked
                         .options()
                         .iter()
@@ -514,12 +515,16 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
                 self.observe_question(event);
             }
-            ExecutionUpdate::QuestionClosed { id } => {
+            // `question`, not `id`: `id` here is the execution, and shadowing it
+            // recorded the closure under (question, question) — so a replayed
+            // ask missed its tombstone and reopened. An ask is identified by the
+            // execution that asked and its own identity, together.
+            ExecutionUpdate::QuestionClosed { id: question } => {
                 self.answered_questions
-                    .insert((id.as_str().to_owned(), id.as_str().to_owned()));
-                self.view
-                    .questions
-                    .retain(|question| question.question_id != id.as_str());
+                    .insert((id.to_owned(), question.as_str().to_owned()));
+                self.view.questions.retain(|open| {
+                    open.execution_id != id || open.question_id != question.as_str()
+                });
             }
             ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;

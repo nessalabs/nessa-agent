@@ -905,6 +905,7 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
     let refused = opened
         .session
         .answer_question(QuestionAnswer {
+            actor: answerer(),
             execution_id: ExecutionId::new("write").unwrap(),
             id: id.clone(),
             choices: Some(vec![QuestionChoice::new(
@@ -924,6 +925,7 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
     opened
         .session
         .answer_question(QuestionAnswer {
+            actor: answerer(),
             execution_id: ExecutionId::new("write").unwrap(),
             id: id.clone(),
             choices: Some(vec![QuestionChoice::new(
@@ -976,6 +978,9 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
     for record in &answers {
         assert_eq!(record.execution_id().as_str(), "write");
         assert_eq!(record.question_id(), &id);
+        // Who answered is kept, not merely checked on the way in: an explicit
+        // answer's audit without its initiator is not evidence of anything.
+        assert_eq!(record.actor(), Some(&answerer()));
         let QuestionResponse::Answered(accepted) = record.response() else {
             panic!("the question was answered, not declined");
         };
@@ -988,4 +993,192 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
         .await
         .into_result()
         .unwrap();
+}
+
+/// The verified caller these tests answer as.
+fn answerer() -> ActionContext {
+    ActionContext::new("reviewer", "nessa.panel", "answer-question").unwrap()
+}
+
+/// The provider's recorded answers, each with its request id exactly as sent.
+fn provider_answers(root: &TempDir) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(root.path().join("answers"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// Answer one open ask with `value`, as the verified caller.
+async fn answer_with(opened: &OpenedProviderSession, id: &QuestionId, value: &str) {
+    opened
+        .session
+        .answer_question(QuestionAnswer {
+            actor: answerer(),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id: id.clone(),
+            choices: Some(vec![QuestionChoice::new(
+                "question_0",
+                vec![value.into()],
+                None,
+            )
+            .unwrap()]),
+        })
+        .await
+        .unwrap();
+}
+
+/// Two requests whose ids share their text are still two asks.
+///
+/// The review reproduced `1` and `"1"` colliding: identity was minted from the
+/// provider's id as text, so the second ask replaced the first and answering
+/// the one on screen wrote to the wrong request. Identity is now minted here.
+#[tokio::test]
+async fn two_asks_whose_ids_share_their_text_are_answered_separately() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("asks-collide", 16);
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+
+    let ExecutionUpdate::QuestionAsked { id: first, .. } = next(&mut opened).await else {
+        panic!("expected the first ask");
+    };
+    let ExecutionUpdate::QuestionAsked { id: second, .. } = next(&mut opened).await else {
+        panic!("expected the second ask");
+    };
+    assert_ne!(first, second, "two requests are two asks");
+
+    answer_with(&opened, &first, "staging").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::QuestionClosed { .. }
+    ));
+    answer_with(&opened, &second, "production").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::QuestionClosed { .. }
+    ));
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // Each provider request received the answer meant for it: number `1` got
+    // the first, string `"1"` the second.
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    let answered = |id: serde_json::Value| {
+        answers
+            .iter()
+            .find(|answer| answer["id"] == id)
+            .unwrap_or_else(|| panic!("no answer for {id}"))["result"]["content"]["question_0"]
+            .clone()
+    };
+    assert_eq!(answered(serde_json::json!(1)), "staging");
+    assert_eq!(answered(serde_json::json!("1")), "production");
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// A question the provider takes back ends with its evidence, and cannot then
+/// be answered into a request nobody is waiting on.
+#[tokio::test]
+async fn a_withdrawn_ask_closes_is_recorded_and_can_no_longer_be_answered() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("ask-withdrawn", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+
+    let ExecutionUpdate::QuestionAsked { id, .. } = next(&mut opened).await else {
+        panic!("expected the ask");
+    };
+    let ExecutionUpdate::QuestionClosed { id: closed } = next(&mut opened).await else {
+        panic!("a withdrawn ask must close as its own observation");
+    };
+    assert_eq!(closed, id);
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // The provider was told, so it is not left waiting.
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["id"], "ask");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+
+    // The ending is recorded with its cause, and with no initiator invented.
+    let records = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        records[0].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::ProviderWithdrawal)
+    );
+    assert_eq!(records[0].actor(), None);
+    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Written);
+
+    // Nothing is waiting any more, so an answer is refused rather than sent.
+    let late = opened
+        .session
+        .answer_question(QuestionAnswer {
+            actor: answerer(),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id,
+            choices: None,
+        })
+        .await
+        .map_err(ProviderOperationFailure::into_error);
+    assert!(matches!(late, Err(AgentError::InvalidInput(_))), "{late:?}");
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// No more asks are admitted than a surface can show.
+///
+/// The review found a ninth ask stranded: the binding admitted it, the view
+/// could not show it, and nothing could ever answer it. The excess is now
+/// answered at once, so the agent is not left waiting on it.
+#[tokio::test]
+async fn asks_beyond_what_a_surface_can_show_are_answered_rather_than_stranded() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("asks-overflow", 32);
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+
+    let mut asked = 0;
+    loop {
+        match next(&mut opened).await {
+            ExecutionUpdate::QuestionAsked { .. } => asked += 1,
+            ExecutionUpdate::Message(chunk) if chunk.as_str() == "done asking" => break,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(asked, MAX_OPEN_QUESTIONS);
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let overflow = provider_answers(&root)
+        .into_iter()
+        .find(|answer| answer["id"] == "a8")
+        .expect("the ninth ask was answered");
+    assert_eq!(overflow["result"]["action"], "cancel");
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
 }

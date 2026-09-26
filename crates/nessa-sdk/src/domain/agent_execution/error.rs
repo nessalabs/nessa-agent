@@ -76,8 +76,13 @@ pub enum ExecutionError {
     /// Two questions in one ask share a key, so an answer to either could not be
     /// correlated back to the question that wanted it.
     DuplicateQuestionKey,
+    /// Two answers to one question record the same value, so a host choosing
+    /// between them could not say which it meant.
+    DuplicateAnswerOption,
     /// An answer names a question the agent did not ask in this ask.
     UnaskedQuestion,
+    /// A question the asker said may not be skipped was left unanswered.
+    UnansweredQuestion,
     /// An answer chooses something the question did not offer, or supplies
     /// prose where the question invited none.
     UnofferedAnswer,

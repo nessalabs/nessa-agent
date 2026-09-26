@@ -158,6 +158,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     events,
                     sequence: 0,
                     permission_sequence: Arc::new(AtomicU64::new(0)),
+                    question_sequence: Arc::new(AtomicU64::new(0)),
                     active: None,
                     steering: None,
                     steering_supported: false,

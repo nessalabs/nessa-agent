@@ -9,6 +9,7 @@
 //! rather than a refusal.
 pub mod value_objects;
 pub use value_objects::{
-    AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question, QuestionChoice, QuestionId,
-    QuestionResponse, MAX_OPTIONS, MAX_QUESTIONS, MAX_TEXT_BYTES,
+    AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation,
+    QuestionChoice, QuestionId, QuestionResponse, MAX_KEY_BYTES, MAX_OPEN_QUESTIONS, MAX_OPTIONS,
+    MAX_QUESTIONS, MAX_TEXT_BYTES,
 };

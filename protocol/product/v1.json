@@ -1841,6 +1841,10 @@
           "type": "boolean",
           "description": "Whether an answer in the answerer's own words is accepted."
         },
+        "required": {
+          "type": "boolean",
+          "description": "Whether an answer must include this question. Declining the whole ask is still possible; leaving out only this one is refused."
+        },
         "options": {
           "type": "array",
           "maxItems": 32,
@@ -1855,6 +1859,7 @@
         "prompt",
         "multiSelect",
         "freeText",
+        "required",
         "options"
       ]
     },

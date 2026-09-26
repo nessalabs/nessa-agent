@@ -587,6 +587,8 @@ export interface ConversationAsked {
   multiSelect: boolean
   /** Whether an answer in the answerer's own words is accepted. */
   freeText: boolean
+  /** Whether an answer must include this question. Declining the whole ask is still possible; leaving out only this one is refused. */
+  required: boolean
   /** What may be chosen, in the order the agent offered it. */
   options: ConversationAnswerOption[]
 }

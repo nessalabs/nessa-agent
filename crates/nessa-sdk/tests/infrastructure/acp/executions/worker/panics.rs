@@ -108,6 +108,7 @@ fn spawn_worker<P: AcpProfile>(
         audit,
         None,
         Arc::new(AtomicU64::new(0)),
+        Arc::new(AtomicU64::new(0)),
         operations,
         recovery.clone(),
     ));

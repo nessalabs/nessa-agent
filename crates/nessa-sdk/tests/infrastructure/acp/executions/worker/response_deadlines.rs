@@ -86,6 +86,7 @@ async fn blocked_worker(
         events,
         sequence: 0,
         permission_sequence: Arc::new(AtomicU64::new(0)),
+        question_sequence: Arc::new(AtomicU64::new(0)),
         active: Some(ActiveExecution {
             id: 1,
             execution_id,

@@ -6,7 +6,10 @@ use crate::application::agent_execution::executions::{
 use crate::domain::agent_execution::{
     permissions::PermissionOption,
     prompts::{LinkedFile, UserMessage},
-    questions::MAX_TEXT_BYTES as MAX_QUESTION_TEXT_BYTES,
+    questions::{
+        MAX_KEY_BYTES as MAX_QUESTION_KEY_BYTES, MAX_OPTIONS as MAX_QUESTION_OPTIONS,
+        MAX_QUESTIONS, MAX_TEXT_BYTES as MAX_QUESTION_TEXT_BYTES,
+    },
     tools::{FileLocation, ToolContent},
 };
 use std::mem::size_of;
@@ -46,8 +49,10 @@ pub(super) enum Shape {
     Tool,
     Review,
     Ask,
+    AskedQuestions,
     Asked,
     AskedOptions,
+    AskedOption,
     Content,
     Locations,
     Options,
@@ -98,13 +103,16 @@ impl Shape {
             (Update, "Tool") | (Review, "tool") => Tool,
             (Update, "PermissionRequested" | "PermissionCancelled") => Review,
             (Update, "QuestionAsked" | "QuestionClosed") => Ask,
-            (Ask, "questions") => Asked,
+            // Plural shapes are the arrays; `element` gives the singular for
+            // each item, which is where the field bounds below apply. Mapping a
+            // field straight to the singular skipped that step, so every saved
+            // question decoded as generic and none of these bounds were read.
+            (Ask, "questions") => AskedQuestions,
             (Asked, "options") => AskedOptions,
             (Ask, "id") => Text(256),
             (Ask, "message") | (Asked, "prompt" | "header") => Text(MAX_QUESTION_TEXT_BYTES),
-            (Asked, "key") | (AskedOptions, "value" | "label" | "description") => {
-                Text(MAX_QUESTION_TEXT_BYTES)
-            }
+            (Asked, "key" | "free_text_key") => Text(MAX_QUESTION_KEY_BYTES),
+            (AskedOption, "value" | "label" | "description") => Text(MAX_QUESTION_TEXT_BYTES),
             (Tool, "content") => Content,
             (Tool, "locations") => Locations,
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),
@@ -157,6 +165,8 @@ impl Shape {
             Self::Reorders => Self::Reorder,
             Self::QueueEntries => Self::QueueEntry,
             Self::QueueIds => Self::Text(256),
+            Self::AskedQuestions => Self::Asked,
+            Self::AskedOptions => Self::AskedOption,
             _ => Self::Generic,
         }
     }
@@ -179,6 +189,10 @@ impl Shape {
             Self::Options => LARGE_STRING / size_of::<PermissionOption>(),
             // Valid scheduling histories have at most three transitions.
             Self::Scheduling => 3,
+            // The constructors refuse more; refuse them here, before the
+            // excess questions and options are built.
+            Self::AskedQuestions => MAX_QUESTIONS,
+            Self::AskedOptions => MAX_QUESTION_OPTIONS,
             // Each collection element occupies retained storage. The per-change
             // structural budget below also applies to nested/empty elements.
             _ => 4 * 1024 * 1024,

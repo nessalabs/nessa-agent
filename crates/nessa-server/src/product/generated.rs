@@ -579,6 +579,7 @@ pub struct ConversationAsked {
     pub header: Option<String>,
     pub multi_select: bool,
     pub free_text: bool,
+    pub required: bool,
     pub options: Vec<ConversationAnswerOption>,
 }
 #[derive(Deserialize, Serialize)]

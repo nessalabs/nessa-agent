@@ -181,6 +181,7 @@ async fn worker_with_ready_frames_boundary(
             events,
             sequence: 0,
             permission_sequence: Arc::new(AtomicU64::new(0)),
+            question_sequence: Arc::new(AtomicU64::new(0)),
             active: None,
             steering: None,
             steering_supported: true,

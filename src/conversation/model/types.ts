@@ -184,6 +184,7 @@ type ConversationState = {
         header?: string | null
         multiSelect: boolean
         freeText: boolean
+        required: boolean
         options: { value: string; label: string; description?: string | null }[]
       }[]
     }[]

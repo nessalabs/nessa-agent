@@ -2,9 +2,11 @@
 //! Tests use synthetic evidence; no provider or model is contacted.
 //! `identifier_limits`, `messages`, and `retention` exercise restored admission;
 //! `permission_choices` checks exact persisted choices and scalable decoding;
+//! `asked_questions` checks restored ask fidelity, history, and decode bounds;
 //! `provider_identity` checks validated resume metadata; `custom_storage` supplies
 //! an unchecked adapter to prove application validation.
 use nessa_local_storage as private;
+mod asked_questions;
 mod benchmark;
 mod custom_storage;
 mod file_identity;

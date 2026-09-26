@@ -66,6 +66,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         profile,
         audit,
         permission_sequence: Arc::new(AtomicU64::new(0)),
+        question_sequence: Arc::new(AtomicU64::new(0)),
     };
     let (mut generation, initial_events) = factory.start(restore).map_err(|cause| {
         // This private factory returns only ProcessScope::spawn Transport errors;
@@ -116,6 +117,10 @@ struct WorkerFactory<P> {
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
     permission_sequence: Arc<AtomicU64>,
+    /// Question identities, minted here for the same reason review identities
+    /// are: they outlive any one provider request, including across restarts
+    /// of the worker that holds them.
+    question_sequence: Arc<AtomicU64>,
 }
 impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(
@@ -145,6 +150,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
             self.audit.clone(),
             restore,
             self.permission_sequence.clone(),
+            self.question_sequence.clone(),
             self.operation_capabilities.clone(),
             recovery.clone(),
         ));

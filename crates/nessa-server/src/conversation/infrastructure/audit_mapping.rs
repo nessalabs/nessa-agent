@@ -13,7 +13,7 @@ use nessa_sdk::domain::agent_execution::{
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
         ReviewDeclineReason,
     },
-    questions::QuestionResponse,
+    questions::{QuestionCancellation, QuestionResponse},
 };
 use serde_json::{json, Value};
 
@@ -74,9 +74,25 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                             "ownWords":choice.own_words(),
                         })).collect::<Vec<_>>(),
                     }),
+                    QuestionResponse::Cancelled(cause) => json!({
+                        "kind":"cancelled",
+                        "cause":match cause {
+                            QuestionCancellation::ProviderWithdrawal => "provider_withdrawal",
+                            QuestionCancellation::SessionEnded => "session_ended",
+                        },
+                    }),
                 },
                 "delivery":delivery(record.delivery()),
-                "origin":{"kind":"client"},
+                // The initiator is whoever actually ended the ask. An answer or
+                // a decline names its verified caller; a cancellation had none,
+                // and is labelled by what caused it rather than given one.
+                "origin":match (record.actor(), record.response()) {
+                    (Some(caller), _) => json!({"kind":"client","actor":actor(caller)}),
+                    (None, QuestionResponse::Cancelled(QuestionCancellation::ProviderWithdrawal)) => {
+                        json!({"kind":"provider"})
+                    }
+                    (None, _) => json!({"kind":"runtime"}),
+                },
             })
         }
     }

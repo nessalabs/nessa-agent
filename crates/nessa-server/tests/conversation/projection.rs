@@ -18,6 +18,7 @@ use nessa_sdk::{
             PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
         },
         prompts::{PromptText, UserMessage},
+        questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::{ExecutionSessionId, SessionId},
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
@@ -437,4 +438,66 @@ fn ordered_parts_keep_message_identity_and_non_text_observation_offsets() {
     assert_eq!(message["parts"][1]["offset"], 2);
     assert_eq!(message["parts"][1]["messageId"], "m1");
     assert_eq!(message["parts"][2]["messageId"], "m2");
+}
+
+fn asked(execution: &str, question: &str) -> ExecutionEvent {
+    ExecutionEvent::new(
+        ExecutionId::new(execution).unwrap(),
+        ExecutionUpdate::QuestionAsked {
+            id: QuestionId::new(question).unwrap(),
+            question: AgentQuestion::new(
+                "Which environment?",
+                vec![Question::new(
+                    "question_0",
+                    "Which environment?",
+                    None,
+                    AnswerShape::One,
+                    vec![AnswerOption::new("staging", "Staging", None).unwrap()],
+                    None,
+                    false,
+                )
+                .unwrap()],
+            )
+            .unwrap(),
+        },
+    )
+}
+fn closed(execution: &str, question: &str) -> ExecutionEvent {
+    ExecutionEvent::new(
+        ExecutionId::new(execution).unwrap(),
+        ExecutionUpdate::QuestionClosed {
+            id: QuestionId::new(question).unwrap(),
+        },
+    )
+}
+
+#[test]
+fn a_closed_ask_stays_closed_when_it_is_replayed() {
+    // The review reproduced a closure recorded as (question, question) instead
+    // of (execution, question): a replayed ask missed its tombstone and became
+    // answerable again. The execution and question ids differ here, which is
+    // exactly the case that exposed it.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    assert_eq!(projection.read().questions.len(), 1);
+    projection.event(&closed("execution", "1"));
+    assert!(projection.read().questions.is_empty());
+    projection.event(&asked("execution", "1"));
+    assert!(
+        projection.read().questions.is_empty(),
+        "a closed ask reopened on replay"
+    );
+}
+
+#[test]
+fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
+    // Removal matched on the question id alone, so closing one execution's ask
+    // took another execution's same-numbered ask with it.
+    let mut projection = projection();
+    projection.event(&asked("first", "1"));
+    projection.event(&asked("second", "1"));
+    projection.event(&closed("first", "1"));
+    let view = projection.read();
+    assert_eq!(view.questions.len(), 1);
+    assert_eq!(view.questions[0].execution_id, "second");
 }
