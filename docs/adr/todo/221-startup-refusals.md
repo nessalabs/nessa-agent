@@ -169,7 +169,11 @@ the first fact is either `RetirementAcknowledged` or
 
 Both adapters ask the same shared rule what an answer allows
 (`gateway::infrastructure::retirement::stop_allowed_after`), so launchd and
-systemd cannot disagree about it. On macOS the stop is the unload plan
+systemd cannot disagree about it. They read a refusal's name through one rule
+too (`refusal_read`): it counts only on a failed retirement the gateway admitted,
+with a stop or audit failure and the gateway's own upgrade attribution, because
+that is the only result the gateway writes a name on. Any other result that did
+not retire is `not_confirmed` whatever it names. On macOS the stop is the unload plan
 `unload-unretirable-service`; on Linux it is the ordinary `stop-systemd-unit`
 step, and the failed `request-systemd-retirement` step's text names the refusal.
 On both, a refusal is a durable answer rather than an unreadable result, so a

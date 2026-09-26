@@ -34,7 +34,7 @@ use crate::gateway::{
         SystemdJobConclusion, SystemdJobMode, SystemdJobOperation, SystemdJobTerminal,
         SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
-    infrastructure::retirement::{stop_allowed_after, RetirementFailure},
+    infrastructure::retirement::{refusal_read, stop_allowed_after, RetirementFailure},
 };
 use nessa_gateway_endpoint::{
     domain::GatewayEndpointAdvertisement, infrastructure::FileEndpointDiscovery,
@@ -3180,8 +3180,9 @@ fn retirement_answer(
     let answer = if identity_agrees && result.retired && !failed && result.refusal.is_none() {
         RetirementAnswer::Retired
     } else if identity_agrees && !result.retired && failed {
+        // `identity_agrees` includes this request's attribution.
         RetirementAnswer::Refused {
-            refusal: RetirementRefusal::named(result.refusal.as_deref()),
+            refusal: refusal_read(result.refusal.as_deref(), true, failed),
             message: format!(
                 "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
                 result.retired, result.cleanup_error, result.audit_error

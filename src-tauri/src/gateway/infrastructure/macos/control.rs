@@ -2,7 +2,7 @@
 use super::startup::{
     diagnose, log_tail, parse_last_exit, recorded_failure, LastExit, RecordedFailure,
 };
-use crate::gateway::domain::value_objects::RetirementRefusal;
+use crate::gateway::infrastructure::retirement::refusal_read;
 pub(super) use crate::gateway::infrastructure::retirement::RetirementFailure;
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
@@ -583,9 +583,14 @@ fn acknowledge(
     {
         return Ok(false);
     }
-    if !result.retired || result.cleanup_error.is_some() || result.audit_error.is_some() {
+    let failed = result.cleanup_error.is_some() || result.audit_error.is_some();
+    if !result.retired || failed {
+        // Admitted: the same attribution a retirement needs, a correlation
+        // under the gateway's own upgrade cause (checked above to agree).
+        let attributed = result.retirement_request_id.is_some()
+            && valid_confirmed_cause(result.retirement_cause.as_ref());
         return Err(RetirementFailure::Refused {
-            refusal: RetirementRefusal::named(result.refusal.as_deref()),
+            refusal: refusal_read(result.refusal.as_deref(), attributed, failed),
             message: format!(
                 "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
                 result.retired, result.cleanup_error, result.audit_error

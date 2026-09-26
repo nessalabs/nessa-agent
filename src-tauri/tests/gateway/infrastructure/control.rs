@@ -1576,6 +1576,28 @@ fn a_refused_retirement_is_typed_by_its_published_name() {
         .to_string()
         .ends_with("(refusal: data_missing)"));
 
+    // A name counts only on a failed retirement the gateway admitted; no
+    // gateway writes it on anything else, so it never allows a stop there.
+    let mut nothing_failed = refused(Some("data_missing"));
+    nothing_failed["cleanupError"] = Value::Null;
+    let mut not_admitted = refused(Some("data_missing"));
+    not_admitted["retirementCause"] = Value::Null;
+    not_admitted["retirementRequestId"] = Value::Null;
+    let mut other_cause = refused(Some("data_missing"));
+    other_cause["retirementCause"]["surfaceId"] = json!("desktop");
+    for (case, result) in [
+        ("nothing failed", nothing_failed),
+        ("not admitted", not_admitted),
+        ("another cause", other_cause),
+    ] {
+        match answer(result) {
+            Err(super::RetirementFailure::Refused { refusal, .. }) => {
+                assert_eq!(refusal, RetirementRefusal::NotConfirmed, "{case}");
+            }
+            other => panic!("{case}: {other:?}"),
+        }
+    }
+
     let mut contradictory = successful_result();
     contradictory["refusal"] = json!("data_missing");
     assert_eq!(answer(contradictory), Ok(false));

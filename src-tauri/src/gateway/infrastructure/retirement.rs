@@ -40,6 +40,24 @@ impl From<&str> for RetirementFailure {
     }
 }
 
+/// The refusal a result that did not retire stands for. Its name counts only
+/// when the result is a failed retirement of this very request: the gateway
+/// admitted it (`attributed`) and a stop or its audit then failed (`failed`).
+/// That is the only refusal a gateway writes a name for; any other tuple is not
+/// one the gateway's writer produces, so its name is not trusted and it is
+/// `NotConfirmed`, which never allows a stop.
+pub(in crate::gateway::infrastructure) fn refusal_read(
+    name: Option<&str>,
+    attributed: bool,
+    failed: bool,
+) -> RetirementRefusal {
+    if attributed && failed {
+        RetirementRefusal::named(name)
+    } else {
+        RetirementRefusal::NotConfirmed
+    }
+}
+
 /// Why the host may stop the old service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::gateway::infrastructure) enum StopAllowedBy {
@@ -124,6 +142,20 @@ mod tests {
             _: bool,
         ) -> Result<LifecycleObservation, GatewayError> {
             unreachable!("the decision observes nothing")
+        }
+    }
+
+    /// A refusal's name counts only on an attributed, failed retirement.
+    #[test]
+    fn a_refusal_name_counts_only_on_an_attributed_failed_retirement() {
+        let refusal = |attributed, failed| refusal_read(Some("data_missing"), attributed, failed);
+        assert_eq!(refusal(true, true), RetirementRefusal::DataMissing);
+        for (attributed, failed) in [(false, true), (true, false), (false, false)] {
+            assert_eq!(
+                refusal(attributed, failed),
+                RetirementRefusal::NotConfirmed,
+                "attributed={attributed} failed={failed}"
+            );
         }
     }
 
