@@ -35,6 +35,27 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Build, sign and verify the bundle
         run: pnpm app:build --target x86_64-unknown-linux-gnu --bundles deb,appimage
+      - name: Diagnose which runtime files the AppImage changed
+        if: failure()
+        run: |
+          set -uo pipefail
+          bundle=target/x86_64-unknown-linux-gnu/release/bundle
+          mkdir -p "$RUNNER_TEMP/deb" "$RUNNER_TEMP/app"
+          dpkg-deb --extract "$bundle"/deb/*.deb "$RUNNER_TEMP/deb"
+          image=$(find "$GITHUB_WORKSPACE/$bundle/appimage" -name '*.AppImage' | head -1)
+          (cd "$RUNNER_TEMP/app" && "$image" --appimage-extract >/dev/null)
+          a="$RUNNER_TEMP/deb/usr/lib/Nessa/runtime"; b="$RUNNER_TEMP/app/squashfs-root/usr/lib/Nessa/runtime"
+          (cd "$a" && find . -type f -exec sha256sum {} + | sort -k2) > "$RUNNER_TEMP/a.txt"
+          (cd "$b" && find . -type f -exec sha256sum {} + | sort -k2) > "$RUNNER_TEMP/b.txt"
+          diff "$RUNNER_TEMP/a.txt" "$RUNNER_TEMP/b.txt" | head -60
+          (cd "$a" && find . | sort) > "$RUNNER_TEMP/al.txt"; (cd "$b" && find . | sort) > "$RUNNER_TEMP/bl.txt"
+          echo "--- entries only in one"; diff "$RUNNER_TEMP/al.txt" "$RUNNER_TEMP/bl.txt" | head -40
+          for f in nessa nessa-mcp node; do
+            echo "--- $f"; ls -l "$a/$f" "$b/$f" 2>&1
+            readelf -d "$b/$f" 2>/dev/null | grep -Ei 'rpath|runpath'
+            file "$a/$f" "$b/$f"
+          done
+          find "$RUNNER_TEMP/app/squashfs-root/usr/lib" -maxdepth 1 | head -80
       - name: Stage the published assets
         run: node scripts/desktop/release-assets.mjs stage --target x86_64-unknown-linux-gnu --into release-staging
       - name: Write a Linux-only manifest
