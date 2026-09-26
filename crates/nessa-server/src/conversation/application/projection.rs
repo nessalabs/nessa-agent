@@ -11,7 +11,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     prompts::UserMessage,
-    questions::AnswerShape,
+    questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolStatus},
 };
 use std::collections::HashSet;
@@ -49,9 +49,6 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
 }
-/// The most questions this view carries at once; an agent asking beyond it
-/// is truncated rather than allowed to fill the surface.
-const MAX_OPEN_QUESTIONS: usize = 8;
 impl Projection {
     pub fn new(
         id: String,
@@ -203,6 +200,7 @@ impl Projection {
             return;
         }
         let previous = serde_json::to_vec(&self.view.permissions).ok();
+        let previous_questions = serde_json::to_vec(&self.view.questions).ok();
         let previous_error = self.view.permission_view_error.clone();
         self.view.permissions.clear();
         self.view.permission_view_error = None;
@@ -229,7 +227,10 @@ impl Projection {
             }
             for event in &record.events {
                 match event.update() {
-                    ExecutionUpdate::PermissionRequested { .. } => self.observe_permission(event),
+                    ExecutionUpdate::PermissionRequested { .. } => {
+                        self.recovered_waiting(execution);
+                        self.observe_permission(event)
+                    }
                     ExecutionUpdate::PermissionCancelled(cancellation) => {
                         let permission = cancellation.request().id().as_str();
                         self.resolved_permissions
@@ -246,7 +247,10 @@ impl Projection {
                             .questions
                             .retain(|question| question.execution_id != execution);
                     }
-                    ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
+                    ExecutionUpdate::QuestionAsked { .. } => {
+                        self.recovered_waiting(execution);
+                        self.observe_question(event)
+                    }
                     ExecutionUpdate::QuestionClosed { id } => {
                         self.answered_questions
                             .insert((execution.to_owned(), id.as_str().to_owned()));
@@ -265,10 +269,27 @@ impl Projection {
                     .into(),
             );
         }
+        // Asks recovered or dropped here change the view as much as reviews do.
         if previous != serde_json::to_vec(&self.view.permissions).ok()
+            || previous_questions != serde_json::to_vec(&self.view.questions).ok()
             || previous_error != self.view.permission_view_error
         {
             self.bump();
+        }
+    }
+
+    /// An ask or review on record for an execution that has not settled was made
+    /// by one that was dispatched and is waiting on it. Lag may have dropped the
+    /// dispatch, leaving the message queued; the evidence says otherwise, so the
+    /// message runs and leaves the queue, rather than the ask being hidden from
+    /// the only person who could answer it.
+    fn recovered_waiting(&mut self, execution: &str) {
+        let index = self.ensure_message(execution);
+        if self.view.messages[index].status == ConversationMessageStatus::Queued {
+            self.view.messages[index].status = ConversationMessageStatus::Running;
+            self.view
+                .pending
+                .retain(|item| item.execution_id != execution);
         }
     }
 
@@ -747,6 +768,36 @@ impl Projection {
     }
     pub fn read(&self) -> ConversationView {
         let mut view = self.view.clone();
+        // A review or an ask is offered only while its execution is running:
+        // nothing else is waiting on an answer, and the client refuses a view
+        // that says otherwise — the whole conversation would fail to load.
+        // Enforced here, where the view is handed out, rather than at each of
+        // the many places a message's status changes; any one of them missing
+        // it was enough to make a conversation unreadable. An execution whose
+        // message is not in the view is left as the client allows: only in a
+        // view that says it was truncated.
+        let offered = |execution: &str| {
+            view.messages
+                .iter()
+                .find(|message| message.execution_id == execution)
+                .map_or(view.truncated, |message| {
+                    message.status == ConversationMessageStatus::Running
+                })
+        };
+        let questions = view
+            .questions
+            .iter()
+            .filter(|question| offered(&question.execution_id))
+            .cloned()
+            .collect();
+        let permissions = view
+            .permissions
+            .iter()
+            .filter(|permission| offered(&permission.execution_id))
+            .cloned()
+            .collect();
+        view.questions = questions;
+        view.permissions = permissions;
         // Bound actual encoded bytes, including JSON escaping. Permissions are
         // atomic review units: never truncate an option or fabricate a choice.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {

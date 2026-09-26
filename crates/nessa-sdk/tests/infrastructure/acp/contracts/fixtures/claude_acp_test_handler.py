@@ -272,7 +272,7 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
-        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate"):
+        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel"):
             def ask(ask_id):
                 send({"id": ask_id, "method": "elicitation/create", "params": {
                     "sessionId": session, "mode": "form", "message": "Which environment?",
@@ -292,6 +292,15 @@ for line in sys.stdin:
                 send({"id": "u", "method": "elicitation/create", "params": {
                     "sessionId": session, "mode": "url", "message": "Sign in",
                     "url": "https://example.invalid/sign-in", "elicitationId": "e"}})
+            elif mode == "ask-unreadable":
+                # A field that offers nothing to choose is not a question.
+                send({"id": "u", "method": "elicitation/create", "params": {
+                    "sessionId": session, "mode": "form", "message": "Which environment?",
+                    "requestedSchema": {"type": "object", "properties": {
+                        "question_0": {"type": "string"}}}}})
+            elif mode == "ask-after-cancel":
+                # One ask now; another once the session is being stopped.
+                ask("first")
             elif mode == "asks-duplicate":
                 # A second request under an id that is still open: outside
                 # JSON-RPC, and answering it would answer the first.
@@ -411,6 +420,12 @@ for line in sys.stdin:
             pending = None
     elif method == "session/cancel":
         (root / "cancel-observed").write_text("yes")
+        if mode == "ask-after-cancel":
+            # Asked while the session is ending: nobody could answer it.
+            send({"id": "late", "method": "elicitation/create", "params": {
+                "sessionId": session, "mode": "form", "message": "One more thing?",
+                "requestedSchema": {"type": "object", "properties": {
+                    "question_0": {"type": "string", "oneOf": [{"const": "yes"}]}}}}})
         if pending is not None and mode not in ("ignore-stop", "consumer-loss-during-close"):
             if mode == "late-tool-close":
                 update({"sessionUpdate": "tool_call_update", "toolCallId": "file-1", "status": "completed", "content": []})
@@ -421,7 +436,7 @@ for line in sys.stdin:
             pending = None
     elif mode == "permission-pair" and msg.get("id") in ("first-review", "second-review"):
         record(msg["id"] + "-outcome", json.dumps(msg["result"]["outcome"]))
-    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate") and "result" in msg:
+    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel") and "result" in msg:
         # Every answer, in the order it arrived, with its id exactly as sent —
         # `1` and `"1"` are different requests and must stay different here.
         seen = root / "answers"
@@ -432,7 +447,7 @@ for line in sys.stdin:
             (mode == "asks-collide" and answered == 2)
             or (mode == "ask-withdrawn")
             or (mode == "asks-overflow" and msg["id"] == "a8")
-            or (mode == "ask-unsupported")
+            or (mode in ("ask-unsupported", "ask-unreadable"))
         )
         if finished and pending is not None:
             text("done asking")

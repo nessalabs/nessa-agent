@@ -1214,31 +1214,117 @@ fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
 #[tokio::test]
 async fn an_ask_that_cannot_be_put_to_anybody_is_refused_on_the_record() {
     let _process_slot = process_test_slot().await;
+    for (mode, reason) in [
+        ("ask-unsupported", QuestionRefusalReason::Unsupported),
+        ("ask-unreadable", QuestionRefusalReason::UnreadableQuestion),
+    ] {
+        let audit = Arc::new(RecordingAudit::default());
+        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        let mut opened = binding.open(None).await.unwrap();
+        let active = start(&opened, "write").await;
+        assert!(matches!(
+            next(&mut opened).await,
+            ExecutionUpdate::Message(chunk) if chunk.as_str() == "done asking"
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(3), active)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(ExecutionOutcome::Completed),
+            "{mode}"
+        );
+        let answers = provider_answers(&root);
+        assert_eq!(answers.len(), 1, "{mode}: {answers:?}");
+        assert_eq!(answers[0]["result"]["action"], "cancel");
+        assert_refused(&audit, reason);
+        // Refused, not asked: there is no ask to have answered or ended.
+        assert!(audit.answered_questions.lock().unwrap().is_empty());
+        let _ = opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await;
+    }
+}
+
+/// A refusal the audit will not take still reaches the agent, exactly once.
+///
+/// The agent is waiting, so the refusal is sent whether or not it could be
+/// recorded; the failure is then reported rather than swallowed, and the
+/// request is not answered a second time by the dispatcher on the way out.
+#[tokio::test]
+async fn a_refused_ask_the_audit_will_not_take_is_answered_once_and_reported() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..RecordingAudit::default()
+    });
+    let (root, binding) = test_acp_binding_with_audit("ask-unsupported", 16, audit);
+    let opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    assert_eq!(
+        timeout(Duration::from_secs(5), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(AgentError::AuditFailure)
+    );
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "answered exactly once: {answers:?}");
+    assert_eq!(answers[0]["id"], "u");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+    assert_eq!(
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result(),
+        Err(AgentError::AuditFailure)
+    );
+    wait_until_gone(&root, "pid").await;
+}
+
+/// An ask arriving while the session is being stopped is refused on the record.
+///
+/// Nobody could answer it, so it is refused as one the session was ending for,
+/// while the ask that was already open ends as the session's own — two
+/// different facts, recorded as two.
+#[tokio::test]
+async fn an_ask_arriving_while_the_session_ends_is_refused_on_the_record() {
+    let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (root, binding) = test_acp_binding_with_audit("ask-unsupported", 16, audit.clone());
+    let (root, binding) = test_acp_binding_with_audit("ask-after-cancel", 16, audit.clone());
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
     assert!(matches!(
         next(&mut opened).await,
-        ExecutionUpdate::Message(chunk) if chunk.as_str() == "done asking"
+        ExecutionUpdate::QuestionAsked { .. }
     ));
-    assert_eq!(
-        timeout(Duration::from_secs(3), active)
-            .await
-            .unwrap()
-            .unwrap(),
-        Ok(ExecutionOutcome::Completed)
-    );
-    let answers = provider_answers(&root);
-    assert_eq!(answers.len(), 1, "{answers:?}");
-    assert_eq!(answers[0]["result"]["action"], "cancel");
-    assert_refused(&audit, QuestionRefusalReason::Unsupported);
-    // Refused, not asked: there is no ask to have answered or ended.
-    assert!(audit.answered_questions.lock().unwrap().is_empty());
     let _ = opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
+    let _ = timeout(Duration::from_secs(5), active).await.unwrap();
+    wait_until_gone(&root, "pid").await;
+
+    let refused = audit.refused_questions.lock().unwrap().clone();
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    for record in &refused {
+        assert_eq!(record.reason(), QuestionRefusalReason::SessionEnding);
+    }
+    assert_eq!(refused[0].delivery(), &PermissionAnswerDelivery::Selected);
+    let ended = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(
+        ended[0].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
+    );
+    let mut ids: Vec<_> = provider_answers(&root)
+        .into_iter()
+        .map(|answer| answer["id"].as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["first", "late"], "each request answered once");
 }
 
 /// A second ask under an identity still open is a protocol fault, not a refusal.

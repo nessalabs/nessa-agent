@@ -503,19 +503,37 @@ fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
     assert_eq!(view.questions[0].execution_id, "second");
 }
 
-/// Every question the view offers belongs to a message that is still running.
+/// The view agrees with what the client checks before it will show it.
 ///
-/// The client enforces exactly this, and refuses the whole view otherwise; the
-/// projection has to agree with it rather than hope the two never meet.
+/// Every ask and review belongs to a message that is running, and everything
+/// pending to one that is queued. The client refuses the whole view otherwise,
+/// so the projection has to agree with it rather than hope the two never meet.
+/// Returns how many asks are offered.
 fn offers_only_running_asks(projection: &mut Projection) -> usize {
     let view = projection.read();
-    for question in &view.questions {
-        let message = view
-            .messages
+    let status = |execution: &str| {
+        view.messages
             .iter()
-            .find(|message| message.execution_id == question.execution_id)
-            .expect("an ask belongs to a message");
-        assert_eq!(message.status, ConversationMessageStatus::Running);
+            .find(|message| message.execution_id == execution)
+            .map(|message| message.status)
+    };
+    for execution in view
+        .questions
+        .iter()
+        .map(|question| &question.execution_id)
+        .chain(
+            view.permissions
+                .iter()
+                .map(|permission| &permission.execution_id),
+        )
+    {
+        assert_eq!(status(execution), Some(ConversationMessageStatus::Running));
+    }
+    for item in &view.pending {
+        assert_eq!(
+            status(&item.execution_id),
+            Some(ConversationMessageStatus::Queued)
+        );
     }
     view.questions.len()
 }
@@ -549,4 +567,40 @@ fn an_ask_left_open_by_a_failed_execution_is_not_offered_once_it_settles() {
     snapshot.invocations[0].result = Some(Err(AgentError::Closed));
     projection.settled("execution", Some(&snapshot));
     assert_eq!(offers_only_running_asks(&mut projection), 0);
+}
+
+#[test]
+fn an_ask_is_not_offered_beside_a_receipt_that_failed() {
+    // The receipt failed and storage held no result for the execution, so its
+    // message is marked failed without a record passing through: the path the
+    // settle-time rule never saw. A closure arriving after it is ignored.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    projection.settled(
+        "execution",
+        Some(&review_snapshot(vec![asked("execution", "1")])),
+    );
+    projection.receipt_failed("execution");
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+    projection.event(&closed("execution", "1"));
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+}
+
+#[test]
+fn an_ask_recovered_after_lag_is_offered_by_a_running_message() {
+    // Lag dropped the dispatch and the ask. Recovered from storage, the ask
+    // proves the execution was dispatched and is waiting; hiding it would leave
+    // the agent waiting on a question nobody can see, and showing it beside a
+    // queued message made the client refuse the view.
+    let mut projection = projection();
+    projection.admitted(
+        "execution",
+        &said("message"),
+        ConversationPendingMode::Queued,
+    );
+    projection.lagged();
+    projection.recover_permissions(Some(&review_snapshot(vec![asked("execution", "1")])));
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
+    projection.queue_order(&[]);
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
 }
