@@ -4276,8 +4276,15 @@ mod tests {
         .unwrap();
         let request = GatewayReconciliationRequest::new(correlation(1), evidence);
         let attempt = GatewayReconciliationAttempt::new(correlation(2), request).unwrap();
-        let recovery =
-            GatewayLifecycleRecovery::new(attempt.clone(), target, None, false, None, None, None);
+        let recovery = GatewayLifecycleRecovery::new(
+            attempt.clone(),
+            target,
+            None,
+            false,
+            None,
+            None,
+            Vec::new(),
+        );
         let journal = discard_reconciliation_audit().open(&attempt, None).unwrap();
         let identity = active.manager.clone();
         let effective_uid = unsafe { libc::geteuid() };
@@ -4659,7 +4666,7 @@ mod tests {
                 has_effect_plan,
                 latest_observation,
                 None,
-                None,
+                Vec::new(),
             )
         }
 

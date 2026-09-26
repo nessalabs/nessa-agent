@@ -41,7 +41,7 @@ opinion rather than the product's.
 | `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
-| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads reconcile the complete service again while concurrent callers share one attempt. Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. It settles an unfinished intent only after fresh state proves no effect was planned, completes missing observations and outcomes when fresh native state agrees, and otherwise keeps the exact attempt unresolved. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
+| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads reconcile the complete service again while concurrent callers share one attempt. Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. Recovery settles an unfinished attempt without replaying its commands: the journal lists the steps still to settle, and each native adapter records fresh state, adopts only an exact planned target, and closes anything else as failed, keeping unresolved a namespace it does not own or an effect it cannot recognise, and, until a later attempt, one whose launchd state or journal delivery is unavailable. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
 | `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
@@ -186,15 +186,51 @@ intact so its normal managed retirement boundary remains available.
 Before bootstrap, the host durably records the exact service, definition, runtime
 fingerprint and generation under the service-label lock, together with an exact
 bootout contingency for only that target; it retains the registration record
-until readiness succeeds. If bootstrap completion or observation delivery fails,
-the host freshly proves that the same target still owns the label before executing
-the predeclared bootout. A replacement is preserved. The host retries an
-unacknowledged observation as the identical record before appending the cleanup
-completion and its fresh post-command observation; persistent journal failure
-leaves the history unresolved while still retaining the physical cleanup result.
-Restart recovery adopts a bootstrap only when fresh health and launchd PID prove
-the exact planned target. Absence, a PID-less registration, unhealthy state, and
-a replacement all leave the original attempt unresolved without replay or cleanup.
+until readiness succeeds.
+
+The journal is the one owner of whether a cleanup is owed. A declared cleanup —
+the bootout a bootstrap carries, the prune a first staging carries — is owed only
+once the journal holds its step's result and observation and that result is not
+success (`LifecycleEffectPredicate::is_due`). The live path asks that rule before
+running a cleanup, so a success leaves nothing pending and nothing runs that the
+journal could not record. A bootstrap launchd refused has its owed bootout run
+and recorded before the failure is reported, beside launchd's own diagnosis; when
+the label is loaded but not by the exact healthy target, the bootout refuses and
+that refusal is its recorded result. When a step's result or observation cannot be
+delivered, nothing is undone then; the next successful registration prunes every
+runtime and staging directory it does not retain, and a staged runtime that
+matches the next install is reused under the plan `reuse-staged-runtime`.
+
+Restart recovery runs no command. It adopts a bootstrap or readiness step only
+when fresh health and launchd PID prove the exact planned target; otherwise it
+records what it freshly finds and closes the attempt as failed, keeping whatever
+is there for the next registration. An unresolved attempt blocks every later
+registration, so a refusal that depends only on state that will not change would
+block the gateway for good.
+
+Before closing, recovery settles every step the journal lists as unsettled, in
+the journal's order (`LifecycleHistory::unsettled_steps`): a step awaiting its
+observation is observed; an unreturned step is recorded indeterminate, because
+the interrupted attempt may have returned it unrecorded, except readiness, whose
+result recovery decides from the fresh state; a cleanup that result
+makes due is recorded as not run by recovery, though the attempt may have run it.
+The bootstrap step (`bootstrap_service`) and recovery reach launchd and health
+only through the injected `Launchctl`; recovery calls no command on it. Each observation, live
+or recovered, means what `LaunchdArtifacts::present` says for that step: the
+runtime directory for staging and pruning, the staging directory for staging
+cleanup, the plist for publication and retirement, and whether launchd has the
+label loaded for bootstrap, unload, adoption and agent stop. An attempt closes at dispatch
+when any settled step had not returned, and at observation otherwise.
+
+| Journal | Fresh state | Recovery |
+| --- | --- | --- |
+| Intent, no plan | Any | Record whether the target is installed or running (and was not the prior), close failed. No plan authorized no effect. |
+| Bootstrap or readiness pending, no recorded refusal | Exact planned target, healthy, launchd PID agrees | Settle it and adopt the target; an owed bootout is recorded not run. |
+| Bootstrap or readiness pending | Anything else | Settle without running anything, close failed. |
+| Unload, staging, publication, retirement, pruning, or staging cleanup pending | Any | Settle it and any cleanup it makes due without running either, close failed. |
+| Agent stop pending | Any | Settle it and close with its own outcome (unchanged). |
+| Plans settled and observed | Any | Close failed on the last saved observation. A step's observation records only that step's artifact, so it is not compared with a fresh one. |
+| A non-launchd effect, or a namespace this host does not own | Any | Refuse and stay unresolved (unchanged). |
 A retry may unload an unambiguously PID-less unavailable registration only when that
 host-owned record, the desired definition and the complete on-disk definition all
 agree. Missing, malformed or contradictory evidence preserves the service. This

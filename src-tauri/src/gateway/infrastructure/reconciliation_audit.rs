@@ -7,11 +7,10 @@
 //! holds its lock, and orders every record for its attempt.
 use crate::gateway::{
     application::{
-        GatewayError, GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep,
-        GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
-        GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-        GatewayReconciliationOutcome, GatewayReconciliationOutcomeError,
-        GatewayReconciliationRequest, MonotonicClock,
+        GatewayError, GatewayLifecycleRecovery, GatewayReconciliationAttempt,
+        GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationIntent,
+        GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
+        GatewayReconciliationOutcomeError, GatewayReconciliationRequest, MonotonicClock,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -582,12 +581,13 @@ fn parse_predicate(value: &Value) -> Result<LifecycleEffectPredicate, GatewayErr
         .ok_or_else(|| invalid_record("predicate must be an object"))?;
     let kind = string(object, "kind")?;
     match kind.as_str() {
-        "always" | "primary_returned" | "primary_accepted" => {
+        "always" | "primary_returned" | "primary_accepted" | "primary_not_accepted" => {
             object_exact(object, &["kind"])?;
             Ok(match kind.as_str() {
                 "always" => LifecycleEffectPredicate::Always,
                 "primary_returned" => LifecycleEffectPredicate::PrimaryReturned,
-                _ => LifecycleEffectPredicate::PrimaryAccepted,
+                "primary_accepted" => LifecycleEffectPredicate::PrimaryAccepted,
+                _ => LifecycleEffectPredicate::PrimaryNotAccepted,
             })
         }
         "observation_matches" => {
@@ -1037,25 +1037,12 @@ fn unresolved_recovery(
         let request = GatewayReconciliationRequest::new(request_correlation.clone(), evidence);
         let attempt =
             GatewayReconciliationAttempt::new(chain[0].attempt_correlation().clone(), request)?;
-        let has_effect_plan = history.has_effect_plan();
-        let pending_step = history.pending_step().map(|pending| {
-            GatewayLifecycleRecoveryStep::new(
-                pending.plan_id().into(),
-                pending.step().clone(),
-                pending.contingencies().to_vec(),
-                pending.completion().cloned(),
-                pending.native_attempt().cloned(),
-            )
-        });
         return Ok(Some((
-            GatewayLifecycleRecovery::new(
+            GatewayLifecycleRecovery::from_history(
                 attempt,
                 target.clone(),
                 before.clone(),
-                has_effect_plan,
-                history.latest_observation().cloned(),
-                pending_step,
-                history.pending_observation_source(),
+                &history,
             ),
             history,
         )));
@@ -1712,6 +1699,7 @@ fn effect_predicate(predicate: &LifecycleEffectPredicate) -> Value {
         LifecycleEffectPredicate::Always => json!({"kind":"always"}),
         LifecycleEffectPredicate::PrimaryReturned => json!({"kind":"primary_returned"}),
         LifecycleEffectPredicate::PrimaryAccepted => json!({"kind":"primary_accepted"}),
+        LifecycleEffectPredicate::PrimaryNotAccepted => json!({"kind":"primary_not_accepted"}),
         LifecycleEffectPredicate::ObservationMatches(incarnation) => {
             json!({"kind":"observation_matches", "incarnation":identity(incarnation)})
         }
@@ -1859,6 +1847,34 @@ mod tests {
         fs,
         sync::atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn every_effect_predicate_is_stored_and_restored_as_itself() {
+        let incarnation = ReconciliationIncarnation::new(
+            ReconciliationTarget::new(
+                "gui/501/so.nessa.gateway.prod".into(),
+                "a".repeat(64),
+                "b".repeat(64),
+            )
+            .unwrap(),
+            "00000000-0000-4000-8000-000000000103".into(),
+            103,
+            7420,
+        )
+        .unwrap();
+        for predicate in [
+            LifecycleEffectPredicate::Always,
+            LifecycleEffectPredicate::PrimaryReturned,
+            LifecycleEffectPredicate::PrimaryAccepted,
+            LifecycleEffectPredicate::PrimaryNotAccepted,
+            LifecycleEffectPredicate::ObservationMatches(incarnation),
+        ] {
+            assert_eq!(
+                parse_predicate(&effect_predicate(&predicate)).unwrap(),
+                predicate
+            );
+        }
+    }
 
     struct AdvancingClock {
         now: Mutex<Instant>,

@@ -5,7 +5,7 @@ use super::super::application::{
 #[cfg(target_os = "linux")]
 use super::linux::SystemdGateway;
 #[cfg(target_os = "macos")]
-use super::macos::{LaunchctlDisabledServiceStatus, Launchd};
+use super::macos::{LaunchctlDisabledServiceStatus, Launchd, NativeLaunchctl};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use super::reconciliation_audit::FileReconciliationAudit;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -84,6 +84,7 @@ pub fn current(
         let _ = clock;
         Arc::new(Launchd::new(
             Arc::new(LaunchctlDisabledServiceStatus),
+            Arc::new(NativeLaunchctl),
             configuration,
             platform.home.clone(),
         ))

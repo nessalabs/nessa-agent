@@ -46,7 +46,7 @@ const TAIL_LINES: usize = 12;
 /// keeps the caller waiting: a missing or ambiguous line is not evidence of
 /// death.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum LastExit {
+pub(in crate::gateway::infrastructure) enum LastExit {
     Unknown,
     NeverExited,
     Code(i32),

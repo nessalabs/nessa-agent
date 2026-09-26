@@ -651,19 +651,6 @@ pub trait GatewayReconciliationProgress: Send + Sync {
             "This gateway progress port cannot record systemd state evidence".into(),
         ))
     }
-
-    /// Retry the exact observation whose publication may have succeeded before
-    /// acknowledgement. Returns `None` when no observation is pending.
-    #[cfg_attr(
-        target_os = "linux",
-        allow(
-            dead_code,
-            reason = "the launchd progress substitutes use the portable no-pending default"
-        )
-    )]
-    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
-        Ok(None)
-    }
 }
 
 /// One caller's immutable request to the serialized reconciliation owner.
@@ -1078,7 +1065,7 @@ pub struct GatewayLifecycleRecovery {
     has_effect_plan: bool,
     latest_observation: Option<LifecycleObservation>,
     pending_step: Option<GatewayLifecycleRecoveryStep>,
-    pending_observation_source: Option<LifecycleObservationSource>,
+    unsettled_steps: Vec<GatewayLifecycleRecoveryStep>,
 }
 
 /// Exact persisted effect boundary awaiting completion or observation.
@@ -1139,6 +1126,9 @@ impl GatewayLifecycleRecoveryStep {
 }
 
 impl GatewayLifecycleRecovery {
+    /// Builds arbitrary shapes for tests; production recovery comes only from
+    /// a restored history through `from_history`.
+    #[cfg(test)]
     pub(crate) fn new(
         attempt: GatewayReconciliationAttempt,
         target: ReconciliationTarget,
@@ -1146,7 +1136,7 @@ impl GatewayLifecycleRecovery {
         has_effect_plan: bool,
         latest_observation: Option<LifecycleObservation>,
         pending_step: Option<GatewayLifecycleRecoveryStep>,
-        pending_observation_source: Option<LifecycleObservationSource>,
+        unsettled_steps: Vec<GatewayLifecycleRecoveryStep>,
     ) -> Self {
         Self {
             attempt,
@@ -1155,8 +1145,44 @@ impl GatewayLifecycleRecovery {
             has_effect_plan,
             latest_observation,
             pending_step,
-            pending_observation_source,
+            unsettled_steps,
         }
+    }
+
+    /// The recovery a restored lifecycle history describes.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn from_history(
+        attempt: GatewayReconciliationAttempt,
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+        history: &crate::gateway::domain::value_objects::LifecycleHistory,
+    ) -> Self {
+        let step = |pending: crate::gateway::domain::value_objects::LifecyclePendingStep| {
+            GatewayLifecycleRecoveryStep::new(
+                pending.plan_id().into(),
+                pending.step().clone(),
+                pending.contingencies().to_vec(),
+                pending.completion().cloned(),
+                pending.native_attempt().cloned(),
+            )
+        };
+        Self {
+            attempt,
+            target,
+            before,
+            has_effect_plan: history.has_effect_plan(),
+            latest_observation: history.latest_observation().cloned(),
+            pending_step: history.pending_step().map(step),
+            unsettled_steps: history.unsettled_steps().into_iter().map(step).collect(),
+        }
+    }
+
+    /// Every step recovery must settle, in order, when it runs none of them;
+    /// the domain decides which contingencies are due. Empty when the plans
+    /// are settled.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn unsettled_steps(&self) -> &[GatewayLifecycleRecoveryStep] {
+        &self.unsettled_steps
     }
 
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
@@ -1182,17 +1208,6 @@ impl GatewayLifecycleRecovery {
 
     pub fn pending_step(&self) -> Option<&GatewayLifecycleRecoveryStep> {
         self.pending_step.as_ref()
-    }
-
-    #[cfg_attr(
-        target_os = "linux",
-        allow(
-            dead_code,
-            reason = "the launchd adapter resumes this portable observation delivery"
-        )
-    )]
-    pub fn pending_observation_source(&self) -> Option<&LifecycleObservationSource> {
-        self.pending_observation_source.as_ref()
     }
 }
 
