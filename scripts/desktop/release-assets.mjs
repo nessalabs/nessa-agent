@@ -103,20 +103,34 @@ export function bundleDirectory(target) {
  * in `tauri-plugin-updater`), which it appends to `{os}-{arch}` for the bundle
  * type the running app was packaged as. */
 export function updaterArtifacts(productName, version, target) {
-  const bundle = bundleDirectory(target)
+  const directory = bundleDirectory(target)
   const key = releaseTarget(target)
   if (targetPlatform(target).platform === "darwin")
     return [
       {
         key,
-        built: `${bundle}/macos/${productName}.app.tar.gz`,
+        built: `${directory}/macos/${productName}.app.tar.gz`,
         published: `${productName}_${version}_${key}.app.tar.gz`,
       },
     ]
   // The bundler already names Linux packages per version and architecture, so
-  // the .deb is published under the name it wrote.
-  const { deb } = linuxBundles(productName, version, linuxBundleArchitecture(target))
-  return [{ key: `${key}-deb`, built: `${bundle}/${deb}`, published: basename(deb) }]
+  // each is published under the name it wrote. Derived from the row's bundles,
+  // so the table is the one place that says what a Linux release builds; a
+  // bundle with no update format here (the AppImage) cannot be listed.
+  const packages = linuxBundles(productName, version, linuxBundleArchitecture(target))
+  const releasable = { deb: packages.deb }
+  return releaseBundles(target)
+    .split(",")
+    .map((bundle) => {
+      if (!Object.hasOwn(releasable, bundle))
+        throw new Error(`A Linux release cannot publish the ${bundle} bundle`)
+      const built = releasable[bundle]
+      return {
+        key: `${key}-${bundle}`,
+        built: `${directory}/${built}`,
+        published: basename(built),
+      }
+    })
 }
 
 /** The disk image's published name.

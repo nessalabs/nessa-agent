@@ -1,7 +1,8 @@
 # TEMPORARY — proves the Linux release row on this pull request, then is
 # removed before merge. It runs the release build row's steps with a throwaway
 # updater key (so the .sig files exist), stages and writes a Linux-only
-# manifest, and installs the .deb on a clean Ubuntu 22.04 runner.
+# manifest, and installs the .deb on the Ubuntu 22.04 runner (which already
+# has the -dev packages, so it proves installation, not Depends alone).
 name: Linux package proof (temporary)
 on:
   pull_request:
@@ -44,7 +45,7 @@ jobs:
             --targets x86_64-unknown-linux-gnu --tag v0.1.0 --repository "$GITHUB_REPOSITORY"
           cat release-staging/latest.json
           ls -la release-staging
-      - name: Install the .deb on this clean runner
+      - name: Install the .deb on this runner
         run: |
           set -euo pipefail
           sudo apt-get install -y ./release-staging/Nessa_*_amd64.deb

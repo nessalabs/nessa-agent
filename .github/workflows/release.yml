@@ -169,8 +169,8 @@ jobs:
     name: Build ${{ matrix.updater-target }}
     needs: [version, updater-key]
     strategy:
-      # Both architectures' failures are worth seeing in one run; neither ships
-      # without the other regardless, because the release job needs both.
+      # Every row's failure is worth seeing in one run; none ships without the
+      # others regardless, because the release job needs all of them.
       fail-fast: false
       matrix:
         include:

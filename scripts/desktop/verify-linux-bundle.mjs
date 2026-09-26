@@ -76,7 +76,7 @@ function dpkgDeb(args, options) {
     if (error.code === "ENOENT")
       throw new Error(
         "Verifying a .deb needs dpkg-deb, which this host does not have. " +
-          "Build with --bundles appimage, or on Debian or Ubuntu.",
+          "Build it on Debian or Ubuntu.",
         { cause: error },
       )
     throw error
