@@ -506,7 +506,8 @@ fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
 /// The view agrees with what the client checks before it will show it.
 ///
 /// Every ask and review belongs to a message that is running, and everything
-/// pending to one that is queued. The client refuses the whole view otherwise,
+/// pending to one that is queued — or, in a truncated view, to one no longer
+/// shown. The client refuses the whole view otherwise,
 /// so the projection has to agree with it rather than hope the two never meet.
 /// Returns how many asks are offered.
 fn offers_only_running_asks(projection: &mut Projection) -> usize {
@@ -527,12 +528,20 @@ fn offers_only_running_asks(projection: &mut Projection) -> usize {
                 .map(|permission| &permission.execution_id),
         )
     {
-        assert_eq!(status(execution), Some(ConversationMessageStatus::Running));
+        // Absent is allowed only in a view that says it was truncated.
+        let found = status(execution);
+        assert!(
+            found == Some(ConversationMessageStatus::Running)
+                || (found.is_none() && view.truncated),
+            "{execution}: {found:?}"
+        );
     }
     for item in &view.pending {
-        assert_eq!(
-            status(&item.execution_id),
-            Some(ConversationMessageStatus::Queued)
+        let found = status(&item.execution_id);
+        assert!(
+            found == Some(ConversationMessageStatus::Queued) || (found.is_none() && view.truncated),
+            "{}: {found:?}",
+            item.execution_id
         );
     }
     view.questions.len()
@@ -771,4 +780,37 @@ fn an_ask_lag_dropped_from_a_turn_whose_message_was_pushed_out_is_recovered() {
     let view = projection.read();
     assert_eq!(view.questions.len(), 1);
     assert_eq!(view.questions[0].execution_id, "execution");
+}
+
+#[test]
+fn a_late_event_does_not_revive_a_turn_whose_receipt_failed() {
+    // An event buffered before the receipt failed, delivered after it, marked
+    // the turn as begun here again; once pushed out of view, lag recovery then
+    // offered an ask the agent had already stopped waiting on.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    let snapshot = review_snapshot(vec![asked("execution", "1")]);
+    projection.settled("execution", Some(&snapshot));
+    projection.receipt_failed("execution");
+    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text("late"))));
+    evict_running_execution(&mut projection);
+    projection.lagged();
+    projection.recover_permissions(Some(&snapshot));
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+}
+
+#[test]
+fn a_retried_submission_does_not_hide_the_ask_its_turn_is_waiting_on() {
+    // Retrying a running turn whose message was pushed out rebuilt the message
+    // as queued, and a queued message offers nothing — the ask vanished while
+    // its agent waited on it.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    evict_running_execution(&mut projection);
+    projection.admitted(
+        "execution",
+        &said("message"),
+        ConversationPendingMode::Queued,
+    );
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
 }

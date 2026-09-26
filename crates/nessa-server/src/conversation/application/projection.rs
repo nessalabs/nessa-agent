@@ -149,8 +149,28 @@ impl Projection {
         message.attachments = attachments.clone();
         message.files = files.clone();
         if !existed {
-            message.status = ConversationMessageStatus::Queued;
+            // A retried submission can rebuild a message newer turns pushed
+            // out. If its turn already has an ask or review open, it was
+            // dispatched and is waiting — only a dispatched turn can have one —
+            // and rebuilding it as queued hid exactly what it waits on.
+            let waiting = self
+                .view
+                .questions
+                .iter()
+                .any(|question| question.execution_id == id)
+                || self
+                    .view
+                    .permissions
+                    .iter()
+                    .any(|permission| permission.execution_id == id);
+            let message = &mut self.view.messages[index];
+            message.status = if waiting {
+                ConversationMessageStatus::Running
+            } else {
+                ConversationMessageStatus::Queued
+            };
         }
+        let message = &mut self.view.messages[index];
         if !self
             .view
             .pending
@@ -494,12 +514,20 @@ impl Projection {
     /// Apply one live broadcast observation. Live updates carry no durable
     /// cursor, so the lag fence drops their text.
     pub fn event(&mut self, event: &ExecutionEvent) {
-        if !self
-            .terminal_executions
-            .contains(event.execution_id().as_str())
-        {
-            self.live_here
-                .insert(event.execution_id().as_str().to_owned());
+        // A live event says a turn began here, unless the view already shows
+        // it stopped: an event buffered before a failed receipt and delivered
+        // after it would otherwise revive a turn nothing is running any more.
+        let id = event.execution_id().as_str();
+        let stopped = self.terminal_executions.contains(id)
+            || self.view.messages.iter().any(|message| {
+                message.execution_id == id
+                    && !matches!(
+                        message.status,
+                        ConversationMessageStatus::Queued | ConversationMessageStatus::Running
+                    )
+            });
+        if !stopped {
+            self.live_here.insert(id.to_owned());
         }
         self.observe(event, false);
     }
