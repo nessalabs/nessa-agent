@@ -53,7 +53,11 @@ const BUNDLE_VERIFIERS = {
 
 /** Whether Tauri would read a choice of bundles from these arguments: `--bundles`
  * in any form, `--no-bundle`, or `-b` alone or inside a cluster of short flags
- * (`-db`). Arguments after `--` are the runner's, not Tauri's. */
+ * (`-db`). Arguments after `--` are the runner's, not Tauri's. It errs toward
+ * refusing: a `b` inside a value attached to another short flag (`-c'{"bundle":…}'`)
+ * reads as `-b` too, so pass such a value as `--config <value>`. A refusal
+ * happens before compiling and makes nothing; the opposite error would build
+ * a bundle nobody checks. */
 export function choosesBundles(args) {
   const end = args.indexOf("--")
   return (end === -1 ? args : args.slice(0, end)).some(

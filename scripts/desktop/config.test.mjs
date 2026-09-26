@@ -311,6 +311,9 @@ test("arguments after -- are the runner's and choose no bundles", () => {
   assert.equal(choosesBundles(["-v", "--", "-b"]), false)
   assert.equal(choosesBundles(["-vb", "deb"]), true)
   assert.equal(choosesBundles(["--config", "{}"]), false)
+  // Errs toward refusing: an attached value is read as flags.
+  assert.equal(choosesBundles(['-c{"bundle":{}}']), true)
+  assert.equal(choosesBundles(["--config", '{"bundle":{}}']), false)
 })
 
 test("the verifier is told when the build began", () => {
