@@ -439,16 +439,9 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
 
 #[test]
 fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
-    let refusal = |reason, refused| {
-        QuestionRefusalRecord::new(
-            ExecutionSessionId::new("session").unwrap(),
-            ExecutionId::new("run").unwrap(),
-            QuestionId::new("7").unwrap(),
-            reason,
-            refused,
-            PermissionAnswerDelivery::Written,
-        )
-    };
+    let session = || ExecutionSessionId::new("session").unwrap();
+    let run = || ExecutionId::new("run").unwrap();
+    let id = || QuestionId::new("7").unwrap();
     for (reason, code) in [
         (QuestionRefusalReason::Unsupported, "unsupported"),
         (
@@ -458,7 +451,14 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         (QuestionRefusalReason::SessionEnding, "session_ending"),
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionRefused(
-            refusal(reason, None).unwrap(),
+            QuestionRefusalRecord::new(
+                session(),
+                run(),
+                id(),
+                reason,
+                PermissionAnswerDelivery::Written,
+            )
+            .unwrap(),
         ));
         assert_eq!(value["kind"], "question_refused");
         assert_eq!(value["sessionId"], "session");
@@ -472,31 +472,54 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         assert!(value["refused"].is_null());
         assert!(value.get("questionId").is_none());
         assert!(value.get("actor").is_none());
-        // Evidence of a comparison nobody made cannot be recorded.
-        let ask = RefusedAsk::new(deploy_question(), 0, 0);
+    }
+    // A refusal for room is only ever recorded with the evidence it was
+    // decided on, and takes its reason from that evidence.
+    for reason in [
+        QuestionRefusalReason::TooManyOpen,
+        QuestionRefusalReason::TooLarge,
+    ] {
         assert_eq!(
-            refusal(reason, Some(ask)).unwrap_err(),
+            QuestionRefusalRecord::new(
+                session(),
+                run(),
+                id(),
+                reason,
+                PermissionAnswerDelivery::Written
+            )
+            .unwrap_err(),
             ExecutionError::InvalidQuestionRefusal
         );
     }
-    for (reason, code) in [
-        (QuestionRefusalReason::TooManyOpen, "too_many_open"),
-        (QuestionRefusalReason::TooLarge, "too_large"),
+    let ask = deploy_question();
+    let for_room = |open_asks, open_cost| {
+        QuestionRefusalRecord::for_room(
+            session(),
+            run(),
+            id(),
+            RefusedAsk::new(deploy_question(), open_asks, open_cost),
+            PermissionAnswerDelivery::Written,
+        )
+    };
+    // Evidence showing there was room records no refusal at all.
+    assert_eq!(
+        for_room(MAX_OPEN_QUESTIONS - 1, 0).unwrap_err(),
+        ExecutionError::InvalidQuestionRefusal
+    );
+    let too_large = MAX_OPEN_ASK_COST - ask.carrying_cost() + 1;
+    for ((open_asks, open_cost), code) in [
+        ((MAX_OPEN_QUESTIONS, 0), "too_many_open"),
+        ((1, too_large), "too_large"),
     ] {
-        // A refusal for room keeps both sides of the comparison it made.
-        assert_eq!(
-            refusal(reason, None).unwrap_err(),
-            ExecutionError::InvalidQuestionRefusal
-        );
         let value = record_value(&ExecutionAuditRecord::QuestionRefused(
-            refusal(reason, Some(RefusedAsk::new(deploy_question(), 3, 39_000))).unwrap(),
+            for_room(open_asks, open_cost).unwrap(),
         ));
         assert_eq!(value["reason"], code);
         let refused = &value["refused"];
         assert_eq!(refused["ask"]["message"], "Where to?");
-        assert_eq!(refused["openAsks"], 3);
-        assert_eq!(refused["openCost"], 39_000);
-        assert_eq!(refused["askCost"], deploy_question().carrying_cost());
+        assert_eq!(refused["openAsks"], open_asks);
+        assert_eq!(refused["openCost"], open_cost);
+        assert_eq!(refused["askCost"], ask.carrying_cost());
         assert_eq!(refused["maxOpenAsks"], MAX_OPEN_QUESTIONS);
         assert_eq!(refused["maxOpenCost"], MAX_OPEN_ASK_COST);
     }

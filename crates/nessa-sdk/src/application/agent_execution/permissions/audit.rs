@@ -9,7 +9,6 @@ use crate::domain::agent_execution::questions::{
     AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionChoice, QuestionId,
     QuestionRefusalReason, QuestionResponse,
 };
-#[cfg(doc)]
 use crate::domain::agent_execution::questions::{MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::agent_execution::ExecutionError;
@@ -278,6 +277,10 @@ impl RefusedAsk {
     pub fn ask(&self) -> &AgentQuestion {
         &self.ask
     }
+    /// Take back the ask, once there turned out to be room for it.
+    pub fn into_ask(self) -> AgentQuestion {
+        self.ask
+    }
     /// How many asks were already open.
     pub fn open_asks(&self) -> usize {
         self.open_asks
@@ -285,6 +288,20 @@ impl RefusedAsk {
     /// What the asks already open cost together to carry.
     pub fn open_cost(&self) -> usize {
         self.open_cost
+    }
+    /// Why there was no room for the ask, or `None` if there was.
+    ///
+    /// The one place the comparison is made: the binding decides a refusal
+    /// with it, and a record takes its reason from it, so a record can never
+    /// hold a reason its own evidence contradicts.
+    pub fn reason(&self) -> Option<QuestionRefusalReason> {
+        if self.open_asks >= MAX_OPEN_QUESTIONS {
+            Some(QuestionRefusalReason::TooManyOpen)
+        } else if self.open_cost.saturating_add(self.ask.carrying_cost()) > MAX_OPEN_ASK_COST {
+            Some(QuestionRefusalReason::TooLarge)
+        } else {
+            None
+        }
     }
 }
 
@@ -300,8 +317,9 @@ impl RefusedAsk {
 /// having no actor rather than by naming one.
 ///
 /// A refusal for room — too many open, or too large beside them — carries the
-/// [`RefusedAsk`] it was decided on; every other refusal happens before there
-/// is an ask to keep, and carries none. The constructor holds the two to that.
+/// [`RefusedAsk`] it was decided on and takes its reason from it; every other
+/// refusal happens before there is an ask to keep, and carries none. Which
+/// constructor built it is what holds the two to that.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionRefusalRecord {
     session_id: ExecutionSessionId,
@@ -313,18 +331,20 @@ pub struct QuestionRefusalRecord {
 }
 impl QuestionRefusalRecord {
     /// Record that ask `id`, from `execution_id` within `session_id`, was
-    /// refused for `reason`, with `refused` where the refusal was for room.
+    /// refused for `reason` before it could be read or admitted at all.
     ///
-    /// `id` is minted for the refused request, in the same sequence as the
-    /// asks that were admitted. `refused` must be present exactly when
-    /// `reason` is [`TooManyOpen`] or [`TooLarge`]; any other pairing is
-    /// refused as [`ExecutionError::InvalidQuestionRefusal`]. `delivery` is
-    /// this binding's own progress — [`Selected`] before the refusal is
-    /// written, then [`Written`] or [`Failed`] once the write has been
-    /// observed. It never claims the provider acted on the refusal.
+    /// For [`Unsupported`], [`UnreadableQuestion`] and [`SessionEnding`]; a
+    /// refusal for room is recorded by [`for_room`](Self::for_room), which
+    /// keeps its evidence, and is refused here as
+    /// [`ExecutionError::InvalidQuestionRefusal`]. `id` is minted for the
+    /// refused request, in the same sequence as the asks that were admitted.
+    /// `delivery` is this binding's own progress — [`Selected`] before the
+    /// refusal is written, then [`Written`] or [`Failed`] once the write has
+    /// been observed. It never claims the provider acted on the refusal.
     ///
-    /// [`TooManyOpen`]: QuestionRefusalReason::TooManyOpen
-    /// [`TooLarge`]: QuestionRefusalReason::TooLarge
+    /// [`Unsupported`]: QuestionRefusalReason::Unsupported
+    /// [`UnreadableQuestion`]: QuestionRefusalReason::UnreadableQuestion
+    /// [`SessionEnding`]: QuestionRefusalReason::SessionEnding
     /// [`Selected`]: PermissionAnswerDelivery::Selected
     /// [`Written`]: PermissionAnswerDelivery::Written
     /// [`Failed`]: PermissionAnswerDelivery::Failed
@@ -333,14 +353,12 @@ impl QuestionRefusalRecord {
         execution_id: ExecutionId,
         id: QuestionId,
         reason: QuestionRefusalReason,
-        refused: Option<RefusedAsk>,
         delivery: PermissionAnswerDelivery,
     ) -> Result<Self, ExecutionError> {
-        let for_room = matches!(
+        if matches!(
             reason,
             QuestionRefusalReason::TooManyOpen | QuestionRefusalReason::TooLarge
-        );
-        if for_room != refused.is_some() {
+        ) {
             return Err(ExecutionError::InvalidQuestionRefusal);
         }
         Ok(Self {
@@ -348,7 +366,32 @@ impl QuestionRefusalRecord {
             execution_id,
             id,
             reason,
-            refused,
+            refused: None,
+            delivery,
+        })
+    }
+    /// Record that ask `id` was refused for want of room, on `refused`.
+    ///
+    /// The reason is taken from the evidence, not given beside it: evidence
+    /// that shows there was room is refused as
+    /// [`ExecutionError::InvalidQuestionRefusal`], because it records no
+    /// refusal at all. Otherwise as [`new`](Self::new).
+    pub fn for_room(
+        session_id: ExecutionSessionId,
+        execution_id: ExecutionId,
+        id: QuestionId,
+        refused: RefusedAsk,
+        delivery: PermissionAnswerDelivery,
+    ) -> Result<Self, ExecutionError> {
+        let reason = refused
+            .reason()
+            .ok_or(ExecutionError::InvalidQuestionRefusal)?;
+        Ok(Self {
+            session_id,
+            execution_id,
+            id,
+            reason,
+            refused: Some(refused),
             delivery,
         })
     }

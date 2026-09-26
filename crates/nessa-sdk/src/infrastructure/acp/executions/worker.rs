@@ -54,7 +54,6 @@ use crate::domain::agent_execution::permissions::{
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
     AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse,
-    MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -2301,14 +2300,22 @@ impl<P: AcpProfile> Worker<P> {
         );
         // Its decision and its write are two records; this is what pairs them.
         let id = self.mint_question_id()?;
-        let selected = QuestionRefusalRecord::new(
-            session_id.clone(),
-            execution_id.clone(),
-            id,
-            reason,
-            refused,
-            PermissionAnswerDelivery::Selected,
-        )
+        let selected = match refused {
+            Some(refused) => QuestionRefusalRecord::for_room(
+                session_id.clone(),
+                execution_id.clone(),
+                id,
+                refused,
+                PermissionAnswerDelivery::Selected,
+            ),
+            None => QuestionRefusalRecord::new(
+                session_id.clone(),
+                execution_id.clone(),
+                id,
+                reason,
+                PermissionAnswerDelivery::Selected,
+            ),
+        }
         .map_err(|error| json_rpc::protocol(&error.to_string()))?;
         let record = |delivery| {
             ExecutionAuditRecord::QuestionRefused(selected.clone().with_delivery(delivery))
@@ -2445,24 +2452,19 @@ impl<P: AcpProfile> Worker<P> {
         // see is an ask nobody can answer, so admitting more than the surface
         // holds would strand the extras rather than queue them. What the open
         // asks cost together is bounded the same way, and for the same reason.
-        let no_room = if open_asks >= MAX_OPEN_QUESTIONS {
-            Some(QuestionRefusalReason::TooManyOpen)
-        } else if open_cost.saturating_add(question.carrying_cost()) > MAX_OPEN_ASK_COST {
-            Some(QuestionRefusalReason::TooLarge)
-        } else {
-            None
-        };
-        if let Some(reason) = no_room {
+        let candidate = RefusedAsk::new(question, open_asks, open_cost);
+        if let Some(reason) = candidate.reason() {
             return self
                 .refuse_question(
                     execution,
                     wire_id,
                     reason,
-                    Some(RefusedAsk::new(question, open_asks, open_cost)),
+                    Some(candidate),
                     response_deadline,
                 )
                 .await;
         }
+        let question = candidate.into_ask();
         let id = self.mint_question_id()?;
         let execution_id = self
             .active
