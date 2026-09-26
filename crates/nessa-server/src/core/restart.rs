@@ -17,7 +17,9 @@
 //! else keeps the behaviour it had, because a service that retries too often is
 //! a worse bug than one that retries when it did not need to, but a service
 //! that gives up on a failure that would have cleared is worse than both.
-use super::{exit_code, RunError};
+use nessa_auth::adapters::local::LocalStoreError;
+
+use super::RunError;
 
 /// What a fatal failure says about being started again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,10 +37,47 @@ pub(super) enum Restart {
 /// Exhaustive by construction, like the exit-code table beside it: a new fatal
 /// failure does not compile until someone has said whether retrying it helps.
 pub(super) fn restart(error: &RunError) -> Restart {
-    if exit_code::records_startup_failure(error) {
-        Restart::Pointless
-    } else {
-        Restart::Worthwhile
+    match error {
+        // Configuration is read once, from the launchd definition and the
+        // environment it fixes. Nothing rereads differently five seconds later.
+        RunError::Environment(_) => Restart::Pointless,
+        // Contents this build cannot make sense of, including a registry
+        // written by a schema it does not know. Reading them again is reading
+        // the same bytes.
+        RunError::Registry(failure)
+            if matches!(
+                failure.primary(),
+                LocalStoreError::Corrupt
+                    | LocalStoreError::InvalidRegistry { .. }
+                    | LocalStoreError::Capacity
+            ) =>
+        {
+            Restart::Pointless
+        }
+        // A registry another process is holding. That holder can let go — an
+        // upgrade's outgoing gateway is still finishing while its replacement
+        // starts — so this is exactly the failure launchd's retry is for.
+        RunError::Registry(failure) if matches!(failure.primary(), LocalStoreError::Locked) => {
+            Restart::Worthwhile
+        }
+        // A prepared runtime that is missing, unreadable, or not the one this
+        // registration was fingerprinted against. Only a new registration
+        // changes any of that.
+        RunError::Runtime(_) => Restart::Pointless,
+        // The command line named nothing this build can run. Under launchd
+        // that command line is this installation's own plist, which the next
+        // attempt reads unchanged, so retrying is the relaunch loop and not a
+        // recovery.
+        RunError::Usage(_) => Restart::Pointless,
+        // Everything below is either transient by nature or carries no typed
+        // cause to judge — an opaque message is not evidence of permanence, and
+        // guessing wrong here strands a gateway that would have started.
+        RunError::Registry(_)
+        | RunError::Authentication(_)
+        | RunError::Agent(_)
+        | RunError::Bind { .. }
+        | RunError::Serve(_)
+        | RunError::Shutdown(_) => Restart::Worthwhile,
     }
 }
 
@@ -46,7 +85,6 @@ pub(super) fn restart(error: &RunError) -> Restart {
 mod tests {
     use super::*;
     use crate::env::{EnvironmentError, HOST};
-    use nessa_auth::adapters::local::LocalStoreError;
     use std::io::{Error, ErrorKind};
 
     /// The failure this issue was reported for: a registry this build cannot

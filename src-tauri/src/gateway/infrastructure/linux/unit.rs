@@ -17,7 +17,9 @@ pub(super) struct UnitDefinition<'a> {
     pub unit: &'a SystemdUnitName,
     pub runtime: &'a Path,
     pub configuration: &'a ServiceConfiguration,
-    pub data: &'a Path,
+    /// The stage- and instance-namespaced data directory. The server derives
+    /// the same directory itself from `NESSA_DATA_DIR`, the configured root.
+    pub working_directory: &'a Path,
     pub home: &'a Path,
     pub agent_path: &'a SearchPath,
     pub fingerprint: &'a str,
@@ -29,20 +31,19 @@ pub(super) fn render(input: UnitDefinition<'_>) -> Result<RenderedUnit, String> 
         unit,
         runtime,
         configuration,
-        data,
+        working_directory,
         home,
         agent_path,
         fingerprint,
         generation,
     } = input;
     let executable = runtime.join("nessa");
-    let working = data;
     let mut environment = vec![
         ("HOME", path(home)?),
         ("NESSA_STAGE", configuration.stage().to_owned()),
         ("NESSA_HOST", "127.0.0.1".into()),
         ("NESSA_PORT", configuration.port().to_string()),
-        ("NESSA_DATA_DIR", path(data)?),
+        ("NESSA_DATA_DIR", path(configuration.data_root())?),
         ("NESSA_AGENT_PATH", agent_path.as_str().to_owned()),
         ("NESSA_RUNTIME_FINGERPRINT", fingerprint.to_owned()),
         ("NESSA_SERVICE_GENERATION", generation.to_owned()),
@@ -79,7 +80,7 @@ pub(super) fn render(input: UnitDefinition<'_>) -> Result<RenderedUnit, String> 
         .collect::<Result<Vec<_>, String>>()?
         .join(" ");
     let description = format!("Nessa gateway ({})", unit.as_str());
-    let working_directory = path(working)?;
+    let working_directory = path(working_directory)?;
     let rendered_working_directory = path_directive(&working_directory)?;
     let bytes = format!(
         "[Unit]\nDescription={description}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory={}\nExecStart={command}\nRestart=on-failure\nRestartSec=5s\nTimeoutStopSec=30s\n\n[Install]\nWantedBy=default.target\n",
@@ -93,7 +94,15 @@ pub(super) fn render(input: UnitDefinition<'_>) -> Result<RenderedUnit, String> 
     })
 }
 
-pub(super) fn rendered_agent_path(bytes: &[u8]) -> Result<SearchPath, String> {
+/// What a canonical rendered definition says it runs.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct RenderedDeclaration {
+    pub agent_path: SearchPath,
+    pub fingerprint: String,
+    pub generation: String,
+}
+
+pub(super) fn rendered_declaration(bytes: &[u8]) -> Result<RenderedDeclaration, String> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| "The systemd gateway definition is not UTF-8".to_string())?;
     let mut commands = text
@@ -111,14 +120,25 @@ pub(super) fn rendered_agent_path(bytes: &[u8]) -> Result<SearchPath, String> {
     {
         return Err("The systemd gateway definition has an unexpected command".into());
     }
-    let paths = arguments
-        .iter()
-        .filter_map(|argument| argument.strip_prefix("NESSA_AGENT_PATH="))
-        .collect::<Vec<_>>();
-    let [path] = paths.as_slice() else {
-        return Err("The systemd gateway definition has no unique agent path".into());
+    let unique = |key: &str| {
+        let prefix = format!("{key}=");
+        let values = arguments
+            .iter()
+            .filter_map(|argument| argument.strip_prefix(&prefix))
+            .collect::<Vec<_>>();
+        match values.as_slice() {
+            [value] => Ok((*value).to_owned()),
+            _ => Err(format!(
+                "The systemd gateway definition has no unique {key}"
+            )),
+        }
     };
-    SearchPath::parse(path).map_err(|error| error.to_string())
+    Ok(RenderedDeclaration {
+        agent_path: SearchPath::parse(&unique("NESSA_AGENT_PATH")?)
+            .map_err(|error| error.to_string())?,
+        fingerprint: unique("NESSA_RUNTIME_FINGERPRINT")?,
+        generation: unique("NESSA_SERVICE_GENERATION")?,
+    })
 }
 
 fn parse_rendered_command(command: &str) -> Result<Vec<String>, String> {
@@ -247,7 +267,7 @@ mod tests {
                 unit: &unit,
                 runtime: Path::new("/runtime%one"),
                 configuration: &configuration(),
-                data: Path::new("/data"),
+                working_directory: Path::new("/data"),
                 home: Path::new("/home/me"),
                 agent_path: &SearchPath::parse("/usr/bin:/opt/tools").unwrap(),
                 fingerprint: &"a".repeat(64),
@@ -279,25 +299,60 @@ mod tests {
     }
 
     #[test]
-    fn recovers_the_agent_path_only_from_the_canonical_rendered_command() {
+    fn recovers_the_declaration_only_from_the_canonical_rendered_command() {
         let unit = unit_name("prod", None).unwrap();
         let expected = SearchPath::parse("/usr/bin:/opt/with space:/percent%bin").unwrap();
         let rendered = render(UnitDefinition {
             unit: &unit,
             runtime: Path::new("/runtime"),
             configuration: &configuration(),
-            data: Path::new("/data"),
+            working_directory: Path::new("/data"),
             home: Path::new("/home/me"),
             agent_path: &expected,
             fingerprint: &"a".repeat(64),
             generation: &"b".repeat(64),
         })
         .unwrap();
-        assert_eq!(rendered_agent_path(&rendered.bytes).unwrap(), expected);
+        assert_eq!(
+            rendered_declaration(&rendered.bytes).unwrap(),
+            RenderedDeclaration {
+                agent_path: expected,
+                fingerprint: "a".repeat(64),
+                generation: "b".repeat(64),
+            }
+        );
 
         let mut contradictory = rendered.bytes;
         contradictory.extend_from_slice(b"ExecStart=:\"/usr/bin/env\"\n");
-        assert!(rendered_agent_path(&contradictory).is_err());
+        assert!(rendered_declaration(&contradictory).is_err());
+    }
+
+    #[test]
+    fn server_data_root_is_the_configured_root_and_the_working_directory_is_namespaced() {
+        let configuration = ServiceConfiguration::new(
+            "dev".into(),
+            PathBuf::from("/data"),
+            Some("second".into()),
+            7420,
+            None,
+        )
+        .unwrap();
+        let unit = unit_name("dev", Some("second")).unwrap();
+        let rendered = render(UnitDefinition {
+            unit: &unit,
+            runtime: Path::new("/runtime"),
+            configuration: &configuration,
+            working_directory: Path::new("/data/dev/instances/second"),
+            home: Path::new("/home/me"),
+            agent_path: &SearchPath::parse("/usr/bin").unwrap(),
+            fingerprint: &"a".repeat(64),
+            generation: &"b".repeat(64),
+        })
+        .unwrap();
+        assert!(rendered
+            .arguments
+            .contains(&"NESSA_DATA_DIR=/data".to_owned()));
+        assert_eq!(rendered.working_directory, "/data/dev/instances/second");
     }
 
     #[cfg(target_os = "linux")]
@@ -326,7 +381,7 @@ mod tests {
                 None,
             )
             .unwrap(),
-            data: &data,
+            working_directory: &data,
             home: &root,
             agent_path: &SearchPath::parse("/usr/bin").unwrap(),
             fingerprint: &"a".repeat(64),

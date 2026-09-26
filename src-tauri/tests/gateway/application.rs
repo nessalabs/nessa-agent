@@ -1,7 +1,5 @@
 use super::*;
-use crate::gateway::application::ports::{
-    GatewayLifecycleRecovery, GatewayLifecycleRecoveryAuthority,
-};
+use crate::gateway::application::ports::GatewayLifecycleRecovery;
 use crate::gateway::{
     application::{
         testing::{self, FixedLoginShell},
@@ -768,16 +766,13 @@ fn a_restored_no_effect_attempt_settles_before_the_current_attempt_opens() {
             let attempt = GatewayReconciliationAttempt::new(correlation(91), request).unwrap();
             Some(GatewayLifecycleRecovery::new(
                 attempt,
-                GatewayLifecycleRecoveryAuthority::new(
-                    ReconciliationTarget::new(
-                        "gui/501/so.nessa.gateway.old".into(),
-                        "c".repeat(64),
-                        "d".repeat(64),
-                    )
-                    .unwrap(),
-                    None,
-                    None,
-                ),
+                ReconciliationTarget::new(
+                    "gui/501/so.nessa.gateway.old".into(),
+                    "c".repeat(64),
+                    "d".repeat(64),
+                )
+                .unwrap(),
+                None,
                 false,
                 None,
                 None,

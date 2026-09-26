@@ -7,7 +7,7 @@
 //! process's log: a log line is prose written for a person, and prose is not a
 //! contract. The table is one file, included by both sides, so a number cannot
 //! mean one thing here and another there.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
@@ -29,8 +29,6 @@ pub(super) const STOPPED_ON_REQUEST: &str = "stoppedOnRequest";
 #[derive(Debug, Deserialize)]
 struct GatewayExitCodes {
     codes: BTreeMap<String, u8>,
-    #[serde(rename = "recordedStartupFailureReasons")]
-    recorded_startup_failure_reasons: BTreeSet<String>,
 }
 
 static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
@@ -102,12 +100,6 @@ pub(super) fn code(reason: &str) -> u8 {
         .copied()
         .filter(|code| *code != 0)
         .unwrap_or(1)
-}
-
-pub(super) fn records_startup_failure(error: &RunError) -> bool {
-    CODES
-        .recorded_startup_failure_reasons
-        .contains(reason(error))
 }
 
 #[cfg(test)]
@@ -193,23 +185,5 @@ mod tests {
         for code in [registry, locked, taken, refused, authentication] {
             assert_ne!(code, 1);
         }
-    }
-
-    #[test]
-    fn recorded_startup_failures_are_one_closed_subset_of_exit_reasons() {
-        let expected = BTreeSet::from([
-            "configuration".to_owned(),
-            "credentialRegistryInvalid".to_owned(),
-            "runtime".to_owned(),
-            "usage".to_owned(),
-        ]);
-        assert_eq!(CODES.recorded_startup_failure_reasons, expected);
-        assert!(CODES
-            .recorded_startup_failure_reasons
-            .iter()
-            .all(|reason| CODES.codes.contains_key(reason)));
-        assert!(!CODES
-            .recorded_startup_failure_reasons
-            .contains(STOPPED_ON_REQUEST));
     }
 }

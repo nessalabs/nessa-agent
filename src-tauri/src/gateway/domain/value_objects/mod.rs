@@ -17,7 +17,7 @@ pub use reconciliation_evidence::{
     ReconciliationIncarnation, ReconciliationInitiator, ReconciliationIntentDeliveryRecord,
     ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
     ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
-    ReconciliationTarget, StartupFailureRecoveryAuthority,
+    ReconciliationTarget,
 };
 mod search_path;
 pub use search_path::{SearchPath, SearchPathError};

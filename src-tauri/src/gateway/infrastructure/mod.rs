@@ -37,8 +37,6 @@ mod macos;
 mod reconciliation_audit;
 mod reconciliation_ids;
 mod selection;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-mod startup_failure;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
 pub use commands::{

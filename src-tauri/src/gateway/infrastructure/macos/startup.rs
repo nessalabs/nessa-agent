@@ -24,10 +24,6 @@
 //! The sentence is for the panel. The exit status, the tail of the log the
 //! plist already redirects the process's stderr to, and the readiness message
 //! all belong in the app's own log, and are carried separately for that.
-#[allow(unused_imports)]
-pub(super) use super::super::startup_failure::{
-    forget_recorded_failure, parse_record, recorded_failure, RecordedFailure,
-};
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
 use std::{
@@ -191,6 +187,114 @@ pub(super) fn log_tail(path: &Path) -> String {
     lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
 
+/// The gateway's own account of a run it gave up on, written beside its log.
+///
+/// There is one failure the exit code cannot carry. launchd's only exit
+/// condition is `KeepAlive: { SuccessfulExit: false }`, so a server that would
+/// fail identically on every restart has to exit *successfully* to stop being
+/// relaunched — and a zero status says nothing about why. The server writes
+/// this file instead, in the vocabulary of
+/// `protocol/defaults/gateway-exit-codes.json`: the same reason names the exit
+/// code would have carried, chosen deliberately rather than scraped out of prose.
+///
+/// It is still a file on disk and not launchd's word, so it is corroborated
+/// before it authorizes anything: [`RecordedFailure::belongs_to`] is what makes
+/// a record evidence about *this* registration rather than about whatever ran
+/// here last month. Showing someone a sentence is not authorizing anything, and
+/// needs no such corroboration.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RecordedFailure {
+    /// The reason's name in the shared exit-code table.
+    reason: String,
+    /// The code the run would have exited with, had exiting non-zero not meant
+    /// "start me again". Carried for the app log; the reason is what is read.
+    exit_code: u8,
+    /// The failure in the server's own words, for the app log. Never parsed.
+    message: String,
+    /// The launchd service generation that run was registered under. Only a
+    /// launch this host registered writes a record at all, so a record without
+    /// one is not a record this host wrote the other half of.
+    service_generation: String,
+    /// The process that wrote it, for finding its lines in the log beside it.
+    process_id: u32,
+}
+impl RecordedFailure {
+    /// Whether this record is about the registration being reconciled.
+    pub(super) fn belongs_to(&self, generation: &str) -> bool {
+        self.service_generation == generation
+    }
+    /// The sentence this reason becomes, or nothing when it is a name this
+    /// host has no words for.
+    pub(super) fn sentence(&self, port: u16) -> Option<String> {
+        sentence_for(&self.reason, port)
+    }
+    pub(super) fn describe(&self) -> String {
+        format!(
+            "gateway recorded a startup failure it will not retry: {} (reason {}, code {}, pid {})",
+            self.message, self.reason, self.exit_code, self.process_id
+        )
+    }
+}
+
+/// The record's name, beside `gateway.log` in the stage's log directory. The
+/// server writes this same name; `crates/nessa-server/src/core/startup_failure.rs`
+/// is the other half of it.
+const RECORD_FILE: &str = "gateway-startup-failure.json";
+/// A record is a handful of fields. Anything larger is not one.
+const RECORD_MAX_BYTES: u64 = 65_536;
+
+/// What the gateway wrote down in `logs` about giving up, if anything.
+///
+/// A missing, unreadable, oversized or malformed record is not a diagnosis and
+/// not an error: the caller still has the exit status, and says less rather
+/// than blaming the file.
+pub(super) fn recorded_failure(logs: &Path) -> Option<RecordedFailure> {
+    let file =
+        nessa_local_storage::open(&logs.join(RECORD_FILE), OpenMode::ReadNonblocking).ok()?;
+    let mut bytes = Vec::new();
+    file.take(RECORD_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    parse_record(&bytes)
+}
+
+/// Forget a record this host has acted on, before it starts the service again.
+///
+/// The generation is reused when the definition has not changed, so the record
+/// the retry was authorized by would otherwise still be sitting there while the
+/// replacement starts — and a replacement launchd has not spawned yet looks,
+/// for those first moments, exactly like one that has already given up. The new
+/// run writes its own record if it gives up too.
+///
+/// A record that will not go is worth saying and not worth refusing to start
+/// over: the correlation is what it is for, and this only narrows the window.
+pub(super) fn forget_recorded_failure(logs: &Path) {
+    match std::fs::remove_file(logs.join(RECORD_FILE)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("[nessa] could not clear the gateway's startup failure: {error}"),
+    }
+}
+
+/// The record's bytes, read apart from the file they came out of, so that what
+/// the server writes can be checked against what this reads.
+pub(super) fn parse_record(bytes: &[u8]) -> Option<RecordedFailure> {
+    if bytes.len() as u64 > RECORD_MAX_BYTES {
+        return None;
+    }
+    let record: RecordedFailure = serde_json::from_slice(bytes).ok()?;
+    // The reason and the code are two ways of saying the same thing, out of one
+    // table both sides compile in. A record where they disagree describes no
+    // run this server could have had, so it is not evidence about one. A reason
+    // the table does not name is a newer server's word and is left alone: there
+    // is no sentence for it here either way.
+    match CODES.codes.get(&record.reason) {
+        Some(code) if *code != record.exit_code => None,
+        _ => Some(record),
+    }
+}
+
 /// One sentence for the panel, and the evidence behind it for the app log.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct StartupFailure {
@@ -251,12 +355,6 @@ static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
     serde_json::from_str(EXIT_CODES_JSON).expect("bundled gateway-exit-codes.json must parse")
 });
 
-impl RecordedFailure {
-    pub(super) fn sentence(&self, port: u16) -> Option<String> {
-        sentence_for(self.reason(), port)
-    }
-}
-
 /// The sentence a reason becomes. A reason the table names but this host has
 /// no sentence for falls through to the generic message rather than showing
 /// someone a name out of a JSON file.
@@ -304,7 +402,7 @@ fn recognise(
     port: u16,
 ) -> Option<String> {
     let named = |recorded: Option<&RecordedFailure>| {
-        recorded.and_then(|recorded| sentence_for(recorded.reason(), port))
+        recorded.and_then(|recorded| sentence_for(&recorded.reason, port))
     };
     let code = match last_exit {
         LastExit::Code(code) => *code,

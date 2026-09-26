@@ -184,6 +184,59 @@ sequenceDiagram
     Sys-->>App: ReconciledGateway
 ```
 
+### Starting an inactive owned unit
+
+A gateway that meets a failure retrying cannot fix records it and exits zero,
+so `Restart=on-failure` leaves the unit inactive. Registration starts that unit
+again through the ordinary journaled path rather than reading the record: an
+exact owned unit with no process has nothing to retire, so starting it is safe,
+and the record stays a diagnostic for people. A `failed` unit (start limit hit)
+stays a manual repair.
+
+Admission, before any intent:
+
+| Installed unit | Endpoint advertisement | Decision |
+| --- | --- | --- |
+| Not loaded | None | Fresh install (unchanged). |
+| Exact, active, running, owned PID | Corroborated | Ready or replacement (unchanged). |
+| Exact definition of the target its `ExecStartEx` names, `inactive`/`dead`, main PID 0, enabled, no drop-ins | None at all | Admit with no `before`; the installed bytes are the prior definition, so publication replaces them (or republishes equal bytes); reload, link, `StartUnit`. |
+| Anything else: active without endpoint, `failed`, transitional, a process, drop-ins, an inexact or foreign definition, or any advertisement beside an inactive unit | Any | Refuse and preserve (unchanged). |
+| Changes between classification and revalidation | Appears or changes | Refuse before the intent (unchanged). |
+
+Effects on a path with no running prior (fresh install or inactive unit): the
+definition publication, the manager reload, and `StartUnit` each first confirm
+that the unit still has no process. A unit that started meanwhile is refused
+before its definition changes under it.
+
+`StartUnit` is judged by what follows it, not by the first look: its job ends
+when systemd forks the server, before the server advertises. After the job the
+adapter observes until the unit is exact, active, and advertising (reached),
+leaves `activating`/`running` (not reached, reported at once), or the ready
+deadline passes. The journal records that settling observation.
+
+Recovery of an unresolved attempt, never replaying a command:
+
+| Journal | Fresh observation | Decision |
+| --- | --- | --- |
+| Intent only, no plan | Anything the adapter can classify exactly | Close failed/retain-prior with that observation. No plan means no effect was authorized, so whatever exists (nothing, the inactive unit, a gateway systemd started meanwhile) was not caused by this attempt. |
+| A pending step | Anything classified exactly | Unchanged: mark an unreturned step indeterminate, record the fresh observation, close failed/retain-prior. |
+| Plans, no pending step, a durable observation | Not compared | Close failed/retain-prior with the last durable observation. The step observations record only that step's artifact, so comparing them with a fresh broad observation always disagreed. |
+| Definition publication or its cleanup pending; no transaction temporaries; the current bytes are an exact owned render of another target of this unit | Any | Nothing to settle: the publication never ran. The intended definition is recorded absent. |
+| Loaded unit declares another exact owned target while inactive | Any | The intended definition is not loaded yet: a pending reload is recorded not observed, not contradicted. |
+
+Whether the intended target's artifacts are present counts the wants link only
+when the unit file it names is the intended definition; the link itself does
+not name a target. One helper decides whether definition bytes are the intended
+render, another exact owned render, or foreign; foreign bytes stay an error.
+
+The unit's `NESSA_DATA_DIR` is the configured data root, as on macOS; the
+server adds the stage and instance itself, so the desktop's namespaced data
+directory and the server's are the same path. `WorkingDirectory` stays the
+namespaced directory. Prod units without an instance render the same bytes as
+before. A dev or instance unit rendered with the doubled path is now inexact and
+is refused; remove it by hand (`systemctl --user disable --now <unit>` and
+delete its unit file) before registering again.
+
 Done when: fresh Ubuntu machine, install the `.deb`, open the app, chat works,
 quit, reopen, log out and back in, and chat still works. The native acceptance
 case authorizes linger explicitly and proves that setup reports the account-wide
