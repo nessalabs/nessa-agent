@@ -1036,6 +1036,17 @@ impl Projection {
                 .filter(|message| !message.user_text.is_empty())
             {
                 message.user_text = clipped(&message.user_text, message.user_text.len() / 2);
+            } else if let Some(message) = view
+                .messages
+                .first_mut()
+                .filter(|message| !message.files.is_empty() || !message.attachments.is_empty())
+            {
+                // What the message linked is shown by name, and a path can be
+                // long; past the budget the view says it left some out rather
+                // than break its bound or give up an ask somebody must answer.
+                if message.files.pop().is_none() {
+                    message.attachments.pop();
+                }
             } else if !view.tools.is_empty() {
                 view.tools.remove(0);
             } else if !view.pending.is_empty() {

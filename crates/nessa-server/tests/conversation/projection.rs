@@ -38,7 +38,7 @@ use nessa_sdk::{
             ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
             ReviewDeclineStage,
         },
-        prompts::{PromptText, UserMessage},
+        prompts::{LinkedFile, PromptText, UserMessage},
         questions::{
             AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
         },
@@ -1502,4 +1502,42 @@ fn every_ask_the_binding_admits_is_offered_whole_within_the_view() {
     let bytes = serde_json::to_vec(&view).unwrap().len();
     assert!(bytes <= 60_000, "{bytes} bytes");
     assert_eq!(view.questions.len(), 8, "no admitted ask is given up");
+}
+
+#[test]
+fn a_message_linking_long_paths_gives_way_before_an_ask_does() {
+    // A running submission linking ten files at the longest path took about
+    // 40 KB the loop could never shed, so beside asks filling their budget the
+    // view broke its bound. What a message linked now gives way, and the asks
+    // stay.
+    let mut projection = projection();
+    let files = (0..10)
+        .map(|index| {
+            LinkedFile::new(format!(
+                "/{index}{}",
+                "p".repeat(LinkedFile::MAX_PATH_BYTES - 3)
+            ))
+            .unwrap()
+        })
+        .collect();
+    projection.admitted(
+        "linking",
+        &UserMessage::new(None, vec![], files).unwrap(),
+        ConversationPendingMode::Queued,
+    );
+    projection.event(&ExecutionEvent::new(
+        ExecutionId::new("linking").unwrap(),
+        ExecutionUpdate::Message(MessageChunk::text("reading them")),
+    ));
+    // The execution that linked them is the one asking: one turn runs at a
+    // time, so its message is the last one left for the loop to shrink.
+    for index in 1..=8 {
+        projection.event(&escaped_ask("linking", &index.to_string(), 3, 145));
+    }
+    let view = projection.read();
+    assert_eq!(view.messages.len(), 1);
+    let bytes = serde_json::to_vec(&view).unwrap().len();
+    assert!(bytes <= 60_000, "{bytes} bytes");
+    assert_eq!(view.questions.len(), 8, "no admitted ask is given up");
+    assert!(view.truncated);
 }
