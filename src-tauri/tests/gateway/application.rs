@@ -776,7 +776,7 @@ fn a_restored_no_effect_attempt_settles_before_the_current_attempt_opens() {
                 false,
                 None,
                 None,
-                None,
+                Vec::new(),
             ))
         }
     }

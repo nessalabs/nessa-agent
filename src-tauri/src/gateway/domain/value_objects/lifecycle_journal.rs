@@ -172,6 +172,10 @@ pub enum LifecycleEffectPredicate {
     Always,
     PrimaryReturned,
     PrimaryAccepted,
+    /// Due once the primary returned anything but acceptance: a cleanup that
+    /// undoes a primary which may have failed, and is not owed after one that
+    /// succeeded.
+    PrimaryNotAccepted,
     ObservationMatches(ReconciliationIncarnation),
 }
 
@@ -716,26 +720,8 @@ impl LifecycleHistory {
                 {
                     return Err(LifecycleJournalError::NativeAttemptMismatch);
                 }
-                let allowed = if step_id == &plan.primary_id {
-                    true
-                } else {
-                    match predicate {
-                        LifecycleEffectPredicate::Always => true,
-                        LifecycleEffectPredicate::PrimaryReturned => {
-                            plan.completed.contains_key(&plan.primary_id)
-                        }
-                        LifecycleEffectPredicate::PrimaryAccepted => matches!(
-                            plan.completed.get(&plan.primary_id),
-                            Some(LifecycleCommandResult::Accepted)
-                        ),
-                        LifecycleEffectPredicate::ObservationMatches(expected) => {
-                            self.latest_observation
-                                .as_ref()
-                                .and_then(LifecycleObservation::incarnation)
-                                == Some(expected)
-                        }
-                    }
-                };
+                let allowed = step_id == &plan.primary_id
+                    || self.is_due(predicate, plan.completed.get(&plan.primary_id));
                 if !allowed {
                     return Err(LifecycleJournalError::PredicateNotSatisfied);
                 }
@@ -884,15 +870,6 @@ impl LifecycleHistory {
         !self.plans.is_empty()
     }
 
-    pub fn pending_observation_source(&self) -> Option<LifecycleObservationSource> {
-        self.pending_observation.as_ref().map(|(plan_id, step_id)| {
-            LifecycleObservationSource::Effect {
-                plan_id: plan_id.clone(),
-                step_id: step_id.clone(),
-            }
-        })
-    }
-
     pub fn pending_step(&self) -> Option<LifecyclePendingStep> {
         if let Some((plan_id, step_id)) = &self.pending_observation {
             let plan = self.plans.get(plan_id)?;
@@ -907,26 +884,69 @@ impl LifecycleHistory {
                 if step_id == &plan.primary_id || plan.completed.contains_key(step_id) {
                     continue;
                 }
-                let eligible = match step.predicate() {
-                    LifecycleEffectPredicate::Always
-                    | LifecycleEffectPredicate::PrimaryReturned => true,
-                    LifecycleEffectPredicate::PrimaryAccepted => matches!(
-                        plan.completed.get(&plan.primary_id),
-                        Some(LifecycleCommandResult::Accepted)
-                    ),
-                    LifecycleEffectPredicate::ObservationMatches(expected) => {
-                        self.latest_observation
-                            .as_ref()
-                            .and_then(LifecycleObservation::incarnation)
-                            == Some(expected)
-                    }
-                };
-                if eligible {
+                if self.is_due(step.predicate(), plan.completed.get(&plan.primary_id)) {
                     return Some(self.pending(plan_id, plan, step_id));
                 }
             }
         }
         None
+    }
+
+    /// Whether a contingency may run, given its primary's returned result.
+    fn is_due(
+        &self,
+        predicate: &LifecycleEffectPredicate,
+        primary: Option<&LifecycleCommandResult>,
+    ) -> bool {
+        match predicate {
+            LifecycleEffectPredicate::Always => true,
+            LifecycleEffectPredicate::PrimaryReturned => primary.is_some(),
+            LifecycleEffectPredicate::PrimaryAccepted => {
+                matches!(primary, Some(LifecycleCommandResult::Accepted))
+            }
+            LifecycleEffectPredicate::PrimaryNotAccepted => {
+                primary.is_some_and(|result| !matches!(result, LifecycleCommandResult::Accepted))
+            }
+            LifecycleEffectPredicate::ObservationMatches(expected) => {
+                self.latest_observation
+                    .as_ref()
+                    .and_then(LifecycleObservation::incarnation)
+                    == Some(expected)
+            }
+        }
+    }
+
+    /// Every step recovery must settle, in the order the journal accepts,
+    /// when it records each unreturned one as indeterminate rather than
+    /// running it: a step awaiting its observation, then per plan an
+    /// unreturned primary and each contingency that result makes due. An
+    /// empty list means the plans are settled.
+    pub fn unsettled_steps(&self) -> Vec<LifecyclePendingStep> {
+        let mut unsettled = Vec::new();
+        if let Some((plan_id, step_id)) = &self.pending_observation {
+            if let Some(plan) = self.plans.get(plan_id) {
+                unsettled.push(self.pending(plan_id, plan, step_id));
+            }
+        }
+        let unreturned = LifecycleCommandResult::Indeterminate(String::new());
+        for plan_id in &self.plan_order {
+            let Some(plan) = self.plans.get(plan_id) else {
+                continue;
+            };
+            let primary = plan.completed.get(&plan.primary_id);
+            if primary.is_none() {
+                unsettled.push(self.pending(plan_id, plan, &plan.primary_id));
+            }
+            for (step_id, step) in &plan.steps {
+                if step_id != &plan.primary_id
+                    && !plan.completed.contains_key(step_id)
+                    && self.is_due(step.predicate(), Some(primary.unwrap_or(&unreturned)))
+                {
+                    unsettled.push(self.pending(plan_id, plan, step_id));
+                }
+            }
+        }
+        unsettled
     }
 
     fn pending(&self, plan_id: &str, plan: &PlanState, step_id: &str) -> LifecyclePendingStep {
@@ -2486,6 +2506,155 @@ mod tests {
             LifecycleHistory::restore(&records).unwrap_err(),
             LifecycleJournalError::NoEffectProofAfterPlan
         );
+    }
+
+    fn conditional_cleanup_plan(cleanup: LifecycleEffectPredicate) -> LifecycleRecord {
+        record(
+            1,
+            LifecycleRecordPayload::EffectPlan {
+                plan_id: "stage".into(),
+                expected_before: None,
+                target: target(),
+                primary: LifecyclePlanStep::new(
+                    "primary".into(),
+                    LifecycleEffect::StageRuntime {
+                        fingerprint: "a".repeat(64),
+                    },
+                    LifecycleEffectPredicate::Always,
+                )
+                .unwrap(),
+                cleanup: vec![LifecyclePlanStep::new(
+                    "cleanup".into(),
+                    LifecycleEffect::PruneRuntime {
+                        fingerprint: "a".repeat(64),
+                    },
+                    cleanup,
+                )
+                .unwrap()],
+            },
+        )
+    }
+
+    fn step_completion(
+        sequence: u64,
+        step: &str,
+        result: LifecycleCommandResult,
+    ) -> LifecycleRecord {
+        record(
+            sequence,
+            LifecycleRecordPayload::EffectCompletion {
+                plan_id: "stage".into(),
+                step_id: step.into(),
+                result,
+            },
+        )
+    }
+
+    fn step_observation(sequence: u64, step: &str, version: u64) -> LifecycleRecord {
+        record(
+            sequence,
+            LifecycleRecordPayload::Observation {
+                source: LifecycleObservationSource::Effect {
+                    plan_id: "stage".into(),
+                    step_id: step.into(),
+                },
+                state: LifecycleObservation::new(version, None, true),
+            },
+        )
+    }
+
+    #[test]
+    fn a_cleanup_owed_only_after_failure_leaves_a_success_settled() {
+        let settled = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+            step_completion(2, "primary", LifecycleCommandResult::Accepted),
+            step_observation(3, "primary", 1),
+        ])
+        .unwrap();
+        assert!(settled.pending_step().is_none());
+        assert!(settled.unsettled_steps().is_empty());
+        let mut refused = settled.clone();
+        assert_eq!(
+            refused.append(&step_completion(
+                4,
+                "cleanup",
+                LifecycleCommandResult::Accepted
+            )),
+            Err(LifecycleJournalError::PredicateNotSatisfied)
+        );
+
+        let failed = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+            step_completion(2, "primary", LifecycleCommandResult::Failed("copy".into())),
+            step_observation(3, "primary", 1),
+        ])
+        .unwrap();
+        assert_eq!(failed.pending_step().unwrap().step().id(), "cleanup");
+        let mut ran = failed.clone();
+        ran.append(&step_completion(
+            4,
+            "cleanup",
+            LifecycleCommandResult::Accepted,
+        ))
+        .unwrap();
+
+        // Before its primary returns, the cleanup is not yet owed.
+        let mut early = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+        ])
+        .unwrap();
+        assert_eq!(
+            early.append(&step_completion(
+                2,
+                "cleanup",
+                LifecycleCommandResult::Accepted
+            )),
+            Err(LifecycleJournalError::PredicateNotSatisfied)
+        );
+    }
+
+    #[test]
+    fn unsettled_steps_are_listed_in_the_order_the_journal_accepts() {
+        let ids = |history: &LifecycleHistory| {
+            history
+                .unsettled_steps()
+                .iter()
+                .map(|step| step.step().id().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let unreturned = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+        ])
+        .unwrap();
+        assert_eq!(ids(&unreturned), ["primary", "cleanup"]);
+
+        // An unconditional cleanup journaled before its primary, still
+        // awaiting its observation.
+        let early = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::Always),
+            step_completion(2, "cleanup", LifecycleCommandResult::Accepted),
+        ])
+        .unwrap();
+        assert_eq!(ids(&early), ["cleanup", "primary"]);
+
+        let accepted = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryAccepted),
+            step_completion(2, "primary", LifecycleCommandResult::Accepted),
+        ])
+        .unwrap();
+        assert_eq!(ids(&accepted), ["primary", "cleanup"]);
+        let unaccepted = LifecycleHistory::restore(&[
+            intent(None),
+            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryAccepted),
+        ])
+        .unwrap();
+        assert_eq!(ids(&unaccepted), ["primary"]);
     }
 
     #[test]

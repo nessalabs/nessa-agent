@@ -4,6 +4,8 @@ mod service;
 pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;
 #[cfg(test)]
 pub(crate) use ports::testing;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub use ports::GatewayLifecycleRecovery;
 #[cfg(target_os = "linux")]
 pub use ports::GatewayStopProofToken;
 pub use ports::{
@@ -16,6 +18,4 @@ pub use ports::{
     GatewayStopSession, LoginShellError, LoginShellPath, MonotonicClock, ReconciledGateway,
     SystemMonotonicClock,
 };
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-pub use ports::{GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep};
 pub use service::{Gateway, GatewayRuntimeDependencies};

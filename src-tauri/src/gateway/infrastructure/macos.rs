@@ -1,9 +1,9 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep,
-    GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-    GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
-    ReconciledGateway, ReconciliationHistoryFact,
+    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+    GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
+    ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -40,7 +40,7 @@ use control::{
 };
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
-use staging::{launch_settings, stage_runtime_cached, validate_runtime, ValidatedRuntimes};
+use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
 
 pub(super) struct Launchd {
     validated_runtimes: ValidatedRuntimes,
@@ -173,8 +173,9 @@ impl GatewayHost for Launchd {
         );
         let status = service_status(target.service()).map_err(GatewayError::Registration)?;
         let observed = observed_incarnation(target.service(), port, &status, health(port));
-        // Whether the target's artifact is present: launchd runs it, or the
-        // installed plist carries its generation, and it was not the prior.
+        // Whether the target is present for an attempt closed before any
+        // plan: launchd runs it, or the installed plist carries its
+        // generation, and it was not the prior.
         let target_artifact_present = (observed
             .as_ref()
             .is_some_and(|incarnation| incarnation.target() == target)
@@ -182,316 +183,219 @@ impl GatewayHost for Launchd {
             && !recovery
                 .before()
                 .is_some_and(|incarnation| incarnation.target() == target);
-        let close_failed = |step: Option<&GatewayLifecycleRecoveryStep>,
-                            unreturned: &str,
-                            artifact_present: bool,
-                            phase: LifecycleFailedPhase,
-                            message: &str| {
-            close_unadopted(
-                recovery,
-                journal,
-                Unadopted {
-                    step,
-                    unreturned,
-                    observed: observed.clone(),
-                    artifact_present,
-                    phase,
-                    message,
-                },
-            )
+        let plist = self
+            .home
+            .join("Library/LaunchAgents")
+            .join(format!("{label}.plist"));
+        let runtimes = self
+            .home
+            .join("Library/Application Support/Nessa/gateway-runtimes")
+            .join(label);
+        // What each step's observation records, as the live writer records it.
+        let artifact_present = |effect: &LifecycleEffect, loaded: bool| match effect {
+            LifecycleEffect::StageRuntime { fingerprint }
+            | LifecycleEffect::PruneRuntime { fingerprint } => {
+                fs::symlink_metadata(runtimes.join(fingerprint)).is_ok()
+            }
+            LifecycleEffect::RemoveStagingRuntime { generation } => {
+                fs::symlink_metadata(runtimes.join(format!(".staging-{generation}"))).is_ok()
+            }
+            LifecycleEffect::BootstrapService { .. } => loaded,
+            _ => fs::symlink_metadata(&plist).is_ok(),
         };
-        if let Some(step) = recovery.pending_step() {
-            match step.step().effect() {
-                LifecycleEffect::StageRuntime { fingerprint } => {
-                    let runtime = self
-                        .home
-                        .join("Library/Application Support/Nessa/gateway-runtimes")
-                        .join(label)
-                        .join(fingerprint);
-                    // A staged runtime that no longer validates is absent.
-                    let staged = validate_runtime(&runtime, fingerprint).is_ok();
-                    return close_failed(
-                        Some(step),
-                        "The host restarted before runtime staging returned",
-                        staged,
-                        LifecycleFailedPhase::NativeDispatch,
-                        if staged {
-                            "Recovered the exact durable staged runtime after restart"
+        let settle = |decided: Option<LifecycleCommandResult>, observed| {
+            settle_without_replay(recovery, journal, decided, observed, |effect| {
+                artifact_present(effect, status.loaded)
+            })
+        };
+        let close = |settled: Settled, message: &str| close_failed(journal, settled, message);
+        let Some(step) = recovery.pending_step() else {
+            if !recovery.has_effect_plan() {
+                // No plan authorized no effect, so whatever is there now was
+                // not caused by this attempt.
+                let observation = LifecycleObservation::new(
+                    recovery
+                        .latest_observation()
+                        .map_or(1, |prior| prior.version().saturating_add(1)),
+                    observed,
+                    target_artifact_present,
+                );
+                retry_journal_delivery(|| {
+                    journal.observation(&LifecycleObservationSource::Intent, &observation)
+                })?;
+                return close(
+                    Settled {
+                        observation,
+                        unreturned: false,
+                    },
+                    "Recovered admitted intent before any effect-capable plan",
+                );
+            }
+            // Every plan settled and was observed. A step's observation
+            // records only that step's artifact, so it is not compared with a
+            // fresh one.
+            let observation = recovery.latest_observation().cloned().ok_or_else(|| {
+                GatewayError::Registration(
+                    "The unresolved gateway plan has no completion observation and requires exact resume"
+                        .into(),
+                )
+            })?;
+            return close(
+                Settled {
+                    observation,
+                    unreturned: false,
+                },
+                "Recovered settled launchd plans from their last saved observation; nothing was replayed",
+            );
+        };
+        match step.step().effect() {
+            LifecycleEffect::BootstrapService { target: planned } => {
+                let BootstrapRecoveryDecision::Adopt(exact) = bootstrap_recovery_decision(
+                    status.loaded,
+                    status.pid,
+                    observed.as_ref(),
+                    planned,
+                ) else {
+                    return close(
+                        settle(None, observed)?,
+                        "Recovered bootstrap without its exact planned target; nothing was booted out",
+                    );
+                };
+                let settled = settle(None, observed)?;
+                retry_journal_delivery(|| {
+                    journal.physical_outcome(
+                        &LifecyclePhysicalOutcome::Confirmed(exact.clone()),
+                        Some(&settled.observation),
+                        ReconciliationCleanupDecision::AdoptClaimed,
+                    )
+                })?;
+                Ok(())
+            }
+            LifecycleEffect::AdoptReadyIncarnation { target: planned } => {
+                let exact = observed
+                    .as_ref()
+                    .is_some_and(|incarnation| incarnation.target() == planned);
+                let settled = settle_without_replay(
+                    recovery,
+                    journal,
+                    Some(if exact {
+                        LifecycleCommandResult::Accepted
+                    } else {
+                        LifecycleCommandResult::Failed(
+                            "The planned gateway incarnation is not ready after restart".into(),
+                        )
+                    }),
+                    observed.clone(),
+                    |_| exact,
+                )?;
+                let physical = match observed.filter(|_| exact) {
+                    Some(incarnation) => LifecyclePhysicalOutcome::Confirmed(incarnation),
+                    None => LifecyclePhysicalOutcome::Failed {
+                        phase: LifecycleFailedPhase::Observation,
+                        message: "Recovered readiness plan did not find its exact incarnation"
+                            .into(),
+                    },
+                };
+                retry_journal_delivery(|| {
+                    journal.physical_outcome(
+                        &physical,
+                        Some(&settled.observation),
+                        if exact {
+                            ReconciliationCleanupDecision::AdoptClaimed
                         } else {
-                            "Recovered runtime staging after restart; no exact staged runtime remains"
+                            ReconciliationCleanupDecision::RetainPrior
                         },
+                    )
+                })?;
+                Ok(())
+            }
+            LifecycleEffect::StopAgents { incarnation } => {
+                let command = step.completion().cloned().unwrap_or_else(|| {
+                    LifecycleCommandResult::Indeterminate(
+                        "The desktop restarted before stop dispatch returned".into(),
+                    )
+                });
+                let target_present = observed
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.target() == incarnation.target());
+                let settled = settle_without_replay(
+                    recovery,
+                    journal,
+                    Some(command.clone()),
+                    observed,
+                    |_| target_present,
+                )?;
+                retry_journal_delivery(|| {
+                    journal.physical_outcome(
+                        &LifecyclePhysicalOutcome::StopAgentsSettled {
+                            intended: incarnation.clone(),
+                            command: command.clone(),
+                            observed: settled.observation.clone(),
+                        },
+                        Some(&settled.observation),
+                        ReconciliationCleanupDecision::RetainPrior,
+                    )
+                })?;
+                Ok(())
+            }
+            LifecycleEffect::UnloadService { service } => {
+                let expected = recovery
+                    .latest_observation()
+                    .and_then(LifecycleObservation::incarnation)
+                    .or_else(|| recovery.before());
+                if observed.is_some() && observed.as_ref() != expected {
+                    return close(
+                        settle(None, observed)?,
+                        "Recovered unload after its target was replaced; nothing was booted out",
                     );
                 }
-                LifecycleEffect::BootstrapService { target: planned } => {
-                    let BootstrapRecoveryDecision::Adopt(exact) = bootstrap_recovery_decision(
-                        status.loaded,
-                        status.pid,
-                        observed.as_ref(),
-                        planned,
-                    ) else {
-                        return close_failed(
-                            Some(step),
-                            "The host restarted before bootstrap returned",
-                            target_artifact_present,
-                            LifecycleFailedPhase::Observation,
-                            "Recovered bootstrap without its exact planned target; nothing was booted out",
-                        );
-                    };
-                    let observation = settle_without_replay(
+                if observed.is_none() && status.loaded && expected.is_some() {
+                    return close(
+                        settle(None, observed)?,
+                        "Recovered unload after its planned incarnation stopped running; nothing was booted out",
+                    );
+                }
+                // The planned incarnation, or nothing: an unreturned bootout is
+                // the one command recovery runs, once.
+                let command = match step.completion() {
+                    Some(_) => None,
+                    None if status.loaded => Some(match launchctl(&["bootout", service]) {
+                        Ok(()) => LifecycleCommandResult::Accepted,
+                        Err(error) => LifecycleCommandResult::Failed(error),
+                    }),
+                    None => Some(LifecycleCommandResult::Indeterminate(
+                        "The service was already absent when unload recovery began".into(),
+                    )),
+                };
+                let refreshed = service_status(service).map_err(GatewayError::Registration)?;
+                let refreshed_incarnation =
+                    observed_incarnation(service, port, &refreshed, health(port));
+                let message =
+                    format!("Recovered exact unload after restart with command result {command:?}");
+                close(
+                    settle_without_replay(
                         recovery,
                         journal,
-                        step,
-                        "The host restarted before bootstrap returned",
-                        observed.clone(),
-                        true,
-                    )?;
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::Confirmed(exact.clone()),
-                            Some(&observation),
-                            ReconciliationCleanupDecision::AdoptClaimed,
-                        )
-                    })?;
-                    return Ok(());
-                }
-                LifecycleEffect::AdoptReadyIncarnation { target: planned } => {
-                    let exact = observed
-                        .as_ref()
-                        .is_some_and(|incarnation| incarnation.target() == planned);
-                    let command = step.completion().cloned().unwrap_or_else(|| {
-                        if exact {
-                            LifecycleCommandResult::Accepted
-                        } else {
-                            LifecycleCommandResult::Failed(
-                                "The planned gateway incarnation is not ready after restart".into(),
-                            )
-                        }
-                    });
-                    if step.completion().is_none() {
-                        retry_journal_delivery(|| {
-                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
-                        })?;
-                    }
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
-                        observed.clone(),
-                        exact,
-                    );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
-                    let physical = match observed.clone().filter(|_| exact) {
-                        Some(incarnation) => LifecyclePhysicalOutcome::Confirmed(incarnation),
-                        None => LifecyclePhysicalOutcome::Failed {
-                            phase: LifecycleFailedPhase::Observation,
-                            message: "Recovered readiness plan did not find its exact incarnation"
-                                .into(),
-                        },
-                    };
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &physical,
-                            Some(&observation),
-                            if exact {
-                                ReconciliationCleanupDecision::AdoptClaimed
-                            } else {
-                                ReconciliationCleanupDecision::RetainPrior
-                            },
-                        )
-                    })?;
-                    return Ok(());
-                }
-                LifecycleEffect::StopAgents { incarnation } => {
-                    let command = step.completion().cloned().unwrap_or_else(|| {
-                        LifecycleCommandResult::Indeterminate(
-                            "The desktop restarted before stop dispatch returned".into(),
-                        )
-                    });
-                    if step.completion().is_none() {
-                        retry_journal_delivery(|| {
-                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
-                        })?;
-                    }
-                    let target_present = observed
-                        .as_ref()
-                        .is_some_and(|candidate| candidate.target() == incarnation.target());
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
-                        observed.clone(),
-                        target_present,
-                    );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::StopAgentsSettled {
-                                intended: incarnation.clone(),
-                                command: command.clone(),
-                                observed: observation.clone(),
-                            },
-                            Some(&observation),
-                            ReconciliationCleanupDecision::RetainPrior,
-                        )
-                    })?;
-                    return Ok(());
-                }
-                LifecycleEffect::UnloadService { service } => {
-                    let expected = recovery
-                        .latest_observation()
-                        .and_then(LifecycleObservation::incarnation)
-                        .or_else(|| recovery.before());
-                    if observed.as_ref() != expected && (status.loaded || observed.is_some()) {
-                        return close_failed(
-                            Some(step),
-                            "Not run after restart: the unload target was replaced",
-                            fs::symlink_metadata(
-                                self.home
-                                    .join("Library/LaunchAgents")
-                                    .join(format!("{label}.plist")),
-                            )
-                            .is_ok(),
-                            LifecycleFailedPhase::NativeDispatch,
-                            "Recovered unload after its target was replaced; nothing was booted out",
-                        );
-                    }
-                    let command = match step.completion() {
-                        Some(command) => command.clone(),
-                        None if status.loaded => {
-                            let result = match launchctl(&["bootout", service]) {
-                                Ok(()) => LifecycleCommandResult::Accepted,
-                                Err(error) => LifecycleCommandResult::Failed(error),
-                            };
-                            retry_journal_delivery(|| {
-                                journal.effect_completion(step.plan_id(), step.step().id(), &result)
-                            })?;
-                            result
-                        }
-                        None => {
-                            let result = LifecycleCommandResult::Indeterminate(
-                                "The service was already absent when unload recovery began".into(),
-                            );
-                            retry_journal_delivery(|| {
-                                journal.effect_completion(step.plan_id(), step.step().id(), &result)
-                            })?;
-                            result
-                        }
-                    };
-                    let refreshed = service_status(service).map_err(GatewayError::Registration)?;
-                    let refreshed_incarnation =
-                        observed_incarnation(service, port, &refreshed, health(port));
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                        command,
                         refreshed_incarnation,
-                        fs::symlink_metadata(
-                            self.home
-                                .join("Library/LaunchAgents")
-                                .join(format!("{label}.plist")),
-                        )
-                        .is_ok(),
-                    );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::Failed {
-                                phase: LifecycleFailedPhase::NativeDispatch,
-                                message: format!(
-                                    "Recovered exact unload after restart with command result {command:?}"
-                                ),
-                            },
-                            Some(&observation),
-                            ReconciliationCleanupDecision::RetainPrior,
-                        )
-                    })?;
-                    return Ok(());
-                }
-                LifecycleEffect::PruneRuntime { fingerprint } => {
-                    let artifact = self
-                        .home
-                        .join("Library/Application Support/Nessa/gateway-runtimes")
-                        .join(label)
-                        .join(fingerprint);
-                    return close_failed(
-                        Some(step),
-                        "The host restarted before runtime pruning returned",
-                        fs::symlink_metadata(artifact).is_ok(),
-                        LifecycleFailedPhase::Observation,
-                        "Recovered exact runtime-pruning observation after restart",
-                    );
-                }
-                LifecycleEffect::RemoveStagingRuntime { generation } => {
-                    let artifact = self
-                        .home
-                        .join("Library/Application Support/Nessa/gateway-runtimes")
-                        .join(label)
-                        .join(format!(".staging-{generation}"));
-                    return close_failed(
-                        Some(step),
-                        "The host restarted before staging cleanup returned",
-                        fs::symlink_metadata(artifact).is_ok(),
-                        LifecycleFailedPhase::Observation,
-                        "Recovered exact staging-prune observation after restart",
-                    );
-                }
-                LifecycleEffect::PublishServiceDefinition { .. }
-                | LifecycleEffect::RequestRetirement { .. } => {
-                    return close_failed(
-                        Some(step),
-                        "The host restarted before this step returned",
-                        target_artifact_present,
-                        LifecycleFailedPhase::Observation,
-                        "Recovered a planned launchd step by fresh observation; it was not replayed",
-                    );
-                }
-                _ => {
-                    return Err(GatewayError::Registration(
-                        "The unresolved gateway effect is not a launchd effect this host can recover"
-                            .into(),
-                    ));
-                }
+                        |effect| artifact_present(effect, refreshed.loaded),
+                    )?,
+                    &message,
+                )
             }
-        }
-        if !recovery.has_effect_plan() {
-            // No plan authorized no effect, so whatever is there now was not
-            // caused by this attempt.
-            return close_failed(
-                None,
-                "",
-                target_artifact_present,
-                LifecycleFailedPhase::NativeDispatch,
-                "Recovered admitted intent before any effect-capable plan",
-            );
-        }
-        if recovery.pending_observation_source().is_some() {
-            return close_failed(
-                None,
-                "",
-                target_artifact_present,
-                LifecycleFailedPhase::Observation,
-                "Recovered a returned launchd step by fresh observation",
-            );
-        }
-        // Every plan settled and was observed. A step's observation records
-        // only that step's artifact, so it is not compared with a fresh one.
-        let last = recovery.latest_observation().ok_or_else(|| {
-            GatewayError::Registration(
-                "The unresolved gateway plan has no completion observation and requires exact resume"
+            LifecycleEffect::StageRuntime { .. }
+            | LifecycleEffect::PublishServiceDefinition { .. }
+            | LifecycleEffect::RequestRetirement { .. }
+            | LifecycleEffect::PruneRuntime { .. }
+            | LifecycleEffect::RemoveStagingRuntime { .. } => close(
+                settle(None, observed)?,
+                "Recovered an interrupted launchd step without replaying it",
+            ),
+            _ => Err(GatewayError::Registration(
+                "The unresolved gateway effect is not a launchd effect this host can recover"
                     .into(),
-            )
-        })?;
-        retry_journal_delivery(|| {
-            journal.physical_outcome(
-                &LifecyclePhysicalOutcome::Failed {
-                    phase: LifecycleFailedPhase::Observation,
-                    message: "Recovered settled launchd plans from their last saved observation; nothing was replayed".into(),
-                },
-                Some(last),
-                ReconciliationCleanupDecision::RetainPrior,
-            )
-        })?;
-        Ok(())
+            )),
+        }
     }
 
     fn stop_agents(
@@ -981,118 +885,123 @@ fn prune_planned(
     Ok(())
 }
 
-/// What an attempt that cannot be adopted leaves behind when recovery closes it.
-struct Unadopted<'a> {
-    /// The step still pending, if any; an unreturned one is closed as
-    /// indeterminate with `unreturned` as its reason.
-    step: Option<&'a GatewayLifecycleRecoveryStep>,
-    unreturned: &'a str,
-    observed: Option<ReconciliationIncarnation>,
-    artifact_present: bool,
-    phase: LifecycleFailedPhase,
-    message: &'a str,
+/// The last observation recovery recorded, and whether any settled step had
+/// not returned.
+struct Settled {
+    observation: LifecycleObservation,
+    unreturned: bool,
 }
 
-/// Records the fresh observation and closes the attempt as failed, keeping
-/// whatever is there. Nothing is replayed.
-fn close_unadopted(
-    recovery: &GatewayLifecycleRecovery,
+/// Closes the attempt as failed, keeping whatever is there. An attempt whose
+/// steps had not all returned failed at dispatch; one whose steps had, at
+/// observation.
+fn close_failed(
     journal: &dyn GatewayReconciliationJournalSession,
-    unadopted: Unadopted<'_>,
+    settled: Settled,
+    message: &str,
 ) -> Result<(), GatewayError> {
-    let observation = match unadopted.step {
-        Some(step) => settle_without_replay(
-            recovery,
-            journal,
-            step,
-            unadopted.unreturned,
-            unadopted.observed,
-            unadopted.artifact_present,
-        )?,
-        None => {
-            let source = recovery
-                .pending_observation_source()
-                .cloned()
-                .unwrap_or(LifecycleObservationSource::Intent);
-            let observation = LifecycleObservation::new(
-                recovery
-                    .latest_observation()
-                    .map_or(1, |prior| prior.version().saturating_add(1)),
-                unadopted.observed,
-                unadopted.artifact_present,
-            );
-            retry_journal_delivery(|| journal.observation(&source, &observation))?;
-            observation
-        }
-    };
     retry_journal_delivery(|| {
         journal.physical_outcome(
             &LifecyclePhysicalOutcome::Failed {
-                phase: unadopted.phase,
-                message: unadopted.message.into(),
+                phase: if settled.unreturned {
+                    LifecycleFailedPhase::NativeDispatch
+                } else {
+                    LifecycleFailedPhase::Observation
+                },
+                message: message.into(),
             },
-            Some(&observation),
+            Some(&settled.observation),
             ReconciliationCleanupDecision::RetainPrior,
         )
     })
     .map(|_| ())
 }
 
-/// Settles the pending step and, when it is its plan's primary, each cleanup
-/// the plan declared, without running any of them. An unreturned step is
-/// recorded indeterminate: the interrupted attempt may have run it. Every
-/// settled step is observed, and the last observation is returned for the
-/// outcome to confirm, since no outcome may leave a declared cleanup pending.
+/// Settles every step the domain lists as unsettled, in its order, without
+/// running any. The pending step takes `decided` when given; any other
+/// unreturned primary is recorded indeterminate because the interrupted
+/// attempt may have returned it unrecorded, and an unreturned cleanup as not
+/// run by recovery, though the attempt may have run it. Each settled step is observed with `artifact_present` for
+/// its effect, and the last observation is returned for the outcome, since no
+/// outcome may leave a due step unsettled.
 fn settle_without_replay(
     recovery: &GatewayLifecycleRecovery,
     journal: &dyn GatewayReconciliationJournalSession,
-    step: &GatewayLifecycleRecoveryStep,
-    unreturned: &str,
+    decided: Option<LifecycleCommandResult>,
     observed: Option<ReconciliationIncarnation>,
-    artifact_present: bool,
-) -> Result<LifecycleObservation, GatewayError> {
+    artifact_present: impl Fn(&LifecycleEffect) -> bool,
+) -> Result<Settled, GatewayError> {
+    let pending = recovery.pending_step();
     let mut version = recovery
         .latest_observation()
         .map_or(0, LifecycleObservation::version);
-    let mut observe = |source: LifecycleObservationSource| {
-        version = version.saturating_add(1);
-        let observation = LifecycleObservation::new(version, observed.clone(), artifact_present);
-        retry_journal_delivery(|| journal.observation(&source, &observation))?;
-        Ok::<_, GatewayError>(observation)
-    };
-    if step.completion().is_none() {
-        let command = LifecycleCommandResult::Indeterminate(unreturned.into());
-        retry_journal_delivery(|| {
-            journal.effect_completion(step.plan_id(), step.step().id(), &command)
-        })?;
-    }
-    let mut last = observe(step.source())?;
-    let is_primary = !step
-        .contingencies()
-        .iter()
-        .any(|contingency| contingency.id() == step.step().id());
-    if is_primary {
-        for contingency in step.contingencies() {
-            // launchd plans declare only unconditional cleanup, which the
-            // returned primary makes due.
-            if !matches!(contingency.predicate(), LifecycleEffectPredicate::Always) {
-                return Err(GatewayError::Registration(
-                    "A launchd plan declared a conditional cleanup recovery cannot settle".into(),
-                ));
-            }
-            let command = LifecycleCommandResult::Indeterminate(
-                "Not run by recovery; the interrupted attempt may have run it".into(),
-            );
+    let mut settled = None;
+    let mut unreturned = false;
+    for step in recovery.unsettled_steps() {
+        if step.completion().is_none() {
+            unreturned = true;
+            let is_pending = pending.is_some_and(|pending| {
+                pending.plan_id() == step.plan_id() && pending.step().id() == step.step().id()
+            });
+            let is_cleanup = step
+                .contingencies()
+                .iter()
+                .any(|contingency| contingency.id() == step.step().id());
+            let command = match (&decided, is_pending, is_cleanup) {
+                (Some(decided), true, _) => decided.clone(),
+                (_, _, false) => LifecycleCommandResult::Indeterminate(
+                    "The host restarted before this step returned".into(),
+                ),
+                (_, _, true) => LifecycleCommandResult::Indeterminate(
+                    "Not run by recovery; the interrupted attempt may have run it".into(),
+                ),
+            };
             retry_journal_delivery(|| {
-                journal.effect_completion(step.plan_id(), contingency.id(), &command)
-            })?;
-            last = observe(LifecycleObservationSource::Effect {
-                plan_id: step.plan_id().into(),
-                step_id: contingency.id().into(),
+                journal.effect_completion(step.plan_id(), step.step().id(), &command)
             })?;
         }
+        version = version.saturating_add(1);
+        let observation = LifecycleObservation::new(
+            version,
+            observed.clone(),
+            artifact_present(step.step().effect()),
+        );
+        retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+        settled = Some(observation);
     }
-    Ok(last)
+    let observation = settled.ok_or_else(|| {
+        GatewayError::Registration("The unresolved gateway plan has nothing to settle".into())
+    })?;
+    Ok(Settled {
+        observation,
+        unreturned,
+    })
+}
+
+/// The prune a first staging declares for the runtime it publishes, owed
+/// only when staging did not succeed.
+fn staging_cleanup(fingerprint: &str) -> Result<LifecyclePlanStep, String> {
+    LifecyclePlanStep::new(
+        "remove-published-runtime".into(),
+        LifecycleEffect::PruneRuntime {
+            fingerprint: fingerprint.into(),
+        },
+        LifecycleEffectPredicate::PrimaryNotAccepted,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// The bootout a bootstrap declares, owed only when the bootstrap did not
+/// succeed: after a success nothing is left pending for the next step.
+fn bootstrap_cleanup(service: &str) -> Result<LifecyclePlanStep, String> {
+    LifecyclePlanStep::new(
+        "unload-bootstrapped-service".into(),
+        LifecycleEffect::UnloadService {
+            service: service.into(),
+        },
+        LifecycleEffectPredicate::PrimaryNotAccepted,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn register(
@@ -1266,14 +1175,7 @@ fn register(
             },
         )?
     } else {
-        let cleanup_staged_runtime = LifecyclePlanStep::new(
-            "remove-published-runtime".into(),
-            LifecycleEffect::PruneRuntime {
-                fingerprint: fingerprint.clone(),
-            },
-            LifecycleEffectPredicate::Always,
-        )
-        .map_err(|error| error.to_string())?;
+        let cleanup_staged_runtime = staging_cleanup(&fingerprint)?;
         run_planned_effect_with_cleanup(
             progress,
             "stage-runtime",
@@ -1524,14 +1426,7 @@ fn register(
             LifecycleEffectPredicate::Always,
         )
         .map_err(|error| error.to_string())?;
-        let bootstrap_cleanup = LifecyclePlanStep::new(
-            "unload-bootstrapped-service".into(),
-            LifecycleEffect::UnloadService {
-                service: service.clone(),
-            },
-            LifecycleEffectPredicate::Always,
-        )
-        .map_err(|error| error.to_string())?;
+        let bootstrap_cleanup = bootstrap_cleanup(&service)?;
         progress
             .effect_planned(
                 "bootstrap-service",
@@ -2287,14 +2182,7 @@ mod tests {
     }
 
     fn bootstrap_cleanup_step() -> LifecyclePlanStep {
-        LifecyclePlanStep::new(
-            "unload-bootstrapped-service".into(),
-            LifecycleEffect::UnloadService {
-                service: "gui/501/so.nessa.gateway.prod".into(),
-            },
-            LifecycleEffectPredicate::Always,
-        )
-        .unwrap()
+        super::bootstrap_cleanup("gui/501/so.nessa.gateway.prod").unwrap()
     }
 
     fn bootstrap_target() -> ReconciliationTarget {
@@ -2392,6 +2280,12 @@ mod tests {
                 assert_eq!(plan_id, "stage-runtime");
                 assert_eq!(cleanup.len(), 1);
                 assert_eq!(cleanup[0].id(), "remove-published-runtime");
+                // Owed only if staging did not succeed, so a success leaves
+                // nothing pending for the next plan.
+                assert_eq!(
+                    cleanup[0].predicate(),
+                    &LifecycleEffectPredicate::PrimaryNotAccepted
+                );
                 self.0.lock().unwrap().push("plan".into());
                 Ok(test_receipt(1, LifecycleRecordKind::EffectPlan))
             }
@@ -2429,14 +2323,7 @@ mod tests {
 
         let progress = FailingCompletionProgress(Mutex::new(Vec::new()));
         let cleaned = AtomicBool::new(false);
-        let cleanup = LifecyclePlanStep::new(
-            "remove-published-runtime".into(),
-            LifecycleEffect::PruneRuntime {
-                fingerprint: "a".repeat(64),
-            },
-            LifecycleEffectPredicate::Always,
-        )
-        .unwrap();
+        let cleanup = super::staging_cleanup(&"a".repeat(64)).unwrap();
         let result = run_planned_effect_with_cleanup(
             &progress,
             "stage-runtime",
@@ -3223,9 +3110,9 @@ mod tests {
 
 #[cfg(test)]
 mod recovery_tests {
-    //! Recovery against a journal that enforces the domain's lifecycle rules,
-    //! so an outcome the domain would refuse fails the test rather than
-    //! passing through a permissive fake.
+    //! Recovery against a journal that applies the domain's own lifecycle
+    //! rules, so an outcome the domain would refuse fails the test, and every
+    //! row asserts what recovery wrote.
     use super::*;
     use crate::gateway::{
         application::{
@@ -3239,19 +3126,24 @@ mod recovery_tests {
     };
     use std::sync::Mutex;
 
+    const UNRETURNED: &str = "The host restarted before this step returned";
+    const NOT_RUN: &str = "Not run by recovery; the interrupted attempt may have run it";
+
     fn correlation(serial: u64) -> ReconciliationCorrelation {
         ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}")).unwrap()
+    }
+
+    fn indeterminate(reason: &str) -> LifecycleCommandResult {
+        LifecycleCommandResult::Indeterminate(reason.into())
     }
 
     struct Scenario {
         home: tempfile::TempDir,
         label: String,
         target: ReconciliationTarget,
-        records: Vec<LifecyclePayloadStep>,
+        records: Vec<LifecycleRecordPayload>,
         before: Option<ReconciliationIncarnation>,
     }
-
-    type LifecyclePayloadStep = LifecycleRecordPayload;
 
     impl Scenario {
         fn new(before: Option<ReconciliationIncarnation>) -> Self {
@@ -3280,12 +3172,11 @@ mod recovery_tests {
 
         fn plan(
             mut self,
-            plan_id: &str,
             primary: LifecycleEffect,
-            cleanup: Option<LifecycleEffect>,
+            cleanup: Option<(LifecycleEffect, LifecycleEffectPredicate)>,
         ) -> Self {
             self.records.push(LifecycleRecordPayload::EffectPlan {
-                plan_id: plan_id.into(),
+                plan_id: "plan".into(),
                 expected_before: self.before.clone(),
                 target: self.target.clone(),
                 primary: LifecyclePlanStep::new(
@@ -3295,13 +3186,8 @@ mod recovery_tests {
                 )
                 .unwrap(),
                 cleanup: cleanup
-                    .map(|effect| {
-                        LifecyclePlanStep::new(
-                            "cleanup".into(),
-                            effect,
-                            LifecycleEffectPredicate::Always,
-                        )
-                        .unwrap()
+                    .map(|(effect, predicate)| {
+                        LifecyclePlanStep::new("cleanup".into(), effect, predicate).unwrap()
                     })
                     .into_iter()
                     .collect(),
@@ -3309,20 +3195,31 @@ mod recovery_tests {
             self
         }
 
-        fn completed(mut self, plan_id: &str, version: u64, artifact: bool) -> Self {
+        fn completed(mut self, step: &str, result: LifecycleCommandResult) -> Self {
             self.records.push(LifecycleRecordPayload::EffectCompletion {
-                plan_id: plan_id.into(),
-                step_id: "primary".into(),
-                result: LifecycleCommandResult::Accepted,
+                plan_id: "plan".into(),
+                step_id: step.into(),
+                result,
             });
+            self
+        }
+
+        fn observed(mut self, step: &str, version: u64, artifact: bool) -> Self {
             self.records.push(LifecycleRecordPayload::Observation {
                 source: LifecycleObservationSource::Effect {
-                    plan_id: plan_id.into(),
-                    step_id: "primary".into(),
+                    plan_id: "plan".into(),
+                    step_id: step.into(),
                 },
                 state: LifecycleObservation::new(version, None, artifact),
             });
             self
+        }
+
+        fn runtimes(&self) -> PathBuf {
+            self.home
+                .path()
+                .join("Library/Application Support/Nessa/gateway-runtimes")
+                .join(&self.label)
         }
 
         fn published(self) -> Self {
@@ -3340,7 +3237,19 @@ mod recovery_tests {
             self
         }
 
-        fn recover(&self) -> (Result<(), GatewayError>, LifecycleHistory) {
+        fn stage(&self) -> LifecycleEffect {
+            LifecycleEffect::StageRuntime {
+                fingerprint: self.target.runtime_fingerprint().into(),
+            }
+        }
+
+        fn prune(&self) -> LifecycleEffect {
+            LifecycleEffect::PruneRuntime {
+                fingerprint: self.target.runtime_fingerprint().into(),
+            }
+        }
+
+        fn recover(&self) -> Recovered {
             let namespace = self.target.service().to_owned();
             let records = self
                 .records
@@ -3365,26 +3274,16 @@ mod recovery_tests {
                 )
                 .unwrap(),
             );
-            let recovery = GatewayLifecycleRecovery::new(
+            let recovery = GatewayLifecycleRecovery::from_history(
                 GatewayReconciliationAttempt::new(correlation(2), request).unwrap(),
                 self.target.clone(),
                 self.before.clone(),
-                history.has_effect_plan(),
-                history.latest_observation().cloned(),
-                history.pending_step().map(|pending| {
-                    GatewayLifecycleRecoveryStep::new(
-                        pending.plan_id().into(),
-                        pending.step().clone(),
-                        pending.contingencies().to_vec(),
-                        pending.completion().cloned(),
-                        pending.native_attempt().cloned(),
-                    )
-                }),
-                history.pending_observation_source(),
+                &history,
             );
             let journal = DomainJournal {
                 namespace,
                 history: Mutex::new(history),
+                written: Mutex::new(Vec::new()),
             };
             let configuration = ServiceConfiguration::new(
                 "recoverytest".into(),
@@ -3400,13 +3299,75 @@ mod recovery_tests {
                 self.home.path().to_path_buf(),
             );
             let result = host.recover(&recovery, &journal);
-            (result, journal.history.into_inner().unwrap())
+            Recovered {
+                result,
+                terminal: journal.history.into_inner().unwrap().is_terminal(),
+                written: journal.written.into_inner().unwrap(),
+            }
         }
+    }
+
+    struct Recovered {
+        result: Result<(), GatewayError>,
+        terminal: bool,
+        written: Vec<LifecycleRecordPayload>,
+    }
+
+    impl Recovered {
+        /// The completions and observations recovery wrote, then its outcome's
+        /// phase and message.
+        fn closed(self, row: &str) -> (Vec<Written>, LifecycleFailedPhase, String) {
+            if let Err(error) = &self.result {
+                panic!("{row}: {error}");
+            }
+            assert!(self.terminal, "{row}");
+            let mut written = Vec::new();
+            let mut outcome = None;
+            for payload in self.written {
+                match payload {
+                    LifecycleRecordPayload::EffectCompletion {
+                        step_id, result, ..
+                    } => written.push(Written::Completed(step_id, result)),
+                    LifecycleRecordPayload::Observation { source, state } => {
+                        written.push(Written::Observed(source, state.target_artifact_present()))
+                    }
+                    LifecycleRecordPayload::Outcome {
+                        physical: LifecyclePhysicalOutcome::Failed { phase, message },
+                        cleanup: ReconciliationCleanupDecision::RetainPrior,
+                        ..
+                    } => outcome = Some((phase, message)),
+                    other => panic!("{row}: unexpected record {other:?}"),
+                }
+            }
+            let (phase, message) = outcome.unwrap_or_else(|| panic!("{row}: no outcome"));
+            (written, phase, message)
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Written {
+        Completed(String, LifecycleCommandResult),
+        Observed(LifecycleObservationSource, bool),
+    }
+
+    fn observed(step: &str, artifact: bool) -> Written {
+        Written::Observed(
+            LifecycleObservationSource::Effect {
+                plan_id: "plan".into(),
+                step_id: step.into(),
+            },
+            artifact,
+        )
+    }
+
+    fn completed(step: &str, reason: &str) -> Written {
+        Written::Completed(step.into(), indeterminate(reason))
     }
 
     struct DomainJournal {
         namespace: String,
         history: Mutex<LifecycleHistory>,
+        written: Mutex<Vec<LifecycleRecordPayload>>,
     }
 
     impl DomainJournal {
@@ -3417,12 +3378,17 @@ mod recovery_tests {
             let mut history = self.history.lock().unwrap();
             let sequence = history.next_sequence();
             let kind = payload.kind();
-            let record =
-                LifecycleRecord::new(self.namespace.clone(), correlation(2), sequence, payload)
-                    .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            let record = LifecycleRecord::new(
+                self.namespace.clone(),
+                correlation(2),
+                sequence,
+                payload.clone(),
+            )
+            .map_err(|error| GatewayError::Registration(error.to_string()))?;
             history
                 .append(&record)
                 .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            self.written.lock().unwrap().push(payload);
             Ok(AuditDeliveryReceipt::new(correlation(2), sequence, kind))
         }
     }
@@ -3486,49 +3452,47 @@ mod recovery_tests {
         }
     }
 
-    fn stage(target: &ReconciliationTarget) -> LifecycleEffect {
-        LifecycleEffect::StageRuntime {
-            fingerprint: target.runtime_fingerprint().into(),
-        }
-    }
-
-    fn assert_closed((result, history): (Result<(), GatewayError>, LifecycleHistory), row: &str) {
-        result.unwrap_or_else(|error| panic!("{row}: {error}"));
-        assert!(history.is_terminal(), "{row}");
-    }
-
     #[test]
     fn settled_plans_close_on_their_last_saved_observation() {
-        // #210: staging records its runtime as present, then the next step
-        // is never saved.
+        // #210: a first staging succeeded and was observed with its runtime
+        // present; its cleanup is owed only if staging failed.
         let scenario = Scenario::new(None);
-        let scenario = scenario
-            .plan("stage-runtime", stage(&Scenario::new(None).target), None)
-            .completed("stage-runtime", 1, true);
-        assert_closed(scenario.recover(), "settled staging");
-    }
+        let (stage, prune) = (scenario.stage(), scenario.prune());
+        let (written, phase, message) = scenario
+            .plan(
+                stage,
+                Some((prune, LifecycleEffectPredicate::PrimaryNotAccepted)),
+            )
+            .completed("primary", LifecycleCommandResult::Accepted)
+            .observed("primary", 1, true)
+            .recover()
+            .closed("settled staging");
+        assert!(written.is_empty());
+        assert_eq!(phase, LifecycleFailedPhase::Observation);
+        assert!(message.contains("last saved observation"), "{message}");
 
-    #[test]
-    fn a_published_target_no_longer_keeps_recovery_unresolved() {
         let scenario = Scenario::new(None).published();
         let publish = LifecycleEffect::PublishServiceDefinition {
             target: scenario.target.clone(),
         };
-        let scenario = scenario
-            .plan("publish-service-definition", publish, None)
-            .completed("publish-service-definition", 1, true);
-        assert_closed(scenario.recover(), "settled publication");
+        let (written, _, _) = scenario
+            .plan(publish, None)
+            .completed("primary", LifecycleCommandResult::Accepted)
+            .observed("primary", 1, true)
+            .recover()
+            .closed("settled publication");
+        assert!(written.is_empty());
     }
 
     #[test]
-    fn an_intent_without_a_plan_closes_when_the_prior_has_changed() {
+    fn an_intent_without_a_plan_closes_on_the_fresh_observation() {
         let prior_target = ReconciliationTarget::new(
             Scenario::new(None).target.service().into(),
             "c".repeat(64),
             "d".repeat(64),
         )
         .unwrap();
-        // The prior gateway is gone (or restarted with another PID).
+        // The prior gateway is gone, or restarted with another PID.
         let prior = ReconciliationIncarnation::new(
             prior_target,
             "550e8400-e29b-41d4-a716-446655440000".into(),
@@ -3536,57 +3500,150 @@ mod recovery_tests {
             7398,
         )
         .unwrap();
-        assert_closed(Scenario::new(Some(prior)).recover(), "no plan");
+        let (written, phase, _) = Scenario::new(Some(prior)).recover().closed("no plan");
+        assert_eq!(
+            written,
+            [Written::Observed(LifecycleObservationSource::Intent, false)]
+        );
+        assert_eq!(phase, LifecycleFailedPhase::Observation);
+        // An installed plist of the target is recorded present.
+        let (written, _, _) = Scenario::new(None)
+            .published()
+            .recover()
+            .closed("no plan, target installed");
+        assert_eq!(
+            written,
+            [Written::Observed(LifecycleObservationSource::Intent, true)]
+        );
     }
 
     #[test]
-    fn unreturned_steps_close_with_their_declared_cleanup_settled() {
-        let base = Scenario::new(None);
-        let target = base.target.clone();
-        let service = target.service().to_owned();
-        let rows: [(&str, LifecycleEffect, Option<LifecycleEffect>); 5] = [
-            (
-                "first staging",
-                stage(&target),
-                Some(LifecycleEffect::PruneRuntime {
-                    fingerprint: target.runtime_fingerprint().into(),
-                }),
-            ),
-            (
-                "bootstrap without its target",
-                LifecycleEffect::BootstrapService {
-                    target: target.clone(),
-                },
-                Some(LifecycleEffect::UnloadService {
-                    service: service.clone(),
-                }),
-            ),
+    fn an_unreturned_step_is_settled_with_the_cleanup_it_makes_due() {
+        let scenario = Scenario::new(None);
+        let (stage, prune) = (scenario.stage(), scenario.prune());
+        fs::create_dir_all(
+            scenario
+                .runtimes()
+                .join(scenario.target.runtime_fingerprint()),
+        )
+        .unwrap();
+        let (written, phase, _) = scenario
+            .plan(
+                stage,
+                Some((prune, LifecycleEffectPredicate::PrimaryNotAccepted)),
+            )
+            .recover()
+            .closed("first staging");
+        assert_eq!(
+            written,
+            [
+                completed("primary", UNRETURNED),
+                observed("primary", true),
+                completed("cleanup", NOT_RUN),
+                observed("cleanup", true),
+            ]
+        );
+        assert_eq!(phase, LifecycleFailedPhase::NativeDispatch);
+
+        let scenario = Scenario::new(None);
+        let bootstrap = LifecycleEffect::BootstrapService {
+            target: scenario.target.clone(),
+        };
+        let unload = LifecycleEffect::UnloadService {
+            service: scenario.target.service().into(),
+        };
+        let (written, _, message) = scenario
+            .plan(
+                bootstrap,
+                Some((unload, LifecycleEffectPredicate::PrimaryNotAccepted)),
+            )
+            .recover()
+            .closed("bootstrap without its target");
+        assert_eq!(
+            written,
+            [
+                completed("primary", UNRETURNED),
+                observed("primary", false),
+                completed("cleanup", NOT_RUN),
+                observed("cleanup", false),
+            ]
+        );
+        assert!(message.contains("nothing was booted out"), "{message}");
+
+        let scenario = Scenario::new(None).published();
+        let rows = [
             (
                 "publication",
                 LifecycleEffect::PublishServiceDefinition {
-                    target: target.clone(),
+                    target: scenario.target.clone(),
                 },
-                None,
+                true,
             ),
-            (
-                "pruning",
-                LifecycleEffect::PruneRuntime {
-                    fingerprint: "c".repeat(64),
-                },
-                None,
-            ),
+            ("pruning", scenario.prune(), false),
             (
                 "staging cleanup",
                 LifecycleEffect::RemoveStagingRuntime {
                     generation: "d".repeat(64),
                 },
-                None,
+                false,
             ),
         ];
-        for (row, primary, cleanup) in rows {
-            let scenario = Scenario::new(None).plan("step", primary, cleanup);
-            assert_closed(scenario.recover(), row);
+        for (row, primary, artifact) in rows {
+            let scenario = Scenario {
+                home: tempfile::tempdir().unwrap(),
+                ..Scenario::new(None)
+            };
+            let scenario = if row == "publication" {
+                scenario.published()
+            } else {
+                scenario
+            };
+            let (written, _, _) = scenario.plan(primary, None).recover().closed(row);
+            assert_eq!(
+                written,
+                [
+                    completed("primary", UNRETURNED),
+                    observed("primary", artifact)
+                ],
+                "{row}"
+            );
         }
+    }
+
+    #[test]
+    fn an_unconditional_cleanup_already_journaled_is_not_settled_again() {
+        // Journals written before cleanups were conditional declared them
+        // always due, so the live path could journal one before its primary.
+        let scenario = Scenario::new(None);
+        let (stage, prune) = (scenario.stage(), scenario.prune());
+        let (written, _, _) = scenario
+            .plan(
+                stage.clone(),
+                Some((prune.clone(), LifecycleEffectPredicate::Always)),
+            )
+            .completed("cleanup", LifecycleCommandResult::Accepted)
+            .observed("cleanup", 1, false)
+            .recover()
+            .closed("cleanup observed, primary unreturned");
+        assert_eq!(
+            written,
+            [completed("primary", UNRETURNED), observed("primary", false)]
+        );
+
+        let scenario = Scenario::new(None);
+        let (written, _, _) = scenario
+            .plan(stage, Some((prune, LifecycleEffectPredicate::Always)))
+            .completed("cleanup", LifecycleCommandResult::Accepted)
+            .recover()
+            .closed("cleanup awaiting its observation, primary unreturned");
+        assert_eq!(
+            written,
+            [
+                observed("cleanup", false),
+                completed("primary", UNRETURNED),
+                observed("primary", false),
+            ]
+        );
     }
 
     #[test]
@@ -3605,8 +3662,9 @@ mod recovery_tests {
             target: scenario.target.clone(),
             before: None,
         }];
-        let (result, history) = scenario.recover();
-        assert!(result.is_err());
-        assert!(!history.is_terminal());
+        let recovered = scenario.recover();
+        assert!(recovered.result.is_err());
+        assert!(!recovered.terminal);
+        assert!(recovered.written.is_empty());
     }
 }
