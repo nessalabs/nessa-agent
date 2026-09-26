@@ -33,10 +33,14 @@
 //! given the schema, in one transaction, at that version. A file at that
 //! version is opened. Anything else — another version, or tables
 //! with no version — is refused as [`OpenError::Version`] and left untouched
-//! (`another_version_is_refused_and_left_as_it_was`). There are no in-place
-//! migrations: a schema change bumps the version and ships its own move,
-//! decided in its own record, because a reader for an older shape is what
-//! "One current contract" forbids.
+//! (`another_version_is_refused_and_left_as_it_was`); a file that is not a
+//! database is [`OpenError::Unreadable`], and one at this version whose pages
+//! `quick_check` finds damaged is [`OpenError::Damaged`]. Those are what
+//! the file holds, so opening again cannot change them, and a caller can tell
+//! them from a failure that can clear (docs/adr/todo/202-versioned-local-datasets.md).
+//! There are no in-place migrations: during alpha a schema change bumps the
+//! version and nothing moves the old file, because a reader for an older shape
+//! is what "One current contract" forbids.
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fmt, io, path::Path};
 
@@ -88,6 +92,15 @@ pub enum OpenError {
     File(io::Error),
     /// SQLite refused the file, a pragma, or the schema.
     Database(rusqlite::Error),
+    /// The file is not a database, or SQLite found it damaged. Opening it
+    /// again reads the same bytes
+    /// (`a_file_that_is_not_a_database_is_refused_and_left_as_it_was`).
+    Unreadable(rusqlite::Error),
+    /// The file is at this schema's version, but SQLite's `quick_check`
+    /// found damage in it; the first thing it reported. Like `Unreadable`,
+    /// opening again finds the same
+    /// (`a_current_file_with_a_damaged_page_is_refused_and_left_as_it_was`).
+    Damaged(String),
     /// The file holds tables at a version other than the one asked for;
     /// `found` is 0 when it has tables and no version at all, and may be any
     /// integer SQLite holds, negative ones included.
@@ -102,6 +115,8 @@ impl fmt::Display for OpenError {
             Self::Directory(error) => write!(output, "database directory: {error}"),
             Self::File(error) => write!(output, "database file: {error}"),
             Self::Database(error) => write!(output, "database: {error}"),
+            Self::Unreadable(error) => write!(output, "not a readable database: {error}"),
+            Self::Damaged(problem) => write!(output, "damaged database: {problem}"),
             Self::Version { found, expected } => write!(
                 output,
                 "database is at schema version {found}, and this build reads only {expected}"
@@ -115,7 +130,12 @@ impl fmt::Display for OpenError {
 impl std::error::Error for OpenError {}
 impl From<rusqlite::Error> for OpenError {
     fn from(error: rusqlite::Error) -> Self {
-        Self::Database(error)
+        match error.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt) => {
+                Self::Unreadable(error)
+            }
+            _ => Self::Database(error),
+        }
     }
 }
 
@@ -181,6 +201,14 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     // two openers of an empty file cannot both set about creating it.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if accepted(&transaction, schema)? == Accepted::Current {
+        // A header can be whole over a damaged page that nothing above
+        // reads. Every page is read once here, so such a file is refused at
+        // open rather than on the first question that reaches it.
+        let problem: String =
+            transaction.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
+        if problem != "ok" {
+            return Err(OpenError::Damaged(problem));
+        }
         drop(transaction);
         return Ok(connection);
     }

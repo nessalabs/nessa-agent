@@ -443,6 +443,31 @@ fn the_reason_a_gateway_recorded_is_read_when_its_exit_status_says_nothing() {
     );
 }
 
+/// A store the gateway cannot read is not retried, so it is only ever heard
+/// about through the record, and the record's message says which store.
+#[test]
+fn saved_data_this_version_cannot_read_is_said_as_such() {
+    let record = serde_json::json!({
+        "reason": "datasetRefused",
+        "exitCode": code("datasetRefused"),
+        "message": "stored data refused: conversation metadata at /n/conversations/metadata.sqlite3 cannot be read by this build: database is at schema version 2, and this build reads only 1",
+        "serviceGeneration": GENERATION,
+        "processId": 4711u32,
+    })
+    .to_string();
+    let recorded = parse_record(record.as_bytes()).expect("record");
+    let failure = diagnose(&LastExit::Code(0), Some(&recorded), "", PORT, READINESS);
+    assert_eq!(
+        failure.sentence,
+        "Nessa's background service is not starting: some of its saved data was written by another version of Nessa, or is damaged."
+    );
+    assert!(
+        failure.detail.contains("conversation metadata"),
+        "{}",
+        failure.detail
+    );
+}
+
 /// The record authorizes nothing unless it is about the registration being
 /// reconciled, and a reason this host has no words for is not shown as one.
 #[test]

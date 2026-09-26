@@ -775,7 +775,7 @@ async fn a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone() {
 }
 
 #[test]
-fn a_database_that_cannot_be_opened_is_metadata_unavailable() {
+fn a_file_that_is_not_a_database_is_refused_as_unreadable() {
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
@@ -787,7 +787,7 @@ fn a_database_that_cannot_be_opened_is_metadata_unavailable() {
     drop(file);
     assert!(matches!(
         LocalConversationStore::open(&path),
-        Err(ConversationError::Metadata)
+        Err(nessa_local_database::OpenError::Unreadable(_))
     ));
 }
 

@@ -65,6 +65,7 @@ pub(super) fn reason(error: &RunError) -> &'static str {
             "credentialRegistryInvalid"
         }
         RunError::Registry(_) => "credentialRegistry",
+        RunError::Dataset(_) => "datasetRefused",
         // The command line named nothing this binary can run. Under launchd
         // that is this installation's own plist being wrong, not anything the
         // person did, so it is told apart from the reasons they can act on
@@ -129,6 +130,13 @@ mod tests {
                 None,
             ),
             RunError::Usage("unknown command".into()),
+            RunError::opening_browser_sessions(
+                std::path::Path::new("browser-sessions.jsonl"),
+                crate::browser_session::adapters::JournalOpenError::Unreadable {
+                    line: Some(1),
+                    problem: "is not a journal record",
+                },
+            ),
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
             RunError::Runtime("missing bundled runtime file".into()),
