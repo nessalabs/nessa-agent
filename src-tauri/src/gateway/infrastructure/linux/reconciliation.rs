@@ -1113,6 +1113,16 @@ impl GatewayHost for SystemdGateway {
                             "The unresolved startup-failure authority target is not retained exactly".into(),
                         ));
                     }
+                    if recorded_failure(&data.join("logs"))
+                        .and_then(|record| record.authority(authority.target().clone()))
+                        .as_ref()
+                        != Some(authority)
+                    {
+                        return Err(GatewayError::Registration(
+                            "The unresolved startup-failure record no longer matches its authority"
+                                .into(),
+                        ));
+                    }
                     if !observed.snapshot.as_ref().is_some_and(|snapshot| {
                         inactive_systemd_exit_matches(snapshot, authority.process_id())
                     }) {
