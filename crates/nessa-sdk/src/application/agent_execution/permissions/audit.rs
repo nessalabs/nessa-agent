@@ -266,12 +266,30 @@ pub struct RefusedAsk {
 impl RefusedAsk {
     /// `ask` was refused while `open_asks` asks costing `open_cost` together
     /// were already open.
-    pub fn new(ask: AgentQuestion, open_asks: usize, open_cost: usize) -> Self {
-        Self {
+    ///
+    /// Only accounting that could describe asks a binding actually held is
+    /// accepted: never more open than [`MAX_OPEN_QUESTIONS`], never costing
+    /// more than [`MAX_OPEN_ASK_COST`] — each was admitted within it — and no
+    /// cost without an ask or an ask without a cost, since every ask costs
+    /// something to carry. Anything else is
+    /// [`ExecutionError::InvalidQuestionRefusal`]: evidence of a state that
+    /// never existed.
+    pub fn new(
+        ask: AgentQuestion,
+        open_asks: usize,
+        open_cost: usize,
+    ) -> Result<Self, ExecutionError> {
+        if open_asks > MAX_OPEN_QUESTIONS
+            || open_cost > MAX_OPEN_ASK_COST
+            || (open_asks == 0) != (open_cost == 0)
+        {
+            return Err(ExecutionError::InvalidQuestionRefusal);
+        }
+        Ok(Self {
             ask,
             open_asks,
             open_cost,
-        }
+        })
     }
     /// The ask as it arrived.
     pub fn ask(&self) -> &AgentQuestion {
