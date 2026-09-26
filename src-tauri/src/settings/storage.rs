@@ -70,6 +70,9 @@ impl Storage for FileStorage {
                 match repair.repair(path, SharedReadKind::File) {
                     Ok(true) => Self::read_private(path),
                     Ok(false) => Err(refused),
+                    // Not repairable is the refusal itself, already reported
+                    // by whoever reads it; only an unexpected failure is new.
+                    Err(error) if nessa_local_storage::is_unsafe_file(&error) => Err(refused),
                     Err(error) => {
                         eprintln!("[nessa] could not make {} private: {error}", path.display());
                         Err(refused)

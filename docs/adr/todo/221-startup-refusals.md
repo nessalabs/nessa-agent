@@ -105,8 +105,9 @@ silently repaired". The crate documentation says so where it states the rule.
 | `replacing` | Finishing the last update… | retirement, unload | retirement, stop | 75 s acknowledgement |
 | `launching` | Starting… | bootstrap, readiness | start, readiness | 75 s (macOS), 45 s (Linux) |
 
-The waits are each step's own deadline; a `launchctl` call inside one can add
-up to its own bound. Every `launchctl` call the registration makes is bounded
+The waits are each step's own deadline. A `launchctl` call inside one, such as
+a status poll during the retirement wait, can add up to its own bound, so a step
+can take a few multiples of 30 s before it fails; it cannot run forever. Every `launchctl` call the registration makes is bounded
 (30 s). A `bootstrap` ended at that bound is recorded as indeterminate, not
 refused, because launchd may already have accepted it. Copying the
 bundled runtime is local file I/O and is the one step without a timer. A step

@@ -17,14 +17,17 @@ export function usePanelStartup(session: { phase: SessionPhase; retry: () => voi
   const retrySession = React.useRef(session.retry)
   retrySession.current = session.retry
   const sessionFailed = session.phase === "error"
+  const sessionReady = session.phase === "ready"
   React.useEffect(() => {
     if (ready && !wasReady.current) retryOwed.current = true
-    if (!ready) retryOwed.current = false
+    // Owed only until the session settles: once it connects, a later failure
+    // is its own, with its own notice and Retry.
+    if (!ready || sessionReady) retryOwed.current = false
     wasReady.current = ready
     if (retryOwed.current && sessionFailed) {
       retryOwed.current = false
       retrySession.current()
     }
-  }, [ready, sessionFailed])
+  }, [ready, sessionFailed, sessionReady])
   return startup
 }
