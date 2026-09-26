@@ -204,41 +204,42 @@ public static class NessaWindowsProofNative
             throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 
-    private static string SidText(IntPtr sid)
+    private static string SidText(IntPtr sid, string fact)
     {
         IntPtr text;
         if (!ConvertSidToStringSidW(sid, out text))
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "ConvertSidToStringSidW failed for " + fact);
         try { return Marshal.PtrToStringUni(text); }
         finally { LocalFree(text); }
     }
 
-    private static byte[] TokenInformation(IntPtr token, int informationClass)
+    private static byte[] TokenInformation(IntPtr token, int informationClass, string fact)
     {
         int needed;
-        GetTokenInformation(token, informationClass, IntPtr.Zero, 0, out needed);
+        bool sized = GetTokenInformation(token, informationClass, IntPtr.Zero, 0, out needed);
         int error = Marshal.GetLastWin32Error();
-        if (needed <= 0 || error != 122) throw new Win32Exception(error);
+        if (needed <= 0 || (!sized && error != 122))
+            throw new Win32Exception(error, "GetTokenInformation size query failed for " + fact);
         var bytes = new byte[needed];
         var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
         try
         {
             if (!GetTokenInformation(token, informationClass, pinned.AddrOfPinnedObject(), bytes.Length, out needed))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetTokenInformation fill failed for " + fact);
             return bytes;
         }
         finally { pinned.Free(); }
     }
 
-    private static string TokenSid(IntPtr token, int informationClass)
+    private static string TokenSid(IntPtr token, int informationClass, string fact)
     {
-        var bytes = TokenInformation(token, informationClass);
+        var bytes = TokenInformation(token, informationClass, fact);
         var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
         try
         {
             var value = (SID_AND_ATTRIBUTES)Marshal.PtrToStructure(
                 pinned.AddrOfPinnedObject(), typeof(SID_AND_ATTRIBUTES));
-            return SidText(value.Sid);
+            return SidText(value.Sid, fact);
         }
         finally { pinned.Free(); }
     }
@@ -289,7 +290,7 @@ public static class NessaWindowsProofNative
         try
         {
             if (!OpenProcessToken(process, TOKEN_QUERY, out token))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed for retained process handle");
             return ReadTokenFacts(token, ProcessCreationTime(process));
         }
         finally
@@ -304,7 +305,7 @@ public static class NessaWindowsProofNative
         try
         {
             if (!OpenCurrentProcessToken(GetCurrentProcess(), TOKEN_QUERY, out token))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed for current-process pseudo-handle");
             return ReadTokenFacts(token, 0);
         }
         finally
@@ -316,10 +317,10 @@ public static class NessaWindowsProofNative
     private static NessaTokenFacts ReadTokenFacts(IntPtr token, long creationTime)
     {
         return new NessaTokenFacts {
-            Sid = TokenSid(token, TokenUser),
-            Elevated = BitConverter.ToInt32(TokenInformation(token, TokenElevation), 0) != 0,
-            ElevationType = BitConverter.ToInt32(TokenInformation(token, TokenElevationType), 0),
-            IntegritySid = TokenSid(token, TokenIntegrityLevel),
+            Sid = TokenSid(token, TokenUser, "TokenUser"),
+            Elevated = BitConverter.ToInt32(TokenInformation(token, TokenElevation, "TokenElevation"), 0) != 0,
+            ElevationType = BitConverter.ToInt32(TokenInformation(token, TokenElevationType, "TokenElevationType"), 0),
+            IntegritySid = TokenSid(token, TokenIntegrityLevel, "TokenIntegrityLevel"),
             CreationTime = creationTime
         };
     }
