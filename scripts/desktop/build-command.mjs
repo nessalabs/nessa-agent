@@ -51,22 +51,33 @@ const BUNDLE_VERIFIERS = {
   linux: "scripts/desktop/verify-linux-bundle.mjs",
 }
 
-/** Whether Tauri would read a choice of bundles from these arguments: `--bundles`
- * in any form, `--no-bundle`, or `-b` alone or inside a cluster of short flags
- * (`-db`). Arguments after `--` are the runner's, not Tauri's. It errs toward
- * refusing: a `b` inside a value attached to another short flag (`-c'{"bundle":…}'`)
- * reads as `-b` too, so pass such a value as `--config <value>`. A refusal
- * happens before compiling and makes nothing; the opposite error would build
- * a bundle nobody checks. */
+/** Whether Tauri would read a choice of bundles from these arguments:
+ * `--bundles` in any form, `--no-bundle`, or `-b` alone or inside a cluster of
+ * short flags (`-db`). It is given Tauri's arguments only
+ * (`splitRunnerArguments`).
+ *
+ * It errs toward refusing: a `b` inside a value attached to another short flag
+ * (`-c'{"bundle":…}'`) reads as `-b` too, so pass such a value as
+ * `--config <value>`. A refusal happens before compiling and makes nothing;
+ * the opposite error would build a bundle nobody checks. */
 export function choosesBundles(args) {
-  const end = args.indexOf("--")
-  return (end === -1 ? args : args.slice(0, end)).some(
+  return args.some(
     (argument) =>
       argument === "--no-bundle" ||
       argument === "--bundles" ||
       argument.startsWith("--bundles=") ||
       /^-[^-]*b/.test(argument),
   )
+}
+
+/** The arguments before `--`, which are Tauri's and this command's, and the
+ * runner's arguments from `--` on. Everything that reads options reads the
+ * first part only. */
+export function splitRunnerArguments(args) {
+  const start = args.indexOf("--")
+  return start === -1
+    ? { own: args, runner: [] }
+    : { own: args.slice(0, start), runner: args.slice(start) }
 }
 
 /** Parse the Tauri arguments that select the artifact verified after a build. */
@@ -80,12 +91,13 @@ export function parseBuildArguments(args) {
 
 /** Run the public desktop build and verify the artifact selected by its arguments. */
 export function runDesktopBuild({ args, environment, platform, spawn, now = Date.now }) {
-  const parsed = parseBuildArguments(args)
+  const { own, runner: runnerArgs } = splitRunnerArguments(args)
+  const parsed = parseBuildArguments(own)
   const { stage: requestedStage, target } = parsed
   // A Linux build makes exactly what a Linux release makes, and nothing a
   // caller names: the verifier checks the .deb alone, so any other choice of
   // bundles is refused here, before minutes of compiling, rather than parsed.
-  if (platform === "linux" && choosesBundles(args))
+  if (platform === "linux" && choosesBundles(own))
     throw new Error(
       "A Linux build makes the release's bundles; drop --bundles and --no-bundle",
     )
@@ -99,10 +111,7 @@ export function runDesktopBuild({ args, environment, platform, spawn, now = Date
   })
   const buildEnvironment = desktopStageEnvironment(environment, stage)
   // Tauri's own options go before any `--`: what follows it is the runner's.
-  const forwarded = withoutOption(args, "--stage")
-  const runnerStart = forwarded.indexOf("--")
-  const tauriArgs = runnerStart === -1 ? forwarded : forwarded.slice(0, runnerStart)
-  const runnerArgs = runnerStart === -1 ? [] : forwarded.slice(runnerStart)
+  const tauriArgs = withoutOption(own, "--stage")
   if (bundles && !parsed.bundles) tauriArgs.push("--bundles", bundles)
   if (platform === "darwin" || platform === "linux") {
     const bundle = { resources: { "runtime/": "runtime/" } }

@@ -333,9 +333,31 @@ test("the build's own options go to Tauri, before the runner's arguments", () =>
   }
 })
 
-test("arguments after -- are the runner's and choose no bundles", () => {
-  assert.equal(choosesBundles(["--", "-b", "--bundles"]), false)
-  assert.equal(choosesBundles(["-v", "--", "-b"]), false)
+test("arguments after -- are the runner's: no option of ours is read there", () => {
+  const calls = []
+  runDesktopBuild({
+    args: ["--", "--bundles", "rpm", "--target", "elsewhere", "--stage", "dev"],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  const args = calls[0].args
+  assert.deepEqual(args.slice(args.indexOf("--")), [
+    "--",
+    "--bundles",
+    "rpm",
+    "--target",
+    "elsewhere",
+    "--stage",
+    "dev",
+  ])
+  assert.equal(args[args.indexOf("--bundles") + 1], "deb")
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
+  assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, undefined)
+  assert.equal(calls[0].options.env.NESSA_STAGE, "prod")
   assert.equal(choosesBundles(["-vb", "deb"]), true)
   assert.equal(choosesBundles(["--config", "{}"]), false)
   // Errs toward refusing: an attached value is read as flags.

@@ -918,8 +918,8 @@ To remove the background service, boot it out with
 
 ## Installed Linux runtime
 
-Releases ship x86_64 Linux as a `.deb`, built and installed on Ubuntu 22.04,
-for Ubuntu 22.04 or later. It carries the same runtime as the macOS bundle,
+Releases ship x86_64 Linux as a `.deb`, built on Ubuntu 22.04, for Ubuntu
+22.04 or later. It carries the same runtime as the macOS bundle,
 under `usr/lib/Nessa/runtime`, and declares WebKitGTK and the tray's
 `libayatana-appindicator3-1`. There is no AppImage: its bundler rewrites the
 runtime's executables, so the runtime would no longer match its fingerprint,
