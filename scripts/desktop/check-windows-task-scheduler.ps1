@@ -405,6 +405,46 @@ function Test-RunCleanupRequired {
     return $TaskOwned -and $RunAttempted
 }
 
+function New-RunAttemptObservation {
+    return [pscustomobject]@{
+        Rejections = [System.Collections.Generic.List[string]]::new()
+    }
+}
+
+function Update-RunAttemptObservation {
+    param(
+        [Parameter(Mandatory)] $Observation,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Instances,
+        [Parameter(Mandatory)] [string] $ExpectedPath,
+        [Parameter(Mandatory)] [string] $ExpectedActionId,
+        [string] $ExpectedGuid = '',
+        [int] $ExpectedPid = 0
+    )
+    if ($Instances.Count -gt 1) {
+        $Observation.Rejections.Add("observed $($Instances.Count) instances for one IgnoreNew task")
+    }
+    foreach ($instance in $Instances) {
+        if ([string]$instance.Path -ne $ExpectedPath) { $Observation.Rejections.Add("running task path contradicted $ExpectedPath") }
+        if (-not [string]::IsNullOrWhiteSpace([string]$instance.CurrentAction) -and [string]$instance.CurrentAction -ne $ExpectedActionId) {
+            $Observation.Rejections.Add("current action contradicted $ExpectedActionId")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedGuid) -and [string]$instance.InstanceGuid -ne $ExpectedGuid) {
+            $Observation.Rejections.Add("instance GUID contradicted $ExpectedGuid")
+        }
+        if ($ExpectedPid -ne 0 -and [int]$instance.EnginePID -ne 0 -and [int]$instance.EnginePID -ne $ExpectedPid) {
+            $Observation.Rejections.Add("EnginePID contradicted $ExpectedPid")
+        }
+    }
+    return $Observation
+}
+
+function Assert-RunObservationAccepted {
+    param([Parameter(Mandatory)] $Observation, [Parameter(Mandatory)] [string] $Attempt)
+    if ($Observation.Rejections.Count -ne 0) {
+        throw "$Attempt permanently rejected: $([string]::Join('; ', @($Observation.Rejections)))"
+    }
+}
+
 function Invoke-StopSettlement {
     param(
         [Parameter(Mandatory)] [scriptblock] $StopEffect,
@@ -412,9 +452,13 @@ function Invoke-StopSettlement {
         [Parameter(Mandatory)] [scriptblock] $InstancesSettled
     )
     $failures = [System.Collections.Generic.List[string]]::new()
+    $stopOutcome = 'success'
     $stopDiagnostic = $null
     try { $null = & $StopEffect }
-    catch { $stopDiagnostic = $_.Exception.Message }
+    catch {
+        $stopOutcome = Get-CallAcknowledgement -Exception $_.Exception
+        $stopDiagnostic = $_.Exception.Message
+    }
     foreach ($probe in @(
         [pscustomobject]@{ Name = 'retained task processes'; Check = $ProcessesSettled },
         [pscustomobject]@{ Name = 'exact owned task instances'; Check = $InstancesSettled }
@@ -427,7 +471,12 @@ function Invoke-StopSettlement {
             $failures.Add("$($_.Exception.Message)$detail")
         }
     }
-    return [pscustomobject]@{ StopCalled = $true; Failures = @($failures) }
+    return [pscustomobject]@{
+        StopCalled = $true
+        StopOutcome = $stopOutcome
+        StopDiagnostic = $stopDiagnostic
+        Failures = @($failures)
+    }
 }
 
 function Invoke-DeleteSettlement {
@@ -436,17 +485,41 @@ function Invoke-DeleteSettlement {
         [Parameter(Mandatory)] [scriptblock] $DeleteEffect,
         [Parameter(Mandatory)] [scriptblock] $ObservePresent
     )
+    $deleteOutcome = 'success'
     $deleteDiagnostic = $null
     try { $null = & $DeleteEffect }
-    catch { $deleteDiagnostic = $_.Exception.Message }
+    catch {
+        $deleteOutcome = Get-CallAcknowledgement -Exception $_.Exception
+        $deleteDiagnostic = $_.Exception.Message
+    }
+    $observation = 'unobservable'
+    $observationDiagnostic = $null
     try {
         if (& $ObservePresent) {
-            $detail = if ($null -ne $deleteDiagnostic) { ": $deleteDiagnostic" } else { '' }
-            return "$Resource remained after deletion$detail"
+            $observation = 'present'
         }
-        return $null
+        else {
+            $observation = 'absent'
+        }
     }
-    catch { return "$Resource absence could not be observed: $($_.Exception.Message)" }
+    catch { $observationDiagnostic = $_.Exception.Message }
+    $failure = $null
+    if ($observation -eq 'present') {
+        $detail = if ($null -ne $deleteDiagnostic) { "; delete $deleteOutcome`: $deleteDiagnostic" } else { '' }
+        $failure = "$Resource remained after deletion$detail"
+    }
+    elseif ($observation -eq 'unobservable') {
+        $deleteDetail = if ($null -ne $deleteDiagnostic) { "; delete $deleteOutcome`: $deleteDiagnostic" } else { '' }
+        $failure = "$Resource absence could not be observed: $observationDiagnostic$deleteDetail"
+    }
+    return [pscustomobject]@{
+        DeleteOutcome = $deleteOutcome
+        DeleteDiagnostic = $deleteDiagnostic
+        Observation = $observation
+        ObservationDiagnostic = $observationDiagnostic
+        Settled = $observation -eq 'absent'
+        Failure = $failure
+    }
 }
 
 function Format-ProofFailures {
@@ -464,16 +537,55 @@ function Assert-LifecycleStateProbes {
         }
     }
     if (Test-RunCleanupRequired -TaskOwned $false -RunAttempted $true -Observation 'multiple') { throw 'foreign task gained stop authority' }
-    $lostStop = Invoke-StopSettlement -StopEffect { throw 'lost stop reply' } -ProcessesSettled { $true } -InstancesSettled { $true }
-    if (-not $lostStop.StopCalled -or $lostStop.Failures.Count -ne 0) { throw 'lost stop reply did not settle through fresh observations' }
+    $matchingInstance = [pscustomobject]@{ Path = '\planned\task'; CurrentAction = 'planned-action'; InstanceGuid = 'planned-guid'; EnginePID = 42 }
+    foreach ($sequence in @(
+        [pscustomobject]@{ Name = 'first run 2 to 1'; First = @($matchingInstance, $matchingInstance); Second = @($matchingInstance); Guid = ''; Pid = 0 },
+        [pscustomobject]@{ Name = 'first run contradiction to match'; First = @([pscustomobject]@{ Path = '\wrong'; CurrentAction = 'planned-action'; InstanceGuid = 'planned-guid'; EnginePID = 42 }); Second = @($matchingInstance); Guid = ''; Pid = 0 },
+        [pscustomobject]@{ Name = 'second run 2 to 1'; First = @($matchingInstance, $matchingInstance); Second = @($matchingInstance); Guid = 'planned-guid'; Pid = 42 },
+        [pscustomobject]@{ Name = 'second run contradiction to match'; First = @([pscustomobject]@{ Path = '\planned\task'; CurrentAction = 'wrong-action'; InstanceGuid = 'planned-guid'; EnginePID = 42 }); Second = @($matchingInstance); Guid = 'planned-guid'; Pid = 42 }
+    )) {
+        $runObservation = New-RunAttemptObservation
+        $runObservation = Update-RunAttemptObservation -Observation $runObservation -Instances $sequence.First -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid $sequence.Guid -ExpectedPid $sequence.Pid
+        $runObservation = Update-RunAttemptObservation -Observation $runObservation -Instances $sequence.Second -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid $sequence.Guid -ExpectedPid $sequence.Pid
+        if ($runObservation.Rejections.Count -eq 0) { throw "$($sequence.Name) forgot its earlier rejection" }
+        $cleanupProbe = [pscustomobject]@{ StopCalls = 0 }
+        $settlement = Invoke-StopSettlement -StopEffect { $cleanupProbe.StopCalls++ } -ProcessesSettled { $true } -InstancesSettled { $true }
+        if ($cleanupProbe.StopCalls -ne 1 -or $settlement.Failures.Count -ne 0) { throw "$($sequence.Name) did not stop and settle its exact owned task" }
+    }
+    $lostStop = Invoke-StopSettlement -StopEffect { throw [System.Management.Automation.MethodInvocationException]::new('lost stop reply', [System.Runtime.InteropServices.COMException]::new('lost stop reply', -2147023170)) } -ProcessesSettled { $true } -InstancesSettled { $true }
+    if (-not $lostStop.StopCalled -or $lostStop.StopOutcome -ne 'lost' -or $lostStop.Failures.Count -ne 0) { throw 'lost stop reply did not settle through fresh observations' }
     $failedStop = Invoke-StopSettlement -StopEffect { throw 'stop rejected' } -ProcessesSettled { $false } -InstancesSettled { $false }
     if ($failedStop.Failures.Count -ne 2 -or $failedStop.Failures[0] -notmatch 'stop rejected') { throw 'stop failure and lingering effects were not retained' }
-    $lostDelete = Invoke-DeleteSettlement -Resource 'task' -DeleteEffect { throw 'lost delete reply' } -ObservePresent { $false }
-    if ($null -ne $lostDelete) { throw 'lost delete reply did not settle through confirmed absence' }
-    $failedDelete = Invoke-DeleteSettlement -Resource 'task' -DeleteEffect { throw 'delete rejected' } -ObservePresent { $true }
-    if ($failedDelete -notmatch 'task remained.*delete rejected') { throw 'delete rejection and retained object were not retained together' }
-    $unobservableDelete = Invoke-DeleteSettlement -Resource 'folder' -DeleteEffect { } -ObservePresent { throw 'observation failed' }
-    if ($unobservableDelete -notmatch 'absence could not be observed') { throw 'unobservable cleanup did not remain a failure' }
+    $deleteEffects = @(
+        [pscustomobject]@{ Name = 'success'; Effect = { } },
+        [pscustomobject]@{ Name = 'lost'; Effect = { throw [System.Management.Automation.MethodInvocationException]::new('lost delete reply', [System.Runtime.InteropServices.COMException]::new('lost delete reply', -2147023170)) } },
+        [pscustomobject]@{ Name = 'rejected'; Effect = { throw [System.Management.Automation.MethodInvocationException]::new('delete rejected', [System.Runtime.InteropServices.COMException]::new('delete rejected', -2147024891)) } }
+    )
+    $deleteObservations = @(
+        [pscustomobject]@{ Name = 'absent'; Observe = { $false } },
+        [pscustomobject]@{ Name = 'present'; Observe = { $true } },
+        [pscustomobject]@{ Name = 'unobservable'; Observe = { throw 'observation failed' } }
+    )
+    foreach ($effect in $deleteEffects) {
+        foreach ($fresh in $deleteObservations) {
+            $settlement = Invoke-DeleteSettlement -Resource 'task' -DeleteEffect $effect.Effect -ObservePresent $fresh.Observe
+            if ($settlement.DeleteOutcome -ne $effect.Name -or $settlement.Observation -ne $fresh.Name) {
+                throw "delete matrix $($effect.Name)/$($fresh.Name) lost a typed fact"
+            }
+            if ($fresh.Name -eq 'absent') {
+                if (-not $settlement.Settled -or $null -ne $settlement.Failure) { throw "delete matrix $($effect.Name)/absent did not settle" }
+            }
+            elseif ($null -eq $settlement.Failure) {
+                throw "delete matrix $($effect.Name)/$($fresh.Name) lost its cleanup failure"
+            }
+            if ($fresh.Name -eq 'unobservable' -and $effect.Name -ne 'success') {
+                $expectedDeleteDiagnostic = if ($effect.Name -eq 'lost') { 'lost delete reply' } else { 'delete rejected' }
+                if ($settlement.Failure -notmatch $expectedDeleteDiagnostic) {
+                    throw "delete matrix $($effect.Name)/unobservable lost the delete diagnostic"
+                }
+            }
+        }
+    }
     try { throw 'primary' }
     catch { $primary = $_ }
     $combined = Format-ProofFailures -PrimaryFailure $primary -CleanupFailures @('task remained', 'folder unobservable')
@@ -839,8 +951,11 @@ while ($true) { Start-Sleep -Milliseconds 100 }
 
     $runAttempted = $true
     $firstReturned = $ownedTask.Run($null)
+    $firstRunObservation = New-RunAttemptObservation
     Wait-Until -Description 'one running task instance and action evidence' -Condition {
         $instances = @(Get-TaskInstances -Task $ownedTask)
+        $null = Update-RunAttemptObservation -Observation $firstRunObservation -Instances $instances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstReturned.InstanceGuid)
+        Assert-RunObservationAccepted -Observation $firstRunObservation -Attempt 'first run'
         return $instances.Count -eq 1 -and [System.IO.File]::Exists($evidencePath)
     }
     $firstInstances = @(Get-TaskInstances -Task $ownedTask)
@@ -881,8 +996,11 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     Assert-NegativeEvidenceProbes -Accepted $evidence
 
     $secondReturned = $ownedTask.Run($null)
+    $secondRunObservation = New-RunAttemptObservation
     Wait-Until -Description 'IgnoreNew singleton stabilization' -Condition {
         $instances = @(Get-TaskInstances -Task $ownedTask)
+        $null = Update-RunAttemptObservation -Observation $secondRunObservation -Instances $instances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstInstance.InstanceGuid) -ExpectedPid ([int]$firstInstance.EnginePID)
+        Assert-RunObservationAccepted -Observation $secondRunObservation -Attempt 'second run'
         return $instances.Count -eq 1 -and $instances[0].InstanceGuid -eq $firstInstance.InstanceGuid
     }
     $secondInstances = @(Get-TaskInstances -Task $ownedTask)
@@ -952,20 +1070,20 @@ finally {
     }
     foreach ($process in $script:ObservedProcesses.Values) { $process.Dispose() }
     if ($taskOwned -and $null -ne $ownedFolder) {
-        $taskDeleteFailure = Invoke-DeleteSettlement -Resource 'exact task' -DeleteEffect {
+        $taskDeleteSettlement = Invoke-DeleteSettlement -Resource 'exact task' -DeleteEffect {
             $ownedFolder.DeleteTask($taskName, 0)
         } -ObservePresent {
             return $null -ne (Get-ExactTask -Folder $ownedFolder -Name $taskName)
         }
-        if ($null -ne $taskDeleteFailure) { Add-CleanupFailure $taskDeleteFailure }
+        if ($null -ne $taskDeleteSettlement.Failure) { Add-CleanupFailure $taskDeleteSettlement.Failure }
     }
     if ($folderOwned -and $null -ne $schedulerRoot) {
-        $folderDeleteFailure = Invoke-DeleteSettlement -Resource 'exact scheduler folder' -DeleteEffect {
+        $folderDeleteSettlement = Invoke-DeleteSettlement -Resource 'exact scheduler folder' -DeleteEffect {
             $schedulerRoot.DeleteFolder($folderName, 0)
         } -ObservePresent {
             return $null -ne (Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath)
         }
-        if ($null -ne $folderDeleteFailure) { Add-CleanupFailure $folderDeleteFailure }
+        if ($null -ne $folderDeleteSettlement.Failure) { Add-CleanupFailure $folderDeleteSettlement.Failure }
     }
     if ($rootOwned) {
         $rootAlreadyAbsent = $null -eq $runRootHandle -and -not [System.IO.Directory]::Exists($runRoot)

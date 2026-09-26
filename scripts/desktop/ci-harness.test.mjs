@@ -100,7 +100,11 @@ test("the existing Windows matrix leg uniquely owns the Task Scheduler model pro
   const invocations = readdirSync(".github/workflows")
     .filter((name) => /\.ya?ml$/.test(name))
     .map((name) => readFileSync(`.github/workflows/${name}`, "utf8"))
-    .reduce((count, contents) => count + (contents.split(proof).length - 1), 0)
+    .reduce(
+      (count, contents) =>
+        count + (contents.match(/check-windows-task-scheduler\.ps1/g)?.length ?? 0),
+      0,
+    )
   assert.equal(
     invocations,
     1,
@@ -135,8 +139,14 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(script, /confirmed-created-contradictory/)
   assert.match(script, /observed-matching-after-\$Acknowledgement-reply/)
   assert.match(script, /Assert-LifecycleStateProbes/)
+  assert.match(script, /New-RunAttemptObservation/)
+  assert.match(script, /Assert-RunObservationAccepted/)
+  assert.match(script, /first run 2 to 1/)
+  assert.match(script, /second run contradiction to match/)
   assert.match(script, /Invoke-StopSettlement/)
   assert.match(script, /Invoke-DeleteSettlement/)
+  assert.match(script, /DeleteOutcome = \$deleteOutcome/)
+  assert.match(script, /ObservationDiagnostic = \$observationDiagnostic/)
   assert.match(script, /\$ownedTask\.Stop\(0\)/)
   assert.match(script, /exact owned task instance collection to become empty/)
   assert.doesNotMatch(script, /Stop-Process|\.Kill\(|TerminateProcess/)
