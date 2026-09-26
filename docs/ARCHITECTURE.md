@@ -214,8 +214,9 @@ observation is observed; an unreturned step is recorded indeterminate, because
 the interrupted attempt may have returned it unrecorded, except readiness, whose
 result recovery decides from the fresh state; a cleanup that result
 makes due is recorded as not run by recovery, though the attempt may have run it.
-The bootstrap step (`bootstrap_service`) and recovery reach launchd and health
-only through the injected `Launchctl`; recovery calls no command on it. Each observation, live
+The macOS adapter reaches launchd and health only through the injected
+`Launchctl` (status, health, bootstrap, bootout, and the agent-stop and
+retirement signals); recovery calls no command on it. Each observation, live
 or recovered, means what `LaunchdArtifacts::present` says for that step: the
 runtime directory for staging and pruning, the staging directory for staging
 cleanup, the plist for publication and retirement, and whether launchd has the
