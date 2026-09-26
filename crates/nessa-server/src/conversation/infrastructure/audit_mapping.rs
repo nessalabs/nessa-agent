@@ -18,7 +18,9 @@ use nessa_sdk::domain::agent_execution::{
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
         ReviewDeclineReason,
     },
-    questions::{QuestionCancellation, QuestionRefusalReason, QuestionResponse},
+    questions::{
+        AgentQuestion, AnswerShape, QuestionCancellation, QuestionRefusalReason, QuestionResponse,
+    },
     sessions::AttachmentCause,
 };
 use serde_json::{json, Value};
@@ -123,6 +125,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 "sessionId":record.session_id().as_str(),
                 "executionId":record.execution_id().as_str(),
                 "questionId":record.question_id().as_str(),
+                "question":asked(record.question()),
                 "response":match record.response() {
                     QuestionResponse::Declined => json!({"kind":"declined"}),
                     QuestionResponse::Answered(answer) => json!({
@@ -229,13 +232,15 @@ fn submission_mode(mode: SubmissionMode) -> &'static str {
 }
 /// An ask the binding refused before anybody was asked.
 ///
-/// No question identity, because the ask never became one, and no actor,
-/// because nobody chose it: the binding did, which `origin` says.
+/// Its own identity, minted for the refused request, pairs its decision with
+/// its write. No actor, because nobody chose it: the binding did, which
+/// `origin` says.
 fn refused(record: &QuestionRefusalRecord) -> Value {
     json!({
         "kind":"question_refused",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
+        "refusalId":record.id().as_str(),
         "reason":match record.reason() {
             QuestionRefusalReason::TooManyOpen => "too_many_open",
             QuestionRefusalReason::Unsupported => "unsupported",
@@ -244,6 +249,27 @@ fn refused(record: &QuestionRefusalRecord) -> Value {
         },
         "delivery":delivery(record.delivery()),
         "origin":{"kind":"runtime"},
+    })
+}
+/// The ask as it was asked, kept beside every answer and ending of it: what
+/// was offered, what was required, and where own words were to go — so the
+/// record alone shows a choice was one the question offered.
+fn asked(question: &AgentQuestion) -> Value {
+    json!({
+        "message":question.message(),
+        "questions":question.questions().iter().map(|asked| json!({
+            "key":asked.key(),
+            "prompt":asked.prompt(),
+            "header":asked.header(),
+            "multiSelect":asked.shape() == AnswerShape::Many,
+            "freeTextKey":asked.free_text_key(),
+            "required":asked.required(),
+            "options":asked.options().iter().map(|option| json!({
+                "value":option.value(),
+                "label":option.label(),
+                "description":option.description(),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
     })
 }
 /// A review the binding refused before anyone was offered it.

@@ -1409,3 +1409,62 @@ fn a_retried_submission_does_not_hide_the_ask_its_turn_is_waiting_on() {
     );
     assert_eq!(offers_only_running_asks(&mut projection), 1);
 }
+
+/// An ask of `options` options, each carrying `bytes` of label.
+fn large_ask(execution: &str, question: &str, options: usize, bytes: usize) -> ExecutionEvent {
+    ExecutionEvent::new(
+        ExecutionId::new(execution).unwrap(),
+        ExecutionUpdate::QuestionAsked {
+            id: QuestionId::new(question).unwrap(),
+            question: AgentQuestion::new(
+                "Which?",
+                vec![Question::new(
+                    "question_0",
+                    "Which?",
+                    None,
+                    AnswerShape::One,
+                    (0..options)
+                        .map(|index| {
+                            AnswerOption::new(format!("v{index}"), "l".repeat(bytes), None).unwrap()
+                        })
+                        .collect(),
+                    None,
+                    false,
+                )
+                .unwrap()],
+            )
+            .unwrap(),
+        },
+    )
+}
+
+#[test]
+fn an_ask_too_large_to_share_the_view_is_not_offered() {
+    // A valid ask can carry far more text than the view's budget. Offered, it
+    // took the view past its bound on every read; it is held to the bound a
+    // review is held to instead, and the view says something was left out.
+    let mut projection = projection();
+    projection.event(&large_ask("execution", "1", 32, 1024));
+    let view = projection.read();
+    assert!(view.questions.is_empty());
+    assert!(view.truncated);
+}
+
+#[test]
+fn the_view_stays_within_its_bound_whatever_the_asks_hold() {
+    // Eight asks each just inside the per-ask bound still overflow the view
+    // together. The view gives up asks whole before it breaks its bound.
+    let mut projection = projection();
+    for index in 0..8 {
+        let execution = format!("execution-{index}");
+        projection.event(&large_ask(&execution, "1", 14, 1024));
+    }
+    let view = projection.read();
+    let bytes = serde_json::to_vec(&view).unwrap().len();
+    assert!(bytes <= 60_000, "{bytes} bytes");
+    assert!(view.truncated);
+    assert!(
+        !view.questions.is_empty(),
+        "as many as fit are still offered"
+    );
+}

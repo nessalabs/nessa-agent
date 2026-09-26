@@ -25,6 +25,9 @@ pub(super) const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_VIEW_BYTES: usize = 60_000;
+/// The largest single review or ask the view offers, encoded. One actionable
+/// item may not take most of the view's budget from everything else.
+const MAX_ACTIONABLE_BYTES: usize = 16_000;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
@@ -469,7 +472,7 @@ impl Projection {
             self.view.truncated = true;
             return;
         }
-        self.view.questions.push(ConversationQuestion {
+        let value = ConversationQuestion {
             execution_id: execution.to_owned(),
             question_id: id.as_str().to_owned(),
             message: question.message().to_owned(),
@@ -494,7 +497,16 @@ impl Projection {
                         .collect(),
                 })
                 .collect(),
-        });
+        };
+        // An ask is offered whole or not at all, and one this large would
+        // crowd everything else out of a view with a fixed byte budget — the
+        // bound a review is held to, for the same reason.
+        if serde_json::to_vec(&value).map_or(usize::MAX, |bytes| bytes.len()) > MAX_ACTIONABLE_BYTES
+        {
+            self.view.truncated = true;
+            return;
+        }
+        self.view.questions.push(value);
     }
     fn observe_permission(&mut self, event: &ExecutionEvent) {
         let ExecutionUpdate::PermissionRequested {
@@ -564,7 +576,7 @@ impl Projection {
             .iter()
             .filter(|known| offered(&self.view, &known.execution_id))
             .count();
-        if size > 16_000 || open >= MAX_PERMISSIONS {
+        if size > MAX_ACTIONABLE_BYTES || open >= MAX_PERMISSIONS {
             self.view.permission_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
             self.view.truncated = true;
         } else if !self.view.permissions.iter().any(|known| {
@@ -1009,8 +1021,8 @@ impl Projection {
             .collect();
         view.questions = questions;
         view.permissions = permissions;
-        // Bound actual encoded bytes, including JSON escaping. Permissions are
-        // atomic review units: never truncate an option or fabricate a choice.
+        // Bound actual encoded bytes, including JSON escaping. Reviews and asks
+        // are atomic units: never truncate an option or fabricate a choice.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
             view.truncated = true;
             if view.messages.len() > 1 {
@@ -1035,6 +1047,11 @@ impl Projection {
             } else if !view.permissions.is_empty() {
                 view.permissions.pop();
                 view.permission_view_error = Some("Additional tool reviews exceed this bounded view; close the session to cancel all pending reviews.".into());
+            } else if !view.questions.is_empty() {
+                // Dropped whole, newest first, and only once nothing else is
+                // left to give: the view says it was truncated, and the bound
+                // it promises holds whatever an agent asked.
+                view.questions.pop();
             } else {
                 break;
             }

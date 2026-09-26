@@ -6,7 +6,8 @@ use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::questions::{
-    QuestionId, QuestionRefusalReason, QuestionResponse,
+    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason,
+    QuestionResponse,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 
@@ -132,46 +133,81 @@ impl ReviewDeclineRecord {
     }
 }
 
-/// Immutable evidence that an agent's question was answered.
+/// Immutable evidence that an agent's question was answered, or ended unanswered.
 ///
 /// Not a permission answer: nothing was authorised, and declining is an answer
 /// rather than a refusal. It keeps the same two facts apart for the same
 /// reason — what was decided here, and what the wire did with it.
+///
+/// It keeps the ask itself, as a permission record keeps its request and
+/// input: what was offered, what was required, and where own words go. Without
+/// it the evidence could not show on its own that a recorded choice was one the
+/// question offered, or what a decline or cancellation left unanswered.
+///
+/// Who initiated it is decided by how it is built, not checked afterwards:
+/// [`chosen`](Self::chosen) takes the verified answerer, and
+/// [`ended`](Self::ended) takes none, because nobody chose a cancellation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionAnswerRecord {
     session_id: ExecutionSessionId,
     execution_id: ExecutionId,
     question_id: QuestionId,
+    question: AgentQuestion,
     response: QuestionResponse,
     actor: Option<ActionContext>,
     delivery: PermissionAnswerDelivery,
 }
 impl QuestionAnswerRecord {
-    /// Record that `response` ended `question_id` within `session_id`.
+    /// Record that `actor` answered `question_id` — with `answer`, or declined
+    /// it where `answer` is `None`.
     ///
-    /// `actor` is who answered, verified by the host that took the answer.
-    /// It is present exactly when somebody chose the outcome — an answer or a
-    /// decline — and absent for a cancellation, which nobody chose: saying who
-    /// did would be inventing an initiator, and leaving one out of an explicit
-    /// answer would lose the one fact an audit of it exists to keep.
-    pub fn new(
+    /// `actor` is who answered, verified by the host that took the answer;
+    /// leaving it out of an explicit answer would lose the one fact an audit
+    /// of it exists to keep. `question` is the ask as it was asked, which the
+    /// answer was validated against.
+    pub fn chosen(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
         question_id: QuestionId,
-        response: QuestionResponse,
-        actor: Option<ActionContext>,
+        question: AgentQuestion,
+        answer: Option<AcceptedAnswer>,
+        actor: ActionContext,
         delivery: PermissionAnswerDelivery,
     ) -> Self {
         Self {
             session_id,
             execution_id,
             question_id,
-            response,
-            actor,
+            question,
+            response: answer.map_or(QuestionResponse::Declined, QuestionResponse::Answered),
+            actor: Some(actor),
             delivery,
         }
     }
-    /// Who answered, where somebody did; `None` when the ask was cancelled.
+    /// Record that `question_id` ended unanswered, for `cause`.
+    ///
+    /// There is no actor: nobody chose this, and naming one would invent an
+    /// initiator. `cause` says what ended it instead.
+    pub fn ended(
+        session_id: ExecutionSessionId,
+        execution_id: ExecutionId,
+        question_id: QuestionId,
+        question: AgentQuestion,
+        cause: QuestionCancellation,
+        delivery: PermissionAnswerDelivery,
+    ) -> Self {
+        Self {
+            session_id,
+            execution_id,
+            question_id,
+            question,
+            response: QuestionResponse::Cancelled(cause),
+            actor: None,
+            delivery,
+        }
+    }
+    /// Who answered; present exactly when the response is an answer or a
+    /// decline, and `None` when the ask was cancelled.
     pub fn actor(&self) -> Option<&ActionContext> {
         self.actor.as_ref()
     }
@@ -187,7 +223,11 @@ impl QuestionAnswerRecord {
     pub fn question_id(&self) -> &QuestionId {
         &self.question_id
     }
-    /// What was answered, validated against what was asked.
+    /// The ask as it was asked: what it offered, required and invited.
+    pub fn question(&self) -> &AgentQuestion {
+        &self.question
+    }
+    /// What was answered, validated against [`question`](Self::question).
     pub fn response(&self) -> &QuestionResponse {
         &self.response
     }
@@ -202,24 +242,28 @@ impl QuestionAnswerRecord {
 /// The counterpart of [`ReviewDeclineRecord`] for asks, and for the same reason:
 /// the agent is told `cancel` and abandons the tool call that asked, so the
 /// refusal is a decision with an effect, and a reader must be able to tell it
-/// from a person declining. There is no question identity, because the ask
-/// never became one; correlation is the execution the agent was running. No
-/// initiator either: this binding decided, which the record says by having no
-/// actor rather than by naming one.
+/// from a person declining. The refused request is given an identity of its
+/// own, as a declined review is, so its decision and its write pair up even
+/// when several asks are refused in one execution or one of the records is
+/// missing. No initiator: this binding decided, which the record says by
+/// having no actor rather than by naming one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionRefusalRecord {
     session_id: ExecutionSessionId,
     execution_id: ExecutionId,
+    id: QuestionId,
     reason: QuestionRefusalReason,
     delivery: PermissionAnswerDelivery,
 }
 impl QuestionRefusalRecord {
-    /// Record that an ask from `execution_id` within `session_id` was refused
-    /// for `reason`.
+    /// Record that ask `id`, from `execution_id` within `session_id`, was
+    /// refused for `reason`.
     ///
-    /// `delivery` is this binding's own progress — [`Selected`] before the
-    /// refusal is written, then [`Written`] or [`Failed`] once the write has
-    /// been observed. It never claims the provider acted on the refusal.
+    /// `id` is minted for the refused request, in the same sequence as the
+    /// asks that were admitted. `delivery` is this binding's own progress —
+    /// [`Selected`] before the refusal is written, then [`Written`] or
+    /// [`Failed`] once the write has been observed. It never claims the
+    /// provider acted on the refusal.
     ///
     /// [`Selected`]: PermissionAnswerDelivery::Selected
     /// [`Written`]: PermissionAnswerDelivery::Written
@@ -227,12 +271,14 @@ impl QuestionRefusalRecord {
     pub fn new(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
+        id: QuestionId,
         reason: QuestionRefusalReason,
         delivery: PermissionAnswerDelivery,
     ) -> Self {
         Self {
             session_id,
             execution_id,
+            id,
             reason,
             delivery,
         }
@@ -244,6 +290,11 @@ impl QuestionRefusalRecord {
     /// Execution the agent was running when it asked.
     pub fn execution_id(&self) -> &ExecutionId {
         &self.execution_id
+    }
+    /// The identity minted for the refused request; the same on its decision
+    /// and on its write.
+    pub fn id(&self) -> &QuestionId {
+        &self.id
     }
     /// Which limit of this binding the ask ran into.
     pub fn reason(&self) -> QuestionRefusalReason {

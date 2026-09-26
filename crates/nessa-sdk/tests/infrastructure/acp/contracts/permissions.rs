@@ -1228,6 +1228,8 @@ async fn a_withdrawn_ask_closes_is_recorded_and_can_no_longer_be_answered() {
         &QuestionResponse::Cancelled(QuestionCancellation::ProviderWithdrawal)
     );
     assert_eq!(records[0].actor(), None);
+    // The ask it ended travels with it, as asked.
+    assert_eq!(records[0].question().message(), "Which environment?");
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Written);
 
     // Nothing is waiting any more, so an answer is refused rather than sent.
@@ -1315,6 +1317,8 @@ fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
     }
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
     assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+    // One refused request, named alike on its decision and its write.
+    assert_eq!(records[0].id(), records[1].id());
 }
 
 /// An ask nobody here can answer is refused on the record, and the turn goes on.

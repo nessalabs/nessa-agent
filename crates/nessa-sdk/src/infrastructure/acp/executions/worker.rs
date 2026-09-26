@@ -2255,6 +2255,21 @@ impl<P: AcpProfile> Worker<P> {
             failure
         }
     }
+    /// The next identity in this binding's question sequence.
+    ///
+    /// Asks that are admitted and asks that are refused draw from the one
+    /// sequence, so no two requests an audit names can share an identity.
+    fn mint_question_id(&self) -> Result<QuestionId, AgentError> {
+        let sequence = self
+            .question_sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| json_rpc::protocol("question ID exhausted"))?
+            + 1;
+        QuestionId::new(sequence.to_string())
+            .map_err(|error| json_rpc::protocol(&error.to_string()))
+    }
     /// Refuse one ask before anybody is asked, and leave the evidence of why.
     ///
     /// Mirrors a refused review: the decision is recorded before the wire sees
@@ -2283,10 +2298,13 @@ impl<P: AcpProfile> Worker<P> {
             ?reason,
             "agent question refused; the agent is told and the execution continues"
         );
+        // Its decision and its write are two records; this is what pairs them.
+        let id = self.mint_question_id()?;
         let record = |delivery| {
             ExecutionAuditRecord::QuestionRefused(QuestionRefusalRecord::new(
                 session_id.clone(),
                 execution_id.clone(),
+                id.clone(),
                 reason,
                 delivery,
             ))
@@ -2427,15 +2445,7 @@ impl<P: AcpProfile> Worker<P> {
         // which are different requests and the same text, and a provider may
         // reuse an id once its request is answered. An identity an answer names
         // has to outlive both, so this mints its own, as a review does.
-        let sequence = self
-            .question_sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| json_rpc::protocol("question ID exhausted"))?
-            + 1;
-        let id = QuestionId::new(sequence.to_string())
-            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        let id = self.mint_question_id()?;
         let execution_id = self
             .active
             .as_ref()
@@ -2508,13 +2518,18 @@ impl<P: AcpProfile> Worker<P> {
         };
 
         let session_id = execution.id().clone();
+        let chosen = match &response {
+            QuestionResponse::Answered(accepted) => Some(accepted.clone()),
+            _ => None,
+        };
         let record = |delivery| {
-            ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::new(
+            ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::chosen(
                 session_id.clone(),
                 answer.execution_id.clone(),
                 answer.id.clone(),
-                response.clone(),
-                Some(answer.actor.clone()),
+                asked.clone(),
+                chosen.clone(),
+                answer.actor.clone(),
                 delivery,
             ))
         };
@@ -2791,12 +2806,12 @@ impl<P: AcpProfile> Worker<P> {
         let observed = self.emit(closed);
         let recorded = self
             .record_audit(
-                ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::new(
+                ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::ended(
                     open.session_id,
                     open.execution_id,
                     id,
-                    QuestionResponse::Cancelled(cause),
-                    None,
+                    open.question,
+                    cause,
                     match &delivery {
                         Ok(()) => PermissionAnswerDelivery::Written,
                         Err(error) => PermissionAnswerDelivery::Failed(error.clone()),

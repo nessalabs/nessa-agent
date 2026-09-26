@@ -26,7 +26,10 @@ use nessa_sdk::domain::agent_execution::{
         PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineId,
         ReviewDeclineReason,
     },
-    questions::{QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse},
+    questions::{
+        AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation,
+        QuestionChoice, QuestionId, QuestionRefusalReason,
+    },
     tools::{ToolCallId, ToolCallUpdate},
 };
 use std::fs;
@@ -448,6 +451,7 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
             QuestionRefusalRecord::new(
                 ExecutionSessionId::new("session").unwrap(),
                 ExecutionId::new("run").unwrap(),
+                QuestionId::new("7").unwrap(),
                 reason,
                 PermissionAnswerDelivery::Written,
             ),
@@ -458,7 +462,9 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         assert_eq!(value["reason"], code);
         assert_eq!(value["delivery"]["stage"], "written");
         assert_eq!(value["origin"]["kind"], "runtime");
-        // Refused before it became an ask, and chosen by nobody.
+        // Refused before it became an ask, and chosen by nobody; its own
+        // identity is what pairs its decision with its write.
+        assert_eq!(value["refusalId"], "7");
         assert!(value.get("questionId").is_none());
         assert!(value.get("actor").is_none());
     }
@@ -484,12 +490,12 @@ fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
         ),
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
-            QuestionAnswerRecord::new(
+            QuestionAnswerRecord::ended(
                 ExecutionSessionId::new("session").unwrap(),
                 ExecutionId::new("run").unwrap(),
                 QuestionId::new("1").unwrap(),
-                QuestionResponse::Cancelled(cause),
-                None,
+                deploy_question(),
+                cause,
                 PermissionAnswerDelivery::Written,
             ),
         ));
@@ -497,5 +503,59 @@ fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
         assert_eq!(value["response"]["kind"], "cancelled");
         assert_eq!(value["response"]["cause"], code);
         assert_eq!(value["origin"]["kind"], origin);
+        assert!(value.get("actor").is_none() && value["origin"].get("actor").is_none());
+        assert_eq!(value["question"]["message"], "Where to?");
     }
+}
+
+fn deploy_question() -> AgentQuestion {
+    AgentQuestion::new(
+        "Where to?",
+        vec![Question::new(
+            "question_0",
+            "Which environment?",
+            Some("Environment".into()),
+            AnswerShape::One,
+            vec![AnswerOption::new("staging", "Staging", Some("Safe".into())).unwrap()],
+            Some("question_0_custom".into()),
+            true,
+        )
+        .unwrap()],
+    )
+    .unwrap()
+}
+
+#[test]
+fn audit_maps_an_answer_with_its_answerer_and_the_ask_it_answered() {
+    // The ask travels with the answer, so the record alone shows the choice
+    // was one the question offered, and who chose it is the verified caller.
+    let asked = deploy_question();
+    let answer = AcceptedAnswer::new(
+        &asked,
+        vec![QuestionChoice::new("question_0", vec!["staging".into()], Some("eu".into())).unwrap()],
+    )
+    .unwrap();
+    let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
+        QuestionAnswerRecord::chosen(
+            ExecutionSessionId::new("session").unwrap(),
+            ExecutionId::new("run").unwrap(),
+            QuestionId::new("1").unwrap(),
+            asked,
+            Some(answer),
+            actor(),
+            PermissionAnswerDelivery::Written,
+        ),
+    ));
+    assert_eq!(value["response"]["kind"], "answered");
+    assert_eq!(value["response"]["choices"][0]["values"][0], "staging");
+    assert_eq!(value["origin"]["kind"], "client");
+    assert_eq!(
+        value["origin"]["actor"]["principalId"],
+        "verified-principal"
+    );
+    let question = &value["question"]["questions"][0];
+    assert_eq!(question["options"][0]["value"], "staging");
+    assert_eq!(question["required"], true);
+    assert_eq!(question["freeTextKey"], "question_0_custom");
+    assert_eq!(question["multiSelect"], false);
 }
