@@ -181,7 +181,7 @@ and `just release` there.
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
 | `just release alpha` | Shipping-shaped bundle whose UI and host both use `alpha` |
 | `pnpm app` | `tauri dev` with one validated dev stage supplied to the UI and host |
-| `pnpm app:build` | Build and verify the prod macOS shipping bundle (`--stage alpha` selects another named stage) |
+| `pnpm app:build` | Build and verify the prod shipping bundle: the macOS app and disk image, or the Linux `.deb` (`--stage alpha` selects another named stage) |
 | `pnpm desktop:smoke` | On Linux, build and drive a real embedded WebKitGTK window against an isolated gateway/provider |
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |

@@ -5,6 +5,7 @@ import { join } from "node:path"
 import test from "node:test"
 import {
   REQUIRED_DEB_PACKAGES,
+  builtPackage,
   carriesIndicatorLibrary,
   dependencyClauses,
   missingDependencies,
@@ -81,4 +82,49 @@ test("an AppImage tree without the tray's indicator library is refused", () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("the package checked is the one this build wrote, whatever its version", () => {
+  const started = 1_790_000_000_500
+  const pattern = { prefix: "Nessa_", suffix: "_amd64.deb", startedAt: started }
+  // An older app built by merging another version, beside the shipped one an
+  // earlier build left: the newer write is this build's.
+  assert.equal(
+    builtPackage(
+      [
+        { name: "Nessa_0.1.0_amd64.deb", modified: started - 60_000 },
+        { name: "Nessa_0.0.1_amd64.deb", modified: started + 90_000 },
+        { name: "Nessa_0.0.1_amd64.deb.sig", modified: started + 90_000 },
+      ],
+      pattern,
+    ),
+    "Nessa_0.0.1_amd64.deb",
+  )
+  // Written in the second the build began: file times may be whole seconds.
+  assert.equal(
+    builtPackage(
+      [{ name: "Nessa_0.1.0_amd64.deb", modified: 1_790_000_000_000 }],
+      pattern,
+    ),
+    "Nessa_0.1.0_amd64.deb",
+  )
+  assert.throws(
+    () =>
+      builtPackage(
+        [{ name: "Nessa_0.1.0_amd64.deb", modified: started - 60_000 }],
+        pattern,
+      ),
+    /found none/,
+  )
+  assert.throws(
+    () =>
+      builtPackage(
+        [
+          { name: "Nessa_0.1.0_amd64.deb", modified: started + 1 },
+          { name: "Nessa_0.0.1_amd64.deb", modified: started + 2 },
+        ],
+        pattern,
+      ),
+    /found Nessa_0.1.0_amd64.deb, Nessa_0.0.1_amd64.deb/,
+  )
 })

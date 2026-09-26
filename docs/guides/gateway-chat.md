@@ -941,7 +941,7 @@ enable it
 ([#217](https://github.com/nessalabs/nessa-agent/issues/217) tracks offering it).
 
 Updates install the new `.deb` through `pkexec dpkg -i`, which asks for an
-administrator's password. `pnpm app:build --bundles deb` builds the package and
+administrator's password. On Linux, `pnpm app:build` builds the `.deb` and
 verifies the runtime inside it before returning success.
 
 To remove the background service after uninstalling the package, stop and

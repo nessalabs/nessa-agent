@@ -11,7 +11,7 @@
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   includesBundle,
@@ -83,6 +83,37 @@ function dpkgDeb(args, options) {
   }
 }
 
+/** The one package this build wrote in `directory`.
+ *
+ * Named for the product and architecture, any version, and modified no earlier
+ * than the second the build started. The version is not predicted: a build can
+ * merge another one through `--config` (the updater harness builds an older
+ * app that way), and a package an earlier build left under another version is
+ * not this build's, whatever it is named. */
+export function builtPackage(entries, { prefix, suffix, startedAt }) {
+  const since = Math.floor(startedAt / 1000) * 1000
+  const built = entries.filter(
+    ({ name, modified }) =>
+      name.startsWith(prefix) && name.endsWith(suffix) && modified >= since,
+  )
+  if (built.length !== 1)
+    throw new Error(
+      `Expected one ${prefix}*${suffix} written by this build, found ` +
+        `${built.length === 0 ? "none" : built.map(({ name }) => name).join(", ")}`,
+    )
+  return built[0].name
+}
+
+function packageBuiltIn(bundle, pattern, startedAt) {
+  const directory = resolve(bundle, dirname(pattern))
+  const [prefix, suffix] = basename(pattern).split("*")
+  const entries = readdirSync(directory).map((name) => ({
+    name,
+    modified: statSync(join(directory, name)).mtimeMs,
+  }))
+  return join(directory, builtPackage(entries, { prefix, suffix, startedAt }))
+}
+
 function withScratch(action) {
   const scratch = mkdtempSync(join(tmpdir(), "nessa-bundle-"))
   try {
@@ -136,19 +167,21 @@ function main() {
     ? resolve(metadata.target_directory, target, "release/bundle")
     : resolve(metadata.target_directory, "release/bundle")
   const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json")))
-  // The version a merged --config gave this build, when it gave one: the
-  // package is named for what was built, not for the shipped config.
-  const packages = linuxBundles(
+  // Any version: which package is this build's is decided by when it was
+  // written (`builtPackage`). Run on its own, with no build start, the
+  // directory must hold exactly one.
+  const patterns = linuxBundles(
     config.productName,
-    process.env.NESSA_BUILD_VERSION ?? config.version,
+    "*",
     linuxBundleArchitecture(target, process.arch),
   )
+  const startedAt = Number(process.env.NESSA_BUILD_STARTED ?? 0)
   const selected = process.env.NESSA_BUILD_BUNDLES
   const product = { productName: config.productName }
   if (includesBundle(selected, config.bundle.targets, "deb"))
-    verifyDeb(resolve(bundle, packages.deb), product)
+    verifyDeb(packageBuiltIn(bundle, patterns.deb, startedAt), product)
   if (includesBundle(selected, config.bundle.targets, "appimage"))
-    verifyAppImage(resolve(bundle, packages.appimage), product)
+    verifyAppImage(packageBuiltIn(bundle, patterns.appimage, startedAt), product)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()

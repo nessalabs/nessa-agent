@@ -34,9 +34,10 @@
 # (launchd and a systemd user unit). Windows has no gateway host yet
 # (src-tauri/src/gateway/infrastructure/unsupported.rs). The shipped config's
 # bundle.targets stays "all" — scripts/desktop/config.test.mjs asserts it, and
-# it is what a contributor's local build should keep doing. This workflow narrows
-# it per build instead, with each row's `bundles`, so a release publishes only
-# the packages an update can install and a person can run.
+# it is what a contributor's local macOS build keeps doing (a local Linux build
+# builds the release's Linux bundles; scripts/desktop/build-command.mjs). This
+# workflow narrows it per build instead, with each row's `bundles`, so a release
+# publishes only the packages an update can install and a person can run.
 name: Release
 run-name: Release ${{ inputs.tag || github.ref_name }}
 on:

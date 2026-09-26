@@ -51,43 +51,19 @@ const BUNDLE_VERIFIERS = {
   linux: "scripts/desktop/verify-linux-bundle.mjs",
 }
 
-/** The version an inline `--config` object gives the build, if any.
- *
- * Linux package names carry the version, so a build merged with another one
- * (the updater harness builds an older app this way) writes a package the
- * verifier must look for by that version. A `--config` naming a file is not
- * read; its version, if it sets one, is not seen here. */
-function configuredVersion(args) {
-  let version
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]
-    const value =
-      argument === "--config" || argument === "-c"
-        ? args[index + 1]
-        : argument.startsWith("--config=")
-          ? argument.slice("--config=".length)
-          : undefined
-    if (!value?.trimStart().startsWith("{")) continue
-    const parsed = JSON.parse(value)
-    if (typeof parsed.version === "string") version = parsed.version
-  }
-  return version
-}
-
 /** Parse the Tauri arguments that select the artifact verified after a build. */
 export function parseBuildArguments(args) {
   return {
     stage: optionValue(args, "--stage"),
     target: optionValue(args, "--target", "-t"),
     bundles: optionValue(args, "--bundles", "-b"),
-    version: configuredVersion(args),
   }
 }
 
 /** Run the public desktop build and verify the artifact selected by its arguments. */
-export function runDesktopBuild({ args, environment, platform, spawn }) {
+export function runDesktopBuild({ args, environment, platform, spawn, now = Date.now }) {
   const parsed = parseBuildArguments(args)
-  const { stage: requestedStage, target, version } = parsed
+  const { stage: requestedStage, target } = parsed
   // Linux builds what a Linux release builds unless told otherwise: the
   // config's "all" includes an AppImage, whose bundler rewrites the runtime,
   // and the verifier refuses it (release-assets.mjs says why).
@@ -112,6 +88,7 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   }
 
   const pnpm = platform === "win32" ? "pnpm.cmd" : "pnpm"
+  const started = now()
   const build = spawn(pnpm, command, { env: buildEnvironment, stdio: "inherit" })
   if (build.error) throw build.error
   if (build.status !== 0) return build.status ?? 1
@@ -122,8 +99,9 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   delete verificationEnvironment.NESSA_BUILD_BUNDLES
   if (target) verificationEnvironment.NESSA_BUILD_TARGET = target
   if (bundles) verificationEnvironment.NESSA_BUILD_BUNDLES = bundles
-  delete verificationEnvironment.NESSA_BUILD_VERSION
-  if (version) verificationEnvironment.NESSA_BUILD_VERSION = version
+  // When the build began, so the verifier checks the package this build
+  // wrote rather than one an earlier build left under another version.
+  verificationEnvironment.NESSA_BUILD_STARTED = String(started)
   if (platform === "darwin") {
     // Between the build and the verification, because the bundler notarizes
     // the app and then builds the disk image around it: the image itself has
