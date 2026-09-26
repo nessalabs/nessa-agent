@@ -33,6 +33,8 @@ public static class NessaWindowsProofNative
     private const int TokenElevationType = 18;
     private const int TokenElevation = 20;
     private const int TokenIntegrityLevel = 25;
+    private const int ERROR_BAD_LENGTH = 24;
+    private const int ERROR_INSUFFICIENT_BUFFER = 122;
     private const uint FILE_READ_ATTRIBUTES = 0x0080;
     private const uint READ_CONTROL = 0x00020000;
     private const uint DELETE = 0x00010000;
@@ -218,7 +220,7 @@ public static class NessaWindowsProofNative
         int needed;
         bool sized = GetTokenInformation(token, informationClass, IntPtr.Zero, 0, out needed);
         int error = Marshal.GetLastWin32Error();
-        if (needed <= 0 || (!sized && error != 122))
+        if (needed <= 0 || (!sized && error != ERROR_BAD_LENGTH && error != ERROR_INSUFFICIENT_BUFFER))
             throw new Win32Exception(error, "GetTokenInformation size query failed for " + fact);
         var bytes = new byte[needed];
         var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);

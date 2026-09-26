@@ -134,8 +134,13 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.doesNotMatch(script, /OpenProcessForObservation[^\r\n]*\$PID/)
   assert.doesNotMatch(script, /\$callerHandle\s*=/)
   assert.match(script, /OpenProcessToken failed for current-process pseudo-handle/)
-  assert.match(script, /GetTokenInformation size query failed for/)
-  assert.match(script, /GetTokenInformation fill failed for/)
+  const tokenInformationBoundary =
+    /private const int ERROR_BAD_LENGTH = 24;\s+private const int ERROR_INSUFFICIENT_BUFFER = 122;[\s\S]*?\[DllImport\("advapi32\.dll", SetLastError = true\)\]\s+private static extern bool GetTokenInformation\(\s*IntPtr token, int informationClass, IntPtr information, int length, out int returnLength\);[\s\S]*?private static byte\[\] TokenInformation\(IntPtr token, int informationClass, string fact\)\s*\{\s*int needed;\s*bool sized = GetTokenInformation\(token, informationClass, IntPtr\.Zero, 0, out needed\);\s*int error = Marshal\.GetLastWin32Error\(\);\s*if \(needed <= 0 \|\| \(!sized && error != ERROR_BAD_LENGTH && error != ERROR_INSUFFICIENT_BUFFER\)\)\s*throw new Win32Exception\(error, "GetTokenInformation size query failed for " \+ fact\);\s*var bytes = new byte\[needed\];\s*var pinned = GCHandle\.Alloc\(bytes, GCHandleType\.Pinned\);\s*try\s*\{\s*if \(!GetTokenInformation\(token, informationClass, pinned\.AddrOfPinnedObject\(\), bytes\.Length, out needed\)\)\s*throw new Win32Exception\(Marshal\.GetLastWin32Error\(\), "GetTokenInformation fill failed for " \+ fact\);\s*return bytes;\s*\}\s*finally \{ pinned\.Free\(\); \}\s*\}/g
+  assert.equal(
+    script.match(tokenInformationBoundary)?.length,
+    1,
+    "one native token-information boundary must own sizing, allocation, fill, and release",
+  )
   assert.match(script, /ReadTokenFacts\(\$engineProcess\)/)
   assert.match(script, /ProcessHasExited\(\$engineProcess\)/)
   assert.match(script, /ActionCreationTime', 'PidBoundCreationTime'/)
