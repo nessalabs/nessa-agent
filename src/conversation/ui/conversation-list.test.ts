@@ -110,7 +110,7 @@ it("says the list could not be loaded rather than that there is nothing", async 
   const store = makeStore(createDependencies({ conversation: { ...effects, list } }))
   await render(store)
   // Before the gateway arrives there is nothing to have failed yet.
-  expect(container.textContent).toContain("Connecting to the gateway")
+  expect(container.textContent).toContain("Connecting…")
   await React.act(async () => {
     store.dispatch(
       sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),

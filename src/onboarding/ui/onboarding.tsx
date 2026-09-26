@@ -19,7 +19,8 @@ import {
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
-import type { GatewayStartupStatus } from "../application/gateway-startup"
+import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
+import { COULD_NOT_START } from "../../startup/application/copy"
 import type { ShortcutPlatform } from "../model/shortcut-display"
 import { Button } from "@nessa-ui/react/button"
 import {
@@ -503,7 +504,7 @@ export function Onboarding({
               id={SETUP_HEADING_ID}
               className="nessa-text-6 font-semibold text-foreground"
             >
-              Nessa couldn’t start
+              {COULD_NOT_START}
             </h1>
           </div>
           <Button size="lg" className={PANE_BUTTON} onClick={onRetryGateway}>

@@ -2,7 +2,7 @@
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { GatewayStartup } from "../application/ports"
+import type { GatewayStartup } from "../../startup/application/ports"
 
 const native = vi.hoisted(() => ({
   handlers: [] as ((startup: GatewayStartup) => void)[],
@@ -108,7 +108,7 @@ describe("the setup owner under Strict Mode", () => {
     expect(native.handlers.length).toBeGreaterThan(0)
     await React.act(async () => {
       native.handlers.at(-1)!({ revision: 2, state: "ready" })
-      snapshot.resolve({ revision: 1, state: "starting" })
+      snapshot.resolve({ revision: 1, state: "starting", step: "preparing" })
       await snapshot.promise
     })
     await flush()
@@ -202,7 +202,11 @@ describe("the setup owner under Strict Mode", () => {
   })
 
   it("removes the live subscription and ignores events after unmount", async () => {
-    native.gatewayStartup.mockResolvedValue({ revision: 1, state: "starting" })
+    native.gatewayStartup.mockResolvedValue({
+      revision: 1,
+      state: "starting",
+      step: "preparing",
+    })
     const agents = { read: vi.fn(async () => ({ ok: true as const, agents: {} })) }
     await render(agents)
     await flush()

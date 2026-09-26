@@ -512,6 +512,13 @@ pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     replace(&root.join(from), &root.join(to))
 }
 
+/// Windows repairs nothing; see [`crate::find_shared_read`].
+pub(crate) fn open_shared_read(_: &Path, _: SharedReadKind) -> io::Result<Option<(File, u32)>> {
+    Err(unsafe_file())
+}
+pub(crate) fn tighten(_: &File, _: u32) -> io::Result<()> {
+    Err(unsafe_file())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

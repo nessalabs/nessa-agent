@@ -15,6 +15,9 @@ pub(crate) struct ProcessCleanup {
     state: Mutex<CleanupState>,
     config: AcpConfig,
     runtime: Handle,
+    /// Held until the resources are confirmed released, through the retrying
+    /// owner a drop hands them to if it comes to that.
+    until_released: Option<Box<dyn Send + Sync>>,
 }
 
 struct CleanupState {
@@ -42,7 +45,18 @@ impl ProcessCleanup {
             }),
             config,
             runtime: Handle::current(),
+            until_released: None,
         }
+    }
+
+    /// Hold `token` until this owner's resources are confirmed released,
+    /// however long the retrying owner a drop hands them to takes. A caller
+    /// that counts what is still being released (`DeletionCleanups`) gives its
+    /// count here, so the count cannot end while a process is still alive
+    /// (`a_retained_cleanup_holds_its_token_until_release_is_confirmed`).
+    pub(crate) fn until_released(mut self, token: impl Send + Sync + 'static) -> Self {
+        self.until_released = Some(Box::new(token));
+        self
     }
 
     pub(crate) async fn retain(&self, scope: ProcessScope) {
@@ -66,6 +80,7 @@ impl ProcessCleanup {
             }),
             config,
             runtime: Handle::current(),
+            until_released: None,
         }
     }
 
@@ -80,6 +95,7 @@ impl ProcessCleanup {
             }),
             config,
             runtime: Handle::current(),
+            until_released: None,
         }
     }
 
@@ -178,6 +194,7 @@ impl Drop for ProcessCleanup {
                 executable_use: None,
             },
         );
+        let until_released = self.until_released.take();
         if matches!(&state.physical, PhysicalCleanup::Confirmed(_))
             && state.executable_use.is_none()
         {
@@ -188,6 +205,8 @@ impl Drop for ProcessCleanup {
         // This task is the sole owner after caller loss. Cancellation drops its
         // retained resource and durable use guard without acknowledging release.
         drop(self.runtime.spawn(async move {
+            // Released with the loop's end: only once release is confirmed.
+            let _until_released = until_released;
             let mut state = state;
             let mut backoff = Duration::from_millis(100);
             loop {

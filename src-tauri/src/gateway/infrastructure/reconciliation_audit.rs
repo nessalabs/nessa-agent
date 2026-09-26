@@ -18,7 +18,7 @@ use crate::gateway::{
         LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep, LifecycleRecord,
         LifecycleRecordKind, LifecycleRecordPayload, ReconciliationCause,
         ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
-        ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget,
+        ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget, ServiceManager,
         SystemdJobAttempt, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
         SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
@@ -45,15 +45,23 @@ const MAX_RECORD_BYTES: u64 = 256 * 1024;
 
 pub(in crate::gateway::infrastructure) struct FileReconciliationAudit {
     config_root: Option<PathBuf>,
+    manager: ServiceManager,
     clock: Arc<dyn MonotonicClock>,
 }
 
 impl FileReconciliationAudit {
+    /// `manager` is the service manager whose adapter writes this journal; its
+    /// records are read back under the same manager's evidence rules.
     pub(in crate::gateway::infrastructure) fn new(
         config_root: Option<PathBuf>,
+        manager: ServiceManager,
         clock: Arc<dyn MonotonicClock>,
     ) -> Self {
-        Self { config_root, clock }
+        Self {
+            config_root,
+            manager,
+            clock,
+        }
     }
 
     fn open_directory(&self) -> Result<PrivateDirectory, GatewayError> {
@@ -69,6 +77,7 @@ impl FileReconciliationAudit {
 }
 
 struct FileJournalSession {
+    manager: ServiceManager,
     directory: PrivateDirectory,
     _lock: File,
     attempt: GatewayReconciliationAttempt,
@@ -657,12 +666,17 @@ fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError
     };
     if value["systemd"].is_null() {
         return match systemd_state {
+            // A unit state without runtime evidence describes no running
+            // gateway, so an incarnation beside it cannot be kept. Refused,
+            // not dropped: dropping it would reinterpret the record.
+            Some(_) if incarnation.is_some() => Err(invalid_record(
+                "systemd unit state observation carries a portable incarnation",
+            )),
             Some(state) => LifecycleObservation::with_systemd_state(version, artifact, state)
                 .map_err(|error| invalid_record(&error.to_string())),
-            None if incarnation.is_none() => Ok(LifecycleObservation::new(version, None, artifact)),
-            None => Err(invalid_record(
-                "portable observation has no native platform evidence",
-            )),
+            // Which manager may record a running incarnation without native
+            // evidence is decided by `LifecycleHistory`, not by the parser.
+            None => Ok(LifecycleObservation::new(version, incarnation, artifact)),
         };
     }
     if systemd_state != Some(SystemdUnitState::Active) {
@@ -923,7 +937,10 @@ fn acquire_lock(
     }
 }
 
-fn load_records(directory: &PrivateDirectory) -> Result<Vec<StoredRecord>, GatewayError> {
+fn load_records(
+    directory: &PrivateDirectory,
+    manager: ServiceManager,
+) -> Result<Vec<StoredRecord>, GatewayError> {
     let mut records = Vec::new();
     for entry in directory
         .entries()
@@ -969,11 +986,14 @@ fn load_records(directory: &PrivateDirectory) -> Result<Vec<StoredRecord>, Gatew
             .cmp(&right.attempt_correlation)
             .then(left.sequence.cmp(&right.sequence))
     });
-    validate_stage_records(&records)?;
+    validate_stage_records(&records, manager)?;
     Ok(records)
 }
 
-fn validate_stage_records(records: &[StoredRecord]) -> Result<(), GatewayError> {
+fn validate_stage_records(
+    records: &[StoredRecord],
+    manager: ServiceManager,
+) -> Result<(), GatewayError> {
     let mut unresolved = 0usize;
     let mut index = 0usize;
     while index < records.len() {
@@ -987,7 +1007,7 @@ fn validate_stage_records(records: &[StoredRecord]) -> Result<(), GatewayError> 
             .iter()
             .map(domain_record)
             .collect::<Result<Vec<_>, _>>()?;
-        let history = LifecycleHistory::restore(&chain)
+        let history = LifecycleHistory::restore(manager, &chain)
             .map_err(|error| GatewayError::Registration(error.to_string()))?;
         if !history.is_terminal() {
             unresolved += 1;
@@ -1003,6 +1023,7 @@ fn validate_stage_records(records: &[StoredRecord]) -> Result<(), GatewayError> 
 
 fn unresolved_recovery(
     records: &[StoredRecord],
+    manager: ServiceManager,
 ) -> Result<Option<(GatewayLifecycleRecovery, LifecycleHistory)>, GatewayError> {
     let mut index = 0usize;
     while index < records.len() {
@@ -1015,7 +1036,7 @@ fn unresolved_recovery(
             .iter()
             .map(domain_record)
             .collect::<Result<Vec<_>, _>>()?;
-        let history = LifecycleHistory::restore(&chain)
+        let history = LifecycleHistory::restore(manager, &chain)
             .map_err(|error| GatewayError::Registration(error.to_string()))?;
         if history.is_terminal() {
             continue;
@@ -1207,9 +1228,10 @@ impl FileJournalSession {
                 })?;
                 history
             }
-            None => LifecycleHistory::restore(std::slice::from_ref(&domain_record)).map_err(
-                |error| JournalAppendError::Rejected(GatewayError::Registration(error.to_string())),
-            )?,
+            None => LifecycleHistory::restore(self.manager, std::slice::from_ref(&domain_record))
+                .map_err(|error| {
+                JournalAppendError::Rejected(GatewayError::Registration(error.to_string()))
+            })?,
         };
         let kind = domain_record.kind();
         let record = StoredRecord {
@@ -1312,13 +1334,13 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
     ) -> Result<Arc<dyn GatewayReconciliationJournalSession>, GatewayError> {
         let directory = self.open_directory()?;
         let lock = acquire_lock(&directory, deadline, self.clock.as_ref())?;
-        let records = load_records(&directory)?;
+        let records = load_records(&directory, self.manager)?;
         if deadline.is_some_and(|deadline| self.clock.now() >= deadline) {
             return Err(GatewayError::Registration(
                 "Gateway lifecycle journal deadline passed during recovery".into(),
             ));
         }
-        let recovery = unresolved_recovery(&records)?;
+        let recovery = unresolved_recovery(&records, self.manager)?;
         let (session_attempt, namespace, next_sequence, history, latest_observation, recovery) =
             match recovery {
                 Some((recovery, history)) => (
@@ -1332,6 +1354,7 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
                 None => (attempt.clone(), None, 0, None, None, None),
             };
         Ok(Arc::new(FileJournalSession {
+            manager: self.manager,
             directory,
             _lock: lock,
             attempt: session_attempt,
@@ -2010,6 +2033,28 @@ mod tests {
     }
 
     #[test]
+    fn unit_state_observation_with_an_incarnation_is_refused_not_reinterpreted() {
+        let incarnation = ReconciliationIncarnation::new(
+            ReconciliationTarget::new(
+                "nessa-gateway-prod.service".into(),
+                "a".repeat(64),
+                "b".repeat(64),
+            )
+            .unwrap(),
+            "00000000-0000-4000-8000-000000000130".into(),
+            130,
+            7420,
+        )
+        .unwrap();
+        let mut stored = observation(
+            &LifecycleObservation::with_systemd_state(1, false, SystemdUnitState::Inactive)
+                .unwrap(),
+        );
+        stored["incarnation"] = identity(&incarnation);
+        assert!(parse_observation(&stored).is_err());
+    }
+
+    #[test]
     fn systemd_retirement_effect_round_trips_its_request_correlation() {
         let value = json!({
             "kind":"request_systemd_retirement",
@@ -2098,7 +2143,11 @@ mod tests {
             "b".repeat(64),
         )
         .unwrap();
-        let audit = Arc::new(FileReconciliationAudit::new(Some(root), clock));
+        let audit = Arc::new(FileReconciliationAudit::new(
+            Some(root),
+            ServiceManager::Systemd,
+            clock,
+        ));
         let session = audit.clone().open(&attempt, None).unwrap();
         session
             .intent(
@@ -2266,6 +2315,7 @@ mod tests {
                 let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
                 let audit = Arc::new(FileReconciliationAudit::new(
                     Some(temporary.path().join("Nessa")),
+                    ServiceManager::Systemd,
                     Arc::new(SystemMonotonicClock),
                 ));
                 let request = GatewayReconciliationRequest::new(
@@ -2366,7 +2416,7 @@ mod tests {
             stored(first, 0, LifecycleRecordKind::Intent),
             stored(second, 0, LifecycleRecordKind::Intent),
         ];
-        assert!(validate_stage_records(&records).is_err());
+        assert!(validate_stage_records(&records, ServiceManager::Launchd).is_err());
     }
 
     #[test]
@@ -2379,8 +2429,9 @@ mod tests {
             stored(settled, 2, LifecycleRecordKind::Outcome),
             stored(unresolved, 0, LifecycleRecordKind::Intent),
         ];
-        validate_stage_records(&records).expect("one unresolved attempt is valid");
-        let (recovery, history) = unresolved_recovery(&records)
+        validate_stage_records(&records, ServiceManager::Launchd)
+            .expect("one unresolved attempt is valid");
+        let (recovery, history) = unresolved_recovery(&records, ServiceManager::Launchd)
             .unwrap()
             .expect("unresolved attempt is restored");
         assert_eq!(recovery.attempt().correlation().as_str(), unresolved);
@@ -2402,13 +2453,17 @@ mod tests {
             stored(attempt, 2, LifecycleRecordKind::EffectCompletion),
         ];
 
-        let (planned_recovery, _) = unresolved_recovery(&planned).unwrap().unwrap();
+        let (planned_recovery, _) = unresolved_recovery(&planned, ServiceManager::Launchd)
+            .unwrap()
+            .unwrap();
         let planned_step = planned_recovery.pending_step().unwrap();
         assert_eq!(planned_step.plan_id(), "stage-runtime");
         assert_eq!(planned_step.step().id(), "primary");
         assert_eq!(planned_step.completion(), None);
 
-        let (completed_recovery, _) = unresolved_recovery(&completed).unwrap().unwrap();
+        let (completed_recovery, _) = unresolved_recovery(&completed, ServiceManager::Launchd)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             completed_recovery.pending_step().unwrap().completion(),
             Some(&LifecycleCommandResult::Accepted)
@@ -2421,7 +2476,7 @@ mod tests {
         let first = stored(correlation, 0, LifecycleRecordKind::Intent);
         let mut second = stored(correlation, 1, LifecycleRecordKind::Outcome);
         second.service_namespace = "gui/501/so.nessa.gateway.other".into();
-        assert!(validate_stage_records(&[first, second]).is_err());
+        assert!(validate_stage_records(&[first, second], ServiceManager::Launchd).is_err());
     }
 
     #[test]
@@ -2435,11 +2490,13 @@ mod tests {
         let name = OsStr::new(".nessa-0123456789abcdef0123456789abcdef.tmp");
         directory.open_file(name, OpenMode::CreateNew).unwrap();
 
-        assert!(load_records(&directory).unwrap().is_empty());
+        assert!(load_records(&directory, ServiceManager::Launchd)
+            .unwrap()
+            .is_empty());
         assert!(!journal.join(name).exists());
 
         fs::create_dir(journal.join(name)).unwrap();
-        assert!(load_records(&directory).is_err());
+        assert!(load_records(&directory, ServiceManager::Launchd).is_err());
         assert!(journal.join(name).is_dir());
     }
 
@@ -2593,6 +2650,173 @@ mod tests {
         .is_err());
     }
 
+    /// The macOS writer records a running gateway as an incarnation with no
+    /// native evidence. Reopening the journal must read that record back:
+    /// refusing it once stranded every macOS start after the first attempt
+    /// that saw a gateway running (#221).
+    #[test]
+    fn real_file_journal_reopens_what_its_own_manager_wrote() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let clock = Arc::new(SystemMonotonicClock);
+        let attempt = |serial: u64| {
+            GatewayReconciliationAttempt::new(
+                ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}"))
+                    .unwrap(),
+                GatewayReconciliationRequest::new(
+                    ReconciliationCorrelation::parse(format!(
+                        "00000000-0000-4000-8001-{serial:012x}"
+                    ))
+                    .unwrap(),
+                    ReconciliationEvidence::new(
+                        ReconciliationCause::Startup,
+                        ReconciliationInitiator::DesktopHost,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap()
+        };
+        let target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let running = ReconciliationIncarnation::new(
+            ReconciliationTarget::new(
+                "gui/501/so.nessa.gateway.prod".into(),
+                "c".repeat(64),
+                "d".repeat(64),
+            )
+            .unwrap(),
+            "00000000-0000-4000-8000-000000000103".into(),
+            97233,
+            7420,
+        )
+        .unwrap();
+        let observed = LifecycleObservation::new(1, Some(running.clone()), true);
+        let launchd = Arc::new(FileReconciliationAudit::new(
+            Some(root.clone()),
+            ServiceManager::Launchd,
+            clock.clone(),
+        ));
+        let first = attempt(0x110);
+        let session = launchd.clone().open(&first, None).unwrap();
+        session
+            .intent(
+                &GatewayReconciliationIntent::new(first.clone(), target, Some(running)).unwrap(),
+            )
+            .unwrap();
+        session
+            .observation(&LifecycleObservationSource::Intent, &observed)
+            .unwrap();
+        drop(session);
+
+        let directory = PrivateDirectory::open_path(&root, &root.join(DIRECTORY)).unwrap();
+        assert_eq!(
+            load_records(&directory, ServiceManager::Launchd)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(load_records(&directory, ServiceManager::Systemd).is_err());
+        // Read under another manager's rules, the same records are foreign
+        // evidence, refused rather than reinterpreted.
+        let chain = load_records(&directory, ServiceManager::Launchd)
+            .unwrap()
+            .iter()
+            .map(domain_record)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            LifecycleHistory::restore(ServiceManager::Systemd, &chain).unwrap_err(),
+            crate::gateway::domain::value_objects::LifecycleJournalError::ForeignObservationEvidence
+        );
+        drop(directory);
+
+        let reopened = launchd.open(&attempt(0x111), None).unwrap();
+        let recovery = reopened
+            .recovery()
+            .expect("the unresolved attempt is recovered");
+        assert_eq!(recovery.attempt(), &first);
+        drop(reopened);
+
+        let systemd = Arc::new(FileReconciliationAudit::new(
+            Some(root.clone()),
+            ServiceManager::Systemd,
+            clock,
+        ));
+        assert!(
+            systemd.open(&attempt(0x112), None).is_err(),
+            "a launchd journal must not open under systemd rules"
+        );
+    }
+
+    /// The writer is held to the reader's rule: a systemd journal refuses a
+    /// running gateway without the unit's own evidence before writing it, so it
+    /// never holds a record it would refuse to read back.
+    #[test]
+    fn real_file_journal_refuses_to_write_evidence_its_manager_does_not_produce() {
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let attempt = GatewayReconciliationAttempt::new(
+            ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000120".into())
+                .unwrap(),
+            GatewayReconciliationRequest::new(
+                ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000121".into())
+                    .unwrap(),
+                ReconciliationEvidence::new(
+                    ReconciliationCause::Startup,
+                    ReconciliationInitiator::DesktopHost,
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let target = ReconciliationTarget::new(
+            "nessa-gateway-prod.service".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let running = ReconciliationIncarnation::new(
+            target.clone(),
+            "00000000-0000-4000-8000-000000000122".into(),
+            122,
+            7420,
+        )
+        .unwrap();
+        let session = Arc::new(FileReconciliationAudit::new(
+            Some(root.clone()),
+            ServiceManager::Systemd,
+            Arc::new(SystemMonotonicClock),
+        ))
+        .open(&attempt, None)
+        .unwrap();
+        session
+            .intent(&GatewayReconciliationIntent::new(attempt, target, None).unwrap())
+            .unwrap();
+
+        // The typed refusal is the history's, proven by
+        // `observations_are_accepted_only_with_their_service_managers_evidence`;
+        // here the evidence is that nothing reached the file.
+        assert!(session
+            .observation(
+                &LifecycleObservationSource::Intent,
+                &LifecycleObservation::new(1, Some(running), true),
+            )
+            .is_err());
+        let directory = PrivateDirectory::open_path(&root, &root.join(DIRECTORY)).unwrap();
+        assert_eq!(
+            load_records(&directory, ServiceManager::Systemd)
+                .unwrap()
+                .len(),
+            1,
+            "only the intent was written"
+        );
+    }
+
     #[test]
     fn contradictory_outcome_is_classified_as_rejected_by_the_file_adapter() {
         let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
@@ -2634,9 +2858,13 @@ mod tests {
         .unwrap();
         let intent =
             GatewayReconciliationIntent::new(attempt.clone(), target, Some(prior.clone())).unwrap();
-        let session = Arc::new(FileReconciliationAudit::new(Some(root), clock))
-            .open(&attempt, None)
-            .unwrap();
+        let session = Arc::new(FileReconciliationAudit::new(
+            Some(root),
+            ServiceManager::Launchd,
+            clock,
+        ))
+        .open(&attempt, None)
+        .unwrap();
         session.intent(&intent).unwrap();
         session
             .observation(

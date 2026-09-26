@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
 import { Onboarding } from "./onboarding"
-import type { GatewayStartupStatus } from "../application/gateway-startup"
+import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
 import {
   beginOnboarding,
   chooseAgent,
@@ -75,6 +75,7 @@ describe("the managed gateway while setup is open", () => {
     const markup = picker(recordReadiness(asking, { claude: "ready" }), {
       revision: 4,
       state: "starting",
+      step: "preparing",
     })
 
     expect(markup).toContain("starting nessa…")

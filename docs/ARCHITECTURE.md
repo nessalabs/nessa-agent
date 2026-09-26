@@ -208,6 +208,15 @@ is there for the next registration. An unresolved attempt blocks every later
 registration, so a refusal that depends only on state that will not change would
 block the gateway for good.
 
+The journal does not record which service manager wrote it. Each platform keeps
+its own journal directory and opens it under its own manager (`ServiceManager`,
+chosen in `gateway::infrastructure::selection`). Launchd proves a running gateway
+with a portable incarnation alone; systemd must also carry the unit's own runtime
+evidence. `LifecycleHistory` applies that rule both when a record is appended and
+when it is restored, so a writer cannot keep an observation this rule would refuse
+on read (`real_file_journal_reopens_what_its_own_manager_wrote`,
+`real_file_journal_refuses_to_write_evidence_its_manager_does_not_produce`).
+
 Before closing, recovery settles every step the journal lists as unsettled, in
 the journal's order (`LifecycleHistory::unsettled_steps`): a step awaiting its
 observation is observed; an unreturned step is recorded indeterminate, because

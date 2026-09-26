@@ -348,6 +348,41 @@ impl LifecycleObservation {
     }
 }
 
+/// The service manager that supervises the gateway on this platform.
+///
+/// Each one proves a running gateway with different evidence, so a journal is
+/// validated against the manager that wrote it: launchd observations carry a
+/// portable incarnation and nothing native, while a systemd observation of a
+/// running gateway must carry the unit's own runtime evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceManager {
+    #[cfg_attr(
+        not(any(target_os = "macos", test)),
+        allow(dead_code, reason = "only the macOS adapter writes launchd journals")
+    )]
+    Launchd,
+    #[cfg_attr(
+        not(any(target_os = "linux", test)),
+        allow(dead_code, reason = "only the Linux adapter writes systemd journals")
+    )]
+    Systemd,
+}
+
+impl ServiceManager {
+    /// Whether this manager's adapter could have produced `observation`.
+    fn produces(self, observation: &LifecycleObservation) -> bool {
+        match self {
+            // `LifecycleObservation::with_systemd` is the only constructor
+            // that attaches runtime evidence, and it also records the unit's
+            // state, so the state alone decides.
+            // `observations_are_accepted_only_with_their_service_managers_evidence`
+            // refuses systemd runtime evidence under launchd.
+            Self::Launchd => observation.systemd_state().is_none(),
+            Self::Systemd => observation.incarnation().is_none() || observation.systemd().is_some(),
+        }
+    }
+}
+
 /// Record referenced by an observation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LifecycleObservationSource {
@@ -532,6 +567,7 @@ impl LifecyclePendingStep {
 /// State rebuilt from acknowledged records and advanced by the live writer.
 #[derive(Clone, Debug)]
 pub struct LifecycleHistory {
+    manager: ServiceManager,
     namespace: String,
     attempt_correlation: ReconciliationCorrelation,
     target: ReconciliationTarget,
@@ -547,7 +583,10 @@ pub struct LifecycleHistory {
 }
 
 impl LifecycleHistory {
-    pub fn restore(records: &[LifecycleRecord]) -> Result<Self, LifecycleJournalError> {
+    pub fn restore(
+        manager: ServiceManager,
+        records: &[LifecycleRecord],
+    ) -> Result<Self, LifecycleJournalError> {
         let Some(first) = records.first() else {
             return Err(LifecycleJournalError::MissingIntent);
         };
@@ -578,6 +617,7 @@ impl LifecycleHistory {
             return Err(LifecycleJournalError::SequenceGap);
         }
         let mut history = Self {
+            manager,
             namespace: first.namespace().to_owned(),
             attempt_correlation: first.attempt_correlation().clone(),
             target: target.clone(),
@@ -756,6 +796,15 @@ impl LifecycleHistory {
                 self.pending_observation = Some((plan_id.clone(), step_id.clone()));
             }
             LifecycleRecordPayload::Observation { source, state } => {
+                // An outcome may only repeat the latest observation (the
+                // `StateMismatch` checks on `last_confirmed` and
+                // `StopAgentsSettled` below), so checking each observation here
+                // covers every one the journal holds.
+                // `observations_are_accepted_only_with_their_service_managers_evidence`
+                // proves an outcome cannot bring in foreign evidence.
+                if !self.manager.produces(state) {
+                    return Err(LifecycleJournalError::ForeignObservationEvidence);
+                }
                 if state
                     .incarnation()
                     .is_some_and(|incarnation| incarnation.target().service() != self.namespace)
@@ -1164,6 +1213,7 @@ pub enum LifecycleJournalError {
     MissingCompletion,
     PredicateNotSatisfied,
     ObservationVersionRegression,
+    ForeignObservationEvidence,
     NoEffectProofAfterPlan,
     MissingNoEffectObservation,
     UnobservedOutcome,
@@ -1206,6 +1256,9 @@ impl Display for LifecycleJournalError {
             Self::PredicateNotSatisfied => "gateway lifecycle cleanup predicate is not satisfied",
             Self::ObservationVersionRegression => {
                 "gateway lifecycle observation version did not increase"
+            }
+            Self::ForeignObservationEvidence => {
+                "gateway lifecycle observation carries evidence its service manager does not produce"
             }
             Self::NoEffectProofAfterPlan => {
                 "gateway lifecycle cannot prove no effect after an effect plan"
@@ -1431,7 +1484,8 @@ mod tests {
             ),
         ];
         for length in 1..=records.len() {
-            let restored = LifecycleHistory::restore(&records[..length]).unwrap();
+            let restored =
+                LifecycleHistory::restore(ServiceManager::Launchd, &records[..length]).unwrap();
             assert_eq!(restored.next_sequence(), length as u64);
             assert!(!restored.is_terminal());
         }
@@ -1450,8 +1504,11 @@ mod tests {
             },
         );
         assert_eq!(
-            LifecycleHistory::restore(&[prefix[0].clone(), prefix[1].clone(), accepted.clone()])
-                .unwrap_err(),
+            LifecycleHistory::restore(
+                ServiceManager::Systemd,
+                &[prefix[0].clone(), prefix[1].clone(), accepted.clone()]
+            )
+            .unwrap_err(),
             LifecycleJournalError::NativeAttemptMismatch
         );
 
@@ -1485,7 +1542,9 @@ mod tests {
             ),
         ];
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap().next_sequence(),
+            LifecycleHistory::restore(ServiceManager::Systemd, &records)
+                .unwrap()
+                .next_sequence(),
             4
         );
     }
@@ -1533,7 +1592,8 @@ mod tests {
             ),
         ];
         for length in 1..=records.len() {
-            let restored = LifecycleHistory::restore(&records[..length]).unwrap();
+            let restored =
+                LifecycleHistory::restore(ServiceManager::Systemd, &records[..length]).unwrap();
             assert_eq!(restored.next_sequence(), length as u64);
             assert!(!restored.is_terminal());
         }
@@ -1585,7 +1645,7 @@ mod tests {
                 ),
             ];
             assert_eq!(
-                LifecycleHistory::restore(&records).unwrap_err(),
+                LifecycleHistory::restore(ServiceManager::Systemd, &records).unwrap_err(),
                 LifecycleJournalError::NativeAttemptMismatch
             );
         }
@@ -1658,7 +1718,8 @@ mod tests {
         ];
 
         for length in 1..=records.len() {
-            let restored = LifecycleHistory::restore(&records[..length]).unwrap();
+            let restored =
+                LifecycleHistory::restore(ServiceManager::Launchd, &records[..length]).unwrap();
             assert_eq!(restored.next_sequence(), length as u64);
             assert!(!restored.is_terminal());
         }
@@ -1792,7 +1853,7 @@ mod tests {
                 },
             ),
         ];
-        let mut history = LifecycleHistory::restore(&records).unwrap();
+        let mut history = LifecycleHistory::restore(ServiceManager::Systemd, &records).unwrap();
         let pending = history.pending_step().expect("cleanup must remain pending");
         assert_eq!(pending.plan_id(), "publish");
         assert_eq!(pending.step().id(), "settle");
@@ -1813,6 +1874,114 @@ mod tests {
             Err(LifecycleJournalError::MissingCompletion)
         );
         assert!(!history.is_terminal());
+    }
+
+    /// Each manager's adapter records a running gateway with evidence the
+    /// other never produces, so a journal is read only under the manager that
+    /// wrote it. Launchd's shape — an incarnation with nothing native — is the
+    /// one a Linux-only rule once refused on read, stranding every macOS start.
+    #[test]
+    fn observations_are_accepted_only_with_their_service_managers_evidence() {
+        let observed = |intent: LifecycleRecord, state: &LifecycleObservation| {
+            let observation = LifecycleRecord::new(
+                intent.namespace().into(),
+                correlation(),
+                1,
+                LifecycleRecordPayload::Observation {
+                    source: LifecycleObservationSource::Intent,
+                    state: state.clone(),
+                },
+            )
+            .unwrap();
+            vec![intent, observation]
+        };
+        let systemd_incarnation = ReconciliationIncarnation::new(
+            systemd_target(),
+            "00000000-0000-4000-8000-00000000000a".into(),
+            10,
+            7420,
+        )
+        .unwrap();
+        let systemd_running = LifecycleObservation::with_systemd(
+            1,
+            systemd_incarnation.clone(),
+            true,
+            SystemdRuntimeObservation::new(
+                systemd_target(),
+                systemd_manager(1),
+                systemd_unit(),
+                super::super::systemd::SystemdInvocationId::new(vec![7; 16]).unwrap(),
+                10,
+                true,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let systemd_inactive =
+            LifecycleObservation::with_systemd_state(1, false, SystemdUnitState::Inactive).unwrap();
+        let launchd_running = LifecycleObservation::new(1, Some(incarnation(10)), true);
+        let nothing_running = LifecycleObservation::new(1, None, false);
+        let portable_running_under_systemd =
+            LifecycleObservation::new(1, Some(systemd_incarnation), true);
+
+        for state in [&launchd_running, &nothing_running] {
+            let restored =
+                LifecycleHistory::restore(ServiceManager::Launchd, &observed(intent(None), state))
+                    .unwrap();
+            assert_eq!(restored.latest_observation(), Some(state));
+        }
+        for state in [&systemd_running, &systemd_inactive, &nothing_running] {
+            let restored = LifecycleHistory::restore(
+                ServiceManager::Systemd,
+                &observed(systemd_intent(), state),
+            )
+            .unwrap();
+            assert_eq!(restored.latest_observation(), Some(state));
+        }
+
+        for (manager, intent, state) in [
+            (ServiceManager::Launchd, intent(None), &systemd_inactive),
+            (ServiceManager::Launchd, intent(None), &systemd_running),
+            (
+                ServiceManager::Systemd,
+                systemd_intent(),
+                &portable_running_under_systemd,
+            ),
+        ] {
+            let records = observed(intent, state);
+            assert_eq!(
+                LifecycleHistory::restore(manager, &records).unwrap_err(),
+                LifecycleJournalError::ForeignObservationEvidence
+            );
+            // The live writer is refused by the same check, before the record
+            // becomes part of the history.
+            let mut live = LifecycleHistory::restore(manager, &records[..1]).unwrap();
+            assert_eq!(
+                live.append(&records[1]).unwrap_err(),
+                LifecycleJournalError::ForeignObservationEvidence
+            );
+            assert_eq!(live.next_sequence(), 1);
+            assert!(live.latest_observation().is_none());
+        }
+
+        // An outcome cannot bring in evidence the observations did not: its
+        // last confirmed state must be the latest observation, already checked.
+        let mut settled = observed(intent(None), &launchd_running);
+        settled.push(record(
+            2,
+            LifecycleRecordPayload::Outcome {
+                physical: LifecyclePhysicalOutcome::Failed {
+                    phase: LifecycleFailedPhase::Planning,
+                    message: "closed".into(),
+                },
+                last_confirmed: Some(systemd_inactive),
+                cleanup: ReconciliationCleanupDecision::RetainPrior,
+            },
+        ));
+        assert_eq!(
+            LifecycleHistory::restore(ServiceManager::Launchd, &settled).unwrap_err(),
+            LifecycleJournalError::StateMismatch
+        );
     }
 
     #[test]
@@ -1838,7 +2007,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::MissingObservation
         );
     }
@@ -1861,7 +2030,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::MissingCompletion
         );
     }
@@ -1894,7 +2063,7 @@ mod tests {
         ];
 
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::StateMismatch
         );
     }
@@ -1939,7 +2108,7 @@ mod tests {
         ];
 
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::StateMismatch
         );
     }
@@ -1983,7 +2152,9 @@ mod tests {
             ),
         ];
 
-        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+        assert!(LifecycleHistory::restore(ServiceManager::Launchd, &records)
+            .unwrap()
+            .is_terminal());
     }
 
     #[test]
@@ -2046,7 +2217,7 @@ mod tests {
         ];
 
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::StateMismatch
         );
     }
@@ -2090,7 +2261,11 @@ mod tests {
                 },
             );
             assert_eq!(
-                LifecycleHistory::restore(&[intent(Some(incarnation(10))), plan]).unwrap_err(),
+                LifecycleHistory::restore(
+                    ServiceManager::Launchd,
+                    &[intent(Some(incarnation(10))), plan]
+                )
+                .unwrap_err(),
                 LifecycleJournalError::TargetMismatch
             );
         }
@@ -2158,7 +2333,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::UnobservedOutcome
         );
     }
@@ -2166,8 +2341,11 @@ mod tests {
     #[test]
     fn intent_rejects_a_prior_incarnation_from_another_namespace() {
         assert_eq!(
-            LifecycleHistory::restore(&[intent(Some(incarnation_for("other-service", 10)))])
-                .unwrap_err(),
+            LifecycleHistory::restore(
+                ServiceManager::Launchd,
+                &[intent(Some(incarnation_for("other-service", 10)))]
+            )
+            .unwrap_err(),
             LifecycleJournalError::TargetMismatch
         );
     }
@@ -2203,11 +2381,11 @@ mod tests {
         let mut restored_records = prefix.clone();
         restored_records.push(contradiction.clone());
         assert_eq!(
-            LifecycleHistory::restore(&restored_records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &restored_records).unwrap_err(),
             LifecycleJournalError::TargetMismatch
         );
 
-        let mut live = LifecycleHistory::restore(&prefix).unwrap();
+        let mut live = LifecycleHistory::restore(ServiceManager::Launchd, &prefix).unwrap();
         assert_eq!(
             live.append(&contradiction).unwrap_err(),
             LifecycleJournalError::TargetMismatch
@@ -2268,7 +2446,9 @@ mod tests {
             ),
         ];
 
-        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+        assert!(LifecycleHistory::restore(ServiceManager::Launchd, &records)
+            .unwrap()
+            .is_terminal());
     }
 
     #[test]
@@ -2299,11 +2479,11 @@ mod tests {
         let mut restored_records = prefix.clone();
         restored_records.push(contradiction.clone());
         assert_eq!(
-            LifecycleHistory::restore(&restored_records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &restored_records).unwrap_err(),
             LifecycleJournalError::StateMismatch
         );
 
-        let mut live = LifecycleHistory::restore(&prefix).unwrap();
+        let mut live = LifecycleHistory::restore(ServiceManager::Launchd, &prefix).unwrap();
         assert_eq!(
             live.append(&contradiction).unwrap_err(),
             LifecycleJournalError::StateMismatch
@@ -2354,7 +2534,9 @@ mod tests {
                 ),
             ];
 
-            assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+            assert!(LifecycleHistory::restore(ServiceManager::Launchd, &records)
+                .unwrap()
+                .is_terminal());
         }
     }
 
@@ -2397,7 +2579,9 @@ mod tests {
             ),
         ];
 
-        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+        assert!(LifecycleHistory::restore(ServiceManager::Launchd, &records)
+            .unwrap()
+            .is_terminal());
     }
 
     #[test]
@@ -2500,7 +2684,9 @@ mod tests {
             },
         ));
 
-        assert!(LifecycleHistory::restore(&records).unwrap().is_terminal());
+        assert!(LifecycleHistory::restore(ServiceManager::Launchd, &records)
+            .unwrap()
+            .is_terminal());
     }
 
     #[test]
@@ -2517,7 +2703,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            LifecycleHistory::restore(&records).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap_err(),
             LifecycleJournalError::NoEffectProofAfterPlan
         );
     }
@@ -2579,12 +2765,15 @@ mod tests {
 
     #[test]
     fn a_cleanup_owed_only_after_failure_leaves_a_success_settled() {
-        let settled = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
-            step_completion(2, "primary", LifecycleCommandResult::Accepted),
-            step_observation(3, "primary", 1),
-        ])
+        let settled = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+                step_completion(2, "primary", LifecycleCommandResult::Accepted),
+                step_observation(3, "primary", 1),
+            ],
+        )
         .unwrap();
         assert!(settled.pending_step().is_none());
         assert!(settled.unsettled_steps().is_empty());
@@ -2598,12 +2787,15 @@ mod tests {
             Err(LifecycleJournalError::PredicateNotSatisfied)
         );
 
-        let failed = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
-            step_completion(2, "primary", LifecycleCommandResult::Failed("copy".into())),
-            step_observation(3, "primary", 1),
-        ])
+        let failed = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+                step_completion(2, "primary", LifecycleCommandResult::Failed("copy".into())),
+                step_observation(3, "primary", 1),
+            ],
+        )
         .unwrap();
         assert_eq!(failed.pending_step().unwrap().step().id(), "cleanup");
         let mut ran = failed.clone();
@@ -2615,10 +2807,13 @@ mod tests {
         .unwrap();
 
         // Before its primary returns, the cleanup is not yet owed.
-        let mut early = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
-        ])
+        let mut early = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+            ],
+        )
         .unwrap();
         assert_eq!(
             early.append(&step_completion(
@@ -2639,34 +2834,46 @@ mod tests {
                 .map(|step| step.step().id().to_owned())
                 .collect::<Vec<_>>()
         };
-        let unreturned = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
-        ])
+        let unreturned = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryNotAccepted),
+            ],
+        )
         .unwrap();
         assert_eq!(ids(&unreturned), ["primary", "cleanup"]);
 
         // An unconditional cleanup journaled before its primary, still
         // awaiting its observation.
-        let early = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::Always),
-            step_completion(2, "cleanup", LifecycleCommandResult::Accepted),
-        ])
+        let early = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::Always),
+                step_completion(2, "cleanup", LifecycleCommandResult::Accepted),
+            ],
+        )
         .unwrap();
         assert_eq!(ids(&early), ["cleanup", "primary"]);
 
-        let accepted = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryAccepted),
-            step_completion(2, "primary", LifecycleCommandResult::Accepted),
-        ])
+        let accepted = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryAccepted),
+                step_completion(2, "primary", LifecycleCommandResult::Accepted),
+            ],
+        )
         .unwrap();
         assert_eq!(ids(&accepted), ["primary", "cleanup"]);
-        let unaccepted = LifecycleHistory::restore(&[
-            intent(None),
-            conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryAccepted),
-        ])
+        let unaccepted = LifecycleHistory::restore(
+            ServiceManager::Launchd,
+            &[
+                intent(None),
+                conditional_cleanup_plan(LifecycleEffectPredicate::PrimaryAccepted),
+            ],
+        )
         .unwrap();
         assert_eq!(ids(&unaccepted), ["primary"]);
     }
@@ -2684,7 +2891,8 @@ mod tests {
         ];
         for (before, observed, artifact_present) in found {
             let observation = LifecycleObservation::new(1, observed, artifact_present);
-            let mut history = LifecycleHistory::restore(&[intent(before)]).unwrap();
+            let mut history =
+                LifecycleHistory::restore(ServiceManager::Launchd, &[intent(before)]).unwrap();
             history
                 .append(&record(
                     1,
@@ -2713,7 +2921,8 @@ mod tests {
 
     #[test]
     fn no_effect_closure_requires_a_fresh_observation() {
-        let mut history = LifecycleHistory::restore(&[intent(None)]).unwrap();
+        let mut history =
+            LifecycleHistory::restore(ServiceManager::Launchd, &[intent(None)]).unwrap();
         assert_eq!(
             history
                 .append(&record(
@@ -2756,7 +2965,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            LifecycleHistory::restore(&[first.clone(), wrong_namespace]).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &[first.clone(), wrong_namespace])
+                .unwrap_err(),
             LifecycleJournalError::NamespaceMismatch
         );
         let gap = record(
@@ -2775,7 +2985,7 @@ mod tests {
             },
         );
         assert_eq!(
-            LifecycleHistory::restore(&[first, gap]).unwrap_err(),
+            LifecycleHistory::restore(ServiceManager::Launchd, &[first, gap]).unwrap_err(),
             LifecycleJournalError::SequenceGap
         );
     }

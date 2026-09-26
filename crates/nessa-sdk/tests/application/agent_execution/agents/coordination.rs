@@ -838,3 +838,6 @@ mod restore_cleanup;
 
 #[path = "coordination/confirmed_cleanup.rs"]
 mod confirmed_cleanup;
+
+#[path = "coordination/open_in_flight.rs"]
+mod open_in_flight;

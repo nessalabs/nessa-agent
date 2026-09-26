@@ -980,6 +980,9 @@ impl SessionLifecycle {
     pub(super) fn attachment_needs_cleanup(&self) -> bool {
         self.attachment.needs_cleanup()
     }
+    pub(super) fn attachment_may_hold_resources(&self) -> bool {
+        self.attachment.may_hold_resources()
+    }
     /// Capture the work generation before polling a provider operation. Late failures only
     /// affect that work generation, never a restored or newly admitted provider generation.
     pub(super) fn work_generation(&self) -> WorkGeneration {

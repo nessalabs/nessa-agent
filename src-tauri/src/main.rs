@@ -22,6 +22,7 @@ mod shortcuts;
 // rather than carried everywhere and unused, which `-D warnings` calls dead on
 // the platforms that never reach it.
 mod stage_port;
+mod startup;
 mod surface_credential;
 mod tray;
 mod updater;
@@ -81,34 +82,32 @@ fn main() {
             updater::install_update,
             attachments::choose_attachment_files,
             attachments::read_attachment_bytes,
+            startup::host_startup,
+            startup::restart_nessa,
+            startup::quit_nessa,
         ])
         .setup(move |app| {
-            // Registered here rather than in the builder chain because there is
-            // nothing to update on a phone: an installed iOS or Android app is
-            // replaced by its store, not by itself. This is the plugin's own
-            // documented placement for that reason.
-            #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
-
-            // Registered here for the same reason, and with the same shape: a
-            // phone hands an app a document through its own share sheet rather
-            // than a path somebody browsed to, so attaching a file by path is a
-            // desktop question. Registered before the bundle is assembled,
-            // because the picker composition builds asks this plugin to put the
-            // dialog on screen. The webview is granted nothing by this — it calls
-            // `choose_attachment_files`, which is Nessa's own command, and the
-            // host calls the plugin.
-            #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_dialog::init())?;
-
+            // Nothing below returns an error to Tauri (ADR 221). Tauri panics on
+            // one, inside a macOS callback that cannot unwind, and the process
+            // aborts with no word to the person. What setup cannot build is a
+            // refusal the panel shows instead.
+            //
             // The composition root. Every outside thing the host talks to is
             // built here, once, and handed down from here: the settings file,
             // the shortcut cache, the surface credential, the background
             // service, and the release endpoint. Managed as one value so the
             // commands below can declare `State<HostDependencies>` and be given
             // it, and kept here so the rest of `setup` can pass it by hand.
-            let deps = HostDependencies::assemble(app.handle(), stage.clone())?;
+            let deps = match assemble_host(app.handle(), &stage) {
+                Ok(deps) => deps,
+                Err(refusal) => {
+                    eprintln!("[nessa] Nessa could not start: {refusal}");
+                    app.manage(startup::HostStartup::Refused(refusal));
+                    startup::show_refusal(app.handle());
+                    return Ok(());
+                }
+            };
+            app.manage(startup::HostStartup::Ready);
             app.manage(deps.clone());
 
             // The host owns packaged gateway startup. Start it independently of
@@ -254,6 +253,40 @@ fn main() {
                 }
             }
         });
+}
+
+/// The plugins `setup` registers and the dependency bundle, or why not.
+fn assemble_host(
+    app: &tauri::AppHandle,
+    stage: &str,
+) -> Result<HostDependencies, startup::StartupRefusal> {
+    // Registered here rather than in the builder chain because there is
+    // nothing to update on a phone: an installed iOS or Android app is
+    // replaced by its store, not by itself. This is the plugin's own
+    // documented placement for that reason.
+    #[cfg(desktop)]
+    app.plugin(tauri_plugin_updater::Builder::new().build())
+        .map_err(|error| startup::StartupRefusal::Plugin {
+            plugin: "updater",
+            detail: error.to_string(),
+        })?;
+
+    // Registered here for the same reason, and with the same shape: a
+    // phone hands an app a document through its own share sheet rather
+    // than a path somebody browsed to, so attaching a file by path is a
+    // desktop question. Registered before the bundle is assembled,
+    // because the picker composition builds asks this plugin to put the
+    // dialog on screen. The webview is granted nothing by this — it calls
+    // `choose_attachment_files`, which is Nessa's own command, and the
+    // host calls the plugin.
+    #[cfg(desktop)]
+    app.plugin(tauri_plugin_dialog::init())
+        .map_err(|error| startup::StartupRefusal::Plugin {
+            plugin: "dialog",
+            detail: error.to_string(),
+        })?;
+
+    HostDependencies::assemble(app, stage.to_owned())
 }
 
 /// The quit policy, on the way out.

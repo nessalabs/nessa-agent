@@ -25,7 +25,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe("gateway startup", () => {
   it("reads, subscribes, and retries through the native host contract", async () => {
-    const startup = { revision: 3, state: "starting" } as const
+    const startup = { revision: 3, state: "starting", step: "preparing" } as const
     const stop = vi.fn()
     let publish!: (event: { payload: typeof startup }) => void
     invoke.mockResolvedValueOnce(startup).mockResolvedValueOnce(undefined)

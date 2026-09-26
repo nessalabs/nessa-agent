@@ -34,7 +34,7 @@
 //! nothing to substitute for a window-server handle. Those stay managed state,
 //! reached where they are used.
 
-use std::{io, sync::Arc};
+use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
 
@@ -59,6 +59,7 @@ use crate::gateway_endpoint::{self, application::GatewayEndpointAccess};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
+use crate::startup::StartupRefusal;
 use crate::surface_credential::{service_namespace, SurfaceCredential, SurfaceCredentials};
 #[cfg(desktop)]
 use crate::updater::{self, ReleaseSource};
@@ -144,14 +145,22 @@ impl HostDependencies {
     /// `stage` was resolved once before Tauri started. It names both the config
     /// root the settings and shortcut files sit under and the service the
     /// gateway registers; reading the environment again here could disagree.
-    pub fn assemble(app: &AppHandle, stage: String) -> tauri::Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// A [`StartupRefusal`] when something the host cannot run without is
+    /// missing or unreadable. `setup` shows it; it is never returned to Tauri.
+    pub fn assemble(app: &AppHandle, stage: String) -> Result<Self, StartupRefusal> {
         let config_root = local_data::config_root(app, &stage);
         let settings: Arc<dyn SettingsStore> = Arc::new(SettingsFile::at(config_root.clone()));
         // These fields own the service registration and its credential
         // namespace. A corrupt or unreadable authority cannot be replaced by
         // defaults without potentially starting and addressing another service.
-        let durable = settings.load_service()?;
-        let home = app.path().home_dir()?;
+        let durable = settings.load_service().map_err(StartupRefusal::Settings)?;
+        let home = app
+            .path()
+            .home_dir()
+            .map_err(|error| StartupRefusal::Home(error.to_string()))?;
         let service_configuration = ServiceConfiguration::new(
             stage.clone(),
             durable.data_root.unwrap_or_else(|| home.join(".nessa")),
@@ -159,15 +168,12 @@ impl HostDependencies {
             durable
                 .port
                 .or_else(|| crate::stage_port::stage_port(&stage))
-                .ok_or_else(|| {
-                    tauri::Error::Io(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("no gateway port is defined for stage {stage}"),
-                    ))
+                .ok_or_else(|| StartupRefusal::Port {
+                    stage: stage.clone(),
                 })?,
             durable.claude.configuration_directory,
         )
-        .map_err(|error| tauri::Error::Io(io::Error::new(io::ErrorKind::InvalidData, error)))?;
+        .map_err(|error| StartupRefusal::ServiceConfiguration(error.to_string()))?;
         let service_namespace = service_namespace(
             Some(service_configuration.data_root().to_path_buf()),
             service_configuration.stage(),
@@ -197,9 +203,14 @@ impl HostDependencies {
         let gateway = if cfg!(debug_assertions) {
             None
         } else {
-            let runtime = app.path().resource_dir()?.join("runtime");
+            let runtime = app
+                .path()
+                .resource_dir()
+                .map_err(|error| StartupRefusal::Resources(error.to_string()))?
+                .join("runtime");
             let clock = Arc::new(SystemMonotonicClock);
-            let platform = gateway::infrastructure::platform_context(home)?;
+            let platform = gateway::infrastructure::platform_context(home)
+                .map_err(StartupRefusal::PlatformPaths)?;
             let reconciliation_audit = gateway::infrastructure::reconciliation_audit(
                 config_root.clone(),
                 &platform,

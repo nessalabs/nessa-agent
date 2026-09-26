@@ -172,6 +172,25 @@ impl Agent {
         self.inner.lifecycle.attachment_needs_cleanup()
     }
 
+    /// Whether this agent may still own provider or storage resources: a
+    /// provider open is still running, whoever started it (a caller's
+    /// attachment or the scheduler's automatic recovery), or
+    /// [`Self::attachment_cleanup_pending`] is true.
+    ///
+    /// An open can own a process before it returns, and the cleanup fact is
+    /// armed only once it does, so neither fact alone answers "is anything
+    /// left running". This one reads both in the only safe order: an open
+    /// arms its cleanup before it stops counting as running, and this reads
+    /// the running count first, so an open that keeps a process is never
+    /// missed. Callers must use this rather than combining the parts.
+    ///
+    /// Safe to call from any task at any time. A `false` answer can become
+    /// `true` as soon as it is read if a new open starts; a caller that relies
+    /// on `false` must first stop new opens, for example by closing the agent.
+    pub fn may_hold_provider_resources(&self) -> bool {
+        self.inner.lifecycle.attachment_may_hold_resources()
+    }
+
     /// Authorize one attachment attempt for the current lifecycle generation.
     /// Dropping the returned token abandons only that exact authorization.
     pub fn authorize_attachment(

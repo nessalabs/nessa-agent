@@ -692,3 +692,26 @@ async fn cancelling_a_wait_neither_abandons_the_run_nor_starts_a_second() {
         [runtime()]
     );
 }
+
+/// ADR 221: a warm-up holds nothing before it starts or once it settled with its
+/// agent released, and may still hold its agent when that release was never
+/// confirmed. A refused retirement asks exactly this.
+#[tokio::test]
+async fn a_warm_up_says_whether_it_may_still_hold_its_agent() {
+    let released = fixture();
+    assert!(!released.warm_up.may_hold_resources(), "not started");
+    released.warm_up.wait_until_settled().await;
+    assert!(
+        !released.warm_up.may_hold_resources(),
+        "settled and released"
+    );
+
+    let retained = fixture();
+    *retained.provider.close_failure.lock().unwrap() =
+        Some(AgentError::Transport("cleanup unconfirmed".into()));
+    retained.warm_up.wait_until_settled().await;
+    assert!(
+        retained.warm_up.may_hold_resources(),
+        "settled with its agent's release unconfirmed"
+    );
+}

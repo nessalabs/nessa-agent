@@ -24,6 +24,11 @@ pub use store::LocalConversationStore;
 mod provider_sessions;
 pub use provider_sessions::BindingSessionEraser;
 
+#[cfg(unix)]
+mod launched_deletions;
+#[cfg(unix)]
+pub(crate) use launched_deletions::LaunchedDeletions;
+
 mod creation_audit;
 pub use creation_audit::DurableConversationCreationAudit;
 

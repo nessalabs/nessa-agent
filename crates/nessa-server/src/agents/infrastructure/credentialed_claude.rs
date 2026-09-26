@@ -9,13 +9,7 @@
 //! exchange; every binding it launched for that is kept until it settles.
 
 use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    future::Future,
-    mem,
-    pin::Pin,
-    sync::{Arc, Mutex},
-    time::Duration,
+    collections::BTreeMap, ffi::OsString, future::Future, mem, pin::Pin, sync::Arc, time::Duration,
 };
 
 use nessa_sdk::{
@@ -40,6 +34,7 @@ use crate::agents::{
     application::{AgentCredentialFailure, AgentCredentialKind, AgentCredentialSource},
     domain::AgentId,
 };
+use crate::conversation::infrastructure::LaunchedDeletions;
 
 const CREDENTIAL_READ_DEADLINE: Duration = Duration::from_secs(3);
 
@@ -54,7 +49,7 @@ pub struct CredentialedClaudeProvider {
     identity: ProviderIdentity,
     capabilities: EffectiveCapabilities,
     /// Every binding a deletion launched, kept until it has settled.
-    deleting: Mutex<Vec<Arc<ClaudeAcpProvider>>>,
+    deleting: LaunchedDeletions<ClaudeAcpProvider>,
 }
 
 impl CredentialedClaudeProvider {
@@ -84,7 +79,7 @@ impl CredentialedClaudeProvider {
             credentials,
             identity,
             capabilities,
-            deleting: Mutex::new(Vec::new()),
+            deleting: LaunchedDeletions::default(),
         })
     }
 
@@ -114,25 +109,15 @@ impl ProviderSessionDeleter for CredentialedClaudeProvider {
                     .await
                     .map_err(|failure| failure.cause().clone())?,
             );
-            self.deleting
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(binding.clone());
+            self.deleting.push(binding.clone());
             binding.delete_session(session).await
         })
     }
     fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            let launched = mem::take(
-                &mut *self
-                    .deleting
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
-            for binding in launched {
-                binding.settled().await;
-            }
-        })
+        Box::pin(self.deleting.settled())
+    }
+    fn cleanup_outstanding(&self) -> bool {
+        self.deleting.cleanup_outstanding()
     }
 }
 

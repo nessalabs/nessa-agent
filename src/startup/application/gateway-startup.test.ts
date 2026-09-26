@@ -37,7 +37,7 @@ describe("observing gateway startup", () => {
     monitor.start()
     await flush()
     publish({ revision: 2, state: "ready" })
-    snapshot.resolve({ revision: 1, state: "starting" })
+    snapshot.resolve({ revision: 1, state: "starting", step: "preparing" })
     await flush()
 
     expect(changed).toEqual([{ revision: 2, state: "ready" }])
@@ -148,7 +148,7 @@ describe("observing gateway startup", () => {
 
   it("turns observation and retry transport failures into visible typed states", async () => {
     const source: GatewayStartupSource = {
-      snapshot: async () => ({ revision: 0, state: "starting" }),
+      snapshot: async () => ({ revision: 0, state: "starting", step: "preparing" }),
       subscribe: async () => {
         throw new Error("native event bridge unavailable")
       },
@@ -244,7 +244,7 @@ describe("observing gateway startup", () => {
         publish = handler
         return () => undefined
       },
-      retry: async () => publish({ revision: 2, state: "starting" }),
+      retry: async () => publish({ revision: 2, state: "starting", step: "preparing" }),
     }
     const changed: unknown[] = []
     const monitor = createGatewayStartupMonitor(source, (startup) =>
@@ -257,7 +257,7 @@ describe("observing gateway startup", () => {
 
     expect(changed).toEqual([
       { revision: 1, state: "failed", message: "registration failed" },
-      { revision: 2, state: "starting" },
+      { revision: 2, state: "starting", step: "preparing" },
       { revision: 3, state: "ready" },
     ])
   })

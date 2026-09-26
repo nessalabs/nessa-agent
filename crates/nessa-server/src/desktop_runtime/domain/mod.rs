@@ -5,5 +5,6 @@ mod retirement;
 pub(crate) use retirement::RunningRuntime;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) use retirement::{
-    validate_retirement_evidence, RetirementCause, RetirementFence, RetirementRequest,
+    validate_retirement_evidence, RetirementCause, RetirementFence, RetirementRefusal,
+    RetirementRequest,
 };

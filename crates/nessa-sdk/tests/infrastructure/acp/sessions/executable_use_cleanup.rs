@@ -196,3 +196,44 @@ fn cancelling_the_final_cleanup_supervisor_does_not_release_durable_use_evidence
         "runtime shutdown cancelled the final cleanup task before use release"
     );
 }
+
+/// ADR 221: a cleanup owner that is dropped before release is confirmed hands
+/// its resources to a retrying task, and the token it was given goes with them:
+/// it is let go only once the retry confirms release, never at the handoff.
+#[tokio::test]
+async fn a_retained_cleanup_holds_its_token_until_release_is_confirmed() {
+    struct ReleaseWhenAllowed(Arc<std::sync::atomic::AtomicBool>);
+    impl ExecutableUseGuard for ReleaseWhenAllowed {
+        fn release(&mut self) -> Result<(), ExecutableUseError> {
+            if self.0.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(ExecutableUseError::new("not yet"))
+            }
+        }
+    }
+    let (_root, config) = cleanup_config();
+    let allowed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let token = Arc::new(());
+    let cleanup =
+        ProcessCleanup::retaining_use(config, Box::new(ReleaseWhenAllowed(allowed.clone())))
+            .until_released(token.clone());
+    assert!(!cleanup.retry_cleanup().await.is_confirmed());
+    drop(cleanup);
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        Arc::strong_count(&token),
+        2,
+        "held while release is unconfirmed"
+    );
+    allowed.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while Arc::strong_count(&token) > 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("let go once release is confirmed");
+}
