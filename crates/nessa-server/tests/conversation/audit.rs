@@ -492,23 +492,38 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         );
     }
     let ask = deploy_question();
+    // Accounting no binding could have held is not evidence of anything: more
+    // open than may be, costing more than was ever admitted, or a cost with no
+    // ask behind it and an ask with no cost.
+    for (open_asks, open_cost) in [
+        (MAX_OPEN_QUESTIONS + 1, 1_000),
+        (1, MAX_OPEN_ASK_COST + 1),
+        (0, 1),
+        (1, 0),
+    ] {
+        assert_eq!(
+            RefusedAsk::new(deploy_question(), open_asks, open_cost).unwrap_err(),
+            ExecutionError::InvalidQuestionRefusal,
+            "{open_asks} asks costing {open_cost}"
+        );
+    }
     let for_room = |open_asks, open_cost| {
         QuestionRefusalRecord::for_room(
             session(),
             run(),
             id(),
-            RefusedAsk::new(deploy_question(), open_asks, open_cost),
+            RefusedAsk::new(deploy_question(), open_asks, open_cost).unwrap(),
             PermissionAnswerDelivery::Written,
         )
     };
     // Evidence showing there was room records no refusal at all.
     assert_eq!(
-        for_room(MAX_OPEN_QUESTIONS - 1, 0).unwrap_err(),
+        for_room(MAX_OPEN_QUESTIONS - 1, 1_000).unwrap_err(),
         ExecutionError::InvalidQuestionRefusal
     );
     let too_large = MAX_OPEN_ASK_COST - ask.carrying_cost() + 1;
     for ((open_asks, open_cost), code) in [
-        ((MAX_OPEN_QUESTIONS, 0), "too_many_open"),
+        ((MAX_OPEN_QUESTIONS, 8_000), "too_many_open"),
         ((1, too_large), "too_large"),
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionRefused(

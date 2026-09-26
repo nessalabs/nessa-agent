@@ -2452,7 +2452,8 @@ impl<P: AcpProfile> Worker<P> {
         // see is an ask nobody can answer, so admitting more than the surface
         // holds would strand the extras rather than queue them. What the open
         // asks cost together is bounded the same way, and for the same reason.
-        let candidate = RefusedAsk::new(question, open_asks, open_cost);
+        let candidate = RefusedAsk::new(question, open_asks, open_cost)
+            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
         if let Some(reason) = candidate.reason() {
             return self
                 .refuse_question(
