@@ -1,0 +1,59 @@
+# TEMPORARY — proves the Linux release row on this pull request, then is
+# removed before merge. It runs the release build row's steps with a throwaway
+# updater key (so the .sig files exist), stages and writes a Linux-only
+# manifest, and installs the .deb on a clean Ubuntu 22.04 runner.
+name: Linux package proof (temporary)
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Install the desktop host's Linux build dependencies
+        run: bash scripts/desktop/install-linux-build-deps.sh
+      - name: Throwaway updater key
+        run: |
+          set -euo pipefail
+          pnpm exec tauri signer generate --ci -p "" -w "$RUNNER_TEMP/proof.key"
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<END"
+            cat "$RUNNER_TEMP/proof.key"
+            echo
+            echo "END"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
+          } >> "$GITHUB_ENV"
+      - name: Build, sign and verify the bundle
+        run: pnpm app:build --target x86_64-unknown-linux-gnu --bundles deb,appimage
+      - name: Stage the published assets
+        run: node scripts/desktop/release-assets.mjs stage --target x86_64-unknown-linux-gnu --into release-staging
+      - name: Write a Linux-only manifest
+        run: |
+          set -euo pipefail
+          node scripts/desktop/release-assets.mjs manifest --directory release-staging \
+            --targets x86_64-unknown-linux-gnu --tag v0.1.0 --repository "$GITHUB_REPOSITORY"
+          cat release-staging/latest.json
+          ls -la release-staging
+      - name: Install the .deb on this clean runner
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y ./release-staging/Nessa_*_amd64.deb
+          deb=$(ls release-staging/Nessa_*_amd64.deb)
+          dpkg-deb --field "$deb" Package Depends
+          dpkg -L "$(dpkg-deb --field "$deb" Package)" | grep -E '^/usr/(bin|lib/Nessa/runtime/[^/]+$|share/applications)'
+          test -x /usr/lib/Nessa/runtime/nessa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-package-proof
+          path: release-staging/
+          retention-days: 3
