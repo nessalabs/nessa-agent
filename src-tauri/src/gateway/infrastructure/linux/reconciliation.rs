@@ -1113,6 +1113,13 @@ impl GatewayHost for SystemdGateway {
                             "The unresolved startup-failure authority target is not retained exactly".into(),
                         ));
                     }
+                    if !observed.snapshot.as_ref().is_some_and(|snapshot| {
+                        inactive_systemd_exit_matches(snapshot, authority.process_id())
+                    }) {
+                        return Err(GatewayError::Registration(
+                            "The unresolved startup-failure systemd exit no longer matches its authority".into(),
+                        ));
+                    }
                     if authority.target() == recovery.target() {
                         LifecycleObservation::with_systemd_state(
                             1,
@@ -2415,17 +2422,20 @@ fn inactive_startup_failure_authority(
     record: &RecordedFailure,
     target: ReconciliationTarget,
 ) -> Option<StartupFailureRecoveryAuthority> {
-    let execution = snapshot.exec_start_ex.first()?;
-    (snapshot.active_state == "inactive"
-        && snapshot.sub_state == "dead"
-        && snapshot.main_process_id == 0
-        && snapshot.exec_start_ex.len() == 1
-        && execution.7 == record.process_id()
-        && execution.8 == 1
-        && execution.9 == 0
+    (inactive_systemd_exit_matches(snapshot, record.process_id())
         && record.belongs_to(target.service_generation()))
     .then(|| record.authority(target))
     .flatten()
+}
+
+fn inactive_systemd_exit_matches(snapshot: &UnitSnapshot, process_id: u32) -> bool {
+    snapshot.active_state == "inactive"
+        && snapshot.sub_state == "dead"
+        && snapshot.main_process_id == 0
+        && snapshot.exec_start_ex.len() == 1
+        && snapshot.exec_start_ex.first().is_some_and(|execution| {
+            execution.7 == process_id && execution.8 == 1 && execution.9 == 0
+        })
 }
 
 fn gateway_from_evidence(
