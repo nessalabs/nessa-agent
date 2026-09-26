@@ -148,6 +148,11 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
     1,
     "the single observation owner must enforce the complete stabilized process vector",
   )
+  assert.equal(
+    script.match(/Test-CompleteAgreement -Evidence/g)?.length,
+    1,
+    "the single observation owner must enforce the broader accepted vector",
+  )
   assert.match(
     script,
     /Invoke-RunAttemptObservation -Observation \$firstRunObservation -Instances \$instances/,
@@ -162,7 +167,7 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   )
   assert.match(
     script,
-    /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$secondInstances[^\r\n]+-Final/,
+    /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$secondInstances[^\r\n]+-Snapshot \$secondSnapshot -CompleteAcceptance -Final/,
   )
   assert.match(script, /first run 2 to 1/)
   assert.match(script, /second run contradiction to match/)
@@ -170,6 +175,10 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(
     script,
     /matching final observation omitted its complete process vector without rejection/,
+  )
+  assert.match(
+    script,
+    /complete observation owner accepted mutation of \$\(\$entry\.Key\)/,
   )
   assert.match(script, /retained action process exited before proof completion/)
   assert.match(script, /Invoke-StopSettlement/)

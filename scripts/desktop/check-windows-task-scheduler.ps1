@@ -609,9 +609,20 @@ function Assert-LifecycleStateProbes {
     $finalSettlement = Invoke-StopSettlement -StopEffect { $finalCleanupProbe.StopCalls++ } -ProcessesSettled { $true } -InstancesSettled { $true }
     if ($finalCleanupProbe.StopCalls -ne 1 -or $finalSettlement.Failures.Count -ne 0) { throw 'contradictory final snapshot did not stop and settle its exact owned task' }
     $acceptedSnapshot = [pscustomobject]@{
-        PlannedTaskPath = '\planned\task'; PlannedActionId = 'planned-action'; InstanceGuid = 'planned-guid'; EnginePid = 42
-        PidBoundCreationTime = 100; PidBoundSid = 'S-1-5-21-1'; PidBoundElevated = $false
-        PidBoundElevationType = 2; PidBoundIntegritySid = 'S-1-16-8192'
+        CallerSid = 'S-1-5-21-1'; PrincipalSid = 'S-1-5-21-1'; TriggerSid = 'S-1-5-21-1'
+        ActionSid = 'S-1-5-21-1'; PidBoundSid = 'S-1-5-21-1'
+        CallerElevated = $false; ActionElevated = $false; PidBoundElevated = $false
+        CallerElevationType = 2; ActionElevationType = 2; PidBoundElevationType = 2
+        CallerIntegritySid = 'S-1-16-8192'; ActionIntegritySid = 'S-1-16-8192'; PidBoundIntegritySid = 'S-1-16-8192'
+        ActionCreationTime = 100; PidBoundCreationTime = 100; ActionPid = 42; EnginePid = 42
+        PlannedNonce = 'planned-nonce'; ActionNonce = 'planned-nonce'
+        RunningTaskPath = '\planned\task'; CurrentAction = 'planned-action'
+        PlannedTaskPath = '\planned\task'; PlannedActionId = 'planned-action'; InstanceGuid = 'planned-guid'
+        InstanceCount = 1; RunningState = 4; EngineProcessExited = $false
+        DefinitionMatches = $true; DescriptorMatches = $true; DaclProtected = $true
+        Owner = 'S-1-5-21-1'; Group = 'S-1-5-21-1'; AceSids = 'S-1-5-18|S-1-5-21-1'
+        AccessMasks = "$($script:FileAllAccess)|$($script:FileAllAccess)"; AceTypes = 'AccessAllowed|AccessAllowed'
+        AceFlags = 'None|None'; ObjectAceCount = 0; AceCount = 2
     }
     $matchingSnapshot = [pscustomobject]@{
         InstanceCount = 1; Path = '\planned\task'; CurrentAction = 'planned-action'; InstanceGuid = 'planned-guid'
@@ -619,7 +630,7 @@ function Assert-LifecycleStateProbes {
         Elevated = $false; ElevationType = 2; IntegritySid = 'S-1-16-8192'
     }
     $positiveObservation = New-RunAttemptObservation
-    $null = Invoke-RunAttemptObservation -Observation $positiveObservation -Instances @($matchingInstance) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42 -Accepted $acceptedSnapshot -Snapshot $matchingSnapshot -Final
+    $null = Invoke-RunAttemptObservation -Observation $positiveObservation -Instances @($matchingInstance) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42 -Accepted $acceptedSnapshot -Snapshot $matchingSnapshot -CompleteAcceptance -Final
     foreach ($mutation in @(
         [pscustomobject]@{ Field = 'Path'; Value = '\wrong-final-path' },
         [pscustomobject]@{ Field = 'CurrentAction'; Value = 'wrong-final-action' },
@@ -630,7 +641,7 @@ function Assert-LifecycleStateProbes {
         foreach ($property in $matchingSnapshot.PSObject.Properties) { $copy[$property.Name] = $property.Value }
         $copy[$mutation.Field] = $mutation.Value
         $negativeObservation = New-RunAttemptObservation
-        try { $null = Invoke-RunAttemptObservation -Observation $negativeObservation -Instances @($matchingInstance) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42 -Accepted $acceptedSnapshot -Snapshot ([pscustomobject]$copy) -Final }
+        try { $null = Invoke-RunAttemptObservation -Observation $negativeObservation -Instances @($matchingInstance) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42 -Accepted $acceptedSnapshot -Snapshot ([pscustomobject]$copy) -CompleteAcceptance -Final }
         catch { }
         if ($negativeObservation.Rejections.Count -eq 0) { throw "stabilized snapshot accepted mutation of $($mutation.Field)" }
     }
@@ -833,6 +844,18 @@ function Test-CompleteAgreement {
 
 function Assert-NegativeEvidenceProbes {
     param([Parameter(Mandatory)] $Accepted)
+    $matchingInstance = [pscustomobject]@{
+        Path = $Accepted.PlannedTaskPath; CurrentAction = $Accepted.PlannedActionId
+        InstanceGuid = $Accepted.InstanceGuid; EnginePID = $Accepted.EnginePid
+    }
+    $matchingSnapshot = [pscustomobject]@{
+        InstanceCount = 1; Path = $Accepted.PlannedTaskPath; CurrentAction = $Accepted.PlannedActionId
+        InstanceGuid = $Accepted.InstanceGuid; EnginePid = $Accepted.EnginePid; RunningState = 4; ProcessExited = $false
+        CreationTime = $Accepted.PidBoundCreationTime; Sid = $Accepted.PidBoundSid; Elevated = $Accepted.PidBoundElevated
+        ElevationType = $Accepted.PidBoundElevationType; IntegritySid = $Accepted.PidBoundIntegritySid
+    }
+    $positiveObservation = New-RunAttemptObservation
+    $null = Invoke-RunAttemptObservation -Observation $positiveObservation -Instances @($matchingInstance) -ExpectedPath $Accepted.PlannedTaskPath -ExpectedActionId $Accepted.PlannedActionId -ExpectedGuid $Accepted.InstanceGuid -ExpectedPid $Accepted.EnginePid -Accepted $Accepted -Snapshot $matchingSnapshot -CompleteAcceptance -Final
     $mutations = @{
         ActionSid = 'S-1-5-18'; ActionElevated = -not $Accepted.ActionElevated; ActionElevationType = -1
         ActionIntegritySid = 'S-1-16-0'; PidBoundSid = 'S-1-5-18'; PidBoundElevated = -not $Accepted.PidBoundElevated
@@ -850,8 +873,11 @@ function Assert-NegativeEvidenceProbes {
         $copy = [ordered]@{}
         foreach ($property in $Accepted.PSObject.Properties) { $copy[$property.Name] = $property.Value }
         $copy[$entry.Key] = $entry.Value
-        if (Test-CompleteAgreement -Evidence ([pscustomobject]$copy)) {
-            throw "evidence validator accepted mutation of $($entry.Key)"
+        $negativeObservation = New-RunAttemptObservation
+        try { $null = Invoke-RunAttemptObservation -Observation $negativeObservation -Instances @($matchingInstance) -ExpectedPath $Accepted.PlannedTaskPath -ExpectedActionId $Accepted.PlannedActionId -ExpectedGuid $Accepted.InstanceGuid -ExpectedPid $Accepted.EnginePid -Accepted ([pscustomobject]$copy) -Snapshot $matchingSnapshot -CompleteAcceptance -Final }
+        catch { }
+        if ($negativeObservation.Rejections -notcontains 'final observation started from incomplete accepted evidence') {
+            throw "complete observation owner accepted mutation of $($entry.Key)"
         }
     }
 }
