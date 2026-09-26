@@ -25,6 +25,9 @@ pub(super) const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_VIEW_BYTES: usize = 60_000;
+/// The largest single review the view offers, encoded. One review may not take
+/// most of the view's budget from everything else.
+const MAX_REVIEW_BYTES: usize = 16_000;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
@@ -469,7 +472,7 @@ impl Projection {
             self.view.truncated = true;
             return;
         }
-        self.view.questions.push(ConversationQuestion {
+        let value = ConversationQuestion {
             execution_id: execution.to_owned(),
             question_id: id.as_str().to_owned(),
             message: question.message().to_owned(),
@@ -494,7 +497,8 @@ impl Projection {
                         .collect(),
                 })
                 .collect(),
-        });
+        };
+        self.view.questions.push(value);
     }
     fn observe_permission(&mut self, event: &ExecutionEvent) {
         let ExecutionUpdate::PermissionRequested {
@@ -564,7 +568,7 @@ impl Projection {
             .iter()
             .filter(|known| offered(&self.view, &known.execution_id))
             .count();
-        if size > 16_000 || open >= MAX_PERMISSIONS {
+        if size > MAX_REVIEW_BYTES || open >= MAX_PERMISSIONS {
             self.view.permission_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
             self.view.truncated = true;
         } else if !self.view.permissions.iter().any(|known| {
@@ -1009,8 +1013,13 @@ impl Projection {
             .collect();
         view.questions = questions;
         view.permissions = permissions;
-        // Bound actual encoded bytes, including JSON escaping. Permissions are
-        // atomic review units: never truncate an option or fabricate a choice.
+        // Bound actual encoded bytes, including JSON escaping. Reviews are
+        // atomic units: never truncate an option or fabricate a choice. Asks are
+        // never given up at all — each is one an agent is waiting on, and hiding
+        // it would leave nobody able to answer. They need not be: the binding
+        // admits asks only while their carrying cost stays within
+        // MAX_OPEN_ASK_COST, which bounds what they take here, and everything
+        // else gives way first.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
             view.truncated = true;
             if view.messages.len() > 1 {
@@ -1027,6 +1036,17 @@ impl Projection {
                 .filter(|message| !message.user_text.is_empty())
             {
                 message.user_text = clipped(&message.user_text, message.user_text.len() / 2);
+            } else if let Some(message) = view
+                .messages
+                .first_mut()
+                .filter(|message| !message.files.is_empty() || !message.attachments.is_empty())
+            {
+                // What the message linked is shown by name, and a path can be
+                // long; past the budget the view says it left some out rather
+                // than break its bound or give up an ask somebody must answer.
+                if message.files.pop().is_none() {
+                    message.attachments.pop();
+                }
             } else if !view.tools.is_empty() {
                 view.tools.remove(0);
             } else if !view.pending.is_empty() {

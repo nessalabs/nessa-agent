@@ -8,7 +8,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
         PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord,
-        QuestionRefusalRecord, ReviewDeclineRecord,
+        QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
     },
     tools::ToolReviewInput,
 };
@@ -26,8 +26,12 @@ use nessa_sdk::domain::agent_execution::{
         PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineId,
         ReviewDeclineReason,
     },
-    questions::{QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse},
+    questions::{
+        AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation, QuestionChoice,
+        QuestionId, QuestionRefusalReason, MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
+    },
     tools::{ToolCallId, ToolCallUpdate},
+    ExecutionError,
 };
 use std::fs;
 struct TestClock;
@@ -435,8 +439,10 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
 
 #[test]
 fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
+    let session = || ExecutionSessionId::new("session").unwrap();
+    let run = || ExecutionId::new("run").unwrap();
+    let id = || QuestionId::new("7").unwrap();
     for (reason, code) in [
-        (QuestionRefusalReason::TooManyOpen, "too_many_open"),
         (QuestionRefusalReason::Unsupported, "unsupported"),
         (
             QuestionRefusalReason::UnreadableQuestion,
@@ -446,11 +452,13 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionRefused(
             QuestionRefusalRecord::new(
-                ExecutionSessionId::new("session").unwrap(),
-                ExecutionId::new("run").unwrap(),
+                session(),
+                run(),
+                id(),
                 reason,
                 PermissionAnswerDelivery::Written,
-            ),
+            )
+            .unwrap(),
         ));
         assert_eq!(value["kind"], "question_refused");
         assert_eq!(value["sessionId"], "session");
@@ -458,9 +466,62 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         assert_eq!(value["reason"], code);
         assert_eq!(value["delivery"]["stage"], "written");
         assert_eq!(value["origin"]["kind"], "runtime");
-        // Refused before it became an ask, and chosen by nobody.
+        // Refused before there was an ask to keep, and chosen by nobody; its
+        // own identity is what pairs its decision with its write.
+        assert_eq!(value["refusalId"], "7");
+        assert!(value["refused"].is_null());
         assert!(value.get("questionId").is_none());
         assert!(value.get("actor").is_none());
+    }
+    // A refusal for room is only ever recorded with the evidence it was
+    // decided on, and takes its reason from that evidence.
+    for reason in [
+        QuestionRefusalReason::TooManyOpen,
+        QuestionRefusalReason::TooLarge,
+    ] {
+        assert_eq!(
+            QuestionRefusalRecord::new(
+                session(),
+                run(),
+                id(),
+                reason,
+                PermissionAnswerDelivery::Written
+            )
+            .unwrap_err(),
+            ExecutionError::InvalidQuestionRefusal
+        );
+    }
+    let ask = deploy_question();
+    let for_room = |open_asks, open_cost| {
+        QuestionRefusalRecord::for_room(
+            session(),
+            run(),
+            id(),
+            RefusedAsk::new(deploy_question(), open_asks, open_cost),
+            PermissionAnswerDelivery::Written,
+        )
+    };
+    // Evidence showing there was room records no refusal at all.
+    assert_eq!(
+        for_room(MAX_OPEN_QUESTIONS - 1, 0).unwrap_err(),
+        ExecutionError::InvalidQuestionRefusal
+    );
+    let too_large = MAX_OPEN_ASK_COST - ask.carrying_cost() + 1;
+    for ((open_asks, open_cost), code) in [
+        ((MAX_OPEN_QUESTIONS, 0), "too_many_open"),
+        ((1, too_large), "too_large"),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QuestionRefused(
+            for_room(open_asks, open_cost).unwrap(),
+        ));
+        assert_eq!(value["reason"], code);
+        let refused = &value["refused"];
+        assert_eq!(refused["ask"]["message"], "Where to?");
+        assert_eq!(refused["openAsks"], open_asks);
+        assert_eq!(refused["openCost"], open_cost);
+        assert_eq!(refused["askCost"], ask.carrying_cost());
+        assert_eq!(refused["maxOpenAsks"], MAX_OPEN_QUESTIONS);
+        assert_eq!(refused["maxOpenCost"], MAX_OPEN_ASK_COST);
     }
 }
 
@@ -484,12 +545,12 @@ fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
         ),
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
-            QuestionAnswerRecord::new(
+            QuestionAnswerRecord::ended(
                 ExecutionSessionId::new("session").unwrap(),
                 ExecutionId::new("run").unwrap(),
                 QuestionId::new("1").unwrap(),
-                QuestionResponse::Cancelled(cause),
-                None,
+                deploy_question(),
+                cause,
                 PermissionAnswerDelivery::Written,
             ),
         ));
@@ -497,5 +558,67 @@ fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
         assert_eq!(value["response"]["kind"], "cancelled");
         assert_eq!(value["response"]["cause"], code);
         assert_eq!(value["origin"]["kind"], origin);
+        assert!(value.get("actor").is_none() && value["origin"].get("actor").is_none());
+        assert_eq!(value["question"]["message"], "Where to?");
     }
+}
+
+fn deploy_question() -> AgentQuestion {
+    AgentQuestion::new(
+        "Where to?",
+        vec![Question::new(
+            "question_0",
+            "Which environment?",
+            Some("Environment".into()),
+            AnswerShape::One,
+            vec![AnswerOption::new("staging", "Staging", Some("Safe".into())).unwrap()],
+            Some("question_0_custom".into()),
+            true,
+        )
+        .unwrap()],
+    )
+    .unwrap()
+}
+
+#[test]
+fn audit_maps_an_answer_with_its_answerer_and_the_ask_it_answered() {
+    // The ask travels with the answer, so the record alone shows the choice
+    // was one the question offered, and who chose it is the verified caller.
+    let chosen = |asked: AgentQuestion, value: &str| {
+        QuestionAnswerRecord::chosen(
+            ExecutionSessionId::new("session").unwrap(),
+            ExecutionId::new("run").unwrap(),
+            QuestionId::new("1").unwrap(),
+            asked,
+            Some(vec![QuestionChoice::new(
+                "question_0",
+                vec![value.into()],
+                Some("eu".into()),
+            )
+            .unwrap()]),
+            actor(),
+            PermissionAnswerDelivery::Written,
+        )
+    };
+    // A choice the recorded ask never offered cannot be recorded beside it,
+    // whatever other question it might have been checked against.
+    assert_eq!(
+        chosen(deploy_question(), "production").unwrap_err(),
+        ExecutionError::UnofferedAnswer
+    );
+    let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
+        chosen(deploy_question(), "staging").unwrap(),
+    ));
+    assert_eq!(value["response"]["kind"], "answered");
+    assert_eq!(value["response"]["choices"][0]["values"][0], "staging");
+    assert_eq!(value["origin"]["kind"], "client");
+    assert_eq!(
+        value["origin"]["actor"]["principalId"],
+        "verified-principal"
+    );
+    let question = &value["question"]["questions"][0];
+    assert_eq!(question["options"][0]["value"], "staging");
+    assert_eq!(question["required"], true);
+    assert_eq!(question["freeTextKey"], "question_0_custom");
+    assert_eq!(question["multiSelect"], false);
 }

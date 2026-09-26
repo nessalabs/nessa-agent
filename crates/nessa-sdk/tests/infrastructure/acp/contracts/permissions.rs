@@ -1228,6 +1228,8 @@ async fn a_withdrawn_ask_closes_is_recorded_and_can_no_longer_be_answered() {
         &QuestionResponse::Cancelled(QuestionCancellation::ProviderWithdrawal)
     );
     assert_eq!(records[0].actor(), None);
+    // The ask it ended travels with it, as asked.
+    assert_eq!(records[0].question().message(), "Which environment?");
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Written);
 
     // Nothing is waiting any more, so an answer is refused rather than sent.
@@ -1315,6 +1317,26 @@ fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
     }
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
     assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+    // One refused request, named alike on its decision and its write.
+    assert_eq!(records[0].id(), records[1].id());
+    // A refusal for room keeps the ask it could not fit and what was already
+    // open; any other refusal happened before there was an ask to keep.
+    for record in &records {
+        match reason {
+            QuestionRefusalReason::TooManyOpen | QuestionRefusalReason::TooLarge => {
+                let refused = record.refused().expect("a refusal for room keeps its ask");
+                assert!(!refused.ask().questions().is_empty());
+                if reason == QuestionRefusalReason::TooManyOpen {
+                    assert_eq!(refused.open_asks(), MAX_OPEN_QUESTIONS);
+                } else {
+                    assert!(
+                        refused.open_cost() + refused.ask().carrying_cost() > MAX_OPEN_ASK_COST
+                    );
+                }
+            }
+            _ => assert!(record.refused().is_none()),
+        }
+    }
 }
 
 /// An ask nobody here can answer is refused on the record, and the turn goes on.
@@ -1324,9 +1346,22 @@ async fn an_ask_that_cannot_be_put_to_anybody_is_refused_on_the_record() {
     for (mode, reason) in [
         ("ask-unsupported", QuestionRefusalReason::Unsupported),
         ("ask-unreadable", QuestionRefusalReason::UnreadableQuestion),
+        // Valid, and more than a surface could show: admitted, nobody could
+        // ever have answered it.
+        ("ask-too-large", QuestionRefusalReason::TooLarge),
     ] {
         let audit = Arc::new(RecordingAudit::default());
-        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        // Room for an ask that is valid on the wire and still too large to
+        // show: its carrying cost runs well ahead of its frame.
+        let (root, mut config, model) = test_acp_configuration(mode, 16);
+        config.max_incoming_frame_bytes = 64 * 1024;
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
         let mut opened = binding
             .open(ProviderOpenRequest::without_startup_control(None))
             .await

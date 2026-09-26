@@ -87,6 +87,13 @@ pub enum ExecutionError {
     DuplicateAnswerOption,
     /// An answer names a question the agent did not ask in this ask.
     UnaskedQuestion,
+    /// A refused ask's evidence disagrees with why it was refused: a refusal
+    /// for room keeps the ask it was decided on, and no other refusal read one.
+    InvalidQuestionRefusal,
+    /// An agent's question holds a control character it cannot be shown with:
+    /// any in an identity, or any but a line break or tab in text. Identifies
+    /// the field.
+    ControlCharacterInQuestion(&'static str),
     /// A question the asker said may not be skipped was answered with no
     /// choice.
     UnansweredQuestion,

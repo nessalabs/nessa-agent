@@ -1,6 +1,7 @@
 //! An ask is held for as long as a turn waits for somebody to answer it, so
 //! what it may contain is decided here rather than by whoever sent it.
 use super::*;
+use crate::domain::agent_execution::questions::value_objects::MAX_OPEN_ASK_COST;
 use crate::domain::agent_execution::questions::{AcceptedAnswer, QuestionChoice, QuestionId};
 
 fn option(value: &str) -> AnswerOption {
@@ -490,4 +491,69 @@ fn every_constructor_refuses_the_same_way_whatever_text_type_it_is_given() {
     assert!(AgentQuestion::new(String::from("m"), vec![question("k")]).is_ok());
     assert!(AgentQuestion::new("", vec![question("k")]).is_err());
     assert!(AgentQuestion::new("m", vec![]).is_err());
+}
+
+#[test]
+fn an_ask_holds_only_text_a_person_can_read() {
+    // Line breaks and tabs are part of what a person reads; any other control
+    // character is not, and an identity is echoed back rather than read.
+    let prompt = |text: &str| {
+        Question::new(
+            "k",
+            text,
+            None,
+            AnswerShape::One,
+            vec![option("a")],
+            None,
+            false,
+        )
+    };
+    assert!(prompt("first line\nsecond\tcolumn\r").is_ok());
+    assert_eq!(
+        prompt("bell\u{7}").unwrap_err(),
+        ExecutionError::ControlCharacterInQuestion("question prompt")
+    );
+    assert_eq!(
+        Question::new(
+            "k\n",
+            "p",
+            None,
+            AnswerShape::One,
+            vec![option("a")],
+            None,
+            false
+        )
+        .unwrap_err(),
+        ExecutionError::ControlCharacterInQuestion("question key")
+    );
+}
+
+#[test]
+fn what_an_ask_costs_to_carry_counts_every_text_twice_and_its_framing() {
+    let bare = Question::new(
+        "k",
+        "p",
+        None,
+        AnswerShape::One,
+        vec![option("v")],
+        None,
+        false,
+    )
+    .unwrap();
+    let full = Question::new(
+        "kk",
+        "pp",
+        Some("hh".into()),
+        AnswerShape::Many,
+        vec![AnswerOption::new("vv", "ll", Some("dd".into())).unwrap()],
+        Some("ff".into()),
+        true,
+    )
+    .unwrap();
+    let ask = AgentQuestion::new("m", vec![bare, full]).unwrap();
+    // ask 512 + message 2; bare: 128 + key 2 + prompt 2 + option (64 + 2 + 2);
+    // full: 128 + 4 × 4 for key, prompt, header, field, + option (64 + 3 × 4).
+    let expected = (512 + 2) + (128 + 2 + 2 + 64 + 2 + 2) + (128 + 16 + 64 + 12);
+    assert_eq!(ask.carrying_cost(), expected);
+    assert!(MAX_OPEN_ASK_COST >= ask.carrying_cost());
 }

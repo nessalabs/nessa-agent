@@ -34,7 +34,7 @@ use crate::application::agent_execution::permissions::{
     CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
     PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
     PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord,
-    ReviewDeclineRecord,
+    RefusedAsk, ReviewDeclineRecord,
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -53,8 +53,7 @@ use crate::domain::agent_execution::permissions::{
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
-    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason,
-    QuestionResponse, MAX_OPEN_QUESTIONS,
+    AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -2255,6 +2254,21 @@ impl<P: AcpProfile> Worker<P> {
             failure
         }
     }
+    /// The next identity in this binding's question sequence.
+    ///
+    /// Asks that are admitted and asks that are refused draw from the one
+    /// sequence, so no two requests an audit names can share an identity.
+    fn mint_question_id(&self) -> Result<QuestionId, AgentError> {
+        let sequence = self
+            .question_sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| json_rpc::protocol("question ID exhausted"))?
+            + 1;
+        QuestionId::new(sequence.to_string())
+            .map_err(|error| json_rpc::protocol(&error.to_string()))
+    }
     /// Refuse one ask before anybody is asked, and leave the evidence of why.
     ///
     /// Mirrors a refused review: the decision is recorded before the wire sees
@@ -2268,6 +2282,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &ExecutionController,
         wire_id: RpcId,
         reason: QuestionRefusalReason,
+        refused: Option<RefusedAsk>,
         response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
         let session_id = execution.id().clone();
@@ -2283,13 +2298,27 @@ impl<P: AcpProfile> Worker<P> {
             ?reason,
             "agent question refused; the agent is told and the execution continues"
         );
-        let record = |delivery| {
-            ExecutionAuditRecord::QuestionRefused(QuestionRefusalRecord::new(
+        // Its decision and its write are two records; this is what pairs them.
+        let id = self.mint_question_id()?;
+        let selected = match refused {
+            Some(refused) => QuestionRefusalRecord::for_room(
                 session_id.clone(),
                 execution_id.clone(),
+                id,
+                refused,
+                PermissionAnswerDelivery::Selected,
+            ),
+            None => QuestionRefusalRecord::new(
+                session_id.clone(),
+                execution_id.clone(),
+                id,
                 reason,
-                delivery,
-            ))
+                PermissionAnswerDelivery::Selected,
+            ),
+        }
+        .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        let record = |delivery| {
+            ExecutionAuditRecord::QuestionRefused(selected.clone().with_delivery(delivery))
         };
         let correlation = self.next_correlation();
         let decided = self
@@ -2384,25 +2413,14 @@ impl<P: AcpProfile> Worker<P> {
         }
         // Each refusal below is a decision with an effect — the agent abandons
         // the tool call that asked — so each is recorded, not only sent.
+        // Nothing is read once the session is ending: nobody could answer.
         if self.closing {
             return self
                 .refuse_question(
                     execution,
                     wire_id,
                     QuestionRefusalReason::SessionEnding,
-                    response_deadline,
-                )
-                .await;
-        }
-        // Bounded where the view that shows them is bounded: an ask nobody can
-        // see is an ask nobody can answer, so admitting more than the surface
-        // holds would strand the extras rather than queue them.
-        if self.questions.len() >= MAX_OPEN_QUESTIONS {
-            return self
-                .refuse_question(
-                    execution,
-                    wire_id,
-                    QuestionRefusalReason::TooManyOpen,
+                    None,
                     response_deadline,
                 )
                 .await;
@@ -2418,24 +2436,36 @@ impl<P: AcpProfile> Worker<P> {
                     _ => QuestionRefusalReason::UnreadableQuestion,
                 };
                 return self
-                    .refuse_question(execution, wire_id, reason, response_deadline)
+                    .refuse_question(execution, wire_id, reason, None, response_deadline)
                     .await;
             }
         };
-        // Minted here rather than taken from the provider's request id. That id
-        // is an attribute of one message: two asks can carry `1` and `"1"`,
-        // which are different requests and the same text, and a provider may
-        // reuse an id once its request is answered. An identity an answer names
-        // has to outlive both, so this mints its own, as a review does.
-        let sequence = self
-            .question_sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| json_rpc::protocol("question ID exhausted"))?
-            + 1;
-        let id = QuestionId::new(sequence.to_string())
-            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        // Room is decided from what is open, and a refusal for room keeps both
+        // sides of that comparison: the ask, and what was already there.
+        let open_asks = self.questions.len();
+        let open_cost = self
+            .questions
+            .values()
+            .map(|open| open.question.carrying_cost())
+            .fold(0, usize::saturating_add);
+        // Bounded where the view that shows them is bounded: an ask nobody can
+        // see is an ask nobody can answer, so admitting more than the surface
+        // holds would strand the extras rather than queue them. What the open
+        // asks cost together is bounded the same way, and for the same reason.
+        let candidate = RefusedAsk::new(question, open_asks, open_cost);
+        if let Some(reason) = candidate.reason() {
+            return self
+                .refuse_question(
+                    execution,
+                    wire_id,
+                    reason,
+                    Some(candidate),
+                    response_deadline,
+                )
+                .await;
+        }
+        let question = candidate.into_ask();
+        let id = self.mint_question_id()?;
         let execution_id = self
             .active
             .as_ref()
@@ -2493,30 +2523,30 @@ impl<P: AcpProfile> Worker<P> {
             )));
             return Ok(());
         }
-        let response = match answer.choices {
-            Some(choices) => match AcceptedAnswer::new(&asked, choices) {
-                Ok(accepted) => QuestionResponse::Answered(accepted),
-                Err(error) => {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
-                        AgentError::InvalidInput(error.to_string()),
-                        ProviderSessionState::Usable,
-                    )));
-                    return Ok(());
-                }
-            },
-            None => QuestionResponse::Declined,
+        // The answer is validated where it is recorded, against the ask it is
+        // recorded beside, so an answer this refuses never becomes evidence and
+        // one it accepts can only be an answer to that ask.
+        let selected = match QuestionAnswerRecord::chosen(
+            execution.id().clone(),
+            answer.execution_id.clone(),
+            answer.id.clone(),
+            asked.clone(),
+            answer.choices,
+            answer.actor.clone(),
+            PermissionAnswerDelivery::Selected,
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::new(
+                    AgentError::InvalidInput(error.to_string()),
+                    ProviderSessionState::Usable,
+                )));
+                return Ok(());
+            }
         };
-
-        let session_id = execution.id().clone();
+        let response = selected.response().clone();
         let record = |delivery| {
-            ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::new(
-                session_id.clone(),
-                answer.execution_id.clone(),
-                answer.id.clone(),
-                response.clone(),
-                Some(answer.actor.clone()),
-                delivery,
-            ))
+            ExecutionAuditRecord::QuestionAnswered(selected.clone().with_delivery(delivery))
         };
         // The decision is evidence before the wire sees it, and an unrecordable
         // decision is not sent: an answered review returns here rather than
@@ -2791,12 +2821,12 @@ impl<P: AcpProfile> Worker<P> {
         let observed = self.emit(closed);
         let recorded = self
             .record_audit(
-                ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::new(
+                ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::ended(
                     open.session_id,
                     open.execution_id,
                     id,
-                    QuestionResponse::Cancelled(cause),
-                    None,
+                    open.question,
+                    cause,
                     match &delivery {
                         Ok(()) => PermissionAnswerDelivery::Written,
                         Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
