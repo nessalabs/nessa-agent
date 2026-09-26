@@ -8,7 +8,7 @@ import {
   linuxBundleArchitecture,
   linuxBundles,
 } from "./bundle-architecture.mjs"
-import { parseBuildArguments, runDesktopBuild } from "./build-command.mjs"
+import { choosesBundles, parseBuildArguments, runDesktopBuild } from "./build-command.mjs"
 
 const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
 const packageConfig = JSON.parse(readFileSync("package.json", "utf8"))
@@ -285,6 +285,7 @@ test("a Linux build makes exactly what a Linux release builds", () => {
     ["-b", "deb"],
     ["-bdeb"],
     ["-b=deb"],
+    ["-db", "appimage"],
     ["--no-bundle"],
   ]) {
     const refused = []
@@ -303,6 +304,13 @@ test("a Linux build makes exactly what a Linux release builds", () => {
     )
     assert.deepEqual(refused, [], `${args.join(" ")} started a build`)
   }
+})
+
+test("arguments after -- are the runner's and choose no bundles", () => {
+  assert.equal(choosesBundles(["--", "-b", "--bundles"]), false)
+  assert.equal(choosesBundles(["-v", "--", "-b"]), false)
+  assert.equal(choosesBundles(["-vb", "deb"]), true)
+  assert.equal(choosesBundles(["--config", "{}"]), false)
 })
 
 test("the verifier is told when the build began", () => {

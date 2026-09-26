@@ -51,6 +51,20 @@ const BUNDLE_VERIFIERS = {
   linux: "scripts/desktop/verify-linux-bundle.mjs",
 }
 
+/** Whether Tauri would read a choice of bundles from these arguments: `--bundles`
+ * in any form, `--no-bundle`, or `-b` alone or inside a cluster of short flags
+ * (`-db`). Arguments after `--` are the runner's, not Tauri's. */
+export function choosesBundles(args) {
+  const end = args.indexOf("--")
+  return (end === -1 ? args : args.slice(0, end)).some(
+    (argument) =>
+      argument === "--no-bundle" ||
+      argument === "--bundles" ||
+      argument.startsWith("--bundles=") ||
+      /^-[^-]*b/.test(argument),
+  )
+}
+
 /** Parse the Tauri arguments that select the artifact verified after a build. */
 export function parseBuildArguments(args) {
   return {
@@ -67,16 +81,7 @@ export function runDesktopBuild({ args, environment, platform, spawn, now = Date
   // A Linux build makes exactly what a Linux release makes, and nothing a
   // caller names: the verifier checks the .deb alone, so any other choice of
   // bundles is refused here, before minutes of compiling, rather than parsed.
-  if (
-    platform === "linux" &&
-    args.some(
-      (argument) =>
-        argument === "--no-bundle" ||
-        argument === "--bundles" ||
-        argument.startsWith("--bundles=") ||
-        argument.startsWith("-b"),
-    )
-  )
+  if (platform === "linux" && choosesBundles(args))
     throw new Error(
       "A Linux build makes the release's bundles; drop --bundles and --no-bundle",
     )

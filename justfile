@@ -17,9 +17,11 @@
 # cmd so Windows does not need Git's sh. Unix still uses sh.
 set windows-shell := ["cmd.exe", "/c"]
 
-# Tauri --bundles is per OS. `app` / `dmg` are macOS-only.
-fast-bundle := if os() == "macos" { "app" } else if os() == "windows" { "nsis" } else { "deb" }
-release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis" } else { "deb" }
+# Tauri --bundles is per OS. `app` / `dmg` are macOS-only. Linux names none:
+# a Linux build makes exactly the release's .deb and refuses a choice
+# (scripts/desktop/build-command.mjs).
+fast-bundles := if os() == "macos" { "--bundles app" } else if os() == "windows" { "--bundles nsis" } else { "" }
+release-bundles := if os() == "macos" { "--bundles dmg" } else if os() == "windows" { "--bundles nsis" } else { "" }
 
 # List recipes. Bare `just` is not `just dev`.
 [private]
@@ -168,13 +170,13 @@ dev:
 [unix]
 [positional-arguments]
 release stage="prod" mode="shipping":
-    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "$1" --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "$1" {{if mode == "fast" { fast-bundles } else { release-bundles }}}
 
 # Shipping bundle by default; `just release prod fast` builds with faster settings.
 [windows]
 [positional-arguments]
 release stage="prod" mode="shipping":
-    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" {{if mode == "fast" { fast-bundles } else { release-bundles }}}
 
 # Manage feature worktrees: create <name>, isolate, list, remove <name>, or clean (requires Bash).
 [unix]

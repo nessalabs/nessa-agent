@@ -57,7 +57,8 @@ import { option } from "./cli.mjs"
 import { releaseManifest, updaterTarget } from "./updater-manifest.mjs"
 
 /** Each target a release builds: the updater's platform, Node's arch, and the
- * `--bundles` its build row passes — the bundles `stagedAssets` publishes.
+ * bundles its build makes — the bundles `stagedAssets` publishes. A macOS row
+ * passes them as `--bundles`; a Linux build makes them without being told.
  *
  * A total table rather than a parse of the triple: a target is released only
  * when it is written here, and `universal-apple-darwin` is not, because we
@@ -87,7 +88,7 @@ export function releaseTarget(target) {
   return updaterTarget(platform, arch)
 }
 
-/** The `--bundles` a release build of this target passes: what it publishes. */
+/** The bundles a release build of this target makes: what it publishes. */
 export function releaseBundles(target) {
   return targetPlatform(target).bundles
 }
@@ -116,7 +117,7 @@ export function updaterArtifacts(productName, version, target) {
   // The bundler already names Linux packages per version and architecture, so
   // each is published under the name it wrote. Derived from the row's bundles,
   // so the table is the one place that says what a Linux release builds; a
-  // bundle with no update format here (the AppImage) cannot be listed.
+  // bundle with no update format here (an AppImage) cannot be listed.
   const packages = linuxBundles(productName, version, linuxBundleArchitecture(target))
   const releasable = { deb: packages.deb }
   return releaseBundles(target)

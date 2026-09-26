@@ -413,7 +413,7 @@ testing does not cost a shipping build.
 
 | | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `just release prod fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `just release prod fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg |
 | `just release` | 6.5 MB `.app` inside a `.dmg` / a `.deb` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
 `just release prod fast` / `pnpm app:fast` overrides the release profile with
@@ -421,9 +421,10 @@ testing does not cost a shipping build.
 there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected
 anyway.) `just release` leaves that profile alone (`opt-level=3`, fat LTO,
-strip) and asks for the shipping installer (`dmg` / `deb` / `nsis`). The
-justfile names the bundle so the Linux CLI is not asked for macOS's `app`
-or `dmg`. Both are release binaries — neither carries debug assertions — so
+strip) and asks for the shipping installer (`dmg` / `nsis`); on Linux the
+build makes the release's `.deb` and takes no choice of bundle. The justfile
+names the bundle per OS so the Windows CLI is not asked for macOS's `app` or
+`dmg`. Both are release binaries — neither carries debug assertions — so
 what you test behaves like what you ship.
 
 **sccache** caches compilation across profiles and checkouts when
