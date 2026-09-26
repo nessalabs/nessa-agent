@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
+import { releaseBundles } from "./release-assets.mjs"
 import {
   bundleArchitecture,
   includesBundle,
@@ -162,17 +163,24 @@ test("build argument forms select the exact artifact and disk image to verify", 
       "--target=aarch64-apple-darwin",
       "--bundles=dmg,app",
     ]),
-    { stage: "dev", target: "aarch64-apple-darwin", bundles: "dmg,app" },
+    {
+      stage: "dev",
+      target: "aarch64-apple-darwin",
+      bundles: "dmg,app",
+      version: undefined,
+    },
   )
   assert.deepEqual(parseBuildArguments(["-t", "x86_64-apple-darwin", "-b", "app,dmg"]), {
     stage: undefined,
     target: "x86_64-apple-darwin",
     bundles: "app,dmg",
+    version: undefined,
   })
   assert.deepEqual(parseBuildArguments(["-tuniversal-apple-darwin", "-b=dmg"]), {
     stage: undefined,
     target: "universal-apple-darwin",
     bundles: "dmg",
+    version: undefined,
   })
   for (const args of [
     ["--target"],
@@ -259,6 +267,64 @@ test("a Linux build verifies its packages and staples nothing", () => {
   assert.deepEqual(calls[1].args, ["scripts/desktop/verify-linux-bundle.mjs"])
   assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, "x86_64-unknown-linux-gnu")
   assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
+})
+
+test("a Linux build with no bundles named builds what a Linux release builds", () => {
+  // The config's "all" would include an AppImage, which the verifier refuses.
+  const calls = []
+  const status = runDesktopBuild({
+    args: [],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(status, 0)
+  const bundles = calls[0].args.indexOf("--bundles")
+  assert.equal(calls[0].args[bundles + 1], releaseBundles("x86_64-unknown-linux-gnu"))
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
+  // Named bundles are the caller's, on Linux as anywhere.
+  const named = []
+  runDesktopBuild({
+    args: ["--bundles", "rpm"],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      named.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(named[0].args.filter((argument) => argument === "--bundles").length, 1)
+  assert.equal(named[1].options.env.NESSA_BUILD_BUNDLES, "rpm")
+})
+
+test("the verifier looks for the package a merged config's version named", () => {
+  // The updater harness builds an older app with `--config '{"version":...}'`;
+  // a Linux package is named for that version, not the shipped one.
+  const calls = []
+  runDesktopBuild({
+    args: ["--config", '{"version":"0.0.1","plugins":{}}'],
+    environment: { NESSA_BUILD_VERSION: "stale" },
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(calls[1].options.env.NESSA_BUILD_VERSION, "0.0.1")
+  const plain = []
+  runDesktopBuild({
+    args: [],
+    environment: { NESSA_BUILD_VERSION: "stale" },
+    platform: "linux",
+    spawn(command, args, options) {
+      plain.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(plain[1].options.env.NESSA_BUILD_VERSION, undefined)
 })
 
 test("verification does not inherit artifact selectors without matching arguments", () => {

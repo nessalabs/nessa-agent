@@ -136,9 +136,11 @@ function main() {
     ? resolve(metadata.target_directory, target, "release/bundle")
     : resolve(metadata.target_directory, "release/bundle")
   const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json")))
+  // The version a merged --config gave this build, when it gave one: the
+  // package is named for what was built, not for the shipped config.
   const packages = linuxBundles(
     config.productName,
-    config.version,
+    process.env.NESSA_BUILD_VERSION ?? config.version,
     linuxBundleArchitecture(target, process.arch),
   )
   const selected = process.env.NESSA_BUILD_BUNDLES

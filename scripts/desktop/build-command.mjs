@@ -1,3 +1,5 @@
+import { LINUX_RUNTIME_TARGET } from "./prepare-linux.mjs"
+import { releaseBundles } from "./release-assets.mjs"
 import { desktopStageEnvironment, resolveDesktopStage } from "./stage.mjs"
 
 function optionValue(args, longName, shortName) {
@@ -49,18 +51,49 @@ const BUNDLE_VERIFIERS = {
   linux: "scripts/desktop/verify-linux-bundle.mjs",
 }
 
+/** The version an inline `--config` object gives the build, if any.
+ *
+ * Linux package names carry the version, so a build merged with another one
+ * (the updater harness builds an older app this way) writes a package the
+ * verifier must look for by that version. A `--config` naming a file is not
+ * read; its version, if it sets one, is not seen here. */
+function configuredVersion(args) {
+  let version
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]
+    const value =
+      argument === "--config" || argument === "-c"
+        ? args[index + 1]
+        : argument.startsWith("--config=")
+          ? argument.slice("--config=".length)
+          : undefined
+    if (!value?.trimStart().startsWith("{")) continue
+    const parsed = JSON.parse(value)
+    if (typeof parsed.version === "string") version = parsed.version
+  }
+  return version
+}
+
 /** Parse the Tauri arguments that select the artifact verified after a build. */
 export function parseBuildArguments(args) {
   return {
     stage: optionValue(args, "--stage"),
     target: optionValue(args, "--target", "-t"),
     bundles: optionValue(args, "--bundles", "-b"),
+    version: configuredVersion(args),
   }
 }
 
 /** Run the public desktop build and verify the artifact selected by its arguments. */
 export function runDesktopBuild({ args, environment, platform, spawn }) {
-  const { stage: requestedStage, target, bundles } = parseBuildArguments(args)
+  const parsed = parseBuildArguments(args)
+  const { stage: requestedStage, target, version } = parsed
+  // Linux builds what a Linux release builds unless told otherwise: the
+  // config's "all" includes an AppImage, whose bundler rewrites the runtime,
+  // and the verifier refuses it (release-assets.mjs says why).
+  const bundles =
+    parsed.bundles ??
+    (platform === "linux" ? releaseBundles(target ?? LINUX_RUNTIME_TARGET) : undefined)
   const stage = resolveDesktopStage({
     environment,
     fallback: "prod",
@@ -68,6 +101,7 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   })
   const buildEnvironment = desktopStageEnvironment(environment, stage)
   const command = ["exec", "tauri", "build", ...withoutOption(args, "--stage")]
+  if (bundles && !parsed.bundles) command.push("--bundles", bundles)
   if (platform === "darwin" || platform === "linux") {
     const bundle = { resources: { "runtime/": "runtime/" } }
     if (platform === "darwin") {
@@ -88,6 +122,8 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   delete verificationEnvironment.NESSA_BUILD_BUNDLES
   if (target) verificationEnvironment.NESSA_BUILD_TARGET = target
   if (bundles) verificationEnvironment.NESSA_BUILD_BUNDLES = bundles
+  delete verificationEnvironment.NESSA_BUILD_VERSION
+  if (version) verificationEnvironment.NESSA_BUILD_VERSION = version
   if (platform === "darwin") {
     // Between the build and the verification, because the bundler notarizes
     // the app and then builds the disk image around it: the image itself has
