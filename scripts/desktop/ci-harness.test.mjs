@@ -140,8 +140,26 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(script, /observed-matching-after-\$Acknowledgement-reply/)
   assert.match(script, /Assert-LifecycleStateProbes/)
   assert.match(script, /New-RunAttemptObservation/)
+  assert.match(script, /function Invoke-RunAttemptObservation/)
   assert.match(script, /Assert-RunObservationAccepted/)
   assert.match(script, /Test-StabilizedRunSnapshot/)
+  assert.equal(
+    script.match(/Test-StabilizedRunSnapshot -Accepted/g)?.length,
+    1,
+    "the single observation owner must enforce the complete stabilized process vector",
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$firstRunObservation -Instances \$instances/,
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$instances/,
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$secondInstances[^\r\n]+-Final/,
+  )
   assert.match(script, /first run 2 to 1/)
   assert.match(script, /second run contradiction to match/)
   assert.match(script, /matching poll followed by a contradictory final snapshot/)
