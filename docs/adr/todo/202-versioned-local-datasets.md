@@ -100,14 +100,26 @@ different. An empty `credentials.v1.json` does not parse and is refused; only a
 missing one means "not initialized". An empty browser-session journal holds no
 sessions, which grants nothing.
 
-The browser-session journal has the same rows. Its open returns
-`JournalOpenError`: `Unreadable { line, problem }` for anything replay refuses
-(a file or line over its bound, a last line without its newline, a line that
-is not a record, a record that is not a legal next step), and `Unavailable` for
-the rest. G3/G4 are
-`a_browser_session_journal_replay_refuses_stops_the_gateway_for_good` and
-`what_replay_refuses_is_unreadable_and_names_its_line`. G5, whose reason stays
-`authentication`, is `a_browser_session_journal_held_elsewhere_is_still_retried`.
+The browser-session journal has the same outcomes. Its open returns
+`JournalOpenError`: `Unreadable { line, problem }` for what replay refuses, and
+`Unavailable` for the rest. Replay reads line by line, under the journal's own
+lock:
+
+| Row | Found | Result | Test |
+| --- | --- | --- | --- |
+| J1 | Every line complete, and each a legal next record | Replayed | `renewal_crosses_original_deadline_and_restart_then_logout_is_durable` |
+| J2 | The last line ends without its newline, within a record's bound | Cut back to the end of the last complete line and synced, then J1 over what is left. Logged with the line and byte count. | `an_append_that_never_finished_is_cut_off_and_the_rest_replays` |
+| J3 | A line longer than a record may be, newline or not | `Unreadable`, and so `datasetRefused`. File untouched. | `a_tail_longer_than_a_record_is_not_cut_off` |
+| J4 | A complete line that is not a record, or not a legal next step | `Unreadable`, and so `datasetRefused`. File untouched. | `what_replay_refuses_is_unreadable_and_names_its_line`, `a_browser_session_journal_replay_refuses_stops_the_gateway_for_good` |
+| J5 | Cutting or its sync fails | `Unavailable`, which is retried. The tail stays for the next open to cut. | — (the cut runs on a real file; an injected failure would need a storage port this journal does not have) |
+| J6 | The process dies during the cut | The next open finds the tail (J2) or not (J1) | follows from J2 being idempotent |
+| J7 | Held by another opener, or the file cannot be opened privately | `Unavailable`, `authentication`, retried | `a_browser_session_journal_held_elsewhere_is_still_retried` |
+
+J2 is safe because of how a record is written. It is appended with its newline
+and synced, and only then acknowledged. So a last line without its newline is
+an append that never answered anybody. Cutting it loses nothing that was
+confirmed. The SDK's session journals already do the same. Only the last line
+can lack a newline, because reading stops at each one.
 
 ## Decisions taken for the owner
 
@@ -146,8 +158,6 @@ choices:
 - After alpha, every shape change carries a migration and a checked-in fixture
   of the version it migrates from.
 - A browser-session journal whose last append was cut short by a crash
-  now stops the gateway with a sentence, where it used to relaunch forever.
-  Either way it needs a hand repair. That append was never acknowledged, so
-  truncating it at open, as the SDK's session journals already do, would be
-  safe. It is not done here.
+  starts again on its own (J2). Only a journal holding something replay refuses
+  stops the gateway.
 - Remaining: migrations, once Nessa leaves alpha.

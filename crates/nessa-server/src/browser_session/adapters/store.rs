@@ -189,8 +189,9 @@ struct State {
 #[derive(Debug, PartialEq, Eq)]
 pub enum JournalOpenError {
     /// The journal holds something replay refuses: a file or line over its
-    /// bound, a last line without its newline, JSON that does not parse, or a
-    /// record that is not a legal next step. `line` counts from 1; `None` is
+    /// bound, JSON that does not parse, or a record that is not a legal next
+    /// step. A last line without its newline is not one of these: it is an
+    /// append that never finished, and is cut off at open. `line` counts from 1; `None` is
     /// the file as a whole.
     Unreadable {
         line: Option<u64>,
@@ -267,6 +268,9 @@ impl PersistentSessions {
         let mut reader = BufReader::new(&mut *file);
         let mut line = Vec::new();
         let mut number = 0_u64;
+        // Bytes up to the end of the last complete line.
+        let mut complete = 0_u64;
+        let mut torn = None;
         loop {
             line.clear();
             number += 1;
@@ -285,8 +289,15 @@ impl PersistentSessions {
                 return Err(unreadable("longer than a record may be"));
             }
             if line.last() != Some(&b'\n') {
-                return Err(unreadable("ends without its newline"));
+                // Only the last line can end without one, and only when its
+                // append never finished. A record is acknowledged after its
+                // newline is synced, so these bytes answered nobody, and they
+                // are cut off rather than refusing every later start
+                // (`an_append_that_never_finished_is_cut_off_and_the_rest_replays`).
+                torn = Some(count);
+                break;
             }
+            complete += count as u64;
             let record: StoredRecord =
                 serde_json::from_slice(&line).map_err(|_| unreadable("is not a journal record"))?;
             let record: Record = record
@@ -296,8 +307,19 @@ impl PersistentSessions {
                 .apply(&record)
                 .map_err(|_| unreadable("is not a legal next step"))?;
         }
-        file.seek(SeekFrom::End(0))
-            .map_err(|_| JournalOpenError::Unavailable)?;
+        drop(reader);
+        if let Some(bytes) = torn {
+            // Under the lock this open holds. A failure here leaves the tail
+            // for the next open to cut again.
+            file.set_len(complete).map_err(|_| Unavailable)?;
+            file.sync_all().map_err(|_| Unavailable)?;
+            tracing::warn!(
+                line = number,
+                bytes,
+                "browser session journal ended in an append that never finished; cut it off"
+            );
+        }
+        file.seek(SeekFrom::End(0)).map_err(|_| Unavailable)?;
         state.file = Some(file);
         // A record's own instant is untrusted input: nothing in the file
         // constrains it, so a forged or clock-damaged `Renewed` chain can claim

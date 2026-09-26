@@ -1341,7 +1341,6 @@ async fn what_replay_refuses_is_unreadable_and_names_its_line() {
     drop(store);
     let valid = std::fs::read_to_string(&path).unwrap();
     for (contents, line, problem) in [
-        (valid.trim_end().to_owned(), 1, "ends without its newline"),
         (format!("{valid}not json\n"), 2, "is not a journal record"),
         // The same record twice: its sequence is not the next one.
         (format!("{valid}{valid}"), 2, "is not a legal next step"),
@@ -1358,4 +1357,62 @@ async fn what_replay_refuses_is_unreadable_and_names_its_line() {
         // Refused, never repaired.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
     }
+}
+
+/// Row J2 of ADR 202: an append the process died inside answered nobody, so
+/// open cuts it off, syncs, and replays what came before it. Anything that
+/// follows is appended after the cut.
+#[tokio::test]
+async fn an_append_that_never_finished_is_cut_off_and_the_rest_replays() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.jsonl");
+    let kept = "a".repeat(64);
+    let store = reopen(&path).unwrap();
+    store
+        .insert(kept.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    drop(store);
+    let valid = std::fs::read_to_string(&path).unwrap();
+    assert!(valid.contains("\"sequence\":1"), "{valid}");
+    // A second record, whole but for its newline, and one cut mid-way: both
+    // are appends that never reached the point of acknowledgement.
+    let second = valid.trim_end().replace("\"sequence\":1", "\"sequence\":2");
+    for tail in [second.clone(), second[..second.len() / 2].to_owned()] {
+        std::fs::write(&path, format!("{valid}{tail}")).unwrap();
+        let store = reopen(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), valid);
+        assert!(store.get(kept.clone()).await.unwrap().is_some());
+        drop(store);
+    }
+    // Only one record was ever acknowledged, so a new one is the second.
+    let store = reopen(&path).unwrap();
+    store
+        .insert("b".repeat(64), session(None).await, None, 100)
+        .await
+        .unwrap();
+    drop(store);
+    let lines = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(lines.lines().count(), 2);
+    assert!(lines.ends_with('\n'));
+    reopen(&path).unwrap();
+}
+
+/// Row J3: a tail longer than any record could be is not an append of ours
+/// that never finished, and stays refused.
+#[test]
+fn a_tail_longer_than_a_record_is_not_cut_off() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.jsonl");
+    drop(reopen(&path).unwrap());
+    let tail = "x".repeat(1_048_577);
+    std::fs::write(&path, &tail).unwrap();
+    assert_eq!(
+        reopen(&path).err(),
+        Some(JournalOpenError::Unreadable {
+            line: Some(1),
+            problem: "longer than a record may be",
+        })
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), tail);
 }
