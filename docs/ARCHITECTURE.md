@@ -212,7 +212,8 @@ the journal's order (`LifecycleHistory::unsettled_steps`): a step awaiting its
 observation is observed; an unreturned step is recorded indeterminate, because
 the interrupted attempt may have returned it unrecorded; a cleanup that result
 makes due is recorded as not run by recovery, though the attempt may have run it.
-Recovery reads launchd and health through `LaunchdProbe`. Each observation, live
+The bootstrap step (`bootstrap_service`) and recovery reach launchd and health
+only through the injected `Launchctl`; recovery calls no command on it. Each observation, live
 or recovered, means what `LaunchdArtifacts::present` says for that step: the
 runtime directory for staging and pruning, the staging directory for staging
 cleanup, the plist for publication and retirement, and whether launchd has the

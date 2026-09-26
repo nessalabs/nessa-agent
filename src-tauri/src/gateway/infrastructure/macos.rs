@@ -42,20 +42,34 @@ use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
 use staging::{launch_settings, stage_runtime_cached, ValidatedRuntimes};
 
-/// launchd and the loopback health endpoint, as recovery reads them.
-pub(super) trait LaunchdProbe: Send + Sync {
+/// launchd and the loopback health endpoint: what the bootstrap step and
+/// recovery read, and the two commands the bootstrap step runs.
+pub(super) trait Launchctl: Send + Sync {
     fn status(&self, service: &str) -> Result<ServiceStatus, String>;
     fn health(&self, port: u16) -> Option<Health>;
+    /// `launchctl bootstrap <domain> <plist>`, with its raw output.
+    fn bootstrap(&self, domain: &str, plist: &Path) -> std::io::Result<Output>;
+    /// `launchctl bootout <service>`.
+    fn bootout(&self, service: &str) -> Result<(), String>;
 }
 
-pub(super) struct NativeLaunchdProbe;
+pub(super) struct NativeLaunchctl;
 
-impl LaunchdProbe for NativeLaunchdProbe {
+impl Launchctl for NativeLaunchctl {
     fn status(&self, service: &str) -> Result<ServiceStatus, String> {
         service_status(service)
     }
     fn health(&self, port: u16) -> Option<Health> {
         health(port)
+    }
+    fn bootstrap(&self, domain: &str, plist: &Path) -> std::io::Result<Output> {
+        Command::new("/bin/launchctl")
+            .args(["bootstrap", domain])
+            .arg(plist)
+            .output()
+    }
+    fn bootout(&self, service: &str) -> Result<(), String> {
+        launchctl(&["bootout", service])
     }
 }
 
@@ -102,7 +116,7 @@ impl LaunchdArtifacts {
 }
 
 pub(super) struct Launchd {
-    probe: Arc<dyn LaunchdProbe>,
+    launchctl: Arc<dyn Launchctl>,
     validated_runtimes: ValidatedRuntimes,
     disabled_services: Arc<dyn DisabledServiceStatus>,
     configuration: ServiceConfiguration,
@@ -167,12 +181,12 @@ fn recovery_probe_port(
 impl Launchd {
     pub(super) fn new(
         disabled_services: Arc<dyn DisabledServiceStatus>,
-        probe: Arc<dyn LaunchdProbe>,
+        launchctl: Arc<dyn Launchctl>,
         configuration: ServiceConfiguration,
         home: PathBuf,
     ) -> Self {
         Self {
-            probe,
+            launchctl,
             validated_runtimes: ValidatedRuntimes::default(),
             disabled_services,
             configuration,
@@ -234,11 +248,11 @@ impl GatewayHost for Launchd {
             self.configuration.port(),
         );
         let status = self
-            .probe
+            .launchctl
             .status(target.service())
             .map_err(GatewayError::Registration)?;
         let observed =
-            observed_incarnation(target.service(), port, &status, self.probe.health(port));
+            observed_incarnation(target.service(), port, &status, self.launchctl.health(port));
         // Whether the target is present for an attempt closed before any
         // plan: launchd runs it, or the installed plist carries its
         // generation, and it was not the prior.
@@ -601,26 +615,24 @@ fn bootstrap_cleanup_decision(
 
 fn cleanup_bootstrap(
     progress: &dyn GatewayReconciliationProgress,
+    launchctl: &dyn Launchctl,
     cleanup_step: &LifecyclePlanStep,
     service: &str,
     port: u16,
     target: &ReconciliationTarget,
 ) -> Result<(), String> {
+    let observe = || {
+        let status = launchctl.status(service)?;
+        let observed = observed_incarnation(service, port, &status, launchctl.health(port));
+        Ok((status.loaded, observed))
+    };
     cleanup_bootstrap_with(
         progress,
         cleanup_step,
         target,
-        || {
-            let status = service_status(service)?;
-            let observed = observed_incarnation(service, port, &status, health(port));
-            Ok((status.loaded, observed))
-        },
-        || launchctl(&["bootout", service]),
-        || {
-            let status = service_status(service)?;
-            let observed = observed_incarnation(service, port, &status, health(port));
-            Ok((status.loaded, observed))
-        },
+        observe,
+        || launchctl.bootout(service),
+        observe,
     )
 }
 
@@ -1015,6 +1027,112 @@ fn bootstrap_cleanup(service: &str) -> Result<LifecyclePlanStep, String> {
         LifecycleEffectPredicate::PrimaryNotAccepted,
     )
     .map_err(|error| error.to_string())
+}
+
+/// What one bootstrap step needs to know about its registration.
+struct BootstrapRequest<'a> {
+    domain: &'a str,
+    label: &'a str,
+    service: &'a str,
+    plist: &'a Path,
+    port: u16,
+    target: &'a ReconciliationTarget,
+}
+
+/// Bootstraps the published definition as one journaled plan: its result and
+/// observation are recorded, and a bootout it owes runs only once the journal
+/// holds a refused result. Every launchd call goes through `launchctl`.
+fn bootstrap_service(
+    progress: &dyn GatewayReconciliationProgress,
+    launchctl: &dyn Launchctl,
+    disabled_services: &dyn DisabledServiceStatus,
+    request: BootstrapRequest<'_>,
+) -> Result<(), RegisterFailure> {
+    let BootstrapRequest {
+        domain,
+        label,
+        service,
+        plist,
+        port,
+        target,
+    } = request;
+    let bootstrap_step = LifecyclePlanStep::new(
+        "primary".into(),
+        LifecycleEffect::BootstrapService {
+            target: target.clone(),
+        },
+        LifecycleEffectPredicate::Always,
+    )
+    .map_err(|error| error.to_string())?;
+    let bootstrap_cleanup = bootstrap_cleanup(service)?;
+    progress
+        .effect_planned(
+            "bootstrap-service",
+            &bootstrap_step,
+            std::slice::from_ref(&bootstrap_cleanup),
+        )
+        .map_err(RegisterFailure::Audit)?;
+    let bootstrap = run_bootstrap(progress, || launchctl.bootstrap(domain, plist))
+        .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
+        .and_then(bootstrap_result);
+    let bootstrap_completion = match &bootstrap {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
+    };
+    if let Err(audit) = progress.effect_completed(
+        "bootstrap-service",
+        bootstrap_step.id(),
+        &bootstrap_completion,
+    ) {
+        return Err(audit_after_physical(audit, &bootstrap));
+    }
+    let status_after_bootstrap = launchctl.status(service)?;
+    let running_after_bootstrap = launchctl.health(port);
+    if let Err(audit) = progress.physical_observed(
+        &LifecycleObservationSource::Effect {
+            plan_id: "bootstrap-service".into(),
+            step_id: "primary".into(),
+        },
+        observed_incarnation(
+            service,
+            port,
+            &status_after_bootstrap,
+            running_after_bootstrap,
+        ),
+        status_after_bootstrap.loaded,
+    ) {
+        return Err(audit_after_physical(audit, &bootstrap));
+    }
+    // A bootstrap launchd refused owes its bootout, recorded before the
+    // failure is reported; the cleanup refuses to touch a replacement.
+    if bootstrap_cleanup
+        .predicate()
+        .is_due(Some(&bootstrap_completion), None)
+    {
+        cleanup_bootstrap(
+            progress,
+            launchctl,
+            &bootstrap_cleanup,
+            service,
+            port,
+            target,
+        )
+        .map_err(|error| {
+            let refused = bootstrap
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            format!("{refused}; predeclared bootstrap cleanup: {error}")
+        })?;
+    }
+    finish_bootstrap(
+        bootstrap,
+        || launchctl.status(service).map(|status| status.loaded),
+        || disabled_services.is_disabled(domain, label),
+    )?;
+    bootstrap_succeeded(progress);
+    Ok(())
 }
 
 fn register(
@@ -1452,81 +1570,19 @@ fn register(
                 ))
             },
         )?;
-        let bootstrap_step = LifecyclePlanStep::new(
-            "primary".into(),
-            LifecycleEffect::BootstrapService {
-                target: target.clone(),
-            },
-            LifecycleEffectPredicate::Always,
-        )
-        .map_err(|error| error.to_string())?;
-        let bootstrap_cleanup = bootstrap_cleanup(&service)?;
-        progress
-            .effect_planned(
-                "bootstrap-service",
-                &bootstrap_step,
-                std::slice::from_ref(&bootstrap_cleanup),
-            )
-            .map_err(RegisterFailure::Audit)?;
-        let bootstrap = run_bootstrap(progress, || {
-            Command::new("/bin/launchctl")
-                .args(["bootstrap", &domain])
-                .arg(&path)
-                .output()
-        })
-        .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
-        .and_then(bootstrap_result);
-        let bootstrap_completion = match &bootstrap {
-            Ok(()) => LifecycleCommandResult::Accepted,
-            Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
-        };
-        if let Err(audit) = progress.effect_completed(
-            "bootstrap-service",
-            bootstrap_step.id(),
-            &bootstrap_completion,
-        ) {
-            return Err(audit_after_physical(audit, &bootstrap));
-        }
-        let status_after_bootstrap = service_status(&service)?;
-        let running_after_bootstrap = health(port);
-        if let Err(audit) = progress.physical_observed(
-            &LifecycleObservationSource::Effect {
-                plan_id: "bootstrap-service".into(),
-                step_id: "primary".into(),
-            },
-            observed_incarnation(
-                &service,
+        bootstrap_service(
+            progress,
+            host.launchctl.as_ref(),
+            host.disabled_services.as_ref(),
+            BootstrapRequest {
+                domain: &domain,
+                label: &label,
+                service: &service,
+                plist: &path,
                 port,
-                &status_after_bootstrap,
-                running_after_bootstrap,
-            ),
-            status_after_bootstrap.loaded,
-        ) {
-            return Err(audit_after_physical(audit, &bootstrap));
-        }
-        // A bootstrap launchd refused owes its bootout, recorded before the
-        // failure is reported; the cleanup refuses to touch a replacement.
-        if bootstrap_cleanup
-            .predicate()
-            .is_due(Some(&bootstrap_completion), None)
-        {
-            cleanup_bootstrap(progress, &bootstrap_cleanup, &service, port, &target).map_err(
-                |error| {
-                    let refused = bootstrap
-                        .as_ref()
-                        .err()
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
-                    format!("{refused}; predeclared bootstrap cleanup: {error}")
-                },
-            )?;
-        }
-        finish_bootstrap(
-            bootstrap,
-            || service_status(&service).map(|status| status.loaded),
-            || host.disabled_services.is_disabled(&domain, &label),
+                target: &target,
+            },
         )?;
-        bootstrap_succeeded(progress);
         let readiness_step = LifecyclePlanStep::new(
             "primary".into(),
             LifecycleEffect::AdoptReadyIncarnation {
@@ -3207,27 +3263,49 @@ mod recovery_tests {
         running_fingerprint: Option<String>,
     }
 
-    /// launchd and health as a scenario sets them; recovery runs no command.
-    struct FakeProbe {
+    /// launchd and health as a test sets them. A command is allowed only
+    /// where the test scripts one, so recovery running any command panics.
+    struct FakeLaunchctl {
         target: ReconciliationTarget,
+        state: Mutex<FakeState>,
+        /// The exit code `bootstrap` returns, and the state it leaves.
+        bootstrap: Option<(i32, FakeState)>,
+        bootouts: Mutex<usize>,
+    }
+
+    #[derive(Clone, Default)]
+    struct FakeState {
         loaded: bool,
         running: Option<u32>,
         running_fingerprint: Option<String>,
     }
 
-    impl LaunchdProbe for FakeProbe {
+    impl FakeLaunchctl {
+        fn new(target: &ReconciliationTarget, state: FakeState) -> Self {
+            Self {
+                target: target.clone(),
+                state: Mutex::new(state),
+                bootstrap: None,
+                bootouts: Mutex::new(0),
+            }
+        }
+    }
+
+    impl Launchctl for FakeLaunchctl {
         fn status(&self, _: &str) -> Result<ServiceStatus, String> {
+            let state = self.state.lock().unwrap();
             Ok(ServiceStatus {
-                loaded: self.loaded,
-                pid: self.running,
+                loaded: state.loaded,
+                pid: state.running,
                 process_identity_known: true,
                 last_exit: startup::LastExit::Unknown,
             })
         }
         fn health(&self, _: u16) -> Option<Health> {
-            self.running.map(|pid| {
+            let state = self.state.lock().unwrap();
+            state.running.map(|pid| {
                 Health::Managed(ManagedRuntime {
-                    fingerprint: self
+                    fingerprint: state
                         .running_fingerprint
                         .clone()
                         .unwrap_or_else(|| self.target.runtime_fingerprint().into()),
@@ -3236,6 +3314,22 @@ mod recovery_tests {
                     pid,
                 })
             })
+        }
+        fn bootstrap(&self, _: &str, _: &Path) -> std::io::Result<Output> {
+            use std::os::unix::process::ExitStatusExt;
+            let (code, after) = self.bootstrap.clone().expect("no bootstrap was scripted");
+            *self.state.lock().unwrap() = after;
+            Ok(Output {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: Vec::new(),
+                stderr: b"Bootstrap failed: 5: Input/output error".to_vec(),
+            })
+        }
+        fn bootout(&self, _: &str) -> Result<(), String> {
+            assert!(self.bootstrap.is_some(), "recovery runs no command");
+            *self.bootouts.lock().unwrap() += 1;
+            *self.state.lock().unwrap() = FakeState::default();
+            Ok(())
         }
     }
 
@@ -3412,12 +3506,14 @@ mod recovery_tests {
             .unwrap();
             let host = Launchd::new(
                 Arc::new(LaunchctlDisabledServiceStatus),
-                Arc::new(FakeProbe {
-                    target: self.target.clone(),
-                    loaded: self.loaded,
-                    running: self.running,
-                    running_fingerprint: self.running_fingerprint.clone(),
-                }),
+                Arc::new(FakeLaunchctl::new(
+                    &self.target,
+                    FakeState {
+                        loaded: self.loaded,
+                        running: self.running,
+                        running_fingerprint: self.running_fingerprint.clone(),
+                    },
+                )),
                 configuration,
                 self.home.path().to_path_buf(),
             );
@@ -3890,6 +3986,263 @@ mod recovery_tests {
                     observed("primary", true),
                 ],
                 "{row}"
+            );
+        }
+    }
+
+    /// Registration progress over a journal applying the domain's rules; it
+    /// can refuse one delivery to model a journal write that failed.
+    struct JournalProgress {
+        journal: DomainJournal,
+        target: ReconciliationTarget,
+        refuse: Option<&'static str>,
+    }
+
+    impl JournalProgress {
+        fn new(target: &ReconciliationTarget, refuse: Option<&'static str>) -> Self {
+            let record = LifecycleRecord::new(
+                target.service().into(),
+                correlation(2),
+                0,
+                LifecycleRecordPayload::Intent {
+                    request_correlation: correlation(1),
+                    cause: ReconciliationCause::Startup,
+                    initiator: ReconciliationInitiator::DesktopHost,
+                    target: target.clone(),
+                    before: None,
+                },
+            )
+            .unwrap();
+            Self {
+                journal: DomainJournal {
+                    namespace: target.service().into(),
+                    history: Mutex::new(LifecycleHistory::restore(&[record]).unwrap()),
+                    written: Mutex::new(Vec::new()),
+                },
+                target: target.clone(),
+                refuse,
+            }
+        }
+
+        fn refused(&self, what: &str) -> Result<(), GatewayError> {
+            match self.refuse {
+                Some(refused) if refused == what => Err(GatewayError::Registration(format!(
+                    "journal refused {what}"
+                ))),
+                _ => Ok(()),
+            }
+        }
+
+        fn written(&self) -> Vec<String> {
+            self.journal
+                .written
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|payload| match payload {
+                    LifecycleRecordPayload::EffectPlan { plan_id, .. } => format!("plan:{plan_id}"),
+                    LifecycleRecordPayload::EffectCompletion {
+                        step_id, result, ..
+                    } => format!(
+                        "{step_id}:{}",
+                        match result {
+                            LifecycleCommandResult::Accepted => "accepted",
+                            LifecycleCommandResult::Rejected(_) => "rejected",
+                            LifecycleCommandResult::Failed(_) => "failed",
+                            LifecycleCommandResult::Indeterminate(_) => "indeterminate",
+                        }
+                    ),
+                    LifecycleRecordPayload::Observation { source, state } => format!(
+                        "observed:{}:{}",
+                        match source {
+                            LifecycleObservationSource::Effect { step_id, .. } => step_id.as_str(),
+                            LifecycleObservationSource::Intent => "intent",
+                        },
+                        state.target_artifact_present()
+                    ),
+                    other => format!("{other:?}"),
+                })
+                .collect()
+        }
+
+        fn settled(&self) -> bool {
+            self.journal
+                .history
+                .lock()
+                .unwrap()
+                .unsettled_steps()
+                .is_empty()
+        }
+    }
+
+    impl GatewayReconciliationProgress for JournalProgress {
+        fn readiness_invalidated(&self) {}
+        fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            unreachable!("the intent is already journaled")
+        }
+        fn history_observed(&self, _: ReconciliationHistoryFact) {}
+        fn effect_planned(
+            &self,
+            plan_id: &str,
+            primary: &LifecyclePlanStep,
+            cleanup: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.journal.append(LifecycleRecordPayload::EffectPlan {
+                plan_id: plan_id.into(),
+                expected_before: None,
+                target: self.target.clone(),
+                primary: primary.clone(),
+                cleanup: cleanup.to_vec(),
+            })
+        }
+        fn effect_completed(
+            &self,
+            plan_id: &str,
+            step_id: &str,
+            result: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.refused(&format!("complete:{step_id}"))?;
+            self.journal.effect_completion(plan_id, step_id, result)
+        }
+        fn physical_observed(
+            &self,
+            source: &LifecycleObservationSource,
+            incarnation: Option<ReconciliationIncarnation>,
+            target_artifact_present: bool,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            if let LifecycleObservationSource::Effect { step_id, .. } = source {
+                self.refused(&format!("observe:{step_id}"))?;
+            }
+            let version = self
+                .journal
+                .history
+                .lock()
+                .unwrap()
+                .latest_observation()
+                .map_or(1, |prior| prior.version() + 1);
+            let observation =
+                LifecycleObservation::new(version, incarnation, target_artifact_present);
+            self.journal.observation(source, &observation)?;
+            Ok(observation)
+        }
+    }
+
+    fn bootstrap_with(
+        exit: i32,
+        after: FakeState,
+        refuse: Option<&'static str>,
+    ) -> (Result<(), RegisterFailure>, JournalProgress, usize) {
+        let scenario = Scenario::new(None);
+        let mut launchctl = FakeLaunchctl::new(&scenario.target, FakeState::default());
+        launchctl.bootstrap = Some((exit, after));
+        let progress = JournalProgress::new(&scenario.target, refuse);
+        let plist = scenario.home.path().join("gateway.plist");
+        let result = bootstrap_service(
+            &progress,
+            &launchctl,
+            &NeverDisabled,
+            BootstrapRequest {
+                domain: "gui/501",
+                label: &scenario.label,
+                service: scenario.target.service(),
+                plist: &plist,
+                port: 7398,
+                target: &scenario.target,
+            },
+        );
+        let bootouts = *launchctl.bootouts.lock().unwrap();
+        (result, progress, bootouts)
+    }
+
+    struct NeverDisabled;
+
+    impl DisabledServiceStatus for NeverDisabled {
+        fn is_disabled(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    fn running_target() -> FakeState {
+        FakeState {
+            loaded: true,
+            running: Some(42),
+            running_fingerprint: None,
+        }
+    }
+
+    #[test]
+    fn a_bootstrap_that_succeeds_leaves_nothing_owed() {
+        let (result, progress, bootouts) = bootstrap_with(0, running_target(), None);
+        assert!(result.is_ok());
+        assert_eq!(bootouts, 0);
+        assert_eq!(
+            progress.written(),
+            [
+                "plan:bootstrap-service",
+                "primary:accepted",
+                "observed:primary:true"
+            ]
+        );
+        assert!(progress.settled());
+    }
+
+    #[test]
+    fn a_refused_bootstrap_records_its_owed_bootout_before_failing() {
+        // Nothing loaded: the bootout has nothing to stop and says so.
+        let (result, progress, bootouts) = bootstrap_with(5, FakeState::default(), None);
+        assert!(matches!(result, Err(RegisterFailure::Physical(_))));
+        assert_eq!(bootouts, 0);
+        assert_eq!(
+            progress.written(),
+            [
+                "plan:bootstrap-service",
+                "primary:rejected",
+                "observed:primary:false",
+                "unload-bootstrapped-service:indeterminate",
+                "observed:unload-bootstrapped-service:false",
+            ]
+        );
+        assert!(progress.settled());
+
+        // launchd refused, yet the exact target runs: the owed bootout stops
+        // it and is recorded.
+        let (result, progress, bootouts) = bootstrap_with(5, running_target(), None);
+        assert!(result.is_err());
+        assert_eq!(bootouts, 1);
+        assert_eq!(
+            progress.written()[3..],
+            [
+                "unload-bootstrapped-service:accepted",
+                "observed:unload-bootstrapped-service:false",
+            ]
+        );
+        assert!(progress.settled());
+
+        // Another runtime owns the label: the bootout refuses it and records
+        // nothing, leaving the owed step for recovery.
+        let replacement = FakeState {
+            running_fingerprint: Some("c".repeat(64)),
+            ..running_target()
+        };
+        let (result, progress, bootouts) = bootstrap_with(5, replacement, None);
+        assert!(result.is_err());
+        assert_eq!(bootouts, 0);
+        assert_eq!(progress.written().len(), 3);
+        assert!(!progress.settled());
+    }
+
+    #[test]
+    fn a_bootstrap_whose_record_fails_is_not_undone() {
+        for refuse in ["complete:primary", "observe:primary"] {
+            let (result, progress, bootouts) = bootstrap_with(0, running_target(), Some(refuse));
+            assert!(matches!(result, Err(RegisterFailure::Audit(_))), "{refuse}");
+            assert_eq!(bootouts, 0, "{refuse}");
+            assert!(
+                !progress
+                    .written()
+                    .iter()
+                    .any(|record| record.starts_with("unload-bootstrapped-service")),
+                "{refuse}"
             );
         }
     }
