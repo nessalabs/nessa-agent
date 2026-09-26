@@ -1,5 +1,6 @@
 import { LINUX_RUNTIME_TARGET } from "./prepare-linux.mjs"
 import { releaseBundles } from "./release-assets.mjs"
+import { uncheckedBundles } from "./verify-linux-bundle.mjs"
 import { desktopStageEnvironment, resolveDesktopStage } from "./stage.mjs"
 
 function optionValue(args, longName, shortName) {
@@ -70,6 +71,19 @@ export function runDesktopBuild({ args, environment, platform, spawn, now = Date
   const bundles =
     parsed.bundles ??
     (platform === "linux" ? releaseBundles(target ?? LINUX_RUNTIME_TARGET) : undefined)
+  // A Linux build is verified, so it may make only bundles the verifier
+  // checks; anything else is refused before minutes of compiling, not after.
+  if (platform === "linux") {
+    if (args.includes("--no-bundle"))
+      throw new Error(
+        "A Linux build is verified, so it must make a bundle: drop --no-bundle",
+      )
+    const unchecked = uncheckedBundles(bundles)
+    if (unchecked.length > 0)
+      throw new Error(
+        `No Linux check verifies the ${unchecked.join(", ")} bundle; build --bundles deb`,
+      )
+  }
   const stage = resolveDesktopStage({
     environment,
     fallback: "prod",

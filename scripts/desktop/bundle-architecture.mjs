@@ -28,19 +28,14 @@ export function linuxBundles(productName, version, architecture) {
   }
 }
 
-/** The bundles a build makes: those named with `--bundles`, else the config's. */
-export function selectedBundles(selected, configured) {
-  return selected
+/** Whether the selected or configured bundle set includes `bundle`. */
+export function includesBundle(selected, configured, bundle) {
+  const targets = selected
     ? selected.split(",")
     : configured === "all"
       ? ["all"]
       : Array.isArray(configured)
         ? configured
         : []
-}
-
-/** Whether the selected or configured bundle set includes `bundle`. */
-export function includesBundle(selected, configured, bundle) {
-  const targets = selectedBundles(selected, configured)
   return targets.includes("all") || targets.includes(bundle)
 }

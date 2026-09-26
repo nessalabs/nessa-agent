@@ -278,19 +278,37 @@ test("a Linux build with no bundles named builds what a Linux release builds", (
   const bundles = calls[0].args.indexOf("--bundles")
   assert.equal(calls[0].args[bundles + 1], releaseBundles("x86_64-unknown-linux-gnu"))
   assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
-  // Named bundles are the caller's, on Linux as anywhere.
+  // Anything the verifier cannot check is refused before the build starts.
+  for (const args of [["--bundles", "rpm"], ["--bundles", "all"], ["--no-bundle"]]) {
+    const refused = []
+    assert.throws(
+      () =>
+        runDesktopBuild({
+          args,
+          environment: {},
+          platform: "linux",
+          spawn(command, spawnArgs) {
+            refused.push(spawnArgs)
+            return { status: 0 }
+          },
+        }),
+      /No Linux check verifies|--no-bundle/,
+    )
+    assert.deepEqual(refused, [], `${args.join(" ")} started a build`)
+  }
+  // Named bundles the verifier checks are the caller's.
   const named = []
   runDesktopBuild({
-    args: ["--bundles", "rpm"],
+    args: ["--bundles", "deb,appimage"],
     environment: {},
     platform: "linux",
-    spawn(command, args, options) {
-      named.push({ command, args, options })
+    spawn(command, spawnArgs, options) {
+      named.push({ command, args: spawnArgs, options })
       return { status: 0 }
     },
   })
   assert.equal(named[0].args.filter((argument) => argument === "--bundles").length, 1)
-  assert.equal(named[1].options.env.NESSA_BUILD_BUNDLES, "rpm")
+  assert.equal(named[1].options.env.NESSA_BUILD_BUNDLES, "deb,appimage")
 })
 
 test("the verifier is told when the build began", () => {

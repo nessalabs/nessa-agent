@@ -147,13 +147,12 @@ test("the package checked is the one this build wrote, whatever its version", ()
   )
 })
 
-test("a build is refused when it made a bundle no Linux check opens", () => {
-  assert.deepEqual(uncheckedBundles("deb", "all"), [])
-  assert.deepEqual(uncheckedBundles("deb,appimage", "all"), [])
-  assert.deepEqual(uncheckedBundles("deb,rpm", "all"), ["rpm"])
-  // With nothing named, the config's "all" includes rpm.
-  assert.deepEqual(uncheckedBundles(undefined, "all"), ["all"])
-  assert.deepEqual(uncheckedBundles(undefined, ["deb"]), [])
+test("a build is refused when it would make a bundle no Linux check opens", () => {
+  assert.deepEqual(uncheckedBundles("deb"), [])
+  assert.deepEqual(uncheckedBundles("deb,appimage"), [])
+  assert.deepEqual(uncheckedBundles("deb,rpm"), ["rpm"])
+  // The config's "all" includes rpm.
+  assert.deepEqual(uncheckedBundles("all"), ["all"])
 })
 
 test("the package is found in the bundle's own directory for the pattern", () => {

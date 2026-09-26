@@ -13,12 +13,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:f
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import {
-  includesBundle,
-  linuxBundleArchitecture,
-  linuxBundles,
-  selectedBundles,
-} from "./bundle-architecture.mjs"
+import { linuxBundleArchitecture, linuxBundles } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
 
 /** What an installed `.deb` cannot run without, stated here rather than read
@@ -118,13 +113,11 @@ export function packageBuiltIn(bundle, pattern, startedAt) {
 /** The Linux bundles this script can check. */
 const CHECKED_BUNDLES = ["deb", "appimage"]
 
-/** Each selected bundle no check here covers. A build is not "verified" by a
- * run that looked at none of what it made: "all" includes rpm, which nothing
- * here opens. */
-export function uncheckedBundles(selected, configured) {
-  return selectedBundles(selected, configured).filter(
-    (bundle) => !CHECKED_BUNDLES.includes(bundle),
-  )
+/** Each of a build's `--bundles` no check here covers. A build is not
+ * "verified" by a run that looked at none of what it made, so the build
+ * command asks this before it starts, and refuses. */
+export function uncheckedBundles(bundles) {
+  return bundles.split(",").filter((bundle) => !CHECKED_BUNDLES.includes(bundle))
 }
 
 function withScratch(action) {
@@ -180,27 +173,25 @@ function main() {
     ? resolve(metadata.target_directory, target, "release/bundle")
     : resolve(metadata.target_directory, "release/bundle")
   const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json")))
-  // Any version: which package is this build's is decided by when it was
-  // written (`builtPackage`). Run on its own, with no build start, the
-  // directory must hold exactly one.
+  // Only as part of a build: `pnpm app:build` says which bundles it made and
+  // when it began, and which package is this build's is decided by when it
+  // was written (`builtPackage`), whatever its version.
+  const selected = process.env.NESSA_BUILD_BUNDLES
+  const started = process.env.NESSA_BUILD_STARTED
+  if (!selected || !started)
+    throw new Error("Run through `pnpm app:build`, which says what it built and when.")
   const patterns = linuxBundles(
     config.productName,
     "*",
     linuxBundleArchitecture(target, process.arch),
   )
-  const startedAt = Number(process.env.NESSA_BUILD_STARTED ?? 0)
-  const selected = process.env.NESSA_BUILD_BUNDLES
-  const unchecked = uncheckedBundles(selected, config.bundle.targets)
-  if (unchecked.length > 0)
-    throw new Error(
-      `No Linux check verifies the ${unchecked.join(", ")} bundle; ` +
-        `build with --bundles deb, or name only bundles this script checks.`,
-    )
   const product = { productName: config.productName }
-  if (includesBundle(selected, config.bundle.targets, "deb"))
-    verifyDeb(packageBuiltIn(bundle, patterns.deb, startedAt), product)
-  if (includesBundle(selected, config.bundle.targets, "appimage"))
-    verifyAppImage(packageBuiltIn(bundle, patterns.appimage, startedAt), product)
+  const verify = { deb: verifyDeb, appimage: verifyAppImage }
+  const unchecked = uncheckedBundles(selected)
+  if (unchecked.length > 0)
+    throw new Error(`No Linux check verifies the ${unchecked.join(", ")} bundle`)
+  for (const kind of selected.split(","))
+    verify[kind](packageBuiltIn(bundle, patterns[kind], Number(started)), product)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()
