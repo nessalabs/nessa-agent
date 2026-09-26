@@ -208,7 +208,7 @@ fn a_file_that_is_not_a_database_is_refused_and_left_as_it_was() {
     drop(file);
     assert!(matches!(
         open(&path, &schema()),
-        Err(OpenError::Database(_))
+        Err(OpenError::Unreadable(_))
     ));
     assert_eq!(std::fs::read(&path).unwrap(), [7; 4096]);
 }
@@ -254,4 +254,44 @@ fn the_file_is_created_private_before_sqlite_opens_it() {
 
 fn rusqlite_connection(path: &std::path::Path) -> nessa_local_database::rusqlite::Connection {
     nessa_local_database::rusqlite::Connection::open(path).unwrap()
+}
+
+#[test]
+fn a_current_file_with_a_damaged_page_is_refused_and_left_as_it_was() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    let mut connection = open(&path, &schema()).unwrap();
+    // Enough rows to give the table pages of its own beyond its root.
+    let rows = connection.transaction().unwrap();
+    for n in 0..200 {
+        rows.execute(
+            "INSERT INTO parents (id) VALUES (?1)",
+            [format!("{n:0>200}")],
+        )
+        .unwrap();
+    }
+    rows.commit().unwrap();
+    let (page_size, root_page): (u32, u32) = connection
+        .query_row(
+            "SELECT (SELECT page_size FROM pragma_page_size),
+                    (SELECT rootpage FROM sqlite_schema WHERE name = 'parents')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(connection);
+    // The header and the schema page stay whole; the table's root does not.
+    let mut bytes = std::fs::read(&path).unwrap();
+    let start = ((root_page - 1) * page_size) as usize;
+    bytes[start..start + page_size as usize].fill(0xA5);
+    std::fs::write(&path, &bytes).unwrap();
+    let refused = open(&path, &schema());
+    assert!(
+        matches!(
+            refused,
+            Err(OpenError::Damaged(_) | OpenError::Unreadable(_))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }

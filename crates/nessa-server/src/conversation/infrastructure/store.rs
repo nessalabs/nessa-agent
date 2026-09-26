@@ -14,7 +14,7 @@ use crate::conversation::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::{
     rusqlite::{self, params, Connection, OptionalExtension, Row, TransactionBehavior},
-    Schema,
+    OpenError, Schema,
 };
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use serde::{Deserialize, Serialize};
@@ -65,17 +65,11 @@ pub struct LocalConversationStore {
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
     /// must be private and owned by this OS user, creating it when absent.
-    pub fn open(path: &Path) -> Result<Self, ConversationError> {
-        let connection = Schema::new(DEFINITION)
-            .and_then(|schema| nessa_local_database::open(path, &schema))
-            .map_err(|error| {
-                tracing::error!(
-                    file = %path.display(),
-                    %error,
-                    "conversation metadata could not be opened"
-                );
-                ConversationError::Metadata
-            })?;
+    /// The opener's own error is returned, because composition decides from
+    /// it whether starting again could help
+    /// (docs/adr/todo/202-versioned-local-datasets.md).
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
+        let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })

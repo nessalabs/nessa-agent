@@ -13,6 +13,7 @@
     "shutdown": 27,
     "runtime": 30,
     "stoppedOnRequest": 31,
-    "usage": 32
+    "usage": 32,
+    "datasetRefused": 33
   }
 }

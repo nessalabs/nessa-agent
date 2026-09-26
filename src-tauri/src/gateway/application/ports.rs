@@ -1167,6 +1167,7 @@ impl GatewayLifecycleRecovery {
         &self.target
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.before.as_ref()
     }

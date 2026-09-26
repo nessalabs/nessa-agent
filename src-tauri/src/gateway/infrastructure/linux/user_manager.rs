@@ -33,6 +33,9 @@ pub(super) struct UnitSnapshot {
     pub drop_in_paths: Vec<String>,
     pub active_state: String,
     pub sub_state: String,
+    /// A job systemd has queued for the unit and not yet finished. An
+    /// inactive unit with one may start at any moment.
+    pub pending_job: bool,
     pub invocation: Option<SystemdInvocationId>,
     pub main_process_id: u32,
     pub service_type: String,
@@ -195,6 +198,11 @@ impl UserManager {
             sub_state: unit_proxy
                 .get_property("SubState")
                 .map_err(|error| error.to_string())?,
+            pending_job: unit_proxy
+                .get_property::<(u32, OwnedObjectPath)>("Job")
+                .map_err(|error| error.to_string())?
+                .0
+                != 0,
             invocation: before.invocation,
             main_process_id: before.main_process_id,
             service_type: service_proxy

@@ -172,6 +172,21 @@ impl Drop for Journal {
         }
     }
 }
+/// Why a record was not appended. Either way the caller is told
+/// `Unavailable`; open alone needs the difference, because a refusal is the
+/// same on every start and an I/O failure may not be.
+enum CommitError {
+    /// The same state refuses the same record every time: illegal, too long,
+    /// or more than the journal has room for.
+    Refused(&'static str),
+    /// Reading the journal's length, or writing and syncing the record, failed.
+    Io,
+}
+impl From<CommitError> for AccessError {
+    fn from(_: CommitError) -> Self {
+        AccessError::Unavailable
+    }
+}
 struct State {
     sessions: BTreeMap<String, BrowserSessionState>,
     login_replacements: BTreeMap<String, Option<(String, BrowserSessionState)>>,
@@ -181,6 +196,56 @@ struct State {
     healthy: bool,
 }
 
+/// Why the journal was not opened.
+///
+/// What the file holds is told apart from what could clear, because opening
+/// the same bytes again refuses them again
+/// (docs/adr/todo/202-versioned-local-datasets.md).
+#[derive(Debug, PartialEq, Eq)]
+pub enum JournalOpenError {
+    /// The journal holds something replay refuses: a file or line over its
+    /// bound, JSON that does not parse, or a record that is not a legal next
+    /// step. A last line without its newline is not one of these: it is an
+    /// append that never finished, and is cut off at open. `line` counts from 1; `None` is
+    /// the file as a whole.
+    Unreadable {
+        line: Option<u64>,
+        problem: &'static str,
+    },
+    /// Replay succeeded, but the record retiring sessions dated in the future
+    /// could not be appended for a reason the same journal repeats: it has no
+    /// room left, or the record is not one it can take.
+    SweepRefused { problem: &'static str },
+    /// The file could not be opened privately, locked, read, synced, or
+    /// written: a failure that can clear.
+    Unavailable,
+}
+impl std::fmt::Display for JournalOpenError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable {
+                line: Some(line),
+                problem,
+            } => write!(output, "browser session journal line {line}: {problem}"),
+            Self::Unreadable {
+                line: None,
+                problem,
+            } => write!(output, "browser session journal: {problem}"),
+            Self::SweepRefused { problem } => write!(
+                output,
+                "browser session journal cannot record retiring sessions dated in the future: {problem}"
+            ),
+            Self::Unavailable => output.write_str("browser session journal is unavailable"),
+        }
+    }
+}
+impl std::error::Error for JournalOpenError {}
+impl From<AccessError> for JournalOpenError {
+    fn from(_: AccessError) -> Self {
+        Self::Unavailable
+    }
+}
+
 /// Private append-only session journal. Each acknowledged write includes its audit
 /// evidence and is synced before publication. A write failure fails closed until restart.
 pub struct PersistentSessions(Arc<Mutex<State>>, Arc<Semaphore>);
@@ -188,25 +253,33 @@ impl PersistentSessions {
     /// Open the journal and reconcile what it claims about time with `now`.
     ///
     /// `now` is read from the same wall clock the store's callers use.
-    pub fn open(path: &Path, now: u64) -> Result<Self, AccessError> {
+    pub fn open(path: &Path, now: u64) -> Result<Self, JournalOpenError> {
         Self::open_bounded(path, MAX_JOURNAL_BYTES, now)
     }
 
-    fn open_bounded(path: &Path, max_journal_bytes: u64, now: u64) -> Result<Self, AccessError> {
+    fn open_bounded(
+        path: &Path,
+        max_journal_bytes: u64,
+        now: u64,
+    ) -> Result<Self, JournalOpenError> {
+        use JournalOpenError::{Unavailable, Unreadable};
         if max_journal_bytes == 0 {
-            return Err(AccessError::Unavailable);
+            return Err(Unavailable);
         }
-        let file = open(path, OpenMode::OpenOrCreate).map_err(|_| AccessError::Unavailable)?;
-        file.try_lock().map_err(|_| AccessError::Unavailable)?;
+        let file = open(path, OpenMode::OpenOrCreate).map_err(|_| Unavailable)?;
+        file.try_lock().map_err(|_| Unavailable)?;
         // Owned from the instant the lock is taken, so every path out of this
         // function — including the refusals below — releases it.
         let mut file = Journal(file);
-        if file.metadata().map_err(|_| AccessError::Unavailable)?.len() > max_journal_bytes {
-            return Err(AccessError::Unavailable);
+        if file.metadata().map_err(|_| Unavailable)?.len() > max_journal_bytes {
+            return Err(Unreadable {
+                line: None,
+                problem: "larger than a journal may grow",
+            });
         }
-        file.sync_all().map_err(|_| AccessError::Unavailable)?;
-        nessa_local_storage::sync_directory(path.parent().ok_or(AccessError::Unavailable)?)
-            .map_err(|_| AccessError::Unavailable)?;
+        file.sync_all().map_err(|_| Unavailable)?;
+        nessa_local_storage::sync_directory(path.parent().ok_or(Unavailable)?)
+            .map_err(|_| Unavailable)?;
         let mut state = State {
             sessions: BTreeMap::new(),
             login_replacements: BTreeMap::new(),
@@ -217,24 +290,59 @@ impl PersistentSessions {
         };
         let mut reader = BufReader::new(&mut *file);
         let mut line = Vec::new();
+        let mut number = 0_u64;
+        // Bytes up to the end of the last complete line.
+        let mut complete = 0_u64;
+        let mut torn = None;
         loop {
             line.clear();
+            number += 1;
+            let unreadable = |problem| Unreadable {
+                line: Some(number),
+                problem,
+            };
             // A record is bounded before allocating untrusted input.
             let count = std::io::Read::take(&mut reader, 1_048_577)
                 .read_until(b'\n', &mut line)
-                .map_err(|_| AccessError::Unavailable)?;
+                .map_err(|_| Unavailable)?;
             if count == 0 {
                 break;
             }
-            if count > 1_048_576 || line.last() != Some(&b'\n') {
-                return Err(AccessError::Unavailable);
+            if count > 1_048_576 {
+                return Err(unreadable("longer than a record may be"));
             }
+            if line.last() != Some(&b'\n') {
+                // Only the last line can end without one, and only when its
+                // append never finished. A record is acknowledged after its
+                // newline is synced, so these bytes answered nobody, and they
+                // are cut off rather than refusing every later start
+                // (`an_append_that_never_finished_is_cut_off_and_the_rest_replays`).
+                torn = Some(count);
+                break;
+            }
+            complete += count as u64;
             let record: StoredRecord =
-                serde_json::from_slice(&line).map_err(|_| AccessError::Unavailable)?;
-            state.apply(&record.try_into()?)?;
+                serde_json::from_slice(&line).map_err(|_| unreadable("is not a journal record"))?;
+            let record: Record = record
+                .try_into()
+                .map_err(|_| unreadable("holds a value that is not valid"))?;
+            state
+                .apply(&record)
+                .map_err(|_| unreadable("is not a legal next step"))?;
         }
-        file.seek(SeekFrom::End(0))
-            .map_err(|_| AccessError::Unavailable)?;
+        drop(reader);
+        if let Some(bytes) = torn {
+            // Under the lock this open holds. A failure here leaves the tail
+            // for the next open to cut again.
+            file.set_len(complete).map_err(|_| Unavailable)?;
+            file.sync_all().map_err(|_| Unavailable)?;
+            tracing::warn!(
+                line = number,
+                bytes,
+                "browser session journal ended in an append that never finished; cut it off"
+            );
+        }
+        file.seek(SeekFrom::End(0)).map_err(|_| Unavailable)?;
         state.file = Some(file);
         // A record's own instant is untrusted input: nothing in the file
         // constrains it, so a forged or clock-damaged `Renewed` chain can claim
@@ -259,7 +367,14 @@ impl PersistentSessions {
                 initiator: None,
             })
             .collect();
-        state.commit(now, swept)?;
+        // Retiring them is a record like any other. One the journal refuses —
+        // most likely because it has no room left — is refused again on
+        // every start, so it is not something the next start could clear
+        // (`a_journal_at_its_bound_cannot_retire_implausible_state_and_fails_closed`).
+        state.commit(now, swept).map_err(|error| match error {
+            CommitError::Refused(problem) => JournalOpenError::SweepRefused { problem },
+            CommitError::Io => Unavailable,
+        })?;
         Ok(Self(
             Arc::new(Mutex::new(state)),
             Arc::new(Semaphore::new(1)),
@@ -479,7 +594,7 @@ impl State {
         self.sequence = record.sequence;
         Ok(())
     }
-    fn commit(&mut self, at: u64, changes: Vec<Change>) -> Result<(), AccessError> {
+    fn commit(&mut self, at: u64, changes: Vec<Change>) -> Result<(), CommitError> {
         if changes.is_empty() {
             return Ok(());
         }
@@ -497,30 +612,29 @@ impl State {
             max_journal_bytes: self.max_journal_bytes,
             healthy: true,
         };
-        proposed.apply(&record)?;
+        proposed
+            .apply(&record)
+            .map_err(|_| CommitError::Refused("it is not a legal next step"))?;
         let mut bytes = serde_json::to_vec(&StoredRecord::from(&record))
-            .map_err(|_| AccessError::Unavailable)?;
+            .map_err(|_| CommitError::Refused("it cannot be written as a record"))?;
         bytes.push(b'\n');
         if bytes.len() > 1_048_576 {
-            return Err(AccessError::Unavailable);
+            return Err(CommitError::Refused("it is longer than a record may be"));
         }
         if let Some(file) = &mut self.file {
-            let projected = file
-                .metadata()
-                .map_err(|_| AccessError::Unavailable)?
+            file.metadata()
+                .map_err(|_| CommitError::Io)?
                 .len()
-                .checked_add(u64::try_from(bytes.len()).map_err(|_| AccessError::Unavailable)?)
-                .ok_or(AccessError::Unavailable)?;
-            if projected > self.max_journal_bytes {
-                return Err(AccessError::Unavailable);
-            }
+                .checked_add(bytes.len() as u64)
+                .filter(|projected| *projected <= self.max_journal_bytes)
+                .ok_or(CommitError::Refused("the journal has no room left for it"))?;
             if file
                 .write_all(&bytes)
                 .and_then(|()| file.sync_all())
                 .is_err()
             {
                 self.healthy = false;
-                return Err(AccessError::Unavailable);
+                return Err(CommitError::Io);
             }
         }
         self.sessions = proposed.sessions;
@@ -616,7 +730,7 @@ impl SessionStore for PersistentSessions {
                 RemovalReason::IdentityMismatch => Reason::IdentityMismatch,
                 RemovalReason::InvalidCredential => Reason::InvalidCredential,
             };
-            state.commit(
+            Ok(state.commit(
                 now,
                 vec![Change {
                     id,
@@ -625,7 +739,7 @@ impl SessionStore for PersistentSessions {
                     reason,
                     initiator,
                 }],
-            )
+            )?)
         })
     }
     fn renew<'a>(
@@ -701,7 +815,7 @@ impl SessionStore for PersistentSessions {
                     }),
                 }
             }
-            state.commit(now, changes)
+            Ok(state.commit(now, changes)?)
         })
     }
 }

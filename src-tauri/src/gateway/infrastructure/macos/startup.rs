@@ -364,6 +364,11 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
             Some("its credential registry is not one this version of Nessa can read.".into())
         }
         "credentialRegistry" => Some("its credential registry could not be read.".into()),
+        // Which store, and what was found, is in the record's message, for the
+        // app log (docs/adr/todo/202-versioned-local-datasets.md).
+        "datasetRefused" => Some(
+            "some of its saved data was written by another version of Nessa, or is damaged.".into(),
+        ),
         "alreadyRunning" => Some("another Nessa is already running for this stage.".into()),
         "portInUse" => Some(format!("port {port} is already in use.")),
         "configuration" => Some("its configuration is not one it can start with.".into()),

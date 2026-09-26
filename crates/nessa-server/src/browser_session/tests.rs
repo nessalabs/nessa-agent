@@ -366,11 +366,13 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     }
     record["changes"][0]["after"]["credential_id"] = json!(" credential");
     std::fs::write(&sessions_path, format!("{record}\n")).unwrap();
-    assert!(PersistentSessions::open(
-        &sessions_path,
-        100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS
-    )
-    .is_err());
+    assert!(matches!(
+        PersistentSessions::open(
+            &sessions_path,
+            100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS
+        ),
+        Err(crate::browser_session::adapters::JournalOpenError::Unreadable { .. })
+    ));
 }
 
 #[tokio::test]

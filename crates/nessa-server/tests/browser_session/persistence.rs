@@ -54,10 +54,13 @@ impl Clock for Authority {
 /// store exercises replay rather than the implausible-state sweep. Tests about
 /// the sweep itself call `PersistentSessions::open` with their own reading.
 const REPLAY_NOW: u64 = 100 + 2 * IDLE_SECONDS;
-fn reopen(path: &std::path::Path) -> Result<PersistentSessions, AccessError> {
+fn reopen(path: &std::path::Path) -> Result<PersistentSessions, JournalOpenError> {
     PersistentSessions::open(path, REPLAY_NOW)
 }
-fn reopen_bounded(path: &std::path::Path, bound: u64) -> Result<PersistentSessions, AccessError> {
+fn reopen_bounded(
+    path: &std::path::Path,
+    bound: u64,
+) -> Result<PersistentSessions, JournalOpenError> {
     PersistentSessions::open_bounded(path, bound, REPLAY_NOW)
 }
 fn credential_id() -> CredentialId {
@@ -117,7 +120,8 @@ async fn renewal_crosses_original_deadline_and_restart_then_logout_is_durable() 
     let path = dir.path().join("sessions.jsonl");
     let id = "a".repeat(64);
     let store = reopen(&path).unwrap();
-    assert!(reopen(&path).is_err());
+    // Held by the store above: a failure that clears when it lets go.
+    assert!(matches!(reopen(&path), Err(JournalOpenError::Unavailable)));
     store
         .insert(id.clone(), session(None).await, None, 100)
         .await
@@ -202,7 +206,10 @@ async fn transitions_cannot_precede_the_session_state_they_replace_live_or_on_re
         .map(|record| format!("{record}\n"))
         .collect::<String>();
     std::fs::write(&path, corrupted).unwrap();
-    assert!(reopen(&path).is_err());
+    assert!(matches!(
+        reopen(&path),
+        Err(JournalOpenError::Unreadable { .. })
+    ));
 }
 
 #[tokio::test]
@@ -567,7 +574,10 @@ async fn replay_rejects_dropping_a_prior_that_was_still_restorable() {
         + "\n";
     std::fs::write(&path, corrupted).unwrap();
 
-    assert!(reopen(&path).is_err());
+    assert!(matches!(
+        reopen(&path),
+        Err(JournalOpenError::Unreadable { .. })
+    ));
 }
 
 #[tokio::test]
@@ -717,7 +727,10 @@ async fn replay_rejects_restoration_that_does_not_match_the_replaced_prior() {
             .join("\n")
             + "\n";
         std::fs::write(&path, corrupted).unwrap();
-        assert!(reopen(&path).is_err());
+        assert!(matches!(
+            reopen(&path),
+            Err(JournalOpenError::Unreadable { .. })
+        ));
     }
 }
 
@@ -766,7 +779,10 @@ async fn replay_rejects_replacing_a_session_with_the_same_id() {
         .join("\n")
         + "\n";
     std::fs::write(&path, corrupted).unwrap();
-    assert!(reopen(&path).is_err());
+    assert!(matches!(
+        reopen(&path),
+        Err(JournalOpenError::Unreadable { .. })
+    ));
 }
 
 #[tokio::test]
@@ -907,7 +923,10 @@ async fn invalid_journal_correlations_fail_closed() {
             _ => record["changes"][0]["after"]["idle_expires_at"] = serde_json::json!(99999999),
         }
         std::fs::write(&path, format!("{record}\n")).unwrap();
-        assert!(reopen(&path).is_err());
+        assert!(matches!(
+            reopen(&path),
+            Err(JournalOpenError::Unreadable { .. })
+        ));
     }
 }
 
@@ -942,7 +961,13 @@ async fn journal_total_byte_bound_is_exact_durable_and_checked_before_replay() {
     let reopened = reopen_bounded(&path, exact_bound).unwrap();
     assert_eq!(reopened.get(id).await.unwrap(), Some(original));
     drop(reopened);
-    assert!(reopen_bounded(&path, exact_bound - 1).is_err());
+    assert_eq!(
+        reopen_bounded(&path, exact_bound - 1).err(),
+        Some(JournalOpenError::Unreadable {
+            line: None,
+            problem: "larger than a journal may grow",
+        })
+    );
 }
 
 #[tokio::test]
@@ -1297,7 +1322,111 @@ async fn a_journal_at_its_bound_cannot_retire_implausible_state_and_fails_closed
     drop(store);
     let exact_bound = std::fs::metadata(&path).unwrap().len();
 
-    assert!(PersistentSessions::open_bounded(&path, exact_bound, 100).is_err());
+    // The same journal refuses the same sweep on every start, so this is
+    // not the retried `Unavailable`.
+    let refused = PersistentSessions::open_bounded(&path, exact_bound, 100).err();
+    assert_eq!(
+        refused,
+        Some(JournalOpenError::SweepRefused {
+            problem: "the journal has no room left for it",
+        })
+    );
+    assert!(matches!(
+        crate::core::RunError::opening_browser_sessions(&path, refused.unwrap()),
+        crate::core::RunError::Dataset(_)
+    ));
     assert_eq!(std::fs::metadata(&path).unwrap().len(), exact_bound);
     assert!(PersistentSessions::open_bounded(&path, exact_bound, excursion).is_ok());
+}
+
+/// Each thing replay refuses says where, and is told apart from a journal
+/// that could not be opened (docs/adr/todo/202-versioned-local-datasets.md).
+#[tokio::test]
+async fn what_replay_refuses_is_unreadable_and_names_its_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.jsonl");
+    let store = reopen(&path).unwrap();
+    store
+        .insert("a".repeat(64), session(None).await, None, 100)
+        .await
+        .unwrap();
+    drop(store);
+    let valid = std::fs::read_to_string(&path).unwrap();
+    for (contents, line, problem) in [
+        (format!("{valid}not json\n"), 2, "is not a journal record"),
+        // The same record twice: its sequence is not the next one.
+        (format!("{valid}{valid}"), 2, "is not a legal next step"),
+    ] {
+        std::fs::write(&path, &contents).unwrap();
+        assert_eq!(
+            reopen(&path).err(),
+            Some(JournalOpenError::Unreadable {
+                line: Some(line),
+                problem,
+            }),
+            "{contents}"
+        );
+        // Refused, never repaired.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+    }
+}
+
+/// Row J2 of ADR 202: an append the process died inside answered nobody, so
+/// open cuts it off, syncs, and replays what came before it. Anything that
+/// follows is appended after the cut.
+#[tokio::test]
+async fn an_append_that_never_finished_is_cut_off_and_the_rest_replays() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.jsonl");
+    let kept = "a".repeat(64);
+    let store = reopen(&path).unwrap();
+    store
+        .insert(kept.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    drop(store);
+    let valid = std::fs::read_to_string(&path).unwrap();
+    assert!(valid.contains("\"sequence\":1"), "{valid}");
+    // A second record, whole but for its newline, and one cut mid-way: both
+    // are appends that never reached the point of acknowledgement.
+    let second = valid.trim_end().replace("\"sequence\":1", "\"sequence\":2");
+    for tail in [second.clone(), second[..second.len() / 2].to_owned()] {
+        std::fs::write(&path, format!("{valid}{tail}")).unwrap();
+        let store = reopen(&path).unwrap();
+        assert!(store.get(kept.clone()).await.unwrap().is_some());
+        // Read only once the store lets go: Windows refuses a read of a
+        // range another handle has locked.
+        drop(store);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), valid);
+    }
+    // Only one record was ever acknowledged, so a new one is the second.
+    let store = reopen(&path).unwrap();
+    store
+        .insert("b".repeat(64), session(None).await, None, 100)
+        .await
+        .unwrap();
+    drop(store);
+    let lines = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(lines.lines().count(), 2);
+    assert!(lines.ends_with('\n'));
+    reopen(&path).unwrap();
+}
+
+/// Row J3: a tail longer than any record could be is not an append of ours
+/// that never finished, and stays refused.
+#[test]
+fn a_tail_longer_than_a_record_is_not_cut_off() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.jsonl");
+    drop(reopen(&path).unwrap());
+    let tail = "x".repeat(1_048_577);
+    std::fs::write(&path, &tail).unwrap();
+    assert_eq!(
+        reopen(&path).err(),
+        Some(JournalOpenError::Unreadable {
+            line: Some(1),
+            problem: "longer than a record may be",
+        })
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), tail);
 }

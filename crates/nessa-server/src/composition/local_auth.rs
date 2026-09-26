@@ -195,13 +195,11 @@ pub(super) fn product_state(
     )
     .with_admin(admin)
     .with_settings(settings.session()?)
-    .with_browser_sessions(Arc::new(
-        PersistentSessions::open(
-            &directory.join("browser-sessions.jsonl"),
-            SystemClock.unix_seconds(),
-        )
-        .map_err(setup_error)?,
-    ));
+    .with_browser_sessions(Arc::new({
+        let path = directory.join("browser-sessions.jsonl");
+        PersistentSessions::open(&path, SystemClock.unix_seconds())
+            .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
+    }));
     product.browser_http_allowed = config.browser_http_allowed();
     if let Some((service, attachments)) = conversations {
         product = product
@@ -321,9 +319,15 @@ fn conversations(
     //
     // Ownership, tombstones and summaries are one database
     // (docs/adr/todo/196-conversation-metadata-database.md).
+    let metadata_path = root.join("metadata.sqlite3");
     let metadata = Arc::new(
-        LocalConversationStore::open(&root.join("metadata.sqlite3"))
-            .map_err(|error| RunError::Agent(error.to_string()))?,
+        LocalConversationStore::open(&metadata_path).map_err(|cause| {
+            RunError::opening(
+                crate::core::Dataset::ConversationMetadata,
+                &metadata_path,
+                cause,
+            )
+        })?,
     );
     let current_opencode_model = opencode
         .configured()

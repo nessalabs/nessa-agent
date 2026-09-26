@@ -854,16 +854,14 @@ impl LifecycleHistory {
                     {
                         return Err(LifecycleJournalError::StateMismatch)
                     }
-                    LifecyclePhysicalOutcome::Failed { .. } if self.plans.is_empty() => {
-                        let observation = self
-                            .latest_observation
-                            .as_ref()
-                            .ok_or(LifecycleJournalError::MissingNoEffectObservation)?;
-                        if observation.incarnation() != self.before.as_ref()
-                            || observation.target_artifact_present()
-                        {
-                            return Err(LifecycleJournalError::InvalidNoEffectClosure);
-                        }
+                    // No plan means no effect was authorized, so whatever the
+                    // observation records was not caused by this attempt. The
+                    // closure requires only that there is one; each adapter
+                    // decides which states it closes on.
+                    LifecyclePhysicalOutcome::Failed { .. }
+                        if self.plans.is_empty() && self.latest_observation.is_none() =>
+                    {
+                        return Err(LifecycleJournalError::MissingNoEffectObservation)
                     }
                     LifecyclePhysicalOutcome::Failed { .. } => {}
                 }
@@ -1134,7 +1132,6 @@ pub enum LifecycleJournalError {
     ObservationVersionRegression,
     NoEffectProofAfterPlan,
     MissingNoEffectObservation,
-    InvalidNoEffectClosure,
     UnobservedOutcome,
     AfterOutcome,
 }
@@ -1181,9 +1178,6 @@ impl Display for LifecycleJournalError {
             }
             Self::MissingNoEffectObservation => {
                 "gateway lifecycle no-effect outcome lacks a fresh observation"
-            }
-            Self::InvalidNoEffectClosure => {
-                "gateway lifecycle no-effect observation contradicts prior state"
             }
             Self::UnobservedOutcome => {
                 "gateway lifecycle confirmed outcome lacks matching observation"
@@ -2495,32 +2489,66 @@ mod tests {
     }
 
     #[test]
-    fn no_effect_closure_requires_prior_state_and_no_target_artifact() {
+    fn no_effect_closure_records_whatever_was_found() {
         let prior = incarnation(10);
-        let mut history = LifecycleHistory::restore(&[intent(Some(prior.clone()))]).unwrap();
-        history
-            .append(&record(
-                1,
-                LifecycleRecordPayload::Observation {
-                    source: LifecycleObservationSource::Intent,
-                    state: LifecycleObservation::new(1, Some(prior.clone()), false),
-                },
-            ))
-            .unwrap();
-        history
-            .append(&record(
-                2,
-                LifecycleRecordPayload::Outcome {
-                    physical: LifecyclePhysicalOutcome::Failed {
-                        phase: LifecycleFailedPhase::Planning,
-                        message: "audit unavailable".into(),
+        let found = [
+            (Some(prior.clone()), Some(prior.clone()), false),
+            // An inactive unit the intent admitted: its artifacts remain.
+            (None, None, true),
+            // A gateway systemd started after the crash, before recovery.
+            (None, Some(incarnation(11)), true),
+            (Some(prior.clone()), None, false),
+        ];
+        for (before, observed, artifact_present) in found {
+            let observation = LifecycleObservation::new(1, observed, artifact_present);
+            let mut history = LifecycleHistory::restore(&[intent(before)]).unwrap();
+            history
+                .append(&record(
+                    1,
+                    LifecycleRecordPayload::Observation {
+                        source: LifecycleObservationSource::Intent,
+                        state: observation.clone(),
                     },
-                    last_confirmed: Some(LifecycleObservation::new(1, Some(prior), false)),
-                    cleanup: ReconciliationCleanupDecision::RetainPrior,
-                },
-            ))
-            .unwrap();
-        assert!(history.is_terminal());
+                ))
+                .unwrap();
+            history
+                .append(&record(
+                    2,
+                    LifecycleRecordPayload::Outcome {
+                        physical: LifecyclePhysicalOutcome::Failed {
+                            phase: LifecycleFailedPhase::Planning,
+                            message: "audit unavailable".into(),
+                        },
+                        last_confirmed: Some(observation),
+                        cleanup: ReconciliationCleanupDecision::RetainPrior,
+                    },
+                ))
+                .unwrap();
+            assert!(history.is_terminal());
+        }
+    }
+
+    #[test]
+    fn no_effect_closure_requires_a_fresh_observation() {
+        let mut history = LifecycleHistory::restore(&[intent(None)]).unwrap();
+        assert_eq!(
+            history
+                .append(&record(
+                    1,
+                    LifecycleRecordPayload::Outcome {
+                        physical: LifecyclePhysicalOutcome::Failed {
+                            phase: LifecycleFailedPhase::Planning,
+                            message: "audit unavailable".into(),
+                        },
+                        last_confirmed: None,
+                        cleanup: ReconciliationCleanupDecision::RetainPrior,
+                    },
+                ))
+                .unwrap_err(),
+            LifecycleJournalError::MissingNoEffectObservation
+        );
+        assert_eq!(history.next_sequence(), 1);
+        assert!(!history.is_terminal());
     }
 
     #[test]
