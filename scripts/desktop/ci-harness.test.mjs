@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import test from "node:test"
 
 test("local-auth integration harness is locked to its declared tools", () => {
@@ -78,6 +78,162 @@ test("the existing Linux matrix leg uniquely owns real runtime assembly", () => 
   const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8")
   assert.doesNotMatch(releaseWorkflow, /target: x86_64-unknown-linux-gnu/)
   assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
+})
+
+test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const proof = "./scripts/desktop/check-windows-task-scheduler.ps1"
+  const localAuthStart = workflow.indexOf("  local-auth:")
+  assert.notEqual(localAuthStart, -1)
+  const afterStart = workflow.slice(localAuthStart + 1)
+  const nextJobOffset = afterStart.search(/\n  [a-z][a-z0-9-]+:\n/)
+  const localAuth = workflow.slice(
+    localAuthStart,
+    nextJobOffset === -1 ? undefined : localAuthStart + 1 + nextJobOffset,
+  )
+  assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+  assert.equal(localAuth.split(proof).length - 1, 1)
+  assert.match(
+    localAuth,
+    /name: Prove the Windows Task Scheduler gateway model\s+if: runner\.os == 'Windows'\s+shell: powershell\s+run: \.\/scripts\/desktop\/check-windows-task-scheduler\.ps1 -CallerContext Administrator\r?\n/,
+  )
+  const invocations = readdirSync(".github/workflows")
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => readFileSync(`.github/workflows/${name}`, "utf8"))
+    .reduce(
+      (count, contents) =>
+        count + (contents.match(/check-windows-task-scheduler\.ps1/g)?.length ?? 0),
+      0,
+    )
+  assert.equal(
+    invocations,
+    1,
+    "the native proof must run once in the existing Windows matrix leg",
+  )
+})
+
+test("the Windows scheduler proof binds identity and cleanup to one exact owned task", () => {
+  const script = readFileSync("scripts/desktop/check-windows-task-scheduler.ps1", "utf8")
+  assert.match(script, /CreateDirectoryW/)
+  assert.match(script, /SECURITY_ATTRIBUTES/)
+  assert.match(script, /FILE_FLAG_OPEN_REPARSE_POINT/)
+  assert.doesNotMatch(script, /FILE_SHARE_DELETE/)
+  assert.match(script, /DirectoryIdentity\(\$runRootHandle\)/)
+  assert.match(script, /MarkDirectoryForDeletion\(\$runRootHandle\)/)
+  assert.doesNotMatch(script, /Directory\]::CreateDirectory|Directory\.CreateDirectory/)
+  assert.match(script, /RegisterTaskDefinition\(\$taskName, \$definition, 2 -bor 16,/)
+  assert.match(script, /MultipleInstances = 2/)
+  assert.equal(script.match(/\$ownedTask\.Run\(\$null\)/g)?.length, 2)
+  assert.match(script, /ActionPid', 'EnginePid'/)
+  assert.match(script, /PlannedActionId', 'CurrentAction'/)
+  assert.match(script, /OpenProcessForObservation\(\[uint32\]\$instance\.EnginePID\)/)
+  assert.match(
+    script,
+    /OpenProcess\(PROCESS_QUERY_LIMITED_INFORMATION \| SYNCHRONIZE, false, processId\)/,
+  )
+  assert.match(
+    script,
+    /\$caller = \[NessaWindowsProofNative\]::ReadCurrentProcessTokenFacts\(\)/,
+  )
+  assert.match(
+    script,
+    /\[ValidateSet\('StandardUser', 'Administrator'\)\]\s+\[string\] \$CallerContext = 'StandardUser'/,
+  )
+  assert.match(
+    script,
+    /if \(\$CallerContext -eq 'StandardUser' -and \$caller\.Elevated\) \{ throw /,
+  )
+  assert.match(
+    script,
+    /if \(\$CallerContext -eq 'Administrator' -and -not \$caller\.Elevated\) \{ throw /,
+  )
+  assert.doesNotMatch(
+    script,
+    /LogonType\s*=\s*(1|2|5|6)\b|TASK_LOGON_(PASSWORD|S4U|GROUP)/,
+  )
+  assert.doesNotMatch(script, /Xml -match/)
+  assert.match(script, /Test-TaskXmlCarriesNoCredential -Xml \$observedTask\.Xml/)
+  assert.match(script, /^Assert-CredentialFieldProbes\r?$/m)
+  assert.doesNotMatch(script, /OpenProcessForObservation[^\r\n]*\$PID/)
+  assert.doesNotMatch(script, /\$callerHandle\s*=/)
+  assert.match(script, /OpenProcessToken failed for current-process pseudo-handle/)
+  const tokenInformationBoundary =
+    /private const int ERROR_BAD_LENGTH = 24;\s+private const int ERROR_INSUFFICIENT_BUFFER = 122;[\s\S]*?\[DllImport\("advapi32\.dll", SetLastError = true\)\]\s+private static extern bool GetTokenInformation\(\s*IntPtr token, int informationClass, IntPtr information, int length, out int returnLength\);[\s\S]*?private static byte\[\] TokenInformation\(IntPtr token, int informationClass, string fact\)\s*\{\s*int needed;\s*bool sized = GetTokenInformation\(token, informationClass, IntPtr\.Zero, 0, out needed\);\s*int error = Marshal\.GetLastWin32Error\(\);\s*if \(needed <= 0 \|\| \(!sized && error != ERROR_BAD_LENGTH && error != ERROR_INSUFFICIENT_BUFFER\)\)\s*throw new Win32Exception\(error, "GetTokenInformation size query failed for " \+ fact\);\s*var bytes = new byte\[needed\];\s*var pinned = GCHandle\.Alloc\(bytes, GCHandleType\.Pinned\);\s*try\s*\{\s*if \(!GetTokenInformation\(token, informationClass, pinned\.AddrOfPinnedObject\(\), bytes\.Length, out needed\)\)\s*throw new Win32Exception\(Marshal\.GetLastWin32Error\(\), "GetTokenInformation fill failed for " \+ fact\);\s*return bytes;\s*\}\s*finally \{ pinned\.Free\(\); \}\s*\}/g
+  assert.equal(
+    script.match(tokenInformationBoundary)?.length,
+    1,
+    "one native token-information boundary must own sizing, allocation, fill, and release",
+  )
+  assert.match(script, /ReadTokenFacts\(\$engineProcess\)/)
+  assert.match(script, /ProcessHasExited\(\$engineProcess\)/)
+  assert.match(script, /ActionCreationTime', 'PidBoundCreationTime'/)
+  assert.doesNotMatch(script, /ReadTokenFacts\(\[uint32\]/)
+  assert.match(script, /Get-NativeException/)
+  assert.match(script, /MethodInvocationException/)
+  assert.match(script, /Assert-HResultClassification/)
+  assert.match(script, /AceSids = \[string\]::Join/)
+  assert.match(script, /ObjectAceCount/)
+  assert.match(script, /confirmed-created-contradictory/)
+  assert.match(script, /observed-matching-after-\$Acknowledgement-reply/)
+  assert.match(script, /Assert-LifecycleStateProbes/)
+  assert.match(script, /New-RunAttemptObservation/)
+  assert.match(script, /function Invoke-RunAttemptObservation/)
+  assert.match(script, /Assert-RunObservationAccepted/)
+  assert.match(script, /Test-StabilizedRunSnapshot/)
+  assert.equal(
+    script.match(/Test-StabilizedRunSnapshot -Accepted/g)?.length,
+    1,
+    "the single observation owner must enforce the complete stabilized process vector",
+  )
+  assert.equal(
+    script.match(/Test-CompleteAgreement -Evidence/g)?.length,
+    1,
+    "the single observation owner must enforce the broader accepted vector",
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$firstRunObservation -Instances \$instances/,
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$firstRunObservation -Instances \$firstInstances[^\r\n]+-Snapshot \$firstSnapshot -CompleteAcceptance -Final/,
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$instances/,
+  )
+  assert.match(
+    script,
+    /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$secondInstances[^\r\n]+-Snapshot \$secondSnapshot -CompleteAcceptance -Final/,
+  )
+  assert.match(script, /first run 2 to 1/)
+  assert.match(script, /second run contradiction to match/)
+  assert.match(script, /matching poll followed by a contradictory final snapshot/)
+  assert.match(
+    script,
+    /matching final observation omitted its complete process vector without rejection/,
+  )
+  assert.match(
+    script,
+    /complete observation owner accepted mutation of \$\(\$entry\.Key\)/,
+  )
+  assert.match(script, /retained action process exited before proof completion/)
+  assert.match(script, /Invoke-StopSettlement/)
+  assert.match(script, /\$runEffectsSettled = \$stopSettlement\.Settled/)
+  assert.match(script, /function Invoke-DependencyOrderedCleanup/)
+  assert.match(script, /\$taskSettledBeforeDelete = Test-CreateEffectSettled/)
+  assert.match(script, /\$folderSettledBeforeDelete = Test-CreateEffectSettled/)
+  assert.match(script, /preserved task create effect/)
+  assert.match(script, /uncertain folder create effect/)
+  assert.match(script, /lost stop reply with confirmed settlement/)
+  assert.match(script, /Invoke-DeleteSettlement/)
+  assert.match(script, /DeleteOutcome = \$deleteOutcome/)
+  assert.match(script, /ObservationDiagnostic = \$observationDiagnostic/)
+  assert.match(script, /\$ownedTask\.Stop\(0\)/)
+  assert.match(script, /exact owned task instance collection to become empty/)
+  assert.doesNotMatch(script, /Stop-Process|\.Kill\(|TerminateProcess/)
+  assert.match(script, /primary failure:/)
+  assert.match(script, /cleanup failure:/)
 })
 
 test("the disposable user manager proves the same session bus and cleans its exact runtime", () => {

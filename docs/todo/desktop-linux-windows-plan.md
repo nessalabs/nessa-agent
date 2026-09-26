@@ -1,33 +1,35 @@
 # Plan: ship the desktop app on Linux and Windows
 
-Status: TODO. macOS is done. Linux x86_64 runtime assembly is implemented and
-exercised in CI, but its service adapter, packaging, and release remain TODO.
-The Windows service model is recorded below; its native proof and implementation
-are not started.
-Tracking issue: [nessalabs/nessa-agent#69](https://github.com/nessalabs/nessa-agent/issues/69).
+Status: TODO. macOS is done. Linux x86_64 runtime assembly and its systemd user
+service adapter are implemented and exercised in CI; installed logout/login,
+packaging, and release remain TODO. The Windows service model is recorded below;
+[#205](https://github.com/nessalabs/nessa-agent/issues/205) owns its native model
+proof before adapter implementation. Linux installed acceptance remains tracked
+by [#188](https://github.com/nessalabs/nessa-agent/issues/188).
 
 This plan is written in plain language so anyone on the team can follow it.
 Diagrams use Mermaid and render on GitHub.
 
 ## 1. Where we are today
 
-The desktop app opens on all three systems. But only macOS can run the
-**gateway**, the background service that agents talk to. On Linux and Windows
-the app compiles, then says "Bundled gateway services currently require macOS"
-and stops there.
+The desktop app opens on all three systems. macOS and Linux can run the
+**gateway**, the background service that agents talk to. Linux uses a systemd
+user service and has a native disposable-manager CI proof, while its installed
+logout/login and packaging acceptance remain open. Windows still stops at the
+unsupported host boundary.
 
 ```mermaid
 flowchart LR
     App[Desktop app window]
     Host{Which OS?}
     Mac[macOS adapter<br/>launchd, ~1,900 lines<br/>DONE]
-    Lin[Linux adapter<br/>NOT STARTED<br/>runtime resource prepared]
+    Lin[Linux systemd adapter<br/>DONE<br/>installed acceptance open]
     Win[Windows adapter<br/>NOT STARTED]
     GW[(Gateway service)]
 
     App --> Host
     Host -->|macOS| Mac --> GW
-    Host -->|Linux| Lin -.->|"error: needs macOS"| App
+    Host -->|Linux| Lin --> GW
     Host -->|Windows| Win -.->|"error: needs macOS"| App
 ```
 
@@ -35,7 +37,7 @@ The remaining delivery pieces and the prepared runtime boundary are:
 
 | Piece | What it does | Where |
 | --- | --- | --- |
-| Gateway host adapter | Installs, starts, checks, and retires the background service | `src-tauri/src/gateway/infrastructure/macos/` |
+| Gateway host adapter | Installs, starts, checks, and retires the background service | `src-tauri/src/gateway/infrastructure/macos/`, `src-tauri/src/gateway/infrastructure/linux/` |
 | Runtime staging | Downloads verified Node, builds the CLI tools, and packs them into local macOS and Linux builds | `scripts/desktop/prepare-runtime.mjs`, `scripts/desktop/prepare-node.mjs`, and the platform composers |
 | Release plumbing | Builds, signs, and publishes the app and the update feed | `scripts/desktop/release-assets.mjs`, `.github/workflows/release.yml` |
 | Bundle check | Proves the built app is signed and safe to ship | `scripts/desktop/verify-bundle.mjs` |
@@ -133,24 +135,14 @@ flowchart TB
 Linux is the easy one. **systemd user units** work almost exactly like launchd,
 so the macOS adapter design carries over.
 
-The runtime resource foundation now prepares native
-`x86_64-unknown-linux-gnu` builds in the existing Ubuntu CI matrix leg. It does
-not register or launch a gateway, add a Linux release target, or establish any
-of the service policy below.
+The runtime resource foundation prepares native `x86_64-unknown-linux-gnu`
+builds in the existing Ubuntu CI matrix leg. The Linux adapter now stages that
+runtime, registers and reconciles a systemd user unit, and proves its lifecycle
+against a disposable native user manager. It does not add a Linux release
+target or prove an installed logout/login lifecycle.
 
-What remains to build:
+What remains to validate and ship:
 
-- A decision about which shell answer wins for the agent's `PATH`.
-  `gateway/infrastructure/login_shell.rs` asks bash two ways, because no single
-  bash reads both `.bash_profile` and `.bashrc`, and puts the login shell's
-  entries first. That is right on macOS, where a terminal opens a login shell.
-  On Linux a terminal opens an interactive non-login shell, so the same user's
-  `node` comes from the nvm block in `.bashrc` rather than from the login files
-  — with the current order the agent would run the other one. Decide precedence
-  for this host rather than inheriting macOS's.
-- A `Systemd` adapter that writes a unit file under
-  `~/.config/systemd/user/`, runs `systemctl --user daemon-reload`, then
-  `enable --now`. Health checks reuse the existing loopback logic.
 - Keep the normal user unit scoped to the signed-in user's manager. Lingering is
   an explicit installation policy, not something the app enables silently:
   `loginctl enable-linger` keeps that user's manager alive from boot and after
@@ -259,6 +251,21 @@ reduction of scope.
 
 Decision date: 2026-09-22. Status: selected for implementation, pending the
 native exact-process identity proof below.
+
+GitHub-hosted Windows runners are administrators with UAC off, so the
+`local-auth (windows-latest)` leg runs the #205 proof with
+`-CallerContext Administrator`: it proves exact action identity, `IgnoreNew`,
+and cleanup for an elevated caller and declares that context. The product
+model is the script's default, `StandardUser`, which refuses an elevated
+caller; proving it needs a non-elevated standard user's interactive desktop
+session and remains open in #205.
+
+Native readback facts the adapter must follow, observed on the hosted leg:
+Task Scheduler reads a SID-registered `UserId` back as an account name (bare
+for the principal, machine-qualified for the trigger), so identity is compared
+by the SID that name resolves to; and under `IgnoreNew` a second `Run` does not
+return the live instance, so instance identity comes from enumerating running
+instances, never from `Run`'s return.
 
 Use a Task Scheduler 2.0 task registered through the COM API. Register it for
 the current user's SID with `TASK_LOGON_INTERACTIVE_TOKEN`, `LeastPrivilege`,
@@ -404,7 +411,7 @@ gantt
     Staging split, updater targets, matrix   :s1, 0, 3
     Per-OS verification, gate Unix code      :s2, after s1, 2
     section Linux
-    systemd adapter                          :l1, after s2, 3
+    systemd adapter (done)                   :done, l1, after s2, 3
     Packaging and end-to-end test            :l2, after l1, 2
     section Windows
     Service model decision                   :w1, after s2, 1
@@ -412,9 +419,9 @@ gantt
     Installer and end-to-end test            :w3, after w2, 2
 ```
 
-Linux runtime staging is the completed first slice. Its service and release
-pieces still come before Windows delivery, because Windows needs a lifecycle
-decision and a signing setup before any adapter code is useful.
+Linux runtime staging and its systemd adapter are complete. Installed
+logout/login, packaging, and release remain open. Windows still requires this
+native model proof and a signing setup before adapter code is useful.
 
 ## 7. Existing cross-platform coverage
 
@@ -433,7 +440,7 @@ desktop host can replace a gateway safely.
 - [ ] Shared: add `ubuntu-latest` and `windows-latest` to the release matrix
 - [ ] Shared: per-OS bundle verification
 - [ ] Shared: gate Unix-only code in the gateway adapter
-- [ ] Linux: `Systemd` adapter with XDG persistent/session paths and explicit authorized linger policy
+- [x] Linux: `Systemd` adapter with XDG persistent/session paths; installed authorized linger acceptance remains #188
 - [ ] Linux: `.deb` and AppImage packaging with WebKitGTK deps
 - [ ] Linux: end-to-end install / start / quit / reopen / logout test
 - [x] Windows: record the service model decision
