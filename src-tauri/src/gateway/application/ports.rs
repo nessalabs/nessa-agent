@@ -651,19 +651,6 @@ pub trait GatewayReconciliationProgress: Send + Sync {
             "This gateway progress port cannot record systemd state evidence".into(),
         ))
     }
-
-    /// Retry the exact observation whose publication may have succeeded before
-    /// acknowledgement. Returns `None` when no observation is pending.
-    #[cfg_attr(
-        target_os = "linux",
-        allow(
-            dead_code,
-            reason = "the launchd progress substitutes use the portable no-pending default"
-        )
-    )]
-    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
-        Ok(None)
-    }
 }
 
 /// One caller's immutable request to the serialized reconciliation owner.
@@ -1139,6 +1126,9 @@ impl GatewayLifecycleRecoveryStep {
 }
 
 impl GatewayLifecycleRecovery {
+    /// Builds arbitrary shapes for tests; production recovery comes only from
+    /// a restored history through `from_history`.
+    #[cfg(test)]
     pub(crate) fn new(
         attempt: GatewayReconciliationAttempt,
         target: ReconciliationTarget,
@@ -1176,15 +1166,15 @@ impl GatewayLifecycleRecovery {
                 pending.native_attempt().cloned(),
             )
         };
-        Self::new(
+        Self {
             attempt,
             target,
             before,
-            history.has_effect_plan(),
-            history.latest_observation().cloned(),
-            history.pending_step().map(step),
-            history.unsettled_steps().into_iter().map(step).collect(),
-        )
+            has_effect_plan: history.has_effect_plan(),
+            latest_observation: history.latest_observation().cloned(),
+            pending_step: history.pending_step().map(step),
+            unsettled_steps: history.unsettled_steps().into_iter().map(step).collect(),
+        }
     }
 
     /// Every step recovery must settle, in order, when it runs none of them;

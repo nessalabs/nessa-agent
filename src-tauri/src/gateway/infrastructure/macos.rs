@@ -98,25 +98,24 @@ impl LaunchdArtifacts {
     /// plist for publication and retirement, and whether launchd has the
     /// label loaded for bootstrap, unload, adoption and agent stop. Every
     /// launchd observation, live or recovered, records this.
-    fn present(&self, effect: &LifecycleEffect, loaded: bool) -> bool {
+    /// A file that cannot be examined is an error, never "absent".
+    fn present(&self, effect: &LifecycleEffect, loaded: bool) -> Result<bool, String> {
         match effect {
             LifecycleEffect::StageRuntime { fingerprint }
             | LifecycleEffect::PruneRuntime { fingerprint } => {
-                fs::symlink_metadata(self.runtimes.join(fingerprint)).is_ok()
+                artifact_presence(&self.runtimes.join(fingerprint))
             }
             LifecycleEffect::RemoveStagingRuntime { generation } => {
-                fs::symlink_metadata(self.runtimes.join(format!(".staging-{generation}"))).is_ok()
+                artifact_presence(&self.runtimes.join(format!(".staging-{generation}")))
             }
             LifecycleEffect::PublishServiceDefinition { .. }
-            | LifecycleEffect::RequestRetirement { .. } => {
-                fs::symlink_metadata(&self.plist).is_ok()
-            }
+            | LifecycleEffect::RequestRetirement { .. } => artifact_presence(&self.plist),
             LifecycleEffect::BootstrapService { .. }
             | LifecycleEffect::UnloadService { .. }
             | LifecycleEffect::AdoptReadyIncarnation { .. }
-            | LifecycleEffect::StopAgents { .. } => loaded,
+            | LifecycleEffect::StopAgents { .. } => Ok(loaded),
             // Not a launchd effect: recovery refuses it before observing.
-            _ => false,
+            _ => Err("Not a launchd effect".into()),
         }
     }
 }
@@ -135,15 +134,21 @@ enum BootstrapRecoveryDecision {
     Refuse,
 }
 
+/// The planned target, when launchd runs it: `observed_incarnation` already
+/// requires the label loaded with the healthy process's PID, so the target is
+/// all that is left to compare. The one definition of "exact target running".
+fn exact_target<'a>(
+    observed: Option<&'a ReconciliationIncarnation>,
+    target: &ReconciliationTarget,
+) -> Option<&'a ReconciliationIncarnation> {
+    observed.filter(|incarnation| incarnation.target() == target)
+}
+
 fn bootstrap_recovery_decision(
-    loaded: bool,
-    pid: Option<u32>,
     observed: Option<&ReconciliationIncarnation>,
     target: &ReconciliationTarget,
 ) -> BootstrapRecoveryDecision {
-    match observed.filter(|incarnation| {
-        loaded && pid == Some(incarnation.process_id()) && incarnation.target() == target
-    }) {
+    match exact_target(observed, target) {
         Some(incarnation) => BootstrapRecoveryDecision::Adopt(incarnation.clone()),
         None => BootstrapRecoveryDecision::Refuse,
     }
@@ -317,12 +322,16 @@ impl GatewayHost for Launchd {
         };
         match step.step().effect() {
             LifecycleEffect::BootstrapService { target: planned } => {
-                let BootstrapRecoveryDecision::Adopt(exact) = bootstrap_recovery_decision(
-                    status.loaded,
-                    status.pid,
-                    observed.as_ref(),
-                    planned,
-                ) else {
+                // launchd's recorded refusal is never adopted, whatever runs now.
+                let refused = step
+                    .completion()
+                    .is_some_and(|result| !matches!(result, LifecycleCommandResult::Accepted));
+                let decision = if refused {
+                    BootstrapRecoveryDecision::Refuse
+                } else {
+                    bootstrap_recovery_decision(observed.as_ref(), planned)
+                };
+                let BootstrapRecoveryDecision::Adopt(exact) = decision else {
                     return close(
                         settle(None, observed)?,
                         "Recovered bootstrap without its exact planned target; nothing was booted out",
@@ -340,12 +349,7 @@ impl GatewayHost for Launchd {
             }
             LifecycleEffect::AdoptReadyIncarnation { target: planned } => {
                 let exact = matches!(
-                    bootstrap_recovery_decision(
-                        status.loaded,
-                        status.pid,
-                        observed.as_ref(),
-                        planned,
-                    ),
+                    bootstrap_recovery_decision(observed.as_ref(), planned),
                     BootstrapRecoveryDecision::Adopt(_)
                 );
                 let settled = settle_without_replay(
@@ -364,7 +368,11 @@ impl GatewayHost for Launchd {
                 let physical = match observed.filter(|_| exact) {
                     Some(incarnation) => LifecyclePhysicalOutcome::Confirmed(incarnation),
                     None => LifecyclePhysicalOutcome::Failed {
-                        phase: LifecycleFailedPhase::Observation,
+                        phase: if settled.unreturned {
+                            LifecycleFailedPhase::NativeDispatch
+                        } else {
+                            LifecycleFailedPhase::Observation
+                        },
                         message: "Recovered readiness plan did not find its exact incarnation"
                             .into(),
                     },
@@ -473,7 +481,9 @@ impl GatewayHost for Launchd {
         let observation = LifecycleObservation::new(
             2,
             observed,
-            LaunchdArtifacts::for_label(&self.home, label).present(&stop, status.loaded),
+            LaunchdArtifacts::for_label(&self.home, label)
+                .present(&stop, status.loaded)
+                .map_err(GatewayError::Stop)?,
         );
         let source = LifecycleObservationSource::Effect {
             plan_id: "stop-agents-on-desktop-quit".into(),
@@ -621,7 +631,7 @@ fn bootstrap_cleanup_decision(
     observed: Option<&ReconciliationIncarnation>,
     target: &ReconciliationTarget,
 ) -> BootstrapCleanupDecision {
-    if observed.is_some_and(|incarnation| incarnation.target() == target) {
+    if exact_target(observed, target).is_some() {
         BootstrapCleanupDecision::UnloadExactTarget
     } else if loaded {
         BootstrapCleanupDecision::RefuseReplacement
@@ -643,7 +653,7 @@ fn cleanup_bootstrap(
         let status = launchctl.status(service)?;
         let observed = observed_incarnation(service, port, &status, launchctl.health(port));
         Ok((
-            artifacts.present(cleanup_step.effect(), status.loaded),
+            artifacts.present(cleanup_step.effect(), status.loaded)?,
             observed,
         ))
     };
@@ -689,9 +699,6 @@ fn cleanup_bootstrap_with(
         Err(error) => LifecycleCommandResult::Failed(error.clone()),
     };
 
-    progress
-        .retry_pending_observation()
-        .map_err(|error| format!("{error}; cleanup command result was {command:?}"))?;
     progress
         .effect_completed("bootstrap-service", cleanup_step.id(), &command)
         .map_err(|error| format!("{error}; cleanup command result was {command:?}"))?;
@@ -744,13 +751,20 @@ fn run_planned_effect<T>(
     result.map_err(RegisterFailure::Physical)
 }
 
+/// What a declared cleanup did: removed its artifact, or found it absent.
+#[derive(Debug, PartialEq, Eq)]
+enum CleanupRun {
+    Ran,
+    AlreadyAbsent,
+}
+
 fn run_planned_effect_with_cleanup<T>(
     progress: &dyn GatewayReconciliationProgress,
     plan_id: &str,
     effect: LifecycleEffect,
     cleanup_step: LifecyclePlanStep,
     run: impl FnOnce() -> Result<T, String>,
-    cleanup: impl FnOnce() -> Result<(), String>,
+    cleanup: impl FnOnce() -> Result<CleanupRun, String>,
     observe: impl Fn() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
 ) -> Result<T, RegisterFailure> {
     let primary =
@@ -800,7 +814,10 @@ fn run_planned_effect_with_cleanup<T>(
     } else {
         let cleanup_result = cleanup();
         let cleanup_completion = match &cleanup_result {
-            Ok(()) => LifecycleCommandResult::Accepted,
+            Ok(CleanupRun::Ran) => LifecycleCommandResult::Accepted,
+            Ok(CleanupRun::AlreadyAbsent) => LifecycleCommandResult::Indeterminate(
+                "What the cleanup removes was already absent".into(),
+            ),
             Err(error) => LifecycleCommandResult::Failed(error.clone()),
         };
         let cleanup_delivery = progress
@@ -821,7 +838,10 @@ fn run_planned_effect_with_cleanup<T>(
             });
         if let Err(audit) = cleanup_delivery {
             let cleanup_detail = match &cleanup_result {
-                Ok(()) => "; the planned cleanup ran".to_owned(),
+                Ok(CleanupRun::Ran) => "; the planned cleanup ran".to_owned(),
+                Ok(CleanupRun::AlreadyAbsent) => {
+                    "; the planned cleanup found nothing to remove".to_owned()
+                }
                 Err(error) => format!("; planned cleanup also failed: {error}"),
             };
             return Err(audit_after_physical(
@@ -869,10 +889,11 @@ fn artifact_presence(path: &Path) -> Result<bool, String> {
 
 fn prune_planned(
     progress: &dyn GatewayReconciliationProgress,
-    installations: &Path,
+    artifacts: &LaunchdArtifacts,
     retained: &RetainedRuntimes,
     running: &ReconciliationIncarnation,
 ) -> Result<(), RegisterFailure> {
+    let installations = &artifacts.runtimes;
     let names = match removable_runtime_names(installations, retained) {
         Ok(names) => names,
         Err(error) => {
@@ -909,7 +930,7 @@ fn prune_planned(
         if let Err(audit) = progress.effect_completed(&plan_id, step.id(), &completion) {
             return Err(audit_after_physical(audit, &removal));
         }
-        let artifact_present = artifact_presence(&installations.join(&name)).map_err(|error| {
+        let artifact_present = artifacts.present(step.effect(), false).map_err(|error| {
             audit_after_physical(
                 GatewayError::Registration(format!(
                     "Could not observe pruned gateway runtime {name}: {error}"
@@ -985,7 +1006,7 @@ fn settle_without_replay(
     journal: &dyn GatewayReconciliationJournalSession,
     decided: Option<LifecycleCommandResult>,
     observed: Option<ReconciliationIncarnation>,
-    artifact_present: impl Fn(&LifecycleEffect) -> bool,
+    artifact_present: impl Fn(&LifecycleEffect) -> Result<bool, String>,
 ) -> Result<Settled, GatewayError> {
     let pending = recovery.pending_step();
     let mut version = recovery
@@ -1021,7 +1042,7 @@ fn settle_without_replay(
         let observation = LifecycleObservation::new(
             version,
             observed.clone(),
-            artifact_present(step.step().effect()),
+            artifact_present(step.step().effect()).map_err(GatewayError::Registration)?,
         );
         retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
         settled = Some(observation);
@@ -1131,7 +1152,7 @@ fn bootstrap_service(
             step_id: "primary".into(),
         },
         observed_after_bootstrap.clone(),
-        artifacts.present(bootstrap_step.effect(), status_after_bootstrap.loaded),
+        artifacts.present(bootstrap_step.effect(), status_after_bootstrap.loaded)?,
     ) {
         return Err(audit_after_physical(audit, &bootstrap));
     }
@@ -1342,7 +1363,7 @@ fn register(
                 let status = service_status(&service)?;
                 Ok((
                     observed_incarnation(&service, port, &status, health(port)),
-                    artifacts.present(&staged_effect, status.loaded),
+                    artifacts.present(&staged_effect, status.loaded)?,
                 ))
             },
         )?
@@ -1364,12 +1385,19 @@ fn register(
                     &host.validated_runtimes,
                 )
             },
-            || prune_runtime(&installations, &fingerprint),
+            || {
+                // Staging that failed before publishing left nothing to prune.
+                if artifacts.present(&staged_effect, false)? {
+                    prune_runtime(&installations, &fingerprint).map(|()| CleanupRun::Ran)
+                } else {
+                    Ok(CleanupRun::AlreadyAbsent)
+                }
+            },
             || {
                 let status = service_status(&service)?;
                 Ok((
                     observed_incarnation(&service, port, &status, health(port)),
-                    artifacts.present(&staged_effect, status.loaded),
+                    artifacts.present(&staged_effect, status.loaded)?,
                 ))
             },
         )?
@@ -1390,7 +1418,7 @@ fn register(
             );
             prune_planned(
                 progress,
-                &installations,
+                &artifacts,
                 &retained_runtimes(
                     &fingerprint,
                     &running.fingerprint,
@@ -1441,7 +1469,7 @@ fn register(
                     let status = service_status(&service)?;
                     Ok((
                         observed_incarnation(&service, port, &status, health(port)),
-                        artifacts.present(&retirement, status.loaded),
+                        artifacts.present(&retirement, status.loaded)?,
                     ))
                 },
             )?;
@@ -1462,7 +1490,7 @@ fn register(
                                 service: service.clone(),
                             },
                             status.loaded,
-                        ),
+                        )?,
                     ))
                 },
             )?;
@@ -1489,7 +1517,7 @@ fn register(
                                 service: service.clone(),
                             },
                             status.loaded,
-                        ),
+                        )?,
                     ))
                 },
             )?;
@@ -1543,7 +1571,7 @@ fn register(
                                 service: service.clone(),
                             },
                             status.loaded,
-                        ),
+                        )?,
                     ))
                 },
             )?;
@@ -1603,7 +1631,7 @@ fn register(
                 let status = service_status(&service)?;
                 Ok((
                     observed_incarnation(&service, port, &status, health(port)),
-                    artifacts.present(&publication, status.loaded),
+                    artifacts.present(&publication, status.loaded)?,
                 ))
             },
         )?;
@@ -1659,7 +1687,7 @@ fn register(
                             step_id: "primary".into(),
                         },
                         observed,
-                        status.loaded,
+                        artifacts.present(readiness_step.effect(), status.loaded)?,
                     )
                     .map_err(RegisterFailure::Audit)?;
                 return Err(error.into());
@@ -1682,7 +1710,8 @@ fn register(
                     step_id: "primary".into(),
                 },
                 Some(running_identity),
-                true,
+                // The ready gateway is running, so launchd has its label loaded.
+                artifacts.present(readiness_step.effect(), true)?,
             )
             .map_err(RegisterFailure::Audit)?;
         Ok(running)
@@ -1706,7 +1735,7 @@ fn register(
     );
     prune_planned(
         progress,
-        &installations,
+        &artifacts,
         &retained,
         &gateway.audit_identity().map_err(RegisterFailure::Audit)?,
     )?;
@@ -2220,7 +2249,6 @@ mod tests {
 
     struct BootstrapCleanupProgress {
         events: Arc<Mutex<Vec<String>>>,
-        retry_failure: bool,
         completion_failure: bool,
         observation_failure: bool,
     }
@@ -2279,17 +2307,6 @@ mod tests {
                     incarnation,
                     target_artifact_present,
                 ))
-            }
-        }
-
-        fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
-            self.events.lock().unwrap().push("retry-primary".into());
-            if self.retry_failure {
-                Err(GatewayError::Registration(
-                    "primary observation remains unacknowledged".into(),
-                ))
-            } else {
-                Ok(Some(LifecycleObservation::new(1, None, false)))
             }
         }
     }
@@ -2471,7 +2488,7 @@ mod tests {
                 || staged,
                 || {
                     cleaned.store(true, Ordering::SeqCst);
-                    Ok(())
+                    Ok(super::CleanupRun::Ran)
                 },
                 || Ok((None, false)),
             );
@@ -2489,7 +2506,6 @@ mod tests {
         assert!(!cleaned);
         assert_eq!(events, ["plan", "complete:primary"]);
 
-        // Staging failed and that was recorded: the prune is owed and runs.
         // Staging failed, but its observation was not recorded: the journal
         // cannot yet accept the prune, so it does not run.
         let (result, cleaned, events) = stage(false, true, Err("copy failed".into()));
@@ -2497,6 +2513,7 @@ mod tests {
         assert!(!cleaned);
         assert_eq!(events, ["plan", "complete:primary", "observe:primary"]);
 
+        // Staging failed and that was recorded: the prune is owed and runs.
         let (result, cleaned, events) = stage(false, false, Err("copy failed".into()));
         assert!(matches!(result, Err(super::RegisterFailure::Physical(_))));
         assert!(cleaned);
@@ -2519,58 +2536,6 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_cleanup_retries_the_exact_primary_observation_before_its_own_records() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let progress = BootstrapCleanupProgress {
-            events: events.clone(),
-            retry_failure: false,
-            completion_failure: false,
-            observation_failure: false,
-        };
-        let target = bootstrap_target();
-        let incarnation = bootstrap_incarnation(&target);
-        let result = cleanup_bootstrap_with(
-            &progress,
-            &bootstrap_cleanup_step(),
-            &target,
-            {
-                let events = events.clone();
-                move || {
-                    events.lock().unwrap().push("prove-target".into());
-                    Ok((true, Some(incarnation)))
-                }
-            },
-            {
-                let events = events.clone();
-                move || {
-                    events.lock().unwrap().push("unload".into());
-                    Ok(())
-                }
-            },
-            {
-                let events = events.clone();
-                move || {
-                    events.lock().unwrap().push("observe-after".into());
-                    Ok((false, None))
-                }
-            },
-        );
-
-        assert_eq!(result, Ok(()));
-        assert_eq!(
-            *events.lock().unwrap(),
-            [
-                "prove-target",
-                "unload",
-                "retry-primary",
-                "complete:unload-bootstrapped-service",
-                "observe-after",
-                "observe-cleanup",
-            ]
-        );
-    }
-
-    #[test]
     fn bootstrap_cleanup_refuses_a_loaded_replacement() {
         let target = bootstrap_target();
         let replacement_target = ReconciliationTarget::new(
@@ -2583,7 +2548,6 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let progress = BootstrapCleanupProgress {
             events: events.clone(),
-            retry_failure: false,
             completion_failure: false,
             observation_failure: false,
         };
@@ -2616,7 +2580,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_recovery_adopts_only_the_exact_loaded_healthy_process() {
+    fn bootstrap_recovery_adopts_only_the_exact_target() {
         let target = bootstrap_target();
         let exact = bootstrap_incarnation(&target);
         let replacement_target = ReconciliationTarget::new(
@@ -2628,19 +2592,15 @@ mod tests {
         let replacement = bootstrap_incarnation(&replacement_target);
 
         assert_eq!(
-            bootstrap_recovery_decision(true, Some(42), Some(&exact), &target),
+            bootstrap_recovery_decision(Some(&exact), &target),
             BootstrapRecoveryDecision::Adopt(exact)
         );
         assert_eq!(
-            bootstrap_recovery_decision(true, None, None, &target),
+            bootstrap_recovery_decision(None, &target),
             BootstrapRecoveryDecision::Refuse
         );
         assert_eq!(
-            bootstrap_recovery_decision(true, Some(42), Some(&replacement), &target),
-            BootstrapRecoveryDecision::Refuse
-        );
-        assert_eq!(
-            bootstrap_recovery_decision(false, None, None, &target),
+            bootstrap_recovery_decision(Some(&replacement), &target),
             BootstrapRecoveryDecision::Refuse
         );
     }
@@ -2731,20 +2691,13 @@ mod tests {
 
     #[test]
     fn bootstrap_cleanup_preserves_physical_result_when_audit_remains_unavailable() {
-        for (retry_failure, completion_failure, observation_failure, expected) in [
-            (
-                true,
-                false,
-                false,
-                "primary observation remains unacknowledged",
-            ),
-            (false, true, false, "cleanup completion unavailable"),
-            (false, false, true, "cleanup observation unavailable"),
+        for (completion_failure, observation_failure, expected) in [
+            (true, false, "cleanup completion unavailable"),
+            (false, true, "cleanup observation unavailable"),
         ] {
             let events = Arc::new(Mutex::new(Vec::new()));
             let progress = BootstrapCleanupProgress {
                 events: events.clone(),
-                retry_failure,
                 completion_failure,
                 observation_failure,
             };
@@ -2782,7 +2735,6 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let progress = BootstrapCleanupProgress {
             events: events.clone(),
-            retry_failure: false,
             completion_failure: false,
             observation_failure: false,
         };
@@ -2801,11 +2753,7 @@ mod tests {
         assert_eq!(result, Err("bootout failed".into()));
         assert_eq!(
             *events.lock().unwrap(),
-            [
-                "retry-primary",
-                "complete:unload-bootstrapped-service",
-                "observe-cleanup",
-            ]
+            ["complete:unload-bootstrapped-service", "observe-cleanup",]
         );
     }
 
@@ -4059,7 +4007,8 @@ mod recovery_tests {
                 Scenario::new(None).other_running(43),
             ),
         ] {
-            let (written, _, _) = scenario.plan(adopt.clone(), None).recover().closed(row);
+            let (written, phase, _) = scenario.plan(adopt.clone(), None).recover().closed(row);
+            assert_eq!(phase, LifecycleFailedPhase::NativeDispatch, "{row}");
             assert_eq!(
                 written,
                 [
@@ -4359,6 +4308,143 @@ mod recovery_tests {
                 "{refuse}"
             );
         }
+    }
+
+    #[test]
+    fn journals_stuck_before_this_fix_recover_without_running_anything() {
+        // The #210 shape on disk: an always-owed prune left pending after a
+        // staging that succeeded and was observed.
+        let scenario = Scenario::new(None);
+        let (stage, prune) = (scenario.stage(), scenario.prune());
+        let (written, phase, _) = scenario
+            .plan(stage, Some((prune, LifecycleEffectPredicate::Always)))
+            .completed("primary", LifecycleCommandResult::Accepted)
+            .observed("primary", 1, true)
+            .recover()
+            .closed("stuck staging");
+        assert_eq!(
+            written,
+            [completed("cleanup", NOT_RUN), observed("cleanup", false)]
+        );
+        assert_eq!(phase, LifecycleFailedPhase::NativeDispatch);
+
+        // An always-owed bootout left pending after a bootstrap that succeeded:
+        // the healthy gateway is neither adopted here nor booted out.
+        let scenario = Scenario::new(None).target_running(42);
+        let bootstrap = LifecycleEffect::BootstrapService {
+            target: scenario.target.clone(),
+        };
+        let unload = LifecycleEffect::UnloadService {
+            service: scenario.target.service().into(),
+        };
+        let (written, _, _) = scenario
+            .plan(bootstrap, Some((unload, LifecycleEffectPredicate::Always)))
+            .completed("primary", LifecycleCommandResult::Accepted)
+            .observed("primary", 1, true)
+            .recover()
+            .closed("stuck bootstrap");
+        assert_eq!(
+            written,
+            [completed("cleanup", NOT_RUN), observed("cleanup", true)]
+        );
+    }
+
+    #[test]
+    fn a_bootstrap_launchd_refused_is_never_adopted() {
+        let scenario = Scenario::new(None).target_running(42);
+        let bootstrap = LifecycleEffect::BootstrapService {
+            target: scenario.target.clone(),
+        };
+        let unload = LifecycleEffect::UnloadService {
+            service: scenario.target.service().into(),
+        };
+        let (written, _, message) = scenario
+            .plan(
+                bootstrap,
+                Some((unload, LifecycleEffectPredicate::PrimaryNotAccepted)),
+            )
+            .completed(
+                "primary",
+                LifecycleCommandResult::Rejected("Bootstrap failed: 5".into()),
+            )
+            .recover()
+            .closed("refused, exact target running");
+        assert_eq!(
+            written,
+            [
+                observed("primary", true),
+                completed("cleanup", NOT_RUN),
+                observed("cleanup", true),
+            ]
+        );
+        assert!(message.contains("nothing was booted out"), "{message}");
+    }
+
+    #[test]
+    fn observations_mean_the_target_itself_and_the_file_itself() {
+        // No plan while the running gateway is the prior: nothing of this
+        // attempt is present.
+        let scenario = Scenario::new(None).target_running(42);
+        let prior = ReconciliationIncarnation::new(
+            scenario.target.clone(),
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            42,
+            7398,
+        )
+        .unwrap();
+        let (written, _, _) = Scenario {
+            before: Some(prior.clone()),
+            records: vec![LifecycleRecordPayload::Intent {
+                request_correlation: correlation(1),
+                cause: ReconciliationCause::Startup,
+                initiator: ReconciliationInitiator::DesktopHost,
+                target: scenario.target.clone(),
+                before: Some(prior),
+            }],
+            ..scenario
+        }
+        .recover()
+        .closed("prior is the target");
+        assert_eq!(
+            written,
+            [Written::Observed(LifecycleObservationSource::Intent, false)]
+        );
+
+        // Publication means the plist, not whether launchd has the label.
+        let scenario = Scenario::new(None).label_loaded();
+        let publish = LifecycleEffect::PublishServiceDefinition {
+            target: scenario.target.clone(),
+        };
+        let (written, _, _) = scenario
+            .plan(publish, None)
+            .recover()
+            .closed("loaded, no plist");
+        assert_eq!(
+            written,
+            [completed("primary", UNRETURNED), observed("primary", false)]
+        );
+
+        // Staging cleanup means its staging directory.
+        let scenario = Scenario::new(None);
+        fs::create_dir_all(
+            scenario
+                .runtimes()
+                .join(format!(".staging-{}", "d".repeat(64))),
+        )
+        .unwrap();
+        let (written, _, _) = scenario
+            .plan(
+                LifecycleEffect::RemoveStagingRuntime {
+                    generation: "d".repeat(64),
+                },
+                None,
+            )
+            .recover()
+            .closed("staging directory present");
+        assert_eq!(
+            written,
+            [completed("primary", UNRETURNED), observed("primary", true)]
+        );
     }
 
     #[test]

@@ -211,7 +211,8 @@ block the gateway for good.
 Before closing, recovery settles every step the journal lists as unsettled, in
 the journal's order (`LifecycleHistory::unsettled_steps`): a step awaiting its
 observation is observed; an unreturned step is recorded indeterminate, because
-the interrupted attempt may have returned it unrecorded; a cleanup that result
+the interrupted attempt may have returned it unrecorded, except readiness, whose
+result recovery decides from the fresh state; a cleanup that result
 makes due is recorded as not run by recovery, though the attempt may have run it.
 The bootstrap step (`bootstrap_service`) and recovery reach launchd and health
 only through the injected `Launchctl`; recovery calls no command on it. Each observation, live
@@ -224,7 +225,7 @@ when any settled step had not returned, and at observation otherwise.
 | Journal | Fresh state | Recovery |
 | --- | --- | --- |
 | Intent, no plan | Any | Record whether the target is installed or running (and was not the prior), close failed. No plan authorized no effect. |
-| Bootstrap or readiness pending | Exact planned target, healthy, launchd PID agrees | Settle it and adopt the target; an owed bootout is recorded not run. |
+| Bootstrap or readiness pending, no recorded refusal | Exact planned target, healthy, launchd PID agrees | Settle it and adopt the target; an owed bootout is recorded not run. |
 | Bootstrap or readiness pending | Anything else | Settle without running anything, close failed. |
 | Unload, staging, publication, retirement, pruning, or staging cleanup pending | Any | Settle it and any cleanup it makes due without running either, close failed. |
 | Agent stop pending | Any | Settle it and close with its own outcome (unchanged). |

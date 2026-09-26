@@ -637,31 +637,6 @@ impl GatewayReconciliationProgress for StartupProgress {
         state.latest_observation = Some(observation.clone());
         Ok(observation)
     }
-
-    fn retry_pending_observation(&self) -> Result<Option<LifecycleObservation>, GatewayError> {
-        let pending = self
-            .state
-            .lock()
-            .map_err(|_| state_unavailable())?
-            .pending_observation
-            .clone();
-        let Some((source, observation)) = pending else {
-            return Ok(None);
-        };
-        retry_delivery(|| self.journal.observation(&source, &observation))?;
-        let mut state = self.state.lock().map_err(|_| state_unavailable())?;
-        if state.pending_observation.as_ref() != Some(&(source, observation.clone())) {
-            return Err(GatewayError::Registration(
-                "Gateway lifecycle pending observation changed during retry".into(),
-            ));
-        }
-        state.pending_observation = None;
-        state.latest_observation = Some(observation.clone());
-        if state.failed_phase == Some(LifecycleFailedPhase::Observation) {
-            state.failed_phase = None;
-        }
-        Ok(Some(observation))
-    }
 }
 
 fn retry_delivery<T, E>(mut deliver: impl FnMut() -> Result<T, E>) -> Result<T, E> {
