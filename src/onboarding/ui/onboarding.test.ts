@@ -53,10 +53,10 @@ describe("the agent picker with nothing to pick", () => {
 
   it("says what could not be asked apart from what answered", () => {
     expect(picker(recordReadinessFailure(asking, "unreachable"))).toContain(
-      "Nessa could not ask what is installed here.",
+      "Couldn’t check your agents.",
     )
     expect(picker(recordReadiness(asking, { claude: "not-installed" }))).toContain(
-      "No agent here can start yet.",
+      "Install or sign in to an agent.",
     )
   })
 
@@ -75,47 +75,62 @@ describe("the managed gateway while setup is open", () => {
     const markup = picker(recordReadiness(asking, { claude: "ready" }), {
       revision: 4,
       state: "starting",
-      step: "replacing",
+      step: "preparing",
     })
 
-    expect(markup).toContain("Starting Nessa…")
-    expect(markup).toContain("Finishing the last update…")
+    expect(markup).toContain("starting nessa…")
     expect(markup).not.toContain("Can’t reach Nessa")
     expect(markup).not.toContain("Check again")
   })
 
-  it("shows the host failure and an explicit retry", () => {
-    const markup = picker(asking, {
-      revision: 5,
-      state: "failed",
-      message: "Nessa’s background service could not be registered.",
-    })
+  it.each([
+    [
+      "failed",
+      {
+        revision: 5,
+        state: "failed",
+        message: "Nessa’s background service could not be registered.",
+      },
+    ],
+    [
+      "could not be read",
+      {
+        state: "unavailable",
+        message: "Nessa could not read its background service startup state.",
+      },
+    ],
+  ] satisfies [string, GatewayStartupStatus][])(
+    "shows only a retry, in place of the list, when startup %s",
+    (_reason, startup) => {
+      const markup = picker(recordReadiness(asking, { claude: "ready" }), startup)
 
-    expect(markup).toContain("Nessa needs attention")
-    expect(markup).toContain("Nessa couldn’t start.")
-    // The host's own words are kept, folded behind Details, for whoever helps.
-    expect(markup).toContain("<summary")
-    expect(markup).toContain("Nessa’s background service could not be registered.")
-    expect(markup).toContain("Try starting Nessa again")
-    expect(markup).not.toContain("Check again")
-  })
+      expect(markup).toContain("Nessa couldn’t start")
+      expect(markup).toContain("Try starting Nessa again")
+      // The host's diagnostic is for its log; setup does not recite it.
+      expect(markup).not.toContain(startup.message)
+      expect(markup).not.toContain("Choose an agent")
+      expect(markup).not.toContain("Continue")
+    },
+  )
+})
 
-  it("keeps an unreadable startup state distinct from a confirmed failure", () => {
-    const markup = picker(asking, {
-      state: "unavailable",
-      message: "Nessa could not read its background service startup state.",
-    })
-
-    expect(markup).toContain("Can’t check Nessa startup")
-    expect(markup).toContain("Nessa couldn’t check whether it started.")
-    expect(markup).toContain("Nessa could not read its background service startup state.")
-    expect(markup).not.toContain("Nessa needs attention")
+describe("an agent that cannot be picked", () => {
+  it("names its reason, and keeps the words ready for hover and focus", () => {
+    const markup = picker(recordReadiness(asking, { claude: "not-installed" }))
+    expect(markup).toContain('aria-label="Claude, not installed"')
+    // On screen when the row is hovered or focused, not only through a
+    // tooltip a keyboard cannot open.
+    expect(markup).toMatch(/group-focus:inline"[^>]*>Not installed</)
+    expect(markup).not.toContain("title=")
   })
 })
 
 describe("an agent the icon set ships no mark for", () => {
   it("stands in a monogram rather than a drawing of somebody else's logo", () => {
-    const markup = picker(recordReadiness(asking, { opencode: "ready" }))
+    // Every agent ready, so no readiness mark adds paths of its own.
+    const markup = picker(
+      recordReadiness(asking, { claude: "ready", codex: "ready", opencode: "ready" }),
+    )
     // The name is there, and so is the entry's tile — with a letter in it. A
     // fourth path element would mean a logo had been invented for it.
     expect(markup).toContain("OpenCode")

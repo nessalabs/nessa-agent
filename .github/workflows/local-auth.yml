@@ -313,11 +313,9 @@ jobs:
       # when WebKitGTK is absent, so without this the skip stays permanent.
       - name: Install the desktop host's Linux build dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
-            webkit2gtk-driver xvfb
+        # The WebDriver and virtual display are this job's own, for the native
+        # window smoke below.
+        run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an

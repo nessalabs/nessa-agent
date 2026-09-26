@@ -1063,15 +1063,14 @@ body {
   letter-spacing: -0.02em;
   /*
    * The shadow that keeps white type legible wherever the wash's pigments
-   * happen to be. It lives in a custom property because the focus animation
-   * animates `filter`, and a filter set anywhere else on the element is not
-   * combined with that — it is replaced by it, and with a forwards fill it
-   * stays replaced. Anything else using that animation inherits nothing here
-   * and resolves the empty fallback.
+   * happen to be. A text shadow rather than a `drop-shadow` filter: it is part
+   * of the glyphs' own paint, so it inherits into the reveal's pieces and rides
+   * along with their opacity and transform without anything having to animate
+   * a filter.
    */
-  --nessa-focus-shadow: drop-shadow(0 1px 3px rgb(0 0 0 / 0.9))
-    drop-shadow(0 2px 20px rgb(0 0 0 / 0.5));
-  filter: var(--nessa-focus-shadow,);
+  text-shadow:
+    0 1px 3px rgb(0 0 0 / 0.9),
+    0 2px 20px rgb(0 0 0 / 0.5);
 }
 
 @keyframes nessa-setup-arrive {
@@ -1114,12 +1113,15 @@ body {
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
 .nessa-setup-window[data-step="welcome"] .nessa-setup-word {
   /*
-   * Promoted for the duration. Scaling and blurring live text re-rasterizes
-   * the glyphs on every frame; on its own layer they are drawn once and the
-   * compositor does the rest, which is the difference between this reading as
-   * a focus pull and as a stutter.
+   * Promoted for the duration, and animating only what the compositor can run
+   * by itself. The reveal used to blur each piece and carry a two-layer drop
+   * shadow in the same filter; WebKit repaints an animated filter on the main
+   * thread every frame, and the page is at its busiest exactly then — the
+   * gateway, the readiness ask and the first render all land as the line
+   * starts — so the line stalled partway through "Nessa" and then jumped.
+   * Opacity and transform keep moving however busy the page is.
    */
-  will-change: opacity, scale, filter;
+  will-change: opacity, transform;
   animation-name: nessa-setup-focus;
   animation-duration: 900ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
@@ -1130,13 +1132,8 @@ body {
   animation-delay: calc(var(--nessa-reveal-content) + var(--nessa-word, 0) * 42ms);
 }
 
-.nessa-setup-title[data-words] {
-  /* The shadow moves to the pieces, which are what is filtered. */
-  filter: none;
-}
-
 /*
- * A piece has to be its own box to be scaled and blurred, since inline boxes
+ * A piece has to be its own box to be scaled, since inline boxes
  * cannot be. It keeps its own whitespace: the split falls wherever it falls,
  * and a piece beginning with a space has to still be a space wide, or the line
  * closes up as it resolves.
@@ -1148,7 +1145,6 @@ body {
 .nessa-setup-word {
   display: inline-block;
   white-space: pre;
-  filter: var(--nessa-focus-shadow,);
 }
 
 /*
@@ -1156,8 +1152,9 @@ body {
  *
  * It is the one thing here that has not been on screen in some form already,
  * and everything it follows has been a thing coming into focus — so it does
- * the same. It condenses: slightly too large and far too soft, pulling into
- * sharpness where it already stands.
+ * the same. It condenses: faint and slightly too large, settling into place
+ * where it already stands. No blur — see the timing rule above for why the
+ * softness went.
  *
  * Deliberately no travel. Sliding up from below says the words came from
  * somewhere off-panel and were placed here, which is a different claim from
@@ -1173,8 +1170,7 @@ body {
     /* Neighbouring pieces differ less than whole words did; a large delta
        across a line resolving in pieces reads as a ripple of mismatched
        sizes rather than as one thing coming into focus. */
-    scale: 1.03;
-    filter: blur(8px) var(--nessa-focus-shadow,);
+    transform: scale(1.06);
   }
   /* Legible before it has finished settling, so the last of the movement is
      something you watch rather than something you wait for. */
@@ -1183,8 +1179,7 @@ body {
   }
   to {
     opacity: 1;
-    scale: 1;
-    filter: blur(0) var(--nessa-focus-shadow,);
+    transform: none;
   }
 }
 
@@ -1215,12 +1210,14 @@ body {
 /*
  * Setup's chrome: the way out, and the way to make it be quiet.
  *
- * It used to wait out the whole opening — its own delay chain ran to about
- * 3.6 seconds, and it sat inside the wash that fades in behind everything, so
- * nothing could have made it appear sooner. That is a long time to hold someone
- * inside a surface that covers the menu bar with no visible way out of it, and
- * a reduced-motion preference did not shorten it by a millisecond. It now
- * belongs to the window rather than to the wash and arrives with it.
+ * It arrives once the light has filled the window, not before. Shown over the
+ * floating glow, two buttons hanging in empty space gave away the shape before
+ * the light did and read as a window waiting to load. The opening is short
+ * enough to wait out, Escape leaves it from the first frame, and under a
+ * reduced-motion preference there is no opening and these are simply there.
+ *
+ * It belongs to the window rather than to the wash, so it keeps its own timing
+ * and is not re-mounted by every step.
  */
 .nessa-setup-chrome {
   position: absolute;
@@ -1231,7 +1228,7 @@ body {
   align-items: center;
   gap: 0.25rem;
   animation: nessa-setup-settled 320ms var(--nessa-motion-easing-standard)
-    calc(var(--nessa-reveal-seed) - 200ms) both;
+    calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom)) both;
 }
 
 /*
@@ -1517,9 +1514,12 @@ body {
 }
 
 /*
- * The vessel. It is nothing at all while the light is still gathering, then
- * becomes a visible empty panel a moment before the light starts to spread —
- * so there is something there to be filled.
+ * The vessel. It is nothing at all while the light is gathering and while it
+ * spreads: the light floats free on the dimmed screen, and the only sign of a
+ * shape is where its spread is cut off at the corners. The panel's own backing
+ * and shadow come up once the light has reached its edges, so the light is seen
+ * to fill a shape and then become it. An empty dark panel shown first, waiting
+ * to be filled, read as a loading placeholder.
  */
 .nessa-setup-window {
   position: relative;
@@ -1543,8 +1543,10 @@ body {
   /* Clips the light to the vessel's own corners; the layers inside scroll. */
   overflow: hidden;
   border-radius: 22px;
-  animation: nessa-setup-vessel 300ms var(--nessa-motion-easing-standard)
-    calc(var(--nessa-reveal-seed) - 200ms) both;
+  animation: nessa-setup-vessel
+    calc(var(--nessa-reveal-bloom) * 0.45 + var(--nessa-reveal-settle))
+    var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) * 0.55) both;
 }
 
 @keyframes nessa-setup-vessel {

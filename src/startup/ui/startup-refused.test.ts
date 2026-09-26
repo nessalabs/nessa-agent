@@ -21,7 +21,7 @@ it("says Nessa could not start, offers Try again, and folds the reason away", as
   )
 
   expect(container.querySelector("[role=alert] h1")?.textContent).toBe(
-    "Nessa couldn’t start.",
+    "Nessa couldn’t start",
   )
   const details = container.querySelector("details")
   expect(details?.open).toBe(false)

@@ -17,12 +17,15 @@ export function AgentApiKeyForm({
   agent,
   agentName,
   disabled = false,
+  hint,
   onSave,
   onSaved,
 }: {
   agent: ApiKeyAgent
   agentName: string
   disabled?: boolean
+  /** What entering this key commits someone to, said where they commit to it. */
+  hint?: string
   onSave: (agent: ApiKeyAgent, key: string) => Promise<AgentApiKeySave>
   onSaved: () => void | Promise<void>
 }) {
@@ -80,8 +83,14 @@ export function AgentApiKeyForm({
       <label htmlFor={`${agent}-api-key`} className="nessa-text-2 font-medium">
         {agentName} API key
       </label>
+      {hint ? (
+        <p id={`${agent}-api-key-hint`} className="nessa-text-2 text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
       <input
         id={`${agent}-api-key`}
+        aria-describedby={hint ? `${agent}-api-key-hint` : undefined}
         name="apiKey"
         type="password"
         autoComplete="off"

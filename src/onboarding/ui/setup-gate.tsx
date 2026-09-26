@@ -196,18 +196,13 @@ export function SetupGate({
         What is behind setup dims first, so the box arrives into a settled
         screen rather than competing with the desktop.
 
-        It also takes a click. Setup covers the whole screen, so while it is up
-        nothing else on the machine can be reached — and the instinct when a
-        window is in the way is to click past it, which until now did nothing at
-        all. Clicking away from the box leaves setup, which is what that click
-        was asking for.
-
-        Hidden from assistive technology and given no role, because it is not a
-        control anyone should be told to look for: Escape and the close button
-        are the ways out that announce themselves. This is a courtesy for the
-        pointer.
+        It takes no click. It used to leave setup, but the dim has faded out by
+        the time anyone is choosing an agent, so the click that ended setup was
+        a click on what looked like the desktop — and the window vanished for
+        good with nothing on screen to say why or how to bring it back. Leaving
+        is something a person does on purpose: the close button and Escape.
       */}
-      <div aria-hidden="true" className="nessa-setup-dim" onClick={onboarding.dismiss} />
+      <div aria-hidden="true" className="nessa-setup-dim" />
       <div
         // Setup covers the whole screen, menu bar included, so it is a modal
         // dialog in fact whether or not it says so. Saying so is what puts a

@@ -28,7 +28,7 @@ describe("the panel's startup notice (ADR 221)", () => {
         vi.fn(),
       ),
     )
-    expect(shown).toContain("Nessa couldn’t start.")
+    expect(shown).toContain("Nessa couldn’t start")
     expect(shown).toContain("Try again")
     expect(shown).not.toContain("retirement")
     expect(shown.toLowerCase()).not.toContain("gateway")

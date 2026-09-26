@@ -1,7 +1,7 @@
 import type { GatewayStartupStatus } from "./gateway-startup"
 
 /** What a person reads when Nessa could not start, wherever it is said. */
-export const COULD_NOT_START = "Nessa couldn’t start."
+export const COULD_NOT_START = "Nessa couldn’t start"
 
 /** The line under it, when trying again is the thing to do. */
 export const TRY_AGAIN_HINT = "Trying again usually fixes this."
@@ -31,11 +31,4 @@ export function startupSentence(status: GatewayStartupStatus): string | undefine
     default:
       return undefined
   }
-}
-
-/** The technical account behind "Details", when there is one. */
-export function startupDetails(status: GatewayStartupStatus): string | undefined {
-  return status.state === "failed" || status.state === "unavailable"
-    ? status.message
-    : undefined
 }

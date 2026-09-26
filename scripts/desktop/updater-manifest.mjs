@@ -7,6 +7,8 @@
  * app reports no update rather than an error.
  */
 
+import { linuxBundles } from "./bundle-architecture.mjs"
+
 /** The `{os}-{arch}` key `tauri-plugin-updater` looks up in `platforms`.
  *
  * The plugin's own `updater_os`/`updater_arch` decide this, and they do not
@@ -100,23 +102,16 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
 /** Where `createUpdaterArtifacts` leaves the thing an update installs.
  *
  * Per platform, because the plugin installs a different kind of thing on each:
- * an archived app bundle on macOS, an AppImage on Linux, the NSIS installer on
+ * an archived app bundle on macOS, the `.deb` on Linux (the one Linux package
+ * a release publishes; `release-assets.mjs` says why), the NSIS installer on
  * Windows. Candidates, not a name — the caller serves the first that exists.
- *
- * Linux has two, and which one a build wrote depends on `createUpdaterArtifacts`:
- * `true` leaves the AppImage as it is, and `"v1Compatible"` also archives it.
- * The plugin installs either — it extracts the AppImage when the bytes are gzip
- * and writes them straight out when they are not — so the harness looks for
- * both rather than deciding which setting the build was made under. This
- * repository ships macOS only, so neither is exercised by a release here.
+ * A `.deb` install finds the harness's plain `{os}-{arch}` key, because the
+ * plugin falls back to it after `{os}-{arch}-deb`.
  */
 export function defaultArtifacts(platform, version, targetDirectory = "target") {
   const artifacts = {
     darwin: ["macos/Nessa.app.tar.gz"],
-    linux: [
-      `appimage/Nessa_${version}_amd64.AppImage`,
-      `appimage/Nessa_${version}_amd64.AppImage.tar.gz`,
-    ],
+    linux: [linuxBundles("Nessa", version, "amd64").deb],
     win32: [`nsis/Nessa_${version}_x64-setup.exe`],
   }[platform]
   if (!artifacts)

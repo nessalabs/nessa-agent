@@ -189,8 +189,9 @@ ever moves an install onto a user's machine it stops being optional.
 
 **A tree in `~/.nessa` is outside the seal that covers the bundle.** Everything
 under `Contents/Resources/runtime` is hashed file by file by
-`scripts/desktop/runtime-fingerprint.mjs`, checked by `verify-bundle.mjs`, and
-then sealed by the application's code signature and its notarization ticket.
+`scripts/desktop/runtime-fingerprint.mjs`, checked by `verify-macos-bundle.mjs`,
+and then sealed by the application's code signature and its notarization
+ticket.
 Tamper with a bundled agent tree today and the application will not launch.
 Nothing equivalent covers what is installed at runtime. The fetched archives
 are measured against their pinned digest as they arrive, and `ManagedRuntimes`

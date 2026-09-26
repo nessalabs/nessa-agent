@@ -145,7 +145,7 @@ pins `stable`, so `just dev` and `cargo test` pick it without an extra env var.
 Build packages on Debian/Ubuntu:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
+bash scripts/desktop/install-linux-build-deps.sh
 ```
 
 Then `just dev`. The Linux recipe refuses to start the desktop app if those
@@ -181,7 +181,7 @@ and `just release` there.
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
 | `just release alpha` | Shipping-shaped bundle whose UI and host both use `alpha` |
 | `pnpm app` | `tauri dev` with one validated dev stage supplied to the UI and host |
-| `pnpm app:build` | Build and verify the prod macOS shipping bundle (`--stage alpha` selects another named stage) |
+| `pnpm app:build` | Build and verify the prod shipping bundle: the macOS app and disk image, or the Linux `.deb` (`--stage alpha` selects another named stage) |
 | `pnpm desktop:smoke` | On Linux, build and drive a real embedded WebKitGTK window against an isolated gateway/provider |
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
@@ -413,7 +413,7 @@ testing does not cost a shipping build.
 
 | | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `just release prod fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `just release prod fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg |
 | `just release` | 6.5 MB `.app` inside a `.dmg` / a `.deb` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
 `just release prod fast` / `pnpm app:fast` overrides the release profile with
@@ -421,9 +421,10 @@ testing does not cost a shipping build.
 there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected
 anyway.) `just release` leaves that profile alone (`opt-level=3`, fat LTO,
-strip) and asks for the shipping installer (`dmg` / `deb` / `nsis`). The
-justfile names the bundle so the Linux CLI is not asked for macOS's `app`
-or `dmg`. Both are release binaries — neither carries debug assertions — so
+strip) and asks for the shipping installer (`dmg` / `nsis`); on Linux the
+build makes the release's `.deb` and takes no choice of bundle. The justfile
+names the bundle per OS so the Windows CLI is not asked for macOS's `app` or
+`dmg`. Both are release binaries — neither carries debug assertions — so
 what you test behaves like what you ship.
 
 **sccache** caches compilation across profiles and checkouts when

@@ -231,8 +231,17 @@ test(
     assert.equal(run("alpha").status, 0)
     assert.equal(run("dev", "fast").status, 0)
     const calls = readFileSync(events, "utf8").trim().split("\n")
-    assert.match(calls[0], /build\.mjs --stage prod --bundles/)
-    assert.match(calls[1], /build\.mjs --stage alpha --bundles/)
-    assert.match(calls[2], /build\.mjs --stage dev --bundles/)
+    // Linux names no bundles: its build makes exactly the release's .deb and
+    // refuses a choice.
+    const bundles = process.platform === "linux" ? /^$/ : /^ --bundles \S+$/
+    for (const [call, stage] of [
+      [calls[0], "prod"],
+      [calls[1], "alpha"],
+      [calls[2], "dev"],
+    ]) {
+      const [, rest] = call.match(new RegExp(`build\\.mjs --stage ${stage}(.*)$`)) ?? []
+      assert.notEqual(rest, undefined, call)
+      assert.match(rest.trimEnd(), bundles, call)
+    }
   },
 )

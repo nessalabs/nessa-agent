@@ -115,9 +115,11 @@ that runs past its bound ends the attempt, and the attempt's settlement is what
 moves the projection to `Failed`. The panel keeps no timers and makes no
 guesses.
 
-`Failed` keeps the host's technical message, for **Details** only. The panel
-and onboarding show *"Nessa couldn't start."* with **Try again**. No failure
-reason is inferred from the message's text.
+`Failed` keeps the host's technical message for its log. The panel and
+onboarding show *"Nessa couldn't start"* with **Try again**, and onboarding's
+failure screen deliberately shows no diagnostic; only the refused-start window
+of §1 offers **Details**. No failure reason is inferred from the message's
+text.
 
 The panel subscribes to the startup projection the way onboarding does, through
 one shared monitor, and shows it in the composer's connection notice, in place

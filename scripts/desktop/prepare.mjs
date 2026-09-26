@@ -16,7 +16,7 @@ export async function prepareDesktopRuntime({
   if (platform === "linux") {
     const prepare = await loadLinuxRuntime()
     prepare()
-    return { managedGateway: false }
+    return { managedGateway: true }
   }
   return { managedGateway: false }
 }

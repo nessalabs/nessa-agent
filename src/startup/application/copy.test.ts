@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { startupDetails, startupSentence } from "./copy"
+import { startupSentence } from "./copy"
 import type { GatewayStartupStatus } from "./gateway-startup"
 
 describe("what a person reads about startup (ADR 221)", () => {
@@ -9,7 +9,7 @@ describe("what a person reads about startup (ADR 221)", () => {
     [{ revision: 1, state: "starting", step: "launching" }, "Starting…"],
     [
       { revision: 1, state: "failed", message: "launchctl bootstrap: 5" },
-      "Nessa couldn’t start.",
+      "Nessa couldn’t start",
     ],
     [
       { state: "unavailable", message: "no host" },
@@ -35,13 +35,5 @@ describe("what a person reads about startup (ADR 221)", () => {
   it("reads a step it does not know as a start in progress", () => {
     const unknown = { revision: 1, state: "starting", step: "defragmenting" } as unknown
     expect(startupSentence(unknown as GatewayStartupStatus)).toBe("Getting ready…")
-  })
-
-  it("keeps the host's message for Details only when something went wrong", () => {
-    expect(startupDetails({ revision: 1, state: "failed", message: "why" })).toBe("why")
-    expect(startupDetails({ state: "unavailable", message: "how" })).toBe("how")
-    expect(
-      startupDetails({ revision: 1, state: "starting", step: "launching" }),
-    ).toBeUndefined()
   })
 })

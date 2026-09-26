@@ -50,7 +50,9 @@
  * the served version under it, and two icon controls. Take the install one. The
  * notice goes, an update tab opens on the download, and the app downloads the
  * artifact, verifies the signature, installs over itself, and restarts; the app
- * that comes back is the new version. This terminal logs exactly two requests:
+ * that comes back is the new version. On Linux, where the artifact is a `.deb`,
+ * the system asks for an administrator's password first, because the plugin
+ * installs it with `pkexec dpkg -i`. This terminal logs exactly two requests:
  * one for `/latest.json` at launch, one for the artifact on the install.
  *
  * ## What each failure means

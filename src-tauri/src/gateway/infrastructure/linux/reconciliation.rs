@@ -16,7 +16,7 @@ use super::{
         wants_link_matches, wants_link_temporary_present,
     },
     unit::{render, rendered_declaration, unit_name, RenderedUnit, UnitDefinition},
-    user_manager::{verify_linger, JobTerminal, UnitSnapshot, UserManager},
+    user_manager::{JobTerminal, UnitSnapshot, UserManager},
 };
 use crate::gateway::{
     application::{
@@ -66,7 +66,7 @@ pub(crate) struct SystemdGateway {
 }
 
 trait LinuxManagerFactory: Send + Sync {
-    fn verify_prerequisites(&self, expected_uid: u32) -> Result<(), String>;
+    fn verify_prerequisites(&self) -> Result<(), String>;
     fn connect(&self, expected_uid: u32) -> Result<Box<dyn LinuxUserManager>, String>;
 }
 
@@ -236,13 +236,12 @@ struct NativeLinuxRuntimeContext {
 }
 
 impl LinuxManagerFactory for NativeLinuxManagerFactory {
-    fn verify_prerequisites(&self, expected_uid: u32) -> Result<(), String> {
-        verify_linger(expected_uid)?;
+    fn verify_prerequisites(&self) -> Result<(), String> {
         verify_pidfd_support()
     }
 
     fn connect(&self, expected_uid: u32) -> Result<Box<dyn LinuxUserManager>, String> {
-        self.verify_prerequisites(expected_uid)?;
+        self.verify_prerequisites()?;
         UserManager::connect(expected_uid)
             .map(|manager| Box::new(manager) as Box<dyn LinuxUserManager>)
     }
@@ -369,7 +368,7 @@ impl SystemdGateway {
             ));
         }
         self.manager_factory
-            .verify_prerequisites(effective_uid)
+            .verify_prerequisites()
             .map_err(GatewayError::Registration)?;
         verify_systemd_authority(manager, paths, unit).map_err(GatewayError::Registration)
     }
@@ -2829,7 +2828,7 @@ fn retry<T>(mut operation: impl FnMut() -> Result<T, GatewayError>) -> Result<T,
 }
 
 fn pre_admission(error: impl std::fmt::Display) -> GatewayError {
-    GatewayError::Registration(format!("{error}; Nessa made no service or linger change"))
+    GatewayError::Registration(format!("{error}; Nessa made no service change"))
 }
 
 fn retire_prior(
@@ -3260,7 +3259,7 @@ mod tests {
     }
 
     impl LinuxManagerFactory for FixedManagerFactory {
-        fn verify_prerequisites(&self, _: u32) -> Result<(), String> {
+        fn verify_prerequisites(&self) -> Result<(), String> {
             self.error
                 .as_ref()
                 .map_or(Ok(()), |error| Err(error.clone()))
@@ -4235,7 +4234,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_admission_refusal_states_that_no_service_or_linger_change_occurred() {
+    fn pre_admission_refusal_states_that_no_service_change_occurred() {
         let temporary = tempfile::tempdir().unwrap();
         let configuration = ServiceConfiguration::new(
             "prod".into(),
@@ -4291,9 +4290,7 @@ mod tests {
         let error = gateway
             .register(Path::new("/unused"), "dev", None, &attempt, &progress)
             .unwrap_err();
-        assert!(error
-            .to_string()
-            .ends_with("Nessa made no service or linger change"));
+        assert!(error.to_string().ends_with("Nessa made no service change"));
         assert_eq!(unit.as_str(), "nessa-gateway-prod.service");
     }
 
@@ -4912,7 +4909,7 @@ mod tests {
     struct ScriptedFactory(Arc<Script>);
 
     impl LinuxManagerFactory for ScriptedFactory {
-        fn verify_prerequisites(&self, _: u32) -> Result<(), String> {
+        fn verify_prerequisites(&self) -> Result<(), String> {
             Ok(())
         }
         fn connect(&self, _: u32) -> Result<Box<dyn LinuxUserManager>, String> {
@@ -5803,17 +5800,17 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn native_manager_factory_refuses_an_account_without_linger_authority() {
+    fn native_manager_factory_refuses_an_unknown_account() {
         let temporary = tempfile::tempdir().unwrap();
         let sentinel = temporary.path().join("must-remain-absent.service");
         assert!(!sentinel.exists());
         let error = NativeLinuxManagerFactory
             .connect(u32::MAX)
             .err()
-            .expect("an unknown account cannot satisfy the linger prerequisite");
+            .expect("no user manager is owned by an unknown account");
         assert!(pre_admission(error)
             .to_string()
-            .ends_with("Nessa made no service or linger change"));
+            .ends_with("Nessa made no service change"));
         assert!(!sentinel.exists());
     }
 
@@ -5829,8 +5826,11 @@ mod tests {
             "the native fixture must be invoked by the explicit disposable-manager gate"
         );
         let effective_uid = unsafe { libc::geteuid() };
-        let manager = UserManager::connect(effective_uid)
-            .map(|manager| Box::new(manager) as Box<dyn LinuxUserManager>)
+        // Through the production factory, prerequisites included, so an
+        // account without linger (the check script reports the runner's) is
+        // proven to register.
+        let manager = NativeLinuxManagerFactory
+            .connect(effective_uid)
             .expect("Linux acceptance requires the disposable user manager to be reachable");
         assert_eq!(manager.identity().user_id(), effective_uid);
         manager.recheck_identity().unwrap();
