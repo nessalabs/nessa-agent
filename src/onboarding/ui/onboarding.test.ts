@@ -114,11 +114,13 @@ describe("the managed gateway while setup is open", () => {
 })
 
 describe("an agent that cannot be picked", () => {
-  it("names its reason for the ear and the pointer, without printing it", () => {
+  it("names its reason, and keeps the words ready for hover and focus", () => {
     const markup = picker(recordReadiness(asking, { claude: "not-installed" }))
     expect(markup).toContain('aria-label="Claude, not installed"')
-    expect(markup).toContain('title="Not installed"')
-    expect(markup).not.toContain(">Not installed<")
+    // On screen when the row is hovered or focused, not only through a
+    // tooltip a keyboard cannot open.
+    expect(markup).toMatch(/group-focus:inline"[^>]*>Not installed</)
+    expect(markup).not.toContain("title=")
   })
 })
 

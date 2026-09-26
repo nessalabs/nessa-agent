@@ -5,7 +5,17 @@ import {
   type ApiKeyAgent,
 } from "../application/ports"
 import { AgentApiKeyForm } from "./agent-api-key-form"
-import { Check, CircleAlert, Clock, Download, KeyRound, LoaderCircle } from "lucide-react"
+import {
+  Check,
+  CircleAlert,
+  CircleHelp,
+  Clock,
+  Download,
+  KeyRound,
+  LoaderCircle,
+  Settings,
+  Unplug,
+} from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
@@ -188,8 +198,8 @@ const SetupStep = React.forwardRef<
  * What an agent that cannot be picked is waiting on: a mark, and the words it
  * stands for.
  *
- * The words are the mark's name — announced, and shown on hover — rather than
- * printed beside every row. A column of sentences down the list is noise, and
+ * The words are the mark's name — announced, and shown beside it when the row
+ * is hovered or focused — rather than printed on every row. A column of sentences down the list is noise, and
  * most of these differ only in which small fix they ask for, which a glyph says
  * at a glance.
  *
@@ -220,10 +230,12 @@ function readinessNote(
   // be sitting on the machine already. Telling someone to install what they
   // have is advice that cannot work however many times they take it.
   if (readiness === "not-configured") {
-    return { text: "Not set up here", Icon: CircleAlert }
+    return { text: "Not set up here", Icon: Settings }
   }
-  if (failure === "unreachable") return { text: "Can’t reach Nessa", Icon: CircleAlert }
-  if (failure === "unreadable") return { text: "Unexpected answer", Icon: CircleAlert }
+  // Each failure keeps a mark of its own, so which one it is can be told at a
+  // glance and is not left to the words alone.
+  if (failure === "unreachable") return { text: "Can’t reach Nessa", Icon: Unplug }
+  if (failure === "unreadable") return { text: "Unexpected answer", Icon: CircleHelp }
   return { text: "Checking…", Icon: LoaderCircle, spin: true }
 }
 
@@ -270,18 +282,32 @@ function AgentOption({
       // The note is only a mark on screen, so the option is named outright with
       // the words the mark stands for.
       aria-label={note ? `${name}, ${note.text.toLowerCase()}` : name}
-      title={note?.text}
       onClick={() => {
         if (note) return
         onSelect(id)
       }}
-      className="flex w-full items-center gap-3 rounded-xl border border-white/15 bg-background/45 p-3 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-background/45 aria-pressed:border-ring aria-pressed:bg-background/75"
+      className="group flex w-full items-center gap-3 rounded-xl border border-white/15 bg-background/45 p-3 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-background/45 aria-pressed:border-ring aria-pressed:bg-background/75"
     >
       <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground">
         <AgentMark id={id} name={name} />
       </span>
       <span className="nessa-text-4 font-medium text-foreground">{name}</span>
-      <span className="ml-auto flex size-5 shrink-0 items-center justify-center">
+      {note ? (
+        // The words come up beside the mark whenever the row is pointed at or
+        // focused — by a click or by a key — so the reason is on screen for
+        // anyone who asks for it, not only for a pointer that can hover or a
+        // screen reader that reads the name. Hidden from assistive technology
+        // because the option's name already says it.
+        <span
+          aria-hidden="true"
+          className="ml-auto hidden nessa-text-2 whitespace-nowrap text-muted-foreground group-hover:inline group-focus:inline"
+        >
+          {note.text}
+        </span>
+      ) : null}
+      <span
+        className={`${note ? "group-hover:ml-0 group-focus:ml-0 " : ""}ml-auto flex size-5 shrink-0 items-center justify-center`}
+      >
         {note ? (
           <note.Icon
             aria-hidden
