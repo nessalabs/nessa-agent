@@ -943,11 +943,6 @@ impl LifecycleHistory {
         !self.plans.is_empty()
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub fn startup_failure(&self) -> Option<&StartupFailureRecoveryAuthority> {
-        self.startup_failure.as_ref()
-    }
-
     pub fn pending_observation_source(&self) -> Option<LifecycleObservationSource> {
         self.pending_observation.as_ref().map(|(plan_id, step_id)| {
             LifecycleObservationSource::Effect {

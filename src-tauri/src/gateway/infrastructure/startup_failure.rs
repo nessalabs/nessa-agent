@@ -41,6 +41,7 @@ impl RecordedFailure {
     pub(super) fn belongs_to(&self, generation: &str) -> bool {
         self.service_generation == generation
     }
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(super) fn reason(&self) -> &str {
         &self.reason
     }
@@ -55,6 +56,7 @@ impl RecordedFailure {
     ) -> Option<StartupFailureRecoveryAuthority> {
         validated_authority(self.reason.clone(), self.exit_code, target, self.process_id)
     }
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(super) fn describe(&self) -> String {
         format!(
             "gateway recorded a startup failure it will not retry: {} (reason {}, code {}, pid {})",
@@ -73,6 +75,7 @@ pub(super) fn recorded_failure(logs: &Path) -> Option<RecordedFailure> {
     parse_record(&bytes)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(super) fn forget_recorded_failure(logs: &Path) {
     match std::fs::remove_file(logs.join(RECORD_FILE)) {
         Ok(()) => {}

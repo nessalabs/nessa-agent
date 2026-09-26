@@ -21,8 +21,8 @@ use super::{
 };
 use crate::gateway::{
     application::{
-        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayLifecycleRecoveryAuthority,
-        GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
+        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
+        GatewayReconciliationAttempt, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
         MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
     },
@@ -3176,8 +3176,8 @@ mod tests {
     use super::*;
     use crate::gateway::{
         application::{
-            testing::discard_reconciliation_audit, GatewayReconciliationRequest,
-            SystemMonotonicClock,
+            testing::discard_reconciliation_audit, GatewayLifecycleRecoveryAuthority,
+            GatewayReconciliationRequest, SystemMonotonicClock,
         },
         domain::value_objects::{
             LifecycleRecordKind, ReconciliationCorrelation, ReconciliationEvidence,
