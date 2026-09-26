@@ -26,6 +26,7 @@ export {
   gatewayStartup,
   hostStartup,
   restartNessa,
+  quitNessa,
   retrySetupRecord,
   retryGatewayStartup,
   saveAgentApiKey,

@@ -66,6 +66,13 @@ export async function restartNessa(): Promise<void> {
   await invoke("restart_nessa")
 }
 
+/** Quits Nessa: the way out of a refused launch that trying again cannot clear. */
+export async function quitNessa(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("quit_nessa")
+}
+
 /**
  * The latest gateway startup transition retained by the host.
  *

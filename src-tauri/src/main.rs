@@ -84,6 +84,7 @@ fn main() {
             attachments::read_attachment_bytes,
             startup::host_startup,
             startup::restart_nessa,
+            startup::quit_nessa,
         ])
         .setup(move |app| {
             // Nothing below returns an error to Tauri (ADR 221). Tauri panics on

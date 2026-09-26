@@ -13,6 +13,14 @@ pub enum RetirementRefusal {
 }
 
 impl RetirementRefusal {
+    /// The published name, for the record of a refused retirement.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DataMissing => "data_missing",
+            Self::NotConfirmed => "not_confirmed",
+        }
+    }
+
     /// The refusal a result names. A result with no name, or one this build does
     /// not know, is `NotConfirmed`: nothing is stopped on a reason the host
     /// cannot read.

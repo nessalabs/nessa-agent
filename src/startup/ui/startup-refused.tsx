@@ -1,4 +1,5 @@
 import { Button } from "@nessa-ui/react/button"
+import { COULD_NOT_START } from "../application/copy"
 import { StartupDetails } from "./startup-details"
 
 /**
@@ -10,9 +11,11 @@ import { StartupDetails } from "./startup-details"
 export function StartupRefused({
   details,
   onTryAgain,
+  onQuit,
 }: {
   details: string
   onTryAgain: () => void
+  onQuit: () => void
 }) {
   return (
     <main className="flex size-full items-center justify-center p-4">
@@ -20,14 +23,23 @@ export function StartupRefused({
         role="alert"
         className="flex w-full max-w-sm flex-col gap-3 rounded-2xl border border-border bg-background p-6 text-foreground shadow-2xl"
       >
-        <h1 className="nessa-text-5 font-semibold">Nessa couldn’t start.</h1>
+        <h1 className="nessa-text-5 font-semibold">{COULD_NOT_START}</h1>
         <p className="nessa-text-2 text-muted-foreground">
-          Trying again usually fixes this. If it keeps happening, copy the details
-          and send them to us.
+          Try again. If it keeps happening, copy the details and send them to us.
         </p>
-        <Button type="button" className="rounded-full" onClick={onTryAgain}>
-          Try again
-        </Button>
+        <div className="flex gap-2">
+          <Button type="button" className="flex-1 rounded-full" onClick={onTryAgain}>
+            Try again
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1 rounded-full"
+            onClick={onQuit}
+          >
+            Quit
+          </Button>
+        </div>
         <StartupDetails details={details} />
       </div>
     </main>

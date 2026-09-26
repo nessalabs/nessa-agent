@@ -1509,6 +1509,10 @@ fn a_command_past_its_deadline_is_ended_and_fails() {
     )
     .unwrap_err();
     assert!(started.elapsed() < Duration::from_secs(5), "{refused}");
+    assert_eq!(
+        refused,
+        super::BoundedOutputError::Deadline(Duration::from_millis(200))
+    );
 
     let answered = super::bounded_output(
         std::process::Command::new("/bin/echo")
@@ -1565,6 +1569,12 @@ fn a_refused_retirement_is_typed_by_its_published_name() {
             other => panic!("{name:?}: {other:?}"),
         }
     }
+
+    // The journal records the failed step's text; it names the refusal.
+    assert!(answer(refused(Some("data_missing")))
+        .unwrap_err()
+        .to_string()
+        .ends_with("(refusal: data_missing)"));
 
     let mut contradictory = successful_result();
     contradictory["refusal"] = json!("data_missing");

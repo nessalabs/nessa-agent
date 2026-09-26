@@ -32,5 +32,7 @@ describe("the panel's startup notice (ADR 221)", () => {
     expect(startupNotice(undefined, vi.fn())).toBeNull()
     expect(startupNotice({ revision: 4, state: "ready" }, vi.fn())).toBeNull()
     expect(startupNotice({ revision: 0, state: "unmanaged" }, vi.fn())).toBeNull()
+    // Not being able to ask the host is not a startup failure to announce.
+    expect(startupNotice({ state: "unavailable", message: "no host" }, vi.fn())).toBeNull()
   })
 })

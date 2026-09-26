@@ -3,23 +3,28 @@ import type { SessionPhase } from "../../session"
 import { useGatewayStartup } from "../../startup"
 
 /**
- * The host's startup projection, for the panel (ADR 221). A session that gave
- * up while the gateway was starting is retried once, when the host says it has
- * become ready, rather than waiting for somebody to press Retry. Only the
- * change to ready does this, so a session that fails again against a ready
- * gateway keeps its own notice and Retry.
+ * The host's startup projection, for the panel (ADR 221). Each time the host
+ * says the gateway has become ready, a session that has failed is retried once
+ * — whether it failed before that moment or while still connecting after it —
+ * rather than waiting for somebody to press Retry. A session that fails again
+ * after that keeps its own notice and Retry.
  */
 export function usePanelStartup(session: { phase: SessionPhase; retry: () => void }) {
   const startup = useGatewayStartup()
   const ready = startup.status?.state === "ready"
   const wasReady = React.useRef(ready)
+  const retryOwed = React.useRef(false)
   const retrySession = React.useRef(session.retry)
   retrySession.current = session.retry
   const sessionFailed = session.phase === "error"
   React.useEffect(() => {
-    const becameReady = ready && !wasReady.current
+    if (ready && !wasReady.current) retryOwed.current = true
+    if (!ready) retryOwed.current = false
     wasReady.current = ready
-    if (becameReady && sessionFailed) retrySession.current()
+    if (retryOwed.current && sessionFailed) {
+      retryOwed.current = false
+      retrySession.current()
+    }
   }, [ready, sessionFailed])
   return startup
 }

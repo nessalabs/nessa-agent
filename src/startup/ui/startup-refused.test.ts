@@ -9,11 +9,13 @@ it("says Nessa could not start, offers Try again, and folds the reason away", as
   const container = document.createElement("div")
   const root = createRoot(container)
   const tryAgain = vi.fn()
+  const quit = vi.fn()
   await React.act(async () =>
     root.render(
       React.createElement(StartupRefused, {
         details: "settings could not be read: local storage must be private",
         onTryAgain: tryAgain,
+        onQuit: quit,
       }),
     ),
   )
@@ -29,5 +31,11 @@ it("says Nessa could not start, offers Try again, and folds the reason away", as
   )
   await React.act(async () => button?.click())
   expect(tryAgain).toHaveBeenCalledOnce()
+  // A refusal that trying again cannot clear still has a way out.
+  const quitButton = [...container.querySelectorAll("button")].find(
+    (element) => element.textContent === "Quit",
+  )
+  await React.act(async () => quitButton?.click())
+  expect(quit).toHaveBeenCalledOnce()
   await React.act(async () => root.unmount())
 })

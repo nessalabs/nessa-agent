@@ -9,7 +9,12 @@ export {
   type GatewayStartupMonitor,
   type GatewayStartupStatus,
 } from "./application/gateway-startup"
-export { startupDetails, startupSentence } from "./application/copy"
+export {
+  COULD_NOT_START,
+  TRY_AGAIN_HINT,
+  startupDetails,
+  startupSentence,
+} from "./application/copy"
 export { nativeGatewayStartup } from "./adapters/gateway-startup"
 export { StartupDetails } from "./ui/startup-details"
 export { StartupRefused } from "./ui/startup-refused"

@@ -236,11 +236,48 @@ pub(super) fn launchctl(args: &[&str]) -> Result<(), String> {
 /// step finishes, one way or the other, without the panel keeping a timer.
 pub(super) const LAUNCHCTL_DEADLINE: Duration = Duration::from_secs(30);
 
+/// Why a bounded command gave no output.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BoundedOutputError {
+    /// It was still running at its deadline and was ended. What it had already
+    /// done is unknown.
+    Deadline(Duration),
+    /// It could not be run or waited on.
+    Run(String),
+}
+impl std::fmt::Display for BoundedOutputError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Deadline(deadline) => write!(
+                output,
+                "launchctl did not finish within {} s",
+                deadline.as_secs()
+            ),
+            Self::Run(error) => output.write_str(error),
+        }
+    }
+}
+impl From<BoundedOutputError> for String {
+    fn from(error: BoundedOutputError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Run a `launchctl` command with piped output, ending it at `deadline`.
-pub(super) fn bounded_output(command: &mut Command, deadline: Duration) -> Result<Output, String> {
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take().ok_or("launchctl stdout unavailable")?;
-    let stderr = child.stderr.take().ok_or("launchctl stderr unavailable")?;
+pub(super) fn bounded_output(
+    command: &mut Command,
+    deadline: Duration,
+) -> Result<Output, BoundedOutputError> {
+    let run = |error: String| BoundedOutputError::Run(error);
+    let mut child = command.spawn().map_err(|error| run(error.to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| run("launchctl stdout unavailable".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| run("launchctl stderr unavailable".into()))?;
     let stdout = thread::spawn(move || {
         let mut bytes = Vec::new();
         let mut output = stdout;
@@ -253,18 +290,21 @@ pub(super) fn bounded_output(command: &mut Command, deadline: Duration) -> Resul
     });
     let until = Instant::now() + deadline;
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(run(error.to_string()));
+            }
         }
         if Instant::now() >= until {
             let _ = child.kill();
             let _ = child.wait();
             let _ = stdout.join();
             let _ = stderr.join();
-            return Err(format!(
-                "launchctl did not finish within {} s",
-                deadline.as_secs()
-            ));
+            return Err(BoundedOutputError::Deadline(deadline));
         }
         thread::sleep(Duration::from_millis(10));
     };
@@ -272,12 +312,12 @@ pub(super) fn bounded_output(command: &mut Command, deadline: Duration) -> Resul
         status,
         stdout: stdout
             .join()
-            .map_err(|_| "launchctl stdout reader panicked")?
-            .map_err(|error| error.to_string())?,
+            .map_err(|_| run("launchctl stdout reader panicked".into()))?
+            .map_err(|error| run(error.to_string()))?,
         stderr: stderr
             .join()
-            .map_err(|_| "launchctl stderr reader panicked")?
-            .map_err(|error| error.to_string())?,
+            .map_err(|_| run("launchctl stderr reader panicked".into()))?
+            .map_err(|error| run(error.to_string()))?,
     })
 }
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -586,7 +626,7 @@ fn read_acknowledgement(
             if bytes.len() > 65536 {
                 return Ok(false);
             }
-            if !acknowledge(
+            let answer = acknowledge(
                 &bytes,
                 request,
                 target,
@@ -594,16 +634,19 @@ fn read_acknowledgement(
                 instance,
                 running_generation,
                 target_generation,
-            )? {
+            );
+            if matches!(answer, Ok(false)) {
                 return Ok(false);
             }
             // Reading a renamed file does not establish crash durability. Complete
-            // both persistence barriers before bootout can rely on this fence.
+            // both persistence barriers before bootout can rely on this fence,
+            // and before a refusal can be acted on (ADR 221): either one may be
+            // what lets the host unload the old service.
             file.sync_all()
                 .map_err(|error| format!("Cannot persist retirement acknowledgement: {error}"))?;
             nessa_local_storage::sync_directory(directory)
                 .map_err(|error| format!("Cannot persist retirement fence directory: {error}"))?;
-            Ok(true)
+            answer
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.to_string().into()),
@@ -622,8 +665,14 @@ pub(super) enum RetirementFailure {
 }
 impl std::fmt::Display for RetirementFailure {
     fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The refusal's name is part of the text the journal records for the
+        // failed retirement step, so the durable record says why, not only the
+        // plan the host chose next.
         match self {
-            Self::Refused { message, .. } | Self::Unanswered(message) => output.write_str(message),
+            Self::Refused { refusal, message } => {
+                write!(output, "{message} (refusal: {})", refusal.name())
+            }
+            Self::Unanswered(message) => output.write_str(message),
         }
     }
 }

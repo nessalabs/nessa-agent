@@ -1,5 +1,11 @@
 import type { GatewayStartupStatus } from "./gateway-startup"
 
+/** What a person reads when Nessa could not start, wherever it is said. */
+export const COULD_NOT_START = "Nessa couldn’t start."
+
+/** The line under it, when trying again is the thing to do. */
+export const TRY_AGAIN_HINT = "Trying again usually fixes this."
+
 /**
  * The one sentence a person reads about startup (ADR 221), shared by setup and
  * the panel so they cannot word it differently. The host's own message is
@@ -19,7 +25,7 @@ export function startupSentence(status: GatewayStartupStatus): string | undefine
           return "Getting ready…"
       }
     case "failed":
-      return "Nessa couldn’t start."
+      return COULD_NOT_START
     case "unavailable":
       return "Nessa couldn’t check whether it started."
     default:

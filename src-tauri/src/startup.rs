@@ -61,8 +61,9 @@ impl fmt::Display for StartupRefusal {
     }
 }
 
-/// Managed before anything else in `setup`, so the page's first question
-/// always has an answer.
+/// Managed by `setup` on both of its paths, before it returns. The page's
+/// `host_startup` is a synchronous command, so Tauri answers it on the main
+/// thread after `setup` has run: the first question always has an answer.
 pub enum HostStartup {
     Ready,
     Refused(StartupRefusal),
@@ -91,14 +92,26 @@ pub fn restart_nessa(app: AppHandle) {
     app.restart();
 }
 
+/// **Quit** on the refusal. With no tray, and a refusal that trying again may
+/// not clear, the page has to offer a way out that needs no keyboard shortcut.
+#[tauri::command]
+pub fn quit_nessa(app: AppHandle) {
+    app.exit(0);
+}
+
 /// Put the panel on screen for the refusal. Nothing else runs: no gateway, no
 /// tray, no shortcut, because each of them needs what setup could not build.
+/// Without a tray the panel has to be findable, so it joins the taskbar.
 pub fn show_refusal(app: &AppHandle) {
     let Some(window) = app.get_webview_window(crate::panel::MAIN_WINDOW) else {
         eprintln!("[nessa] no panel to show the startup refusal in");
         return;
     };
-    if let Err(error) = window.show().and_then(|()| window.set_focus()) {
+    let shown = window
+        .set_skip_taskbar(false)
+        .and_then(|()| window.show())
+        .and_then(|()| window.set_focus());
+    if let Err(error) = shown {
         eprintln!("[nessa] could not show the startup refusal: {error}");
     }
 }

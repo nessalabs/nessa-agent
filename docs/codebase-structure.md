@@ -693,11 +693,13 @@ found only by port is never stopped. Later updates exchange correlated records i
 commands, join admitted commands, close owned agents, record the transition, and
 then replace the service definition. Failed or contradictory acknowledgement
 preserves the old process. An admitted retirement cause fences admission even when cleanup or audit fails;
-that evidence forces a stale-service retry but never authorizes bootout. A result
-that did not retire names why, as `refusal` from
-`protocol/defaults/gateway-retirement-refusals.json`; on macOS, `data_missing`
-(the gateway's own conversation data is gone) is the one refusal after which the
-host unloads the old service itself, recorded as its own plan (ADR 221). A pending
+that evidence forces a stale-service retry and, with one exception, never
+authorizes bootout. A result that did not retire names why, as `refusal` from
+`protocol/defaults/gateway-retirement-refusals.json`. The exception is
+`data_missing`: every agent was confirmed stopped and only the record of it
+failed, because the gateway's conversation data is gone. On macOS the host then
+unloads the old service itself under its own plan, `unload-unretirable-service`
+(ADR 221). A pending
 request for the live instance/generation also forces retry if result publication
 failed; stale requests for other instances or generations do not. Successful
 results retain the original validated lifecycle principal, cause, and correlation as durable retirement fences;

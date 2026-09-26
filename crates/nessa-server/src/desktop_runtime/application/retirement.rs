@@ -1,10 +1,10 @@
 use crate::{
-    conversation::application::ConversationService,
+    conversation::application::{ConversationError, ConversationService},
     desktop_runtime::domain::{
         RetirementFence, RetirementRefusal, RetirementRequest, RunningRuntime,
     },
 };
-use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::{agents::AgentError, permissions::ActionContext};
 use std::{future::Future, pin::Pin, time::Duration};
 
 pub(crate) struct RetirementRecord {
@@ -51,6 +51,9 @@ pub(crate) async fn retire(
     data: &dyn ConversationData,
     audit: &dyn RetirementAudit,
 ) -> RetirementResult {
+    // Whether every owner's stop was confirmed and only its record failed: the
+    // one failure a refusal may call `data_missing` (ADR 221).
+    let mut stops_confirmed_but_unrecorded = false;
     let mut cleanup_error = if !running.accepts(&request) {
         Some(
             "Retirement request identifies a different running instance or service generation"
@@ -58,11 +61,13 @@ pub(crate) async fn retire(
         )
     } else {
         match conversations {
-            Some(service) => service
-                .retire("gateway_upgrade", request.id())
-                .await
-                .err()
-                .map(|e| e.to_string()),
+            Some(service) => match service.retire("gateway_upgrade", request.id()).await {
+                Ok(()) => None,
+                Err(error) => {
+                    stops_confirmed_but_unrecorded = only_unrecorded_stops(&error);
+                    Some(error.to_string())
+                }
+            },
             None => None,
         }
     };
@@ -72,6 +77,7 @@ pub(crate) async fn retire(
             .is_some_and(|cause| cause.surface_id() != "gateway_upgrade")
     {
         cleanup_error = Some("runtime admission was closed by a different lifecycle cause".into());
+        stops_confirmed_but_unrecorded = false;
     }
     let retirement_cause = if running.accepts(&request) {
         Some(
@@ -98,8 +104,12 @@ pub(crate) async fn retire(
     .unwrap_or_else(|_| Err("retirement audit acknowledgement deadline elapsed".into()))
     .err();
     let retired = cleanup_error.is_none() && audit_error.is_none();
-    let refusal =
-        (!retired).then(|| RetirementRefusal::of(running.accepts(&request), data.missing()));
+    let refusal = (!retired).then(|| {
+        RetirementRefusal::of(
+            stops_confirmed_but_unrecorded && audit_error.is_none(),
+            data.missing(),
+        )
+    });
     RetirementResult {
         request,
         retirement_cause,
@@ -109,6 +119,24 @@ pub(crate) async fn retire(
         audit_error,
         refusal,
     }
+}
+
+/// Every owner was closed and only the record of closing it failed.
+///
+/// The SDK answers `close` with `AuditFailure` only when its cleanup completed
+/// and the audit sink refused; a cleanup that did not complete is
+/// `AuditAndCleanupFailure`, `CleanupUncertain`, or a stop past its budget
+/// (`Deadline`). Any of those, or an admission that could not drain, leaves
+/// work this gateway may still own, so none of them is this case.
+pub(crate) fn only_unrecorded_stops(error: &ConversationError) -> bool {
+    matches!(
+        error,
+        ConversationError::Retirement(failures)
+            if !failures.is_empty()
+                && failures
+                    .iter()
+                    .all(|(_, failure)| matches!(failure, AgentError::AuditFailure))
+    )
 }
 
 /// Restore the original gateway-upgrade fence before serving any product request.

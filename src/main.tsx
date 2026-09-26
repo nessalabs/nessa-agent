@@ -14,7 +14,7 @@ import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
 
 import { BrowserApplication } from "./composition/browser"
-import { hasNativeHost, hostStartup, restartNessa, windowSurface } from "./host"
+import { hasNativeHost, hostStartup, quitNessa, restartNessa, windowSurface } from "./host"
 import { StartupRefused } from "./startup"
 
 import { environmentFromVite } from "./env/vite"
@@ -59,6 +59,7 @@ void hostStartup()
           <StartupRefused
             details={startup.details}
             onTryAgain={() => void restartNessa()}
+            onQuit={() => void quitNessa()}
           />
         </React.StrictMode>,
       )

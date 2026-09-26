@@ -50,11 +50,15 @@ impl Storage for FileStorage {
             return Self::read_private(path);
         };
         // Reading never depended on the folder, so a folder that cannot be made
-        // private is left as it was; writing still refuses it.
+        // private is left as it was, silently: that is its steady state, and
+        // writing still refuses it. Only an unexpected failure is worth a line.
+        #[cfg(unix)]
         if let Some(folder) = path.parent() {
             match repair.repair(folder, SharedReadKind::Directory) {
                 Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        || nessa_local_storage::is_unsafe_file(&error) => {}
                 Err(error) => eprintln!(
                     "[nessa] could not make {} private: {error}",
                     folder.display()
@@ -224,6 +228,29 @@ mod tests {
             &storage.read(&path).unwrap_err()
         ));
         assert_eq!(mode_of(&path), 0o664);
+    }
+
+    /// A folder others can write is not repairable, and reading never needed
+    /// it private: the read goes ahead and the folder is left exactly as it was.
+    #[test]
+    fn a_folder_that_cannot_be_repaired_is_left_alone_and_read_as_before() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("so.nessa.app");
+        std::fs::create_dir(&config).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let path = config.join("settings.json");
+        let mut file =
+            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew).unwrap();
+        file.write_all(b"{}").unwrap();
+        drop(file);
+
+        assert_eq!(FileStorage::repairing(&config).read(&path).unwrap(), "{}");
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o775
+        );
+        assert!(!config.join(super::super::repair::RECORDS).exists());
     }
 
     #[test]

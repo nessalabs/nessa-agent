@@ -136,8 +136,8 @@ async fn audit_failure_never_acknowledges_retirement() {
     assert_eq!(result.audit_error.as_deref(), Some("audit refused"));
 }
 
-/// ADR 221: a retirement that did not happen says why, by a published name.
-/// Only a request for this very runtime may say its data is missing.
+/// ADR 221: the file carries a refusal only when there is one, the reader
+/// holds the writer's rule, and an audit failure alone is never `data_missing`.
 #[tokio::test]
 async fn a_refused_retirement_names_why_and_the_file_carries_it() {
     struct MissingData;
@@ -146,11 +146,11 @@ async fn a_refused_retirement_names_why_and_the_file_carries_it() {
             true
         }
     }
-    let request = |instance: &str| {
+    let request = || {
         RetirementRequest::new(
             Uuid::new_v4().to_string(),
             "b".repeat(64),
-            instance.into(),
+            INSTANCE.into(),
             "c".repeat(64),
             "d".repeat(64),
         )
@@ -158,59 +158,49 @@ async fn a_refused_retirement_names_why_and_the_file_carries_it() {
     };
     let running =
         || RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap();
-    let other = "0e0c3f5c-33a8-4a55-9a52-5d1f6c1b0b7e";
 
-    for (request, data, expected) in [
-        (
-            request(INSTANCE),
-            &PresentData as &dyn crate::desktop_runtime::application::ConversationData,
-            RetirementRefusal::NotConfirmed,
-        ),
-        (
-            request(INSTANCE),
-            &MissingData,
-            RetirementRefusal::DataMissing,
-        ),
-        (
-            request(other),
-            &MissingData,
-            RetirementRefusal::NotConfirmed,
-        ),
-    ] {
-        let result = retire(request, running(), None, data, &RejectingAudit).await;
-        assert!(!result.retired);
-        assert_eq!(result.refusal, Some(expected));
-    }
+    // The retirement audit failing says nothing about what was stopped.
+    let refused = retire(request(), running(), None, &MissingData, &RejectingAudit).await;
+    assert!(!refused.retired);
+    assert_eq!(refused.refusal, Some(RetirementRefusal::NotConfirmed));
 
     let root = tempfile::tempdir().unwrap();
     let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
-    let refused = retire(
-        request(INSTANCE),
-        running(),
-        None,
-        &MissingData,
-        &RejectingAudit,
-    )
-    .await;
-    files.result(&refused).unwrap();
-    let written: serde_json::Value =
+    let read = |files: &RetirementFiles| -> serde_json::Value {
         serde_json::from_slice(&std::fs::read(files.directory.join("result.json")).unwrap())
-            .unwrap();
-    assert_eq!(written["retired"], false);
-    assert_eq!(written["refusal"], "data_missing");
-    // The writer reads back what it wrote, refusal included.
-    assert!(files.evidence().is_ok());
+            .unwrap()
+    };
 
-    let retired = retire(request(INSTANCE), running(), None, &MissingData, &files).await;
+    let retired = retire(request(), running(), None, &MissingData, &files).await;
     assert!(retired.retired);
     assert_eq!(retired.refusal, None);
+    files.result(&retired).unwrap();
+    // A retired result is exactly what earlier gateways and hosts wrote.
+    assert!(read(&files).get("refusal").is_none());
+
+    let mut data_missing = refused.clone();
+    data_missing.refusal = Some(RetirementRefusal::DataMissing);
+    let other_root = tempfile::tempdir().unwrap();
+    let other = RetirementFiles::new(other_root.path(), Arc::new(TestClock)).unwrap();
+    other.result(&data_missing).unwrap();
+    assert_eq!(read(&other)["refusal"], "data_missing");
+    assert!(other.evidence().is_ok());
 
     let mut contradictory = refused.clone();
     contradictory.refusal = None;
-    assert!(files.result(&contradictory).is_err());
+    assert!(other.result(&contradictory).is_err());
     let mut contradictory = retired.clone();
     contradictory.refusal = Some(RetirementRefusal::NotConfirmed);
     assert!(files.result(&contradictory).is_err());
+
+    // What the writer refuses to write, the reader refuses to read.
+    for refusal in [json!("not_confirmed"), json!("stopped_for_fun")] {
+        let mut stored = read(&files);
+        stored["refusal"] = refusal;
+        std::fs::remove_file(files.directory.join("result.json")).unwrap();
+        write(&files.directory, "result.json", &stored).unwrap();
+        assert!(files.evidence().is_err());
+    }
 }
 
 struct TestClock;

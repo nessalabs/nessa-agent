@@ -47,9 +47,9 @@ struct RecordedResult {
     cleanup_error: Option<String>,
     #[serde(deserialize_with = "required_nullable_error")]
     audit_error: Option<String>,
-    /// Absent from results a gateway wrote before refusals had names.
+    /// Absent from retired results, and from results a gateway wrote before
+    /// refusals had names.
     #[serde(default)]
-    #[allow(dead_code, reason = "read back for its shape; the host acts on it")]
     refusal: Option<String>,
 }
 #[derive(Deserialize)]
@@ -152,6 +152,18 @@ impl RetirementFiles {
         {
             return Err("retirement correlation differs from lifecycle attribution".into());
         }
+        // The reader holds the writer's rule: a retired result names no
+        // refusal, and a refusal is one of the published names. A result with
+        // no refusal at all may come from a gateway that predates the names.
+        match result.refusal.as_deref() {
+            Some(_) if result.retired => {
+                return Err("a retired result names a refusal".into());
+            }
+            Some(name) if RetirementRefusal::named(name).is_none() => {
+                return Err("retirement result names an unknown refusal".into());
+            }
+            _ => {}
+        }
         validate_retirement_evidence(
             request,
             &running,
@@ -207,16 +219,17 @@ impl RetirementFiles {
             .as_ref()
             .map(RetirementFence::cause)
             .or_else(|| incoming.as_ref().map(RetirementFence::cause));
-        write(
-            &self.directory,
-            "result.json",
-            &json!({
+        let mut recorded = json!({
                 "requestId": result.request.id(), "targetFingerprint": result.request.target().as_str(),
                 "runningFingerprint": result.running.fingerprint().as_str(), "runningInstance": result.running.instance().as_str(), "requestedInstance": result.request.running_instance().as_str(), "runningGeneration": result.running.generation().as_str(), "requestedRunningGeneration": result.request.running_generation().as_str(), "targetGeneration": result.request.target_generation().as_str(), "retirementCause": retirement_cause.map(|cause| json!({"principalId":cause.principal_id(),"surfaceId":cause.surface_id(),"requestId":cause.request_id()})), "retirementRequestId": retirement_cause.map(RetirementCause::request_id), "retired": result.retired,
-                "cleanupError": result.cleanup_error, "auditError": result.audit_error,
-                "refusal": result.refusal.map(RetirementRefusal::as_str)
-            }),
-        )
+                "cleanupError": result.cleanup_error, "auditError": result.audit_error
+        });
+        // Written only when there is one, so a retired result is exactly what
+        // every earlier gateway and host wrote and reads (ADR 221).
+        if let Some(refusal) = result.refusal {
+            recorded["refusal"] = json!(refusal.as_str());
+        }
+        write(&self.directory, "result.json", &recorded)
     }
 }
 fn write(directory: &Path, name: &str, value: &Value) -> Result<(), String> {

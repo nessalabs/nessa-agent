@@ -80,7 +80,12 @@ impl Launchctl for NativeLaunchctl {
                 .stderr(Stdio::piped()),
             LAUNCHCTL_DEADLINE,
         )
-        .map_err(std::io::Error::other)
+        .map_err(|error| match error {
+            control::BoundedOutputError::Deadline(_) => {
+                std::io::Error::new(ErrorKind::TimedOut, error.to_string())
+            }
+            control::BoundedOutputError::Run(error) => std::io::Error::other(error),
+        })
     }
     fn bootout(&self, service: &str) -> Result<(), String> {
         launchctl(&["bootout", service])
@@ -647,19 +652,6 @@ fn unload_plan_after_retirement(
         }
         Err(failure) => Err(RegisterFailure::Physical(failure.to_string())),
     }
-}
-
-#[cfg(test)]
-fn retire_then_unload(
-    progress: &dyn GatewayReconciliationProgress,
-    retire: impl FnOnce() -> Result<(), String>,
-    unload: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    retire()?;
-    progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
-    unload()?;
-    progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
-    Ok(())
 }
 
 fn publish_definition(
@@ -1239,12 +1231,15 @@ fn bootstrap_service(
         )
         .map_err(RegisterFailure::Audit)?;
     let bootstrap = run_bootstrap(progress, || launchctl.bootstrap(domain, &artifacts.plist))
-        .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
+        .map_err(|error| {
+            if error.kind() == ErrorKind::TimedOut {
+                BootstrapFailure::Unfinished(error.to_string())
+            } else {
+                BootstrapFailure::CouldNotRun(error.to_string())
+            }
+        })
         .and_then(bootstrap_result);
-    let bootstrap_completion = match &bootstrap {
-        Ok(()) => LifecycleCommandResult::Accepted,
-        Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
-    };
+    let bootstrap_completion = bootstrap_completion(&bootstrap);
     if let Err(audit) = progress.effect_completed(
         "bootstrap-service",
         bootstrap_step.id(),
@@ -2098,13 +2093,32 @@ fn unreadable_process_identity() -> &'static str {
 #[derive(Debug, PartialEq, Eq)]
 enum BootstrapFailure {
     CouldNotRun(String),
-    Refused { status: Option<i32>, detail: String },
+    /// `launchctl bootstrap` was ended at its deadline (ADR 221). launchd may
+    /// already have accepted it, so this is not a refusal.
+    Unfinished(String),
+    Refused {
+        status: Option<i32>,
+        detail: String,
+    },
+}
+
+/// What the journal records for a bootstrap. A command ended at its deadline is
+/// indeterminate: the status observation that follows says what launchd did.
+fn bootstrap_completion(bootstrap: &Result<(), BootstrapFailure>) -> LifecycleCommandResult {
+    match bootstrap {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error @ BootstrapFailure::Unfinished(_)) => {
+            LifecycleCommandResult::Indeterminate(error.to_string())
+        }
+        Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
+    }
 }
 
 impl Display for BootstrapFailure {
     fn fmt(&self, out: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::CouldNotRun(error) => write!(out, "Could not run launchctl bootstrap: {error}"),
+            Self::Unfinished(error) => write!(out, "launchctl bootstrap did not finish: {error}"),
             Self::Refused { detail, .. } => write!(out, "Could not register gateway: {detail}"),
         }
     }
@@ -2209,14 +2223,14 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_presence, bootstrap_cleanup_decision, bootstrap_recovery_decision,
-        bootstrap_succeeded, cleanup_bootstrap_with, control, disabled_service, finish_bootstrap,
-        gave_up_retry, installed_generation, matches_reconciled_gateway, prepare_data_directory,
-        publish_definition, recovery_probe_port, registered_agent_path, retire_then_unload,
-        run_bootstrap, run_planned_effect_with_cleanup, runtime_fingerprint, service_environment,
-        service_matches, startup, unavailable_service, unload_plan_after_retirement,
-        unreadable_process_identity, BootstrapCleanupDecision, BootstrapFailure,
-        BootstrapRecoveryDecision, RetirementRefusal, SearchPath,
+        artifact_presence, bootstrap_cleanup_decision, bootstrap_completion,
+        bootstrap_recovery_decision, bootstrap_succeeded, cleanup_bootstrap_with, control,
+        disabled_service, finish_bootstrap, gave_up_retry, installed_generation,
+        matches_reconciled_gateway, prepare_data_directory, publish_definition,
+        recovery_probe_port, registered_agent_path, run_bootstrap, run_planned_effect_with_cleanup,
+        runtime_fingerprint, service_environment, service_matches, startup, unavailable_service,
+        unload_plan_after_retirement, unreadable_process_identity, BootstrapCleanupDecision,
+        BootstrapFailure, BootstrapRecoveryDecision, RetirementRefusal, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
@@ -2383,6 +2397,35 @@ mod tests {
         )
     }
 
+    /// ADR 221: a bootstrap ended at its deadline may already have been
+    /// accepted by launchd, so the journal records it as indeterminate, never
+    /// as refused.
+    #[test]
+    fn a_bootstrap_ended_at_its_deadline_is_indeterminate_not_rejected() {
+        assert_eq!(
+            bootstrap_completion(&Ok(())),
+            LifecycleCommandResult::Accepted
+        );
+        assert!(matches!(
+            bootstrap_completion(&Err(BootstrapFailure::Unfinished(
+                "launchctl did not finish within 30 s".into()
+            ))),
+            LifecycleCommandResult::Indeterminate(_)
+        ));
+        for refused in [
+            BootstrapFailure::CouldNotRun("no such file".into()),
+            BootstrapFailure::Refused {
+                status: Some(5),
+                detail: "Input/output error".into(),
+            },
+        ] {
+            assert!(matches!(
+                bootstrap_completion(&Err(refused)),
+                LifecycleCommandResult::Rejected(_)
+            ));
+        }
+    }
+
     /// ADR 221: only a refusal naming missing data lets the host unload an old
     /// gateway without its acknowledgement; every other answer preserves it.
     #[test]
@@ -2425,16 +2468,6 @@ mod tests {
 
     #[test]
     fn production_transition_helpers_emit_only_completed_ordered_boundaries() {
-        let progress = RecordingProgress::default();
-        assert_eq!(
-            retire_then_unload(&progress, || Ok(()), || Err("bootout failed".into())),
-            Err("bootout failed".into())
-        );
-        assert_eq!(
-            *progress.0.lock().unwrap(),
-            [ReconciliationHistoryFact::RetirementAcknowledged]
-        );
-
         let progress = RecordingProgress::default();
         assert_eq!(
             publish_definition(&progress, || Ok(()), || Err("sync failed".into())),

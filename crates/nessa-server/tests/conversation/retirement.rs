@@ -313,3 +313,87 @@ impl crate::desktop_runtime::application::ConversationData for PresentData {
         false
     }
 }
+
+/// ADR 221: a gateway says its data is missing only when every owner's stop was
+/// confirmed and only the record of it failed, and the data is gone. A stop
+/// that did not finish keeps the refusal `not_confirmed` whatever the disk says.
+#[tokio::test]
+async fn data_missing_needs_confirmed_stops_as_well_as_missing_data() {
+    use crate::desktop_runtime::domain::RetirementRefusal;
+    struct Accept;
+    impl RetirementAudit for Accept {
+        fn record(
+            &self,
+            _: RetirementRecord,
+        ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    struct Data(bool);
+    impl crate::desktop_runtime::application::ConversationData for Data {
+        fn missing(&self) -> bool {
+            self.0
+        }
+    }
+
+    for (close_failure, missing, expected) in [
+        (
+            AgentError::AuditFailure,
+            true,
+            RetirementRefusal::DataMissing,
+        ),
+        (
+            AgentError::AuditFailure,
+            false,
+            RetirementRefusal::NotConfirmed,
+        ),
+        (
+            AgentError::CleanupUncertain,
+            true,
+            RetirementRefusal::NotConfirmed,
+        ),
+        (
+            AgentError::AuditAndCleanupFailure,
+            true,
+            RetirementRefusal::NotConfirmed,
+        ),
+        (AgentError::Deadline, true, RetirementRefusal::NotConfirmed),
+    ] {
+        let (service, provider, _, _) = fixture(ConversationLimits::default());
+        service
+            .create(
+                ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+                ConversationCaller {
+                    organization_id: OrganizationId::new("org").unwrap(),
+                    principal_id: PrincipalId::new("person").unwrap(),
+                    surface_id: "panel".into(),
+                    action_id: "create".into(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        *provider.close_failure.lock().unwrap() = Some(close_failure.clone());
+        let result = retire(
+            RetirementRequest::new(
+                Uuid::new_v4().to_string(),
+                "b".repeat(64),
+                INSTANCE.into(),
+                "c".repeat(64),
+                "d".repeat(64),
+            )
+            .unwrap(),
+            RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap(),
+            Some(&service),
+            &Data(missing),
+            &Accept,
+        )
+        .await;
+        assert!(!result.retired, "{close_failure:?}");
+        assert_eq!(
+            result.refusal,
+            Some(expected),
+            "{close_failure:?} missing={missing}"
+        );
+    }
+}

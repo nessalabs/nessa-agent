@@ -44,3 +44,28 @@ it("retries a failed session once, when the host says the gateway became ready",
   expect(retry).toHaveBeenCalledOnce()
   await React.act(async () => root.unmount())
 })
+
+it("retries once when the session fails after the gateway became ready", async () => {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  const retry = vi.fn()
+  function Probe({ phase }: { phase: "connecting" | "error" }) {
+    usePanelStartup({ phase, retry })
+    return null
+  }
+  const root = createRoot(document.createElement("div"))
+  const render = (phase: "connecting" | "error") =>
+    React.act(async () => root.render(React.createElement(Probe, { phase })))
+
+  startup.status = { revision: 1, state: "starting" }
+  await render("connecting")
+  startup.status = { revision: 2, state: "ready" }
+  await render("connecting")
+  expect(retry).not.toHaveBeenCalled()
+  // The attempt that was in flight when the gateway became ready fails.
+  await render("error")
+  expect(retry).toHaveBeenCalledOnce()
+  await render("connecting")
+  await render("error")
+  expect(retry).toHaveBeenCalledOnce()
+  await React.act(async () => root.unmount())
+})

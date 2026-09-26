@@ -45,9 +45,12 @@ again.
 typed `StartupRefusal` instead of an error. `setup` then manages
 `HostStartup::Refused`, shows the main window, and does nothing else: no
 gateway, no tray, no shortcuts. The page asks `host_startup` first and, when
-refused, shows *"Nessa couldn't start."* with **Try again** (restarts the app)
-and a **Details** disclosure holding the technical reason and a copy button.
-No command that needs `HostDependencies` can be reached from that page.
+refused, shows *"Nessa couldn't start."* with **Try again** (restarts the app),
+**Quit**, and a **Details** disclosure holding the technical reason and a copy
+button. The panel joins the taskbar, since there is no tray. The commands that
+need `HostDependencies` stay registered; the refused page never mounts anything
+that calls them, and if one were called it would answer that its state is not
+there rather than panic.
 
 ### 2. One narrow repair: shared read on a private file
 
@@ -79,6 +82,11 @@ was and the read goes ahead as before. Each repair is written to
 `<config root>/local-storage-repairs/` before and after the change: target,
 mode before and after, cause `shared_read`, initiator `desktop_host`. If the
 intent record cannot be written, nothing is changed and the read stays refused.
+If the change is made but its outcome cannot be recorded, the repair is not
+confirmed and this read stays refused; the next read finds the file private.
+Repairs in one process run one at a time, so two reads never record the same
+change. The records go through an audit port, as the credential-save audit's
+do, and carry no clock of their own, as that audit's records do not.
 Anything else unsafe stays refused, and for the gateway's section of
 `settings.json` that means the "couldn't start" window, because guessing the
 port, instance or data root could start a second gateway.
@@ -97,7 +105,10 @@ silently repaired". The crate documentation says so where it states the rule.
 | `replacing` | Finishing the last update… | retirement, unload | retirement, stop | 75 s acknowledgement |
 | `launching` | Starting… | bootstrap, readiness | start, readiness | 75 s (macOS), 45 s (Linux) |
 
-Every `launchctl` call the registration makes is bounded (30 s). Copying the
+The waits are each step's own deadline; a `launchctl` call inside one can add
+up to its own bound. Every `launchctl` call the registration makes is bounded
+(30 s). A `bootstrap` ended at that bound is recorded as indeterminate, not
+refused, because launchd may already have accepted it. Copying the
 bundled runtime is local file I/O and is the one step without a timer. A step
 that runs past its bound ends the attempt, and the attempt's settlement is what
 moves the projection to `Failed`. The panel keeps no timers and makes no
@@ -119,14 +130,19 @@ list's empty state no longer says "gateway".
 
 | `refusal` | The gateway sets it when | The host does |
 | --- | --- | --- |
-| `data_missing` | its conversation directory no longer exists when it is asked to retire | Stops the old service itself (plan `unload-unretirable-service`), after the history records `RetirementRefusedDataMissing`, then continues |
-| `not_confirmed` | anything else: a stop, an agent's cleanup, or the retirement audit could not be confirmed | Fails the attempt; **Try again** asks again |
+| `data_missing` | every agent's stop was confirmed and only its record failed (`AuditFailure` alone, for every owner), and its conversation directory no longer exists | Stops the old service itself (plan `unload-unretirable-service`), after the history records `RetirementRefusedDataMissing`, then continues |
+| `not_confirmed` | anything else: a stop that did not finish or was not confirmed, an admission that could not drain, or the retirement audit failing | Fails the attempt; **Try again** asks again |
 | absent | the gateway predates this field | Same as `not_confirmed` |
 
-`data_missing` is safe to act on because the evidence the refusal protects is
-gone. Stopping the process loses nothing that still exists. The host's own
-journal records the stop: intent, plan, completion, observation and outcome,
-with the gateway's refusal as the cause.
+`data_missing` is safe to act on because both halves hold: nothing the gateway
+started is still running, and the evidence it could not record has nowhere left
+to go. A missing directory alone is not enough; a stop that did not finish keeps
+the refusal `not_confirmed` whatever the disk says. The host syncs the result
+before acting on it, as it does before acting on a success, and its own journal
+records the stop: the failed retirement step, whose text names the refusal, the
+plan `unload-unretirable-service`, its completion and observation, and the
+outcome. A retired result carries no `refusal` key at all, so it is exactly what
+earlier gateways and hosts wrote and read.
 
 The history's fact order gains one path. When a managed gateway was running,
 the first fact is either `RetirementAcknowledged` or
@@ -176,7 +192,10 @@ is a separate decision, not taken here.
 - One old-gateway failure, the one that happened, clears itself. Every other
   refusal is still a plain failure with **Try again**. If people get stuck on
   `not_confirmed`, that is the signal to split it further.
-- A downgraded host paired with a newer gateway cannot parse `refusal` and waits
-  out its 75 s timeout. This is accepted: host and gateway ship together, and
-  only a downgrade pairs them this way.
+- A downgraded host paired with a newer gateway that *refused* cannot parse
+  `refusal` and waits out its 75 s timeout; a downgraded gateway reading such a
+  stored result refuses it as evidence. Retired results are unchanged, so an
+  ordinary upgrade or downgrade is unaffected. This is accepted: host and
+  gateway ship together, and only a downgrade after a refusal pairs them this
+  way.
 - A new `refusal` value, or a new repair condition, needs its row here first.

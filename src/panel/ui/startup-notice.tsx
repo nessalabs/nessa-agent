@@ -1,5 +1,9 @@
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
-import { startupSentence, type GatewayStartupStatus } from "../../startup"
+import {
+  TRY_AGAIN_HINT,
+  startupSentence,
+  type GatewayStartupStatus,
+} from "../../startup"
 
 /**
  * The connection's own notice while Nessa is still starting, or could not
@@ -12,7 +16,9 @@ export function startupNotice(
   status: GatewayStartupStatus | undefined,
   onRetry: () => void,
 ): React.ReactNode {
-  if (!status) return null
+  // "Couldn't check" is about the page's link to the host, not about starting;
+  // the session's own notice says what the connection is doing.
+  if (!status || status.state === "unavailable") return null
   const sentence = startupSentence(status)
   if (!sentence) return null
   if (status.state === "starting")
@@ -22,7 +28,7 @@ export function startupNotice(
       className="mb-2"
       state="disconnected"
       title={sentence}
-      description="Trying again usually fixes this."
+      description={TRY_AGAIN_HINT}
       retryLabel="Try again"
       onRetry={onRetry}
     />

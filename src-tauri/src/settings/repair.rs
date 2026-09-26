@@ -9,45 +9,74 @@ use nessa_local_storage::{find_shared_read, SharedReadKind};
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 /// Folder, beneath the config root, holding one record per repair step.
 pub(crate) const RECORDS: &str = "local-storage-repairs";
 
+/// One repair, as it is recorded.
+pub(crate) struct RepairChange<'a> {
+    pub path: &'a Path,
+    pub kind: SharedReadKind,
+    pub mode_before: u32,
+    pub mode_after: u32,
+}
+
+/// Where repair evidence goes: the host's audit port for this one change. The
+/// real sink writes private files; a test substitutes one to fail either step.
+pub(crate) trait RepairRecords: Send + Sync {
+    /// Record what is about to change. The answer is the repair's identity,
+    /// which the outcome is recorded under.
+    fn intent(&self, change: &RepairChange<'_>) -> io::Result<String>;
+    /// Record what happened: `tightened`, or why not.
+    fn outcome(&self, repair: &str, change: &RepairChange<'_>, outcome: &str) -> io::Result<()>;
+}
+
+/// One repair at a time in this process. Two reads that find the same shared
+/// folder would otherwise both record a change only one of them made.
+static REPAIRING: Mutex<()> = Mutex::new(());
+
 /// Makes shared-read settings objects private, recording each change.
 pub(crate) struct SharedReadRepair {
-    records: PathBuf,
+    records: Arc<dyn RepairRecords>,
 }
 
 impl SharedReadRepair {
-    /// Records go in `records`, which is created private when first needed.
-    pub(crate) fn recording_in(records: PathBuf) -> Self {
+    /// Records go through `records`.
+    pub(crate) fn recording_to(records: Arc<dyn RepairRecords>) -> Self {
         Self { records }
     }
 
+    /// Records go in `records`, a folder created private when first needed.
+    pub(crate) fn recording_in(records: PathBuf) -> Self {
+        Self::recording_to(Arc::new(FileRepairRecords { directory: records }))
+    }
+
     /// Tighten `path` if it is shared only for reading. `Ok(false)` means it
-    /// was already private. An error means it was not changed: either it is not
-    /// repairable, or the record of the change could not be written.
+    /// was already private. An error means the repair is not confirmed:
+    /// `path` was not repairable, the intent could not be recorded (and nothing
+    /// changed), or the change or its outcome record failed.
     pub(crate) fn repair(&self, path: &Path, kind: SharedReadKind) -> io::Result<bool> {
+        let _one_at_a_time = REPAIRING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(candidate) = find_shared_read(path, kind)? else {
             return Ok(false);
         };
-        let repair = record_id()?;
-        let (before, after) = (candidate.mode_before(), candidate.mode_after());
-        self.record(&repair, "intent", path, kind, (before, after), None)?;
+        let change = RepairChange {
+            path,
+            kind,
+            mode_before: candidate.mode_before(),
+            mode_after: candidate.mode_after(),
+        };
+        let repair = self.records.intent(&change)?;
         let result = candidate.tighten();
         let outcome = match &result {
             Ok(()) => "tightened".to_owned(),
             Err(error) => format!("failed: {error}"),
         };
-        let recorded = self.record(
-            &repair,
-            "outcome",
-            path,
-            kind,
-            (before, after),
-            Some(&outcome),
-        );
+        let recorded = self.records.outcome(&repair, &change, &outcome);
         result?;
         recorded?;
         eprintln!(
@@ -56,41 +85,54 @@ impl SharedReadRepair {
         );
         Ok(true)
     }
+}
 
-    fn record(
+/// The real sink: one private JSON file per step, synced before it counts.
+struct FileRepairRecords {
+    directory: PathBuf,
+}
+
+impl FileRepairRecords {
+    fn write(
         &self,
         repair: &str,
         stage: &str,
-        path: &Path,
-        kind: SharedReadKind,
-        (before, after): (u32, u32),
+        change: &RepairChange<'_>,
         outcome: Option<&str>,
     ) -> io::Result<()> {
         let record = serde_json::json!({
             "repair": repair,
             "stage": stage,
-            "target": path.to_string_lossy(),
-            "kind": match kind {
+            "target": change.path.to_string_lossy(),
+            "kind": match change.kind {
                 SharedReadKind::File => "file",
                 SharedReadKind::Directory => "directory",
             },
-            "modeBefore": format!("{before:04o}"),
-            "modeAfter": format!("{after:04o}"),
+            "modeBefore": format!("{:04o}", change.mode_before),
+            "modeAfter": format!("{:04o}", change.mode_after),
             "cause": "shared_read",
             "initiator": "desktop_host",
             "outcome": outcome,
         });
-        self.write(repair, stage, record)
-    }
-
-    fn write(&self, repair: &str, stage: &str, record: serde_json::Value) -> io::Result<()> {
-        nessa_local_storage::create_directory(&self.records)?;
-        let mut file = nessa_local_storage::PrivateTempFile::new_in(&self.records)?;
+        nessa_local_storage::create_directory(&self.directory)?;
+        let mut file = nessa_local_storage::PrivateTempFile::new_in(&self.directory)?;
         serde_json::to_writer(file.as_file_mut(), &record)?;
         file.as_file_mut().write_all(b"\n")?;
         file.as_file().sync_all()?;
-        file.persist(&self.records.join(format!("{repair}-{stage}.json")))?;
-        nessa_local_storage::sync_directory(&self.records)
+        file.persist(&self.directory.join(format!("{repair}-{stage}.json")))?;
+        nessa_local_storage::sync_directory(&self.directory)
+    }
+}
+
+impl RepairRecords for FileRepairRecords {
+    fn intent(&self, change: &RepairChange<'_>) -> io::Result<String> {
+        let repair = record_id()?;
+        self.write(&repair, "intent", change, None)?;
+        Ok(repair)
+    }
+
+    fn outcome(&self, repair: &str, change: &RepairChange<'_>, outcome: &str) -> io::Result<()> {
+        self.write(repair, "outcome", change, Some(outcome))
     }
 }
 
@@ -171,6 +213,41 @@ mod tests {
             .repair(&path, SharedReadKind::File)
             .is_err());
         assert_eq!(mode_of(&path), 0o644);
+    }
+
+    /// The change happened but its outcome could not be recorded: the repair
+    /// is not confirmed, so the caller keeps its refusal for this read, and
+    /// the intent says what was about to change.
+    #[test]
+    fn a_change_whose_outcome_cannot_be_recorded_is_not_confirmed() {
+        struct IntentOnly(Mutex<Vec<String>>);
+        impl RepairRecords for IntentOnly {
+            fn intent(&self, change: &RepairChange<'_>) -> io::Result<String> {
+                self.0.lock().unwrap().push(format!(
+                    "intent {:04o}->{:04o}",
+                    change.mode_before, change.mode_after
+                ));
+                Ok("repair".into())
+            }
+            fn outcome(&self, _: &str, _: &RepairChange<'_>, outcome: &str) -> io::Result<()> {
+                self.0.lock().unwrap().push(format!("outcome {outcome}"));
+                Err(io::Error::other("sink refused"))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let records = Arc::new(IntentOnly(Mutex::new(Vec::new())));
+
+        assert!(SharedReadRepair::recording_to(records.clone())
+            .repair(&path, SharedReadKind::File)
+            .is_err());
+        assert_eq!(mode_of(&path), 0o600);
+        assert_eq!(
+            *records.0.lock().unwrap(),
+            ["intent 0644->0600", "outcome tightened"]
+        );
     }
 
     #[test]

@@ -237,8 +237,9 @@ impl RetirementCause {
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetirementRefusal {
-    /// This gateway's own conversation data is no longer where it was opened,
-    /// so the evidence a refusal protects is already gone.
+    /// Every agent was stopped, and only the record of stopping it failed,
+    /// because this gateway's conversation data is no longer where it was
+    /// opened.
     DataMissing,
     /// Anything else that could not be confirmed.
     NotConfirmed,
@@ -246,11 +247,12 @@ pub(crate) enum RetirementRefusal {
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 impl RetirementRefusal {
-    /// The refusal for a retirement that did not happen. Only a request for
-    /// this very runtime can say its data is missing: a request that names
-    /// another runtime is not this gateway's to answer that way.
-    pub(crate) fn of(request_is_for_this_runtime: bool, data_missing: bool) -> Self {
-        if request_is_for_this_runtime && data_missing {
+    /// The refusal for a retirement that did not happen. `DataMissing` needs
+    /// both facts: every owner's stop was confirmed and only its record failed,
+    /// and the data those records belong in is gone. Then stopping this
+    /// gateway leaves nothing running and loses nothing that still exists.
+    pub(crate) fn of(stops_confirmed_but_unrecorded: bool, data_missing: bool) -> Self {
+        if stops_confirmed_but_unrecorded && data_missing {
             Self::DataMissing
         } else {
             Self::NotConfirmed
@@ -262,6 +264,13 @@ impl RetirementRefusal {
             Self::DataMissing => "data_missing",
             Self::NotConfirmed => "not_confirmed",
         }
+    }
+
+    /// The refusal a stored result names, if it is one of the published names.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        [Self::DataMissing, Self::NotConfirmed]
+            .into_iter()
+            .find(|refusal| refusal.as_str() == name)
     }
 }
 
