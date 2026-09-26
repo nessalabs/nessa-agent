@@ -98,6 +98,15 @@ impl StartupWarmUp {
 
     #[cfg(not(unix))]
     pub(super) fn start(&self) {}
+
+    /// Whether this warm-up may still hold a provider process or its use.
+    #[cfg(unix)]
+    pub(super) fn may_hold_resources(&self) -> bool {
+        match self {
+            Self::Fixed(warm_up) => warm_up.may_hold_resources(),
+            Self::Current(resolver) => resolver.warm_up_may_hold_resources(),
+        }
+    }
 }
 
 /// Construct the guarded product route from a previously initialized local registry.

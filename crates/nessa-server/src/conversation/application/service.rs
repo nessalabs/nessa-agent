@@ -326,6 +326,18 @@ struct LiveConversation {
     attachment_owner: Mutex<Option<JoinHandle<()>>>,
 }
 impl LiveConversation {
+    /// Whether the task that starts this agent's provider has not finished: an
+    /// open may be running, with a process of its own, before the SDK's cleanup
+    /// fact is armed and after a close has already reset its phase.
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
+    async fn attachment_in_flight(&self) -> bool {
+        self.attachment_owner
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|owner| !owner.is_finished())
+    }
+
     async fn join_attachment_owner(&self) {
         if let Some(owner) = self.attachment_owner.lock().await.take() {
             if let Err(error) = owner.await {
@@ -2741,8 +2753,11 @@ impl ConversationService {
 
     /// Whether any conversation this service opened may still hold provider or
     /// storage resources: an agent whose release the SDK has not confirmed, an
-    /// opening that has not settled, or a failed opening that holds what it
-    /// launched. A successful stop releases its slot, so it is not counted.
+    /// agent whose provider open is still in flight (the SDK arms its cleanup
+    /// fact only once an open returns, and a close resets the phase first, so a
+    /// process may be running before either says so), an opening that has not
+    /// settled, or a failed opening that holds what it launched. A successful stop releases its
+    /// slot, so it is not counted.
     ///
     /// It reads the SDK's own cleanup fact, `Agent::attachment_cleanup_pending`,
     /// never the variant of the error a stop returned: that variant is a
@@ -2757,11 +2772,19 @@ impl ConversationService {
             .values()
             .cloned()
             .collect();
-        slots.iter().any(|slot| match slot.value.get() {
-            None => true,
-            Some(Ok(live)) => live.agent.attachment_cleanup_pending(),
-            Some(Err(failed)) => failed.holds,
-        })
+        for slot in slots {
+            let holds = match slot.value.get() {
+                None => true,
+                Some(Ok(live)) => {
+                    live.agent.attachment_cleanup_pending() || live.attachment_in_flight().await
+                }
+                Some(Err(failed)) => failed.holds,
+            };
+            if holds {
+                return true;
+            }
+        }
+        false
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", test))]

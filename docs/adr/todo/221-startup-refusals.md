@@ -133,7 +133,7 @@ list's empty state no longer says "gateway".
 
 | `refusal` | The gateway sets it when | The host does |
 | --- | --- | --- |
-| `data_missing` | its stops failed, but nothing it started still holds resources (the SDK's `attachment_cleanup_pending` is false for every agent, and no opening is unsettled or holding), and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
+| `data_missing` | its stops failed, but nothing it started still holds resources — no agent whose release the SDK has not confirmed (`attachment_cleanup_pending`) or whose provider open is still in flight, no unsettled or holding opening, no warm-up that may hold its agent, and admission drained — and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
 | `not_confirmed` | anything else: a stop that did not finish or was not confirmed, an admission that could not drain, or the retirement audit failing | Fails the attempt; **Try again** asks again |
 | absent | the gateway predates this field | Same as `not_confirmed` |
 
@@ -142,7 +142,15 @@ running. That is read from the SDK's own cleanup fact, never from which error a
 failed stop returned: an error's variant is a diagnostic, and a provider may call
 an unconfirmed cleanup an `AuditFailure` while a released one can still fail. A
 missing directory alone is not enough; a stop that did not release its resources
-keeps the refusal `not_confirmed` whatever the disk says. The host syncs the result
+keeps the refusal `not_confirmed` whatever the disk says. Every source of doubt
+counts as "may still hold": the SDK arms its cleanup fact only once an open
+returns, so an open in flight is read from the gateway's own supervision of it,
+and the startup warm-ups, which own agents outside any conversation, answer for
+themselves. The rule leans one way on purpose: a wrong `not_confirmed` leaves
+the person with **Try again**; a wrong `data_missing` could stop a process that
+is still running. A managed runtime whose executable-use release fails keeps its
+agent unconfirmed, so a gateway whose whole data root is gone may still answer
+`not_confirmed`; that is the safe side, and a case to watch. The host syncs the result
 before acting on it, as it does before acting on a success, and its own journal
 records the stop: the failed retirement step, whose text names the refusal, the
 plan `unload-unretirable-service`, its completion and observation, and the

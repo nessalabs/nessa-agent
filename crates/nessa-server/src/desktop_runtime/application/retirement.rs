@@ -38,6 +38,12 @@ impl RetirementResult {
 pub(crate) trait ConversationData: Send + Sync {
     fn missing(&self) -> bool;
 }
+/// Work this gateway runs outside its conversations, such as the startup
+/// warm-ups, that may hold an agent process of its own. Asked only when a
+/// retirement did not happen, to say why (ADR 221).
+pub(crate) trait BackgroundWork: Send + Sync {
+    fn may_hold_resources(&self) -> bool;
+}
 pub(crate) trait RetirementAudit: Send + Sync {
     fn record(
         &self,
@@ -49,6 +55,7 @@ pub(crate) async fn retire(
     running: RunningRuntime,
     conversations: Option<&ConversationService>,
     data: &dyn ConversationData,
+    background: &dyn BackgroundWork,
     audit: &dyn RetirementAudit,
 ) -> RetirementResult {
     // Whether the stops failed without leaving anything running: the one
@@ -67,7 +74,8 @@ pub(crate) async fn retire(
                     // An admission that could not drain may still be running
                     // work; only a stop failure is asked about what remains.
                     nothing_left_running = matches!(error, ConversationError::Retirement(_))
-                        && !service.owns_unreleased_resources().await;
+                        && !service.owns_unreleased_resources().await
+                        && !background.may_hold_resources();
                     Some(error.to_string())
                 }
             },

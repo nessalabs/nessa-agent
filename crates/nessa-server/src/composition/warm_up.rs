@@ -75,6 +75,17 @@ impl CurrentWarmUpWait {
 }
 
 impl CurrentOpenCodeWarmUp {
+    /// Whether the lane's active run may still hold a provider process or its
+    /// use. An uncertain run stays in the lane, so it keeps answering yes.
+    pub(super) fn may_hold_resources(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|active| active.warm_up.may_hold_resources())
+    }
+
     pub(super) fn new(
         records: Arc<dyn WarmUpRecords>,
         audit: Arc<dyn WarmUpAudit>,

@@ -45,8 +45,8 @@ impl From<&str> for RetirementFailure {
 pub(in crate::gateway::infrastructure) enum StopAllowedBy {
     /// It retired.
     Retirement,
-    /// It refused because every agent it ran was stopped and only the record of
-    /// it failed, since its data is gone. Nothing it owns is still running.
+    /// It refused, but reported that nothing it started still holds resources
+    /// and that its conversation data is gone.
     RefusalDataMissing,
 }
 
@@ -69,7 +69,7 @@ pub(in crate::gateway::infrastructure) fn stop_allowed_after(
             message,
         }) => {
             eprintln!(
-                "[nessa] Stopping gateway {service} itself: its agents are stopped but its conversation data is gone, so it cannot retire ({message})"
+                "[nessa] Stopping gateway {service} itself: nothing it started is still running and its conversation data is gone, so it cannot retire ({message})"
             );
             progress.history_observed(ReconciliationHistoryFact::RetirementRefusedDataMissing);
             Ok(StopAllowedBy::RefusalDataMissing)

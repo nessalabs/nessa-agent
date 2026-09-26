@@ -55,6 +55,7 @@ async fn retirement_acknowledges_correlated_durable_evidence_even_without_agents
         RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap(),
         None,
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -128,6 +129,7 @@ async fn audit_failure_never_acknowledges_retirement() {
         RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap(),
         None,
         &PresentData,
+        &NoBackgroundWork,
         &RejectingAudit,
     )
     .await;
@@ -160,7 +162,15 @@ async fn a_refused_retirement_names_why_and_the_file_carries_it() {
         || RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap();
 
     // The retirement audit failing says nothing about what was stopped.
-    let refused = retire(request(), running(), None, &MissingData, &RejectingAudit).await;
+    let refused = retire(
+        request(),
+        running(),
+        None,
+        &MissingData,
+        &NoBackgroundWork,
+        &RejectingAudit,
+    )
+    .await;
     assert!(!refused.retired);
     assert_eq!(refused.refusal, Some(RetirementRefusal::NotConfirmed));
 
@@ -171,7 +181,15 @@ async fn a_refused_retirement_names_why_and_the_file_carries_it() {
             .unwrap()
     };
 
-    let retired = retire(request(), running(), None, &MissingData, &files).await;
+    let retired = retire(
+        request(),
+        running(),
+        None,
+        &MissingData,
+        &NoBackgroundWork,
+        &files,
+    )
+    .await;
     assert!(retired.retired);
     assert_eq!(retired.refusal, None);
     files.result(&retired).unwrap();
@@ -261,6 +279,7 @@ async fn wrong_instance_or_generation_cannot_close_admission() {
             identity,
             Some(&service),
             &PresentData,
+            &NoBackgroundWork,
             &files,
         )
         .await;
@@ -291,6 +310,7 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
         running(INSTANCE, "a", "c"),
         None,
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -315,6 +335,7 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
         restarted.clone(),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -346,6 +367,7 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
         restarted,
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -571,6 +593,7 @@ async fn stalled_audit_refuses_acknowledgement_and_a_later_request_can_progress(
         running(INSTANCE, "a", "c"),
         None,
         &PresentData,
+        &NoBackgroundWork,
         &StalledAudit,
     )
     .await;
@@ -587,6 +610,7 @@ async fn stalled_audit_refuses_acknowledgement_and_a_later_request_can_progress(
         running(INSTANCE, "a", "c"),
         None,
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -616,6 +640,7 @@ async fn another_lifecycle_cause_cannot_be_relabelled_as_successful_upgrade() {
         runtime.clone(),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -671,6 +696,7 @@ async fn wrong_generation_rejection_can_be_read_after_restart_and_does_not_poiso
         running(INSTANCE, "a", "d"),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -697,6 +723,7 @@ async fn wrong_generation_rejection_can_be_read_after_restart_and_does_not_poiso
         running(INSTANCE, "a", "d"),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &restarted_reader,
     )
     .await;
@@ -725,6 +752,7 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         running(INSTANCE, "a", "c"),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &RejectingAudit,
     )
     .await;
@@ -757,6 +785,7 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         running(INSTANCE, "a", "c"),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -776,6 +805,7 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         running(INSTANCE, "a", "c"),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -804,6 +834,7 @@ async fn cleanup_failure_restores_admission_fence_with_original_correlation() {
         running(INSTANCE, "a", "c"),
         Some(&service),
         &PresentData,
+        &NoBackgroundWork,
         &files,
     )
     .await;
@@ -837,6 +868,14 @@ async fn cleanup_failure_restores_admission_fence_with_original_correlation() {
 struct PresentData;
 impl crate::desktop_runtime::application::ConversationData for PresentData {
     fn missing(&self) -> bool {
+        false
+    }
+}
+
+/// Nothing runs outside the conversations.
+struct NoBackgroundWork;
+impl crate::desktop_runtime::application::BackgroundWork for NoBackgroundWork {
+    fn may_hold_resources(&self) -> bool {
         false
     }
 }

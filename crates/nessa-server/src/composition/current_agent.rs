@@ -327,6 +327,11 @@ impl CurrentAgentResolver {
     /// Start proactive preparation after the listener is accepting requests.
     /// Missing installation or credentials simply means there is nothing to
     /// prepare; a later cold conversation observes again and can start it.
+    /// Whether the OpenCode warm-up lane may still hold a provider process.
+    pub(super) fn warm_up_may_hold_resources(&self) -> bool {
+        self.warm_up.may_hold_resources()
+    }
+
     pub(super) fn start_warm_up(self: &Arc<Self>) {
         let source = self.clone();
         tokio::spawn(async move {
