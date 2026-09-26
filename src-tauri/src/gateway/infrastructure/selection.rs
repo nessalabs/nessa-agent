@@ -12,6 +12,8 @@ use super::reconciliation_audit::FileReconciliationAudit;
 use super::unsupported::{Unsupported, UnsupportedAudit};
 use super::{login_shell::LoginShell, reconciliation_ids::RandomReconciliationIds};
 use crate::gateway::domain::value_objects::ServiceConfiguration;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::gateway::domain::value_objects::ServiceManager;
 use std::{io, path::PathBuf, sync::Arc};
 
 /// One composition-time snapshot of the account paths used by the gateway.
@@ -131,13 +133,18 @@ pub fn reconciliation_audit(
     #[cfg(target_os = "macos")]
     {
         let _ = platform;
-        Arc::new(FileReconciliationAudit::new(config_root, clock))
+        Arc::new(FileReconciliationAudit::new(
+            config_root,
+            ServiceManager::Launchd,
+            clock,
+        ))
     }
     #[cfg(target_os = "linux")]
     {
         let _ = config_root;
         Arc::new(FileReconciliationAudit::new(
             Some(platform.state_home.join("nessa")),
+            ServiceManager::Systemd,
             clock,
         ))
     }

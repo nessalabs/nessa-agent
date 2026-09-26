@@ -3273,7 +3273,7 @@ mod recovery_tests {
         },
         domain::value_objects::{
             LifecycleHistory, LifecycleRecord, LifecycleRecordPayload, ReconciliationCorrelation,
-            ReconciliationEvidence, ReconciliationInitiator,
+            ReconciliationEvidence, ReconciliationInitiator, ServiceManager,
         },
     };
     use std::sync::Mutex;
@@ -3543,7 +3543,7 @@ mod recovery_tests {
                     .unwrap()
                 })
                 .collect::<Vec<_>>();
-            let history = LifecycleHistory::restore(&records).unwrap();
+            let history = LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap();
             let request = GatewayReconciliationRequest::new(
                 correlation(1),
                 ReconciliationEvidence::new(
@@ -4110,7 +4110,9 @@ mod recovery_tests {
             Self {
                 journal: DomainJournal {
                     namespace: target.service().into(),
-                    history: Mutex::new(LifecycleHistory::restore(&[record]).unwrap()),
+                    history: Mutex::new(
+                        LifecycleHistory::restore(ServiceManager::Launchd, &[record]).unwrap(),
+                    ),
                     written: Mutex::new(Vec::new()),
                 },
                 target: target.clone(),

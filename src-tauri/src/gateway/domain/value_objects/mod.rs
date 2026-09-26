@@ -1,5 +1,7 @@
 //! Immutable, validated values of the gateway context.
 mod lifecycle_journal;
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+pub use lifecycle_journal::LifecycleJournalError;
 pub use lifecycle_journal::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
     LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
@@ -7,7 +9,7 @@ pub use lifecycle_journal::{
 };
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use lifecycle_journal::{
-    LifecycleHistory, LifecyclePendingStep, LifecycleRecord, LifecycleRecordPayload,
+    LifecycleHistory, LifecyclePendingStep, LifecycleRecord, LifecycleRecordPayload, ServiceManager,
 };
 mod reconciliation_evidence;
 #[cfg(test)]
