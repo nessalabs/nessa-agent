@@ -192,9 +192,29 @@ the predeclared bootout. A replacement is preserved. The host retries an
 unacknowledged observation as the identical record before appending the cleanup
 completion and its fresh post-command observation; persistent journal failure
 leaves the history unresolved while still retaining the physical cleanup result.
-Restart recovery adopts a bootstrap only when fresh health and launchd PID prove
-the exact planned target. Absence, a PID-less registration, unhealthy state, and
-a replacement all leave the original attempt unresolved without replay or cleanup.
+Restart recovery never replays a command. It adopts a bootstrap only when fresh
+health and launchd PID prove the exact planned target; otherwise it records what
+it freshly finds and closes the attempt as failed, keeping whatever is there. An
+unresolved attempt blocks every later registration, so a refusal that depends
+only on state that will not change would block the gateway for good; the next
+registration starts from the fresh state instead.
+
+| Journal | Fresh state | Recovery |
+| --- | --- | --- |
+| Intent, no plan | Any | Close failed on the fresh observation. No plan authorized no effect, so a restarted or replaced gateway was not caused by this attempt. |
+| Bootstrap pending | Exact planned target, healthy, launchd PID agrees | Adopt it (unchanged). |
+| Bootstrap pending | Absent, PID-less, unhealthy, or replaced | Mark an unreturned bootstrap indeterminate, record the fresh observation, close failed. Nothing is booted out. |
+| Unload pending | The planned incarnation, or nothing | Unchanged: an unreturned bootout is run once, then observed. |
+| Unload pending | Replaced by another incarnation | Mark it indeterminate without running it, record the fresh observation, close failed. |
+| Staging, publication, retirement, pruning, or staging cleanup pending | Any | Mark an unreturned step indeterminate, record the fresh observation of that step's artifact, close failed. A staged runtime that no longer validates is recorded absent. |
+| Adoption or agent stop pending | Any | Unchanged. |
+| Plans, a completion awaiting its observation | Any | Record the fresh observation, close failed. |
+| Plans settled and observed | Any | Close failed on the last saved observation. A step's observation records only that step's artifact, so it is not compared with a fresh one. |
+| A non-launchd effect, or a namespace this host does not own | Any | Refuse and stay unresolved (unchanged). |
+
+Whether the target's artifact is present is one decision: the fresh launchd
+incarnation is the target, or the installed plist carries its generation, and the
+target was not already the prior.
 A retry may unload an unambiguously PID-less unavailable registration only when that
 host-owned record, the desired definition and the complete on-disk definition all
 agree. Missing, malformed or contradictory evidence preserves the service. This

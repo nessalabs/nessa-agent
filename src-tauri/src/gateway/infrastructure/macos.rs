@@ -1,9 +1,9 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
-    GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-    GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-    ReconciliationHistoryFact,
+    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep,
+    GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
+    GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
+    ReconciledGateway, ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -173,6 +173,33 @@ impl GatewayHost for Launchd {
         );
         let status = service_status(target.service()).map_err(GatewayError::Registration)?;
         let observed = observed_incarnation(target.service(), port, &status, health(port));
+        // Whether the target's artifact is present: launchd runs it, or the
+        // installed plist carries its generation, and it was not the prior.
+        let target_artifact_present = (observed
+            .as_ref()
+            .is_some_and(|incarnation| incarnation.target() == target)
+            || installed_generation(definition.as_ref()) == Some(target.service_generation()))
+            && !recovery
+                .before()
+                .is_some_and(|incarnation| incarnation.target() == target);
+        let close_failed = |step: Option<&GatewayLifecycleRecoveryStep>,
+                            unreturned: &str,
+                            artifact_present: bool,
+                            phase: LifecycleFailedPhase,
+                            message: &str| {
+            close_unadopted(
+                recovery,
+                journal,
+                Unadopted {
+                    step,
+                    unreturned,
+                    observed: observed.clone(),
+                    artifact_present,
+                    phase,
+                    message,
+                },
+            )
+        };
         if let Some(step) = recovery.pending_step() {
             match step.step().effect() {
                 LifecycleEffect::StageRuntime { fingerprint } => {
@@ -181,41 +208,19 @@ impl GatewayHost for Launchd {
                         .join("Library/Application Support/Nessa/gateway-runtimes")
                         .join(label)
                         .join(fingerprint);
-                    validate_runtime(&runtime, fingerprint).map_err(|error| {
-                        GatewayError::Registration(format!(
-                            "The unresolved staged runtime cannot be recovered exactly: {error}"
-                        ))
-                    })?;
-                    let command = step.completion().cloned().unwrap_or_else(|| {
-                        LifecycleCommandResult::Indeterminate(
-                            "The host restarted before runtime staging returned".into(),
-                        )
-                    });
-                    if step.completion().is_none() {
-                        retry_journal_delivery(|| {
-                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
-                        })?;
-                    }
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
-                        observed.clone(),
-                        true,
+                    // A staged runtime that no longer validates is absent.
+                    let staged = validate_runtime(&runtime, fingerprint).is_ok();
+                    return close_failed(
+                        Some(step),
+                        "The host restarted before runtime staging returned",
+                        staged,
+                        LifecycleFailedPhase::NativeDispatch,
+                        if staged {
+                            "Recovered the exact durable staged runtime after restart"
+                        } else {
+                            "Recovered runtime staging after restart; no exact staged runtime remains"
+                        },
                     );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::Failed {
-                                phase: LifecycleFailedPhase::NativeDispatch,
-                                message: "Recovered the exact durable staged runtime after restart"
-                                    .into(),
-                            },
-                            Some(&observation),
-                            ReconciliationCleanupDecision::RetainPrior,
-                        )
-                    })?;
-                    return Ok(());
                 }
                 LifecycleEffect::BootstrapService { target: planned } => {
                     let BootstrapRecoveryDecision::Adopt(exact) = bootstrap_recovery_decision(
@@ -224,29 +229,22 @@ impl GatewayHost for Launchd {
                         observed.as_ref(),
                         planned,
                     ) else {
-                        return Err(GatewayError::Registration(
-                            "The unresolved bootstrap target is absent, unhealthy, or replaced; recovery remains unresolved"
-                                .into(),
-                        ));
+                        return close_failed(
+                            Some(step),
+                            "The host restarted before bootstrap returned",
+                            target_artifact_present,
+                            LifecycleFailedPhase::Observation,
+                            "Recovered bootstrap without its exact planned target; nothing was booted out",
+                        );
                     };
-                    let command = step.completion().cloned().unwrap_or_else(|| {
-                        LifecycleCommandResult::Indeterminate(
-                            "The host restarted before bootstrap returned".into(),
-                        )
-                    });
-                    if step.completion().is_none() {
-                        retry_journal_delivery(|| {
-                            journal.effect_completion(step.plan_id(), step.step().id(), &command)
-                        })?;
-                    }
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
+                    let observation = settle_without_replay(
+                        recovery,
+                        journal,
+                        step,
+                        "The host restarted before bootstrap returned",
                         observed.clone(),
                         true,
-                    );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
+                    )?;
                     retry_journal_delivery(|| {
                         journal.physical_outcome(
                             &LifecyclePhysicalOutcome::Confirmed(exact.clone()),
@@ -344,9 +342,18 @@ impl GatewayHost for Launchd {
                         .and_then(LifecycleObservation::incarnation)
                         .or_else(|| recovery.before());
                     if observed.as_ref() != expected && (status.loaded || observed.is_some()) {
-                        return Err(GatewayError::Registration(
-                            "The unresolved unload target was replaced before recovery".into(),
-                        ));
+                        return close_failed(
+                            Some(step),
+                            "Not run after restart: the unload target was replaced",
+                            fs::symlink_metadata(
+                                self.home
+                                    .join("Library/LaunchAgents")
+                                    .join(format!("{label}.plist")),
+                            )
+                            .is_ok(),
+                            LifecycleFailedPhase::NativeDispatch,
+                            "Recovered unload after its target was replaced; nothing was booted out",
+                        );
                     }
                     let command = match step.completion() {
                         Some(command) => command.clone(),
@@ -400,138 +407,87 @@ impl GatewayHost for Launchd {
                     })?;
                     return Ok(());
                 }
-                LifecycleEffect::PruneRuntime { fingerprint } if step.completion().is_some() => {
+                LifecycleEffect::PruneRuntime { fingerprint } => {
                     let artifact = self
                         .home
                         .join("Library/Application Support/Nessa/gateway-runtimes")
                         .join(label)
                         .join(fingerprint);
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
-                        observed.clone(),
+                    return close_failed(
+                        Some(step),
+                        "The host restarted before runtime pruning returned",
                         fs::symlink_metadata(artifact).is_ok(),
+                        LifecycleFailedPhase::Observation,
+                        "Recovered exact runtime-pruning observation after restart",
                     );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::Failed {
-                                phase: LifecycleFailedPhase::Observation,
-                                message:
-                                    "Recovered exact runtime-pruning observation after restart"
-                                        .into(),
-                            },
-                            Some(&observation),
-                            ReconciliationCleanupDecision::RetainPrior,
-                        )
-                    })?;
-                    return Ok(());
                 }
-                LifecycleEffect::RemoveStagingRuntime { generation }
-                    if step.completion().is_some() =>
-                {
+                LifecycleEffect::RemoveStagingRuntime { generation } => {
                     let artifact = self
                         .home
                         .join("Library/Application Support/Nessa/gateway-runtimes")
                         .join(label)
                         .join(format!(".staging-{generation}"));
-                    let observation = LifecycleObservation::new(
-                        recovery
-                            .latest_observation()
-                            .map_or(1, |prior| prior.version().saturating_add(1)),
-                        observed.clone(),
+                    return close_failed(
+                        Some(step),
+                        "The host restarted before staging cleanup returned",
                         fs::symlink_metadata(artifact).is_ok(),
+                        LifecycleFailedPhase::Observation,
+                        "Recovered exact staging-prune observation after restart",
                     );
-                    retry_journal_delivery(|| journal.observation(&step.source(), &observation))?;
-                    retry_journal_delivery(|| {
-                        journal.physical_outcome(
-                            &LifecyclePhysicalOutcome::Failed {
-                                phase: LifecycleFailedPhase::Observation,
-                                message: "Recovered exact staging-prune observation after restart"
-                                    .into(),
-                            },
-                            Some(&observation),
-                            ReconciliationCleanupDecision::RetainPrior,
-                        )
-                    })?;
-                    return Ok(());
+                }
+                LifecycleEffect::PublishServiceDefinition { .. }
+                | LifecycleEffect::RequestRetirement { .. } => {
+                    return close_failed(
+                        Some(step),
+                        "The host restarted before this step returned",
+                        target_artifact_present,
+                        LifecycleFailedPhase::Observation,
+                        "Recovered a planned launchd step by fresh observation; it was not replayed",
+                    );
                 }
                 _ => {
                     return Err(GatewayError::Registration(
-                        "The unresolved gateway effect requires exact typed recovery that is not safely available"
+                        "The unresolved gateway effect is not a launchd effect this host can recover"
                             .into(),
                     ));
                 }
             }
         }
-        let agrees_with_prior = observed.as_ref() == recovery.before();
-        let target_is_present = observed
-            .as_ref()
-            .is_some_and(|incarnation| incarnation.target() == target)
-            || installed_generation(definition.as_ref()) == Some(target.service_generation());
-        let target_was_prior = recovery
-            .before()
-            .is_some_and(|incarnation| incarnation.target() == target);
-        let target_artifact_present = target_is_present && !target_was_prior;
-        if target_artifact_present {
-            return Err(GatewayError::Registration(
-                "The unresolved gateway target remains present and requires exact planned recovery"
-                    .into(),
-            ));
+        if !recovery.has_effect_plan() {
+            // No plan authorized no effect, so whatever is there now was not
+            // caused by this attempt.
+            return close_failed(
+                None,
+                "",
+                target_artifact_present,
+                LifecycleFailedPhase::NativeDispatch,
+                "Recovered admitted intent before any effect-capable plan",
+            );
         }
-        let observation = if !recovery.has_effect_plan() {
-            if !agrees_with_prior {
-                return Err(GatewayError::Registration(
-                    "The unresolved gateway intent cannot be closed as no-effect because fresh native state disagrees"
-                        .into(),
-                ));
-            }
-            let version = recovery
-                .latest_observation()
-                .map_or(1, |observation| observation.version().saturating_add(1));
-            let observation = LifecycleObservation::new(version, observed, false);
-            retry_journal_delivery(|| {
-                journal.observation(&LifecycleObservationSource::Intent, &observation)
-            })?;
-            observation
-        } else if let Some(source) = recovery.pending_observation_source() {
-            let version = recovery
-                .latest_observation()
-                .map_or(1, |observation| observation.version().saturating_add(1));
-            let observation = LifecycleObservation::new(version, observed, false);
-            retry_journal_delivery(|| journal.observation(source, &observation))?;
-            observation
-        } else if let Some(last) = recovery.latest_observation() {
-            if last.incarnation() != observed.as_ref() || last.target_artifact_present() {
-                return Err(GatewayError::Registration(
-                    "Fresh gateway state disagrees with the last durable recovery observation"
-                        .into(),
-                ));
-            }
-            last.clone()
-        } else {
-            return Err(GatewayError::Registration(
+        if recovery.pending_observation_source().is_some() {
+            return close_failed(
+                None,
+                "",
+                target_artifact_present,
+                LifecycleFailedPhase::Observation,
+                "Recovered a returned launchd step by fresh observation",
+            );
+        }
+        // Every plan settled and was observed. A step's observation records
+        // only that step's artifact, so it is not compared with a fresh one.
+        let last = recovery.latest_observation().ok_or_else(|| {
+            GatewayError::Registration(
                 "The unresolved gateway plan has no completion observation and requires exact resume"
                     .into(),
-            ));
-        };
+            )
+        })?;
         retry_journal_delivery(|| {
             journal.physical_outcome(
                 &LifecyclePhysicalOutcome::Failed {
-                    phase: if recovery.has_effect_plan() {
-                        LifecycleFailedPhase::Observation
-                    } else {
-                        LifecycleFailedPhase::NativeDispatch
-                    },
-                    message: if recovery.has_effect_plan() {
-                        "Recovered exact planned lifecycle after confirming no target remained"
-                            .into()
-                    } else {
-                        "Recovered admitted intent before any effect-capable plan".into()
-                    },
+                    phase: LifecycleFailedPhase::Observation,
+                    message: "Recovered settled launchd plans from their last saved observation; nothing was replayed".into(),
                 },
-                Some(&observation),
+                Some(last),
                 ReconciliationCleanupDecision::RetainPrior,
             )
         })?;
@@ -1023,6 +979,120 @@ fn prune_planned(
         }
     }
     Ok(())
+}
+
+/// What an attempt that cannot be adopted leaves behind when recovery closes it.
+struct Unadopted<'a> {
+    /// The step still pending, if any; an unreturned one is closed as
+    /// indeterminate with `unreturned` as its reason.
+    step: Option<&'a GatewayLifecycleRecoveryStep>,
+    unreturned: &'a str,
+    observed: Option<ReconciliationIncarnation>,
+    artifact_present: bool,
+    phase: LifecycleFailedPhase,
+    message: &'a str,
+}
+
+/// Records the fresh observation and closes the attempt as failed, keeping
+/// whatever is there. Nothing is replayed.
+fn close_unadopted(
+    recovery: &GatewayLifecycleRecovery,
+    journal: &dyn GatewayReconciliationJournalSession,
+    unadopted: Unadopted<'_>,
+) -> Result<(), GatewayError> {
+    let observation = match unadopted.step {
+        Some(step) => settle_without_replay(
+            recovery,
+            journal,
+            step,
+            unadopted.unreturned,
+            unadopted.observed,
+            unadopted.artifact_present,
+        )?,
+        None => {
+            let source = recovery
+                .pending_observation_source()
+                .cloned()
+                .unwrap_or(LifecycleObservationSource::Intent);
+            let observation = LifecycleObservation::new(
+                recovery
+                    .latest_observation()
+                    .map_or(1, |prior| prior.version().saturating_add(1)),
+                unadopted.observed,
+                unadopted.artifact_present,
+            );
+            retry_journal_delivery(|| journal.observation(&source, &observation))?;
+            observation
+        }
+    };
+    retry_journal_delivery(|| {
+        journal.physical_outcome(
+            &LifecyclePhysicalOutcome::Failed {
+                phase: unadopted.phase,
+                message: unadopted.message.into(),
+            },
+            Some(&observation),
+            ReconciliationCleanupDecision::RetainPrior,
+        )
+    })
+    .map(|_| ())
+}
+
+/// Settles the pending step and, when it is its plan's primary, each cleanup
+/// the plan declared, without running any of them. An unreturned step is
+/// recorded indeterminate: the interrupted attempt may have run it. Every
+/// settled step is observed, and the last observation is returned for the
+/// outcome to confirm, since no outcome may leave a declared cleanup pending.
+fn settle_without_replay(
+    recovery: &GatewayLifecycleRecovery,
+    journal: &dyn GatewayReconciliationJournalSession,
+    step: &GatewayLifecycleRecoveryStep,
+    unreturned: &str,
+    observed: Option<ReconciliationIncarnation>,
+    artifact_present: bool,
+) -> Result<LifecycleObservation, GatewayError> {
+    let mut version = recovery
+        .latest_observation()
+        .map_or(0, LifecycleObservation::version);
+    let mut observe = |source: LifecycleObservationSource| {
+        version = version.saturating_add(1);
+        let observation = LifecycleObservation::new(version, observed.clone(), artifact_present);
+        retry_journal_delivery(|| journal.observation(&source, &observation))?;
+        Ok::<_, GatewayError>(observation)
+    };
+    if step.completion().is_none() {
+        let command = LifecycleCommandResult::Indeterminate(unreturned.into());
+        retry_journal_delivery(|| {
+            journal.effect_completion(step.plan_id(), step.step().id(), &command)
+        })?;
+    }
+    let mut last = observe(step.source())?;
+    let is_primary = !step
+        .contingencies()
+        .iter()
+        .any(|contingency| contingency.id() == step.step().id());
+    if is_primary {
+        for contingency in step.contingencies() {
+            // launchd plans declare only unconditional cleanup, which the
+            // returned primary makes due.
+            if !matches!(contingency.predicate(), LifecycleEffectPredicate::Always) {
+                return Err(GatewayError::Registration(
+                    "A launchd plan declared a conditional cleanup recovery cannot settle".into(),
+                ));
+            }
+            let command = LifecycleCommandResult::Indeterminate(
+                "Not run by recovery; the interrupted attempt may have run it".into(),
+            );
+            retry_journal_delivery(|| {
+                journal.effect_completion(step.plan_id(), contingency.id(), &command)
+            })?;
+            last = observe(LifecycleObservationSource::Effect {
+                plan_id: step.plan_id().into(),
+                step_id: contingency.id().into(),
+            })?;
+        }
+    }
+    Ok(last)
 }
 
 fn register(
@@ -3148,5 +3218,395 @@ mod tests {
             registered_agent_path(None, Some(&installed), runtime).as_str(),
             "/usr/bin"
         );
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    //! Recovery against a journal that enforces the domain's lifecycle rules,
+    //! so an outcome the domain would refuse fails the test rather than
+    //! passing through a permissive fake.
+    use super::*;
+    use crate::gateway::{
+        application::{
+            GatewayReconciliationOutcome, GatewayReconciliationOutcomeError,
+            GatewayReconciliationRequest,
+        },
+        domain::value_objects::{
+            LifecycleHistory, LifecycleRecord, LifecycleRecordPayload, ReconciliationCorrelation,
+            ReconciliationEvidence, ReconciliationInitiator,
+        },
+    };
+    use std::sync::Mutex;
+
+    fn correlation(serial: u64) -> ReconciliationCorrelation {
+        ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}")).unwrap()
+    }
+
+    struct Scenario {
+        home: tempfile::TempDir,
+        label: String,
+        target: ReconciliationTarget,
+        records: Vec<LifecyclePayloadStep>,
+        before: Option<ReconciliationIncarnation>,
+    }
+
+    type LifecyclePayloadStep = LifecycleRecordPayload;
+
+    impl Scenario {
+        fn new(before: Option<ReconciliationIncarnation>) -> Self {
+            let uid = unsafe { libc::getuid() };
+            let label = format!("so.nessa.gateway.recovery-test-{}", std::process::id());
+            let target = ReconciliationTarget::new(
+                format!("gui/{uid}/{label}"),
+                "a".repeat(64),
+                "b".repeat(64),
+            )
+            .unwrap();
+            Self {
+                home: tempfile::tempdir().unwrap(),
+                label,
+                records: vec![LifecycleRecordPayload::Intent {
+                    request_correlation: correlation(1),
+                    cause: ReconciliationCause::Startup,
+                    initiator: ReconciliationInitiator::DesktopHost,
+                    target: target.clone(),
+                    before: before.clone(),
+                }],
+                target,
+                before,
+            }
+        }
+
+        fn plan(
+            mut self,
+            plan_id: &str,
+            primary: LifecycleEffect,
+            cleanup: Option<LifecycleEffect>,
+        ) -> Self {
+            self.records.push(LifecycleRecordPayload::EffectPlan {
+                plan_id: plan_id.into(),
+                expected_before: self.before.clone(),
+                target: self.target.clone(),
+                primary: LifecyclePlanStep::new(
+                    "primary".into(),
+                    primary,
+                    LifecycleEffectPredicate::Always,
+                )
+                .unwrap(),
+                cleanup: cleanup
+                    .map(|effect| {
+                        LifecyclePlanStep::new(
+                            "cleanup".into(),
+                            effect,
+                            LifecycleEffectPredicate::Always,
+                        )
+                        .unwrap()
+                    })
+                    .into_iter()
+                    .collect(),
+            });
+            self
+        }
+
+        fn completed(mut self, plan_id: &str, version: u64, artifact: bool) -> Self {
+            self.records.push(LifecycleRecordPayload::EffectCompletion {
+                plan_id: plan_id.into(),
+                step_id: "primary".into(),
+                result: LifecycleCommandResult::Accepted,
+            });
+            self.records.push(LifecycleRecordPayload::Observation {
+                source: LifecycleObservationSource::Effect {
+                    plan_id: plan_id.into(),
+                    step_id: "primary".into(),
+                },
+                state: LifecycleObservation::new(version, None, artifact),
+            });
+            self
+        }
+
+        fn published(self) -> Self {
+            let agents = self.home.path().join("Library/LaunchAgents");
+            fs::create_dir_all(&agents).unwrap();
+            let definition = serde_json::json!({
+                "Label": self.label,
+                "EnvironmentVariables": {"NESSA_SERVICE_GENERATION": self.target.service_generation()},
+            });
+            fs::write(
+                agents.join(format!("{}.plist", self.label)),
+                convert_definition_to_xml(&serde_json::to_vec(&definition).unwrap()).unwrap(),
+            )
+            .unwrap();
+            self
+        }
+
+        fn recover(&self) -> (Result<(), GatewayError>, LifecycleHistory) {
+            let namespace = self.target.service().to_owned();
+            let records = self
+                .records
+                .iter()
+                .enumerate()
+                .map(|(sequence, payload)| {
+                    LifecycleRecord::new(
+                        namespace.clone(),
+                        correlation(2),
+                        sequence as u64,
+                        payload.clone(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let history = LifecycleHistory::restore(&records).unwrap();
+            let request = GatewayReconciliationRequest::new(
+                correlation(1),
+                ReconciliationEvidence::new(
+                    ReconciliationCause::Startup,
+                    ReconciliationInitiator::DesktopHost,
+                )
+                .unwrap(),
+            );
+            let recovery = GatewayLifecycleRecovery::new(
+                GatewayReconciliationAttempt::new(correlation(2), request).unwrap(),
+                self.target.clone(),
+                self.before.clone(),
+                history.has_effect_plan(),
+                history.latest_observation().cloned(),
+                history.pending_step().map(|pending| {
+                    GatewayLifecycleRecoveryStep::new(
+                        pending.plan_id().into(),
+                        pending.step().clone(),
+                        pending.contingencies().to_vec(),
+                        pending.completion().cloned(),
+                        pending.native_attempt().cloned(),
+                    )
+                }),
+                history.pending_observation_source(),
+            );
+            let journal = DomainJournal {
+                namespace,
+                history: Mutex::new(history),
+            };
+            let configuration = ServiceConfiguration::new(
+                "recoverytest".into(),
+                self.home.path().join("nessa"),
+                None,
+                7398,
+                None,
+            )
+            .unwrap();
+            let host = Launchd::new(
+                Arc::new(LaunchctlDisabledServiceStatus),
+                configuration,
+                self.home.path().to_path_buf(),
+            );
+            let result = host.recover(&recovery, &journal);
+            (result, journal.history.into_inner().unwrap())
+        }
+    }
+
+    struct DomainJournal {
+        namespace: String,
+        history: Mutex<LifecycleHistory>,
+    }
+
+    impl DomainJournal {
+        fn append(
+            &self,
+            payload: LifecycleRecordPayload,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            let mut history = self.history.lock().unwrap();
+            let sequence = history.next_sequence();
+            let kind = payload.kind();
+            let record =
+                LifecycleRecord::new(self.namespace.clone(), correlation(2), sequence, payload)
+                    .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            history
+                .append(&record)
+                .map_err(|error| GatewayError::Registration(error.to_string()))?;
+            Ok(AuditDeliveryReceipt::new(correlation(2), sequence, kind))
+        }
+    }
+
+    impl GatewayReconciliationJournalSession for DomainJournal {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            unreachable!("recovery admits no intent")
+        }
+        fn outcome(
+            &self,
+            _: &GatewayReconciliationOutcome,
+        ) -> Result<(), GatewayReconciliationOutcomeError> {
+            unreachable!("recovery records a physical outcome")
+        }
+        fn joined(&self, _: &GatewayReconciliationRequest) -> Result<(), GatewayError> {
+            unreachable!("recovery joins no request")
+        }
+        fn effect_plan(
+            &self,
+            _: &str,
+            _: Option<&ReconciliationIncarnation>,
+            _: &ReconciliationTarget,
+            _: &LifecyclePlanStep,
+            _: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            unreachable!("recovery plans no effect")
+        }
+        fn effect_completion(
+            &self,
+            plan_id: &str,
+            step_id: &str,
+            result: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.append(LifecycleRecordPayload::EffectCompletion {
+                plan_id: plan_id.into(),
+                step_id: step_id.into(),
+                result: result.clone(),
+            })
+        }
+        fn observation(
+            &self,
+            source: &LifecycleObservationSource,
+            state: &LifecycleObservation,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.append(LifecycleRecordPayload::Observation {
+                source: source.clone(),
+                state: state.clone(),
+            })
+        }
+        fn physical_outcome(
+            &self,
+            physical: &LifecyclePhysicalOutcome,
+            last_confirmed: Option<&LifecycleObservation>,
+            cleanup: ReconciliationCleanupDecision,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.append(LifecycleRecordPayload::Outcome {
+                physical: physical.clone(),
+                last_confirmed: last_confirmed.cloned(),
+                cleanup,
+            })
+        }
+    }
+
+    fn stage(target: &ReconciliationTarget) -> LifecycleEffect {
+        LifecycleEffect::StageRuntime {
+            fingerprint: target.runtime_fingerprint().into(),
+        }
+    }
+
+    fn assert_closed((result, history): (Result<(), GatewayError>, LifecycleHistory), row: &str) {
+        result.unwrap_or_else(|error| panic!("{row}: {error}"));
+        assert!(history.is_terminal(), "{row}");
+    }
+
+    #[test]
+    fn settled_plans_close_on_their_last_saved_observation() {
+        // #210: staging records its runtime as present, then the next step
+        // is never saved.
+        let scenario = Scenario::new(None);
+        let scenario = scenario
+            .plan("stage-runtime", stage(&Scenario::new(None).target), None)
+            .completed("stage-runtime", 1, true);
+        assert_closed(scenario.recover(), "settled staging");
+    }
+
+    #[test]
+    fn a_published_target_no_longer_keeps_recovery_unresolved() {
+        let scenario = Scenario::new(None).published();
+        let publish = LifecycleEffect::PublishServiceDefinition {
+            target: scenario.target.clone(),
+        };
+        let scenario = scenario
+            .plan("publish-service-definition", publish, None)
+            .completed("publish-service-definition", 1, true);
+        assert_closed(scenario.recover(), "settled publication");
+    }
+
+    #[test]
+    fn an_intent_without_a_plan_closes_when_the_prior_has_changed() {
+        let prior_target = ReconciliationTarget::new(
+            Scenario::new(None).target.service().into(),
+            "c".repeat(64),
+            "d".repeat(64),
+        )
+        .unwrap();
+        // The prior gateway is gone (or restarted with another PID).
+        let prior = ReconciliationIncarnation::new(
+            prior_target,
+            "550e8400-e29b-41d4-a716-446655440000".into(),
+            4242,
+            7398,
+        )
+        .unwrap();
+        assert_closed(Scenario::new(Some(prior)).recover(), "no plan");
+    }
+
+    #[test]
+    fn unreturned_steps_close_with_their_declared_cleanup_settled() {
+        let base = Scenario::new(None);
+        let target = base.target.clone();
+        let service = target.service().to_owned();
+        let rows: [(&str, LifecycleEffect, Option<LifecycleEffect>); 5] = [
+            (
+                "first staging",
+                stage(&target),
+                Some(LifecycleEffect::PruneRuntime {
+                    fingerprint: target.runtime_fingerprint().into(),
+                }),
+            ),
+            (
+                "bootstrap without its target",
+                LifecycleEffect::BootstrapService {
+                    target: target.clone(),
+                },
+                Some(LifecycleEffect::UnloadService {
+                    service: service.clone(),
+                }),
+            ),
+            (
+                "publication",
+                LifecycleEffect::PublishServiceDefinition {
+                    target: target.clone(),
+                },
+                None,
+            ),
+            (
+                "pruning",
+                LifecycleEffect::PruneRuntime {
+                    fingerprint: "c".repeat(64),
+                },
+                None,
+            ),
+            (
+                "staging cleanup",
+                LifecycleEffect::RemoveStagingRuntime {
+                    generation: "d".repeat(64),
+                },
+                None,
+            ),
+        ];
+        for (row, primary, cleanup) in rows {
+            let scenario = Scenario::new(None).plan("step", primary, cleanup);
+            assert_closed(scenario.recover(), row);
+        }
+    }
+
+    #[test]
+    fn a_namespace_this_host_does_not_own_stays_unresolved() {
+        let mut scenario = Scenario::new(None);
+        scenario.target = ReconciliationTarget::new(
+            "gui/0/com.example.other".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        scenario.records = vec![LifecycleRecordPayload::Intent {
+            request_correlation: correlation(1),
+            cause: ReconciliationCause::Startup,
+            initiator: ReconciliationInitiator::DesktopHost,
+            target: scenario.target.clone(),
+            before: None,
+        }];
+        let (result, history) = scenario.recover();
+        assert!(result.is_err());
+        assert!(!history.is_terminal());
     }
 }
