@@ -540,6 +540,7 @@ function Invoke-StopSettlement {
         StopCalled = $true
         StopOutcome = $stopOutcome
         StopDiagnostic = $stopDiagnostic
+        Settled = $failures.Count -eq 0
         Failures = @($failures)
     }
 }
@@ -672,9 +673,9 @@ function Assert-LifecycleStateProbes {
         if ($negativeObservation.Rejections.Count -eq 0) { throw "stabilized snapshot accepted mutation of $($mutation.Field)" }
     }
     $lostStop = Invoke-StopSettlement -StopEffect { throw [System.Management.Automation.MethodInvocationException]::new('lost stop reply', [System.Runtime.InteropServices.COMException]::new('lost stop reply', -2147023170)) } -ProcessesSettled { $true } -InstancesSettled { $true }
-    if (-not $lostStop.StopCalled -or $lostStop.StopOutcome -ne 'lost' -or $lostStop.Failures.Count -ne 0) { throw 'lost stop reply did not settle through fresh observations' }
+    if (-not $lostStop.StopCalled -or $lostStop.StopOutcome -ne 'lost' -or -not $lostStop.Settled -or $lostStop.Failures.Count -ne 0) { throw 'lost stop reply did not settle through fresh observations' }
     $failedStop = Invoke-StopSettlement -StopEffect { throw 'stop rejected' } -ProcessesSettled { $false } -InstancesSettled { $false }
-    if ($failedStop.Failures.Count -ne 2 -or $failedStop.Failures[0] -notmatch 'stop rejected') { throw 'stop failure and lingering effects were not retained' }
+    if ($failedStop.Settled -or $failedStop.Failures.Count -ne 2 -or $failedStop.Failures[0] -notmatch 'stop rejected') { throw 'stop failure and lingering effects were not retained' }
     $deleteEffects = @(
         [pscustomobject]@{ Name = 'success'; Effect = { } },
         [pscustomobject]@{ Name = 'lost'; Effect = { throw [System.Management.Automation.MethodInvocationException]::new('lost delete reply', [System.Runtime.InteropServices.COMException]::new('lost delete reply', -2147023170)) } },
@@ -1165,6 +1166,7 @@ catch {
     $primaryFailure = $_
 }
 finally {
+    $runEffectsSettled = -not $runAttempted
     if (-not $folderOwned -and $null -ne $folderAcknowledgement -and $null -ne $schedulerRoot) {
         try {
             $recoveredFolder = Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath
@@ -1218,29 +1220,41 @@ finally {
             return $true
         }
         foreach ($failure in $stopSettlement.Failures) { Add-CleanupFailure $failure }
+        $runEffectsSettled = $stopSettlement.Settled
     }
     foreach ($process in $script:ObservedProcesses.Values) { $process.Dispose() }
+    $taskSettled = -not $taskOwned
     if ($taskOwned -and $null -ne $ownedFolder) {
-        $taskDeleteSettlement = Invoke-DeleteSettlement -Resource 'exact task' -DeleteEffect {
-            $ownedFolder.DeleteTask($taskName, 0)
-        } -ObservePresent {
-            return $null -ne (Get-ExactTask -Folder $ownedFolder -Name $taskName)
+        if ($runEffectsSettled) {
+            $taskDeleteSettlement = Invoke-DeleteSettlement -Resource 'exact task' -DeleteEffect {
+                $ownedFolder.DeleteTask($taskName, 0)
+            } -ObservePresent {
+                return $null -ne (Get-ExactTask -Folder $ownedFolder -Name $taskName)
+            }
+            if ($null -ne $taskDeleteSettlement.Failure) { Add-CleanupFailure $taskDeleteSettlement.Failure }
+            $taskSettled = $taskDeleteSettlement.Settled
         }
-        if ($null -ne $taskDeleteSettlement.Failure) { Add-CleanupFailure $taskDeleteSettlement.Failure }
+        else { Add-CleanupFailure 'exact task was preserved because its processes or instances did not settle' }
     }
+    $folderSettled = -not $folderOwned
     if ($folderOwned -and $null -ne $schedulerRoot) {
-        $folderDeleteSettlement = Invoke-DeleteSettlement -Resource 'exact scheduler folder' -DeleteEffect {
-            $schedulerRoot.DeleteFolder($folderName, 0)
-        } -ObservePresent {
-            return $null -ne (Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath)
+        if ($taskSettled) {
+            $folderDeleteSettlement = Invoke-DeleteSettlement -Resource 'exact scheduler folder' -DeleteEffect {
+                $schedulerRoot.DeleteFolder($folderName, 0)
+            } -ObservePresent {
+                return $null -ne (Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath)
+            }
+            if ($null -ne $folderDeleteSettlement.Failure) { Add-CleanupFailure $folderDeleteSettlement.Failure }
+            $folderSettled = $folderDeleteSettlement.Settled
         }
-        if ($null -ne $folderDeleteSettlement.Failure) { Add-CleanupFailure $folderDeleteSettlement.Failure }
+        else { Add-CleanupFailure 'scheduler folder was preserved because its exact task did not settle' }
     }
     if ($rootOwned) {
         $rootAlreadyAbsent = $null -eq $runRootHandle -and -not [System.IO.Directory]::Exists($runRoot)
         if ($rootAlreadyAbsent) { $rootOwned = $false }
-        $rootCanDelete = $null -ne $runRootHandle
-        if ($rootOwned -and -not $rootCanDelete) { Add-CleanupFailure 'cleanup-owned run root has no retained authority handle; the path was preserved' }
+        $rootCanDelete = $folderSettled -and $null -ne $runRootHandle
+        if ($rootOwned -and -not $folderSettled) { Add-CleanupFailure 'run root was preserved because its scheduler folder did not settle' }
+        if ($rootOwned -and $folderSettled -and $null -eq $runRootHandle) { Add-CleanupFailure 'cleanup-owned run root has no retained authority handle; the path was preserved' }
         if ($rootCanDelete) {
             try {
                 if ([NessaWindowsProofNative]::DirectoryIsReparsePoint($runRootHandle) -or [NessaWindowsProofNative]::DirectoryIdentity($runRootHandle) -ne $runRootIdentity) {
