@@ -859,6 +859,18 @@ function Get-ExactTask {
     }
 }
 
+function Resolve-AccountSid {
+    param([string] $Account)
+    if ([string]::IsNullOrWhiteSpace($Account)) { return $Account }
+    if ($Account -match '^S-1-\d+(-\d+)+$') { return $Account }
+    try {
+        return ([System.Security.Principal.NTAccount]::new($Account)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    }
+    catch {
+        return $Account
+    }
+}
+
 # Each disagreement is named with both values, so a native contradiction says
 # which fact Task Scheduler read back differently rather than only that one did.
 function Get-TaskDefinitionMismatches {
@@ -876,7 +888,11 @@ function Get-TaskDefinitionMismatches {
         if ($Observed -ne $Planned) { $mismatches.Add("$Name observed '$Observed' planned '$Planned'") }
     }
     $definition = $Task.Definition
-    Compare-Fact 'Principal.UserId' $definition.Principal.UserId $CallerSid
+    # Registered with the caller's SID, Task Scheduler reads UserId back as an
+    # account name: bare for the principal, machine-qualified for the trigger
+    # (run 36226784863). Identity is the SID that name resolves to, never the
+    # name's spelling; an unresolvable name is kept as observed and disagrees.
+    Compare-Fact 'Principal.UserId' (Resolve-AccountSid $definition.Principal.UserId) $CallerSid
     Compare-Fact 'Principal.LogonType' $definition.Principal.LogonType 3
     Compare-Fact 'Principal.RunLevel' $definition.Principal.RunLevel 0
     Compare-Fact 'Triggers.Count' $definition.Triggers.Count 1
@@ -884,7 +900,7 @@ function Get-TaskDefinitionMismatches {
         $trigger = $definition.Triggers.Item(1)
         Compare-Fact 'Trigger.Type' $trigger.Type 9
         Compare-Fact 'Trigger.Enabled' $trigger.Enabled $true
-        Compare-Fact 'Trigger.UserId' $trigger.UserId $CallerSid
+        Compare-Fact 'Trigger.UserId' (Resolve-AccountSid $trigger.UserId) $CallerSid
     }
     Compare-Fact 'Actions.Count' $definition.Actions.Count 1
     if ($definition.Actions.Count -eq 1) {
@@ -1259,7 +1275,7 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     $observedTrigger = $observedDefinition.Triggers.Item(1)
     $descriptorFacts = ConvertTo-ExactDescriptor -Sddl $observedTask.GetSecurityDescriptor($securityInformation)
     $evidence = [pscustomobject][ordered]@{
-        CallerSid = $caller.Sid; PrincipalSid = $observedDefinition.Principal.UserId; TriggerSid = $observedTrigger.UserId
+        CallerSid = $caller.Sid; PrincipalSid = (Resolve-AccountSid $observedDefinition.Principal.UserId); TriggerSid = (Resolve-AccountSid $observedTrigger.UserId)
         ActionSid = [string]$record.sid; PidBoundSid = $pidFacts.Sid
         CallerElevated = $caller.Elevated; ActionElevated = [bool]$record.elevated; PidBoundElevated = $pidFacts.Elevated
         CallerElevationType = $caller.ElevationType; ActionElevationType = [int]$record.elevationType; PidBoundElevationType = $pidFacts.ElevationType
