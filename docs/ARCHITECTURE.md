@@ -186,47 +186,46 @@ intact so its normal managed retirement boundary remains available.
 Before bootstrap, the host durably records the exact service, definition, runtime
 fingerprint and generation under the service-label lock, together with an exact
 bootout contingency for only that target; it retains the registration record
-until readiness succeeds. If bootstrap completion or observation delivery fails,
-the host freshly proves that the same target still owns the label before executing
-the predeclared bootout. A replacement is preserved. The host retries an
-unacknowledged observation as the identical record before appending the cleanup
-completion and its fresh post-command observation; persistent journal failure
-leaves the history unresolved while still retaining the physical cleanup result.
-A declared cleanup — the bootout a bootstrap carries, the prune a first staging
-carries — is owed only when its step did not succeed, so a success leaves nothing
-pending for the next step. When bootstrap completion or observation delivery
-fails after a success, the live bootout still runs as described above; the
-journal refuses to record a cleanup that was not owed, and the physical result is
-reported beside that audit failure.
+until readiness succeeds.
 
-Restart recovery replays nothing except an unreturned unload of the exact planned
-incarnation, which it runs once. It adopts a bootstrap only when fresh health and
-launchd PID prove the exact planned target; otherwise it records what it freshly
-finds and closes the attempt as failed, keeping whatever is there. An unresolved
-attempt blocks every later registration, so a refusal that depends only on state
-that will not change would block the gateway for good; the next registration
-starts from the fresh state instead.
+The journal is the one owner of whether a cleanup is owed. A declared cleanup —
+the bootout a bootstrap carries, the prune a first staging carries — is owed only
+once the journal holds its step's result and observation and that result is not
+success (`LifecycleEffectPredicate::is_due`). The live path asks that rule before
+running a cleanup, so a success leaves nothing pending and nothing runs that the
+journal could not record. A bootstrap launchd refused has its bootout run and
+recorded before the failure is reported, and the bootout still refuses a
+replacement that owns the label. When a step's result or observation cannot be
+delivered, nothing is undone then; the next successful registration prunes every
+runtime and staging directory it does not retain, and a staged runtime that
+matches the next install is reused under the plan `reuse-staged-runtime`.
+
+Restart recovery runs no command. It adopts a bootstrap or readiness step only
+when fresh health and launchd PID prove the exact planned target; otherwise it
+records what it freshly finds and closes the attempt as failed, keeping whatever
+is there for the next registration. An unresolved attempt blocks every later
+registration, so a refusal that depends only on state that will not change would
+block the gateway for good.
 
 Before closing, recovery settles every step the journal lists as unsettled, in
-the journal's order: a step awaiting its observation is observed; an unreturned
-step is recorded indeterminate, because the interrupted attempt may have
-returned it unrecorded; a cleanup its step's result makes due is recorded as not
-run by recovery, though the attempt may have run it. Each observation recovery
-writes means what that step's live observation means: the runtime directory for
-staging and pruning, the staging directory for staging cleanup, launchd's loaded
-state for bootstrap, and the plist for publication, retirement and unload. An
-attempt closes at dispatch when any settled step had not returned, and at
-observation otherwise.
+the journal's order (`LifecycleHistory::unsettled_steps`): a step awaiting its
+observation is observed; an unreturned step is recorded indeterminate, because
+the interrupted attempt may have returned it unrecorded; a cleanup that result
+makes due is recorded as not run by recovery, though the attempt may have run it.
+Recovery reads launchd and health through `LaunchdProbe`. Each observation, live
+or recovered, means what `LaunchdArtifacts::present` says for that step: the
+runtime directory for staging and pruning, the staging directory for staging
+cleanup, the plist for publication and retirement, and whether launchd has the
+label loaded for bootstrap, unload and adoption. An attempt closes at dispatch
+when any settled step had not returned, and at observation otherwise.
 
 | Journal | Fresh state | Recovery |
 | --- | --- | --- |
-| Intent, no plan | Any | Record whether the target is installed or running (and was not the prior), close failed. No plan authorized no effect, so a restarted or replaced gateway was not caused by this attempt. |
-| Bootstrap pending | Exact planned target, healthy, launchd PID agrees | Settle it and adopt the target. |
-| Bootstrap pending | Absent, PID-less, unhealthy, or replaced | Settle it and its bootout without running either, close failed. Nothing is booted out. |
-| Unload pending | The planned incarnation, or nothing | An unreturned bootout is run once, then observed (unchanged). |
-| Unload pending | Replaced by another incarnation, or the planned one stopped running while the label stays loaded | Settle it without running it, close failed. |
-| Staging, publication, retirement, pruning, or staging cleanup pending | Any | Settle it and any cleanup it makes due, close failed. |
-| Adoption or agent stop pending | Any | Settle it as before and close with its own outcome. |
+| Intent, no plan | Any | Record whether the target is installed or running (and was not the prior), close failed. No plan authorized no effect. |
+| Bootstrap or readiness pending | Exact planned target, healthy, launchd PID agrees | Settle it and adopt the target; an owed bootout is recorded not run. |
+| Bootstrap or readiness pending | Anything else | Settle without running anything, close failed. |
+| Unload, staging, publication, retirement, pruning, or staging cleanup pending | Any | Settle it and any cleanup it makes due without running either, close failed. |
+| Agent stop pending | Any | Settle it and close with its own outcome (unchanged). |
 | Plans settled and observed | Any | Close failed on the last saved observation. A step's observation records only that step's artifact, so it is not compared with a fresh one. |
 | A non-launchd effect, or a namespace this host does not own | Any | Refuse and stay unresolved (unchanged). |
 A retry may unload an unambiguously PID-less unavailable registration only when that

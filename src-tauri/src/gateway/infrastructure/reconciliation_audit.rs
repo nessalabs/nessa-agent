@@ -1848,6 +1848,34 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
+    #[test]
+    fn every_effect_predicate_is_stored_and_restored_as_itself() {
+        let incarnation = ReconciliationIncarnation::new(
+            ReconciliationTarget::new(
+                "gui/501/so.nessa.gateway.prod".into(),
+                "a".repeat(64),
+                "b".repeat(64),
+            )
+            .unwrap(),
+            "00000000-0000-4000-8000-000000000103".into(),
+            103,
+            7420,
+        )
+        .unwrap();
+        for predicate in [
+            LifecycleEffectPredicate::Always,
+            LifecycleEffectPredicate::PrimaryReturned,
+            LifecycleEffectPredicate::PrimaryAccepted,
+            LifecycleEffectPredicate::PrimaryNotAccepted,
+            LifecycleEffectPredicate::ObservationMatches(incarnation),
+        ] {
+            assert_eq!(
+                parse_predicate(&effect_predicate(&predicate)).unwrap(),
+                predicate
+            );
+        }
+    }
+
     struct AdvancingClock {
         now: Mutex<Instant>,
         waits: AtomicUsize,

@@ -16,14 +16,14 @@ use std::{
 
 /// Identity advertised by a managed gateway process, bound to launchd's exact PID.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ManagedRuntime {
+pub(in crate::gateway::infrastructure) struct ManagedRuntime {
     pub fingerprint: String,
     pub generation: String,
     pub instance: String,
     pub pid: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Health {
+pub(in crate::gateway::infrastructure) enum Health {
     Legacy,
     Managed(ManagedRuntime),
 }
@@ -32,7 +32,7 @@ pub(super) enum Registration {
     Unloaded,
     Loaded,
 }
-pub(super) struct ServiceStatus {
+pub(in crate::gateway::infrastructure) struct ServiceStatus {
     pub loaded: bool,
     pub pid: Option<u32>,
     pub process_identity_known: bool,

@@ -179,6 +179,29 @@ pub enum LifecycleEffectPredicate {
     ObservationMatches(ReconciliationIncarnation),
 }
 
+impl LifecycleEffectPredicate {
+    /// Whether a contingency is owed, given its primary's recorded result and
+    /// the incarnation last observed. This is the one rule: the journal
+    /// applies it to what it accepts and lists, and an adapter asks it before
+    /// running a contingency, so nothing runs that the journal would not
+    /// record.
+    pub fn is_due(
+        &self,
+        primary: Option<&LifecycleCommandResult>,
+        latest: Option<&ReconciliationIncarnation>,
+    ) -> bool {
+        match self {
+            Self::Always => true,
+            Self::PrimaryReturned => primary.is_some(),
+            Self::PrimaryAccepted => matches!(primary, Some(LifecycleCommandResult::Accepted)),
+            Self::PrimaryNotAccepted => {
+                primary.is_some_and(|result| !matches!(result, LifecycleCommandResult::Accepted))
+            }
+            Self::ObservationMatches(expected) => latest == Some(expected),
+        }
+    }
+}
+
 /// Plan-local operation. IDs are unique within their plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LifecyclePlanStep {
@@ -892,35 +915,26 @@ impl LifecycleHistory {
         None
     }
 
-    /// Whether a contingency may run, given its primary's returned result.
     fn is_due(
         &self,
         predicate: &LifecycleEffectPredicate,
         primary: Option<&LifecycleCommandResult>,
     ) -> bool {
-        match predicate {
-            LifecycleEffectPredicate::Always => true,
-            LifecycleEffectPredicate::PrimaryReturned => primary.is_some(),
-            LifecycleEffectPredicate::PrimaryAccepted => {
-                matches!(primary, Some(LifecycleCommandResult::Accepted))
-            }
-            LifecycleEffectPredicate::PrimaryNotAccepted => {
-                primary.is_some_and(|result| !matches!(result, LifecycleCommandResult::Accepted))
-            }
-            LifecycleEffectPredicate::ObservationMatches(expected) => {
-                self.latest_observation
-                    .as_ref()
-                    .and_then(LifecycleObservation::incarnation)
-                    == Some(expected)
-            }
-        }
+        predicate.is_due(
+            primary,
+            self.latest_observation
+                .as_ref()
+                .and_then(LifecycleObservation::incarnation),
+        )
     }
 
     /// Every step recovery must settle, in the order the journal accepts,
     /// when it records each unreturned one as indeterminate rather than
     /// running it: a step awaiting its observation, then per plan an
     /// unreturned primary and each contingency that result makes due. An
-    /// empty list means the plans are settled.
+    /// empty list means the plans are settled. An `ObservationMatches`
+    /// contingency is judged against the observation current when listed; a
+    /// later observation recovery writes can change that answer.
     pub fn unsettled_steps(&self) -> Vec<LifecyclePendingStep> {
         let mut unsettled = Vec::new();
         if let Some((plan_id, step_id)) = &self.pending_observation {
