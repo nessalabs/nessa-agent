@@ -73,11 +73,12 @@ impl RunError {
     }
 
     /// The browser-session journal that did not open. A journal replay
-    /// refuses is a [`RunError::Dataset`]; one that could not be opened,
+    /// refuses, or one that cannot record its startup sweep, is a
+    /// [`RunError::Dataset`]; one that could not be opened,
     /// locked or synced stays `Authentication`, which is retried.
     pub(crate) fn opening_browser_sessions(path: &Path, cause: JournalOpenError) -> Self {
         match cause {
-            JournalOpenError::Unreadable { .. } => {
+            JournalOpenError::Unreadable { .. } | JournalOpenError::SweepRefused { .. } => {
                 Self::Dataset(DatasetRefusal::new(Dataset::BrowserSessions, path, cause))
             }
             JournalOpenError::Unavailable => Self::Authentication(cause.to_string()),

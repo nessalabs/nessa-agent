@@ -1322,7 +1322,19 @@ async fn a_journal_at_its_bound_cannot_retire_implausible_state_and_fails_closed
     drop(store);
     let exact_bound = std::fs::metadata(&path).unwrap().len();
 
-    assert!(PersistentSessions::open_bounded(&path, exact_bound, 100).is_err());
+    // The same journal refuses the same sweep on every start, so this is
+    // not the retried `Unavailable`.
+    let refused = PersistentSessions::open_bounded(&path, exact_bound, 100).err();
+    assert_eq!(
+        refused,
+        Some(JournalOpenError::SweepRefused {
+            problem: "the journal has no room left for it",
+        })
+    );
+    assert!(matches!(
+        crate::core::RunError::opening_browser_sessions(&path, refused.unwrap()),
+        crate::core::RunError::Dataset(_)
+    ));
     assert_eq!(std::fs::metadata(&path).unwrap().len(), exact_bound);
     assert!(PersistentSessions::open_bounded(&path, exact_bound, excursion).is_ok());
 }

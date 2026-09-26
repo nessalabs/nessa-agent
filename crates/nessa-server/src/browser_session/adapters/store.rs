@@ -172,6 +172,21 @@ impl Drop for Journal {
         }
     }
 }
+/// Why a record was not appended. Either way the caller is told
+/// `Unavailable`; open alone needs the difference, because a refusal is the
+/// same on every start and an I/O failure may not be.
+enum CommitError {
+    /// The same state refuses the same record every time: illegal, too long,
+    /// or more than the journal has room for.
+    Refused(&'static str),
+    /// Reading the journal's length, or writing and syncing the record, failed.
+    Io,
+}
+impl From<CommitError> for AccessError {
+    fn from(_: CommitError) -> Self {
+        AccessError::Unavailable
+    }
+}
 struct State {
     sessions: BTreeMap<String, BrowserSessionState>,
     login_replacements: BTreeMap<String, Option<(String, BrowserSessionState)>>,
@@ -197,6 +212,10 @@ pub enum JournalOpenError {
         line: Option<u64>,
         problem: &'static str,
     },
+    /// Replay succeeded, but the record retiring sessions dated in the future
+    /// could not be appended for a reason the same journal repeats: it has no
+    /// room left, or the record is not one it can take.
+    SweepRefused { problem: &'static str },
     /// The file could not be opened privately, locked, read, synced, or
     /// written: a failure that can clear.
     Unavailable,
@@ -212,6 +231,10 @@ impl std::fmt::Display for JournalOpenError {
                 line: None,
                 problem,
             } => write!(output, "browser session journal: {problem}"),
+            Self::SweepRefused { problem } => write!(
+                output,
+                "browser session journal cannot record retiring sessions dated in the future: {problem}"
+            ),
             Self::Unavailable => output.write_str("browser session journal is unavailable"),
         }
     }
@@ -344,7 +367,14 @@ impl PersistentSessions {
                 initiator: None,
             })
             .collect();
-        state.commit(now, swept)?;
+        // Retiring them is a record like any other. One the journal refuses —
+        // most likely because it has no room left — is refused again on
+        // every start, so it is not something the next start could clear
+        // (`a_journal_at_its_bound_cannot_retire_implausible_state_and_fails_closed`).
+        state.commit(now, swept).map_err(|error| match error {
+            CommitError::Refused(problem) => JournalOpenError::SweepRefused { problem },
+            CommitError::Io => Unavailable,
+        })?;
         Ok(Self(
             Arc::new(Mutex::new(state)),
             Arc::new(Semaphore::new(1)),
@@ -564,7 +594,7 @@ impl State {
         self.sequence = record.sequence;
         Ok(())
     }
-    fn commit(&mut self, at: u64, changes: Vec<Change>) -> Result<(), AccessError> {
+    fn commit(&mut self, at: u64, changes: Vec<Change>) -> Result<(), CommitError> {
         if changes.is_empty() {
             return Ok(());
         }
@@ -582,30 +612,29 @@ impl State {
             max_journal_bytes: self.max_journal_bytes,
             healthy: true,
         };
-        proposed.apply(&record)?;
+        proposed
+            .apply(&record)
+            .map_err(|_| CommitError::Refused("it is not a legal next step"))?;
         let mut bytes = serde_json::to_vec(&StoredRecord::from(&record))
-            .map_err(|_| AccessError::Unavailable)?;
+            .map_err(|_| CommitError::Refused("it cannot be written as a record"))?;
         bytes.push(b'\n');
         if bytes.len() > 1_048_576 {
-            return Err(AccessError::Unavailable);
+            return Err(CommitError::Refused("it is longer than a record may be"));
         }
         if let Some(file) = &mut self.file {
-            let projected = file
-                .metadata()
-                .map_err(|_| AccessError::Unavailable)?
+            file.metadata()
+                .map_err(|_| CommitError::Io)?
                 .len()
-                .checked_add(u64::try_from(bytes.len()).map_err(|_| AccessError::Unavailable)?)
-                .ok_or(AccessError::Unavailable)?;
-            if projected > self.max_journal_bytes {
-                return Err(AccessError::Unavailable);
-            }
+                .checked_add(bytes.len() as u64)
+                .filter(|projected| *projected <= self.max_journal_bytes)
+                .ok_or(CommitError::Refused("the journal has no room left for it"))?;
             if file
                 .write_all(&bytes)
                 .and_then(|()| file.sync_all())
                 .is_err()
             {
                 self.healthy = false;
-                return Err(AccessError::Unavailable);
+                return Err(CommitError::Io);
             }
         }
         self.sessions = proposed.sessions;
@@ -701,7 +730,7 @@ impl SessionStore for PersistentSessions {
                 RemovalReason::IdentityMismatch => Reason::IdentityMismatch,
                 RemovalReason::InvalidCredential => Reason::InvalidCredential,
             };
-            state.commit(
+            Ok(state.commit(
                 now,
                 vec![Change {
                     id,
@@ -710,7 +739,7 @@ impl SessionStore for PersistentSessions {
                     reason,
                     initiator,
                 }],
-            )
+            )?)
         })
     }
     fn renew<'a>(
@@ -786,7 +815,7 @@ impl SessionStore for PersistentSessions {
                     }),
                 }
             }
-            state.commit(now, changes)
+            Ok(state.commit(now, changes)?)
         })
     }
 }

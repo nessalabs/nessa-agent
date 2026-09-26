@@ -101,7 +101,8 @@ missing one means "not initialized". An empty browser-session journal holds no
 sessions, which grants nothing.
 
 The browser-session journal has the same outcomes. Its open returns
-`JournalOpenError`: `Unreadable { line, problem }` for what replay refuses, and
+`JournalOpenError`: `Unreadable { line, problem }` for what replay refuses,
+`SweepRefused { problem }` when the startup sweep cannot be recorded (J8), and
 `Unavailable` for the rest. Replay reads line by line, under the journal's own
 lock:
 
@@ -113,6 +114,7 @@ lock:
 | J4 | A complete line that is not a record, or not a legal next step | `Unreadable`, and so `datasetRefused`. File untouched. | `what_replay_refuses_is_unreadable_and_names_its_line`, `a_browser_session_journal_replay_refuses_stops_the_gateway_for_good` |
 | J5 | Cutting or its sync fails | `Unavailable`, which is retried. The tail stays for the next open to cut. | — (the cut runs on a real file; an injected failure would need a storage port this journal does not have) |
 | J6 | The process dies during the cut | The next open finds the tail (J2) or not (J1) | follows from J2 being idempotent |
+| J8 | Replayed, but the record retiring sessions dated in the future cannot be appended: no room left, or the record refused | `SweepRefused`, and so `datasetRefused`. File untouched. The same journal refuses the same sweep on every start. An I/O failure appending it is J5. | `a_journal_at_its_bound_cannot_retire_implausible_state_and_fails_closed` |
 | J7 | Held by another opener, or the file cannot be opened privately | `Unavailable`, `authentication`, retried | `a_browser_session_journal_held_elsewhere_is_still_retried` |
 
 J2 is safe because of how a record is written. It is appended with its newline
