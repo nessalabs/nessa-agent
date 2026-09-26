@@ -92,9 +92,8 @@ describe("onboarding credential-save outcomes", () => {
 
     await React.act(async () => root.render(view({ revision: 2, state: "starting" })))
     expect(container.querySelector("input")).toBeNull()
-    expect(container.textContent).toContain(
-      "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",
-    )
+    // The metering note belongs to the key form, so it goes when the form does.
+    expect(container.textContent).not.toContain("messages may be metered")
 
     await React.act(async () => root.render(view({ revision: 3, state: "unmanaged" })))
     expect(container.querySelector("input")).not.toBeNull()

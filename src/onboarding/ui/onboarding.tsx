@@ -5,7 +5,7 @@ import {
   type ApiKeyAgent,
 } from "../application/ports"
 import { AgentApiKeyForm } from "./agent-api-key-form"
-import { Check } from "lucide-react"
+import { Check, CircleAlert, Clock, Download, KeyRound, LoaderCircle } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
@@ -134,10 +134,6 @@ function summonHeading(state: OnboardingState, configured: boolean) {
  * own name and every piece is hidden — the same arrangement `Keycaps` uses.
  * Without it a screen reader reads two-character fragments and the product's
  * own name arrives in halves.
- *
- * The shadow that keeps white type legible moves to the pieces for the same
- * reason it exists at all — it has to be on whatever is actually being
- * filtered, or the animation replaces it.
  */
 function SetupHeading({ children }: { children: string }) {
   return (
@@ -189,36 +185,51 @@ const SetupStep = React.forwardRef<
 })
 
 /**
- * What an agent that cannot be picked is waiting on.
+ * What an agent that cannot be picked is waiting on: a mark, and the words it
+ * stands for.
  *
- * Every one of these is shown on the agent itself rather than as a message
- * elsewhere, because the reason belongs to the thing it is about — and most of
- * them are fixable, which is only useful if the person can tell which.
+ * The words are the mark's name — announced, and shown on hover — rather than
+ * printed beside every row. A column of sentences down the list is noise, and
+ * most of these differ only in which small fix they ask for, which a glyph says
+ * at a glance.
+ *
+ * A gateway that failed to start is not listed here at all. It is not a fact
+ * about any one agent, so the picker gives way to a screen of its own.
  *
  * "Nothing answered" is not a fact about the agent and does not read as one.
- * Collapsing a gateway that is not running into the same words as an agent
- * Nessa does not support yet told someone their setup was fine when it was not.
+ * Collapsing an unreachable gateway into the same words as an agent Nessa does
+ * not support yet told someone their setup was fine when it was not.
  */
+type ReadinessNote = { text: string; Icon: typeof Check; spin?: boolean }
+
 function readinessNote(
   readiness: AgentReadiness,
   failure: AgentReadinessFailure | undefined,
   startup: GatewayStartupStatus,
-): string | undefined {
-  if (startup.state === "starting") return "Starting Nessa…"
-  if (startup.state === "failed") return "Nessa needs attention"
-  if (startup.state === "unavailable") return "Can’t check Nessa startup"
+): ReadinessNote | undefined {
+  if (startup.state === "starting") {
+    return { text: "Starting Nessa…", Icon: LoaderCircle, spin: true }
+  }
   if (readiness === "ready") return undefined
-  if (readiness === "not-supported") return "Coming soon"
-  if (readiness === "needs-authentication") return "Needs sign-in"
-  if (readiness === "not-installed") return "Not installed"
+  if (readiness === "not-supported") return { text: "Coming soon", Icon: Clock }
+  if (readiness === "needs-authentication") {
+    return { text: "Needs sign-in", Icon: KeyRound }
+  }
+  if (readiness === "not-installed") return { text: "Not installed", Icon: Download }
   // Not "not installed": this Nessa was not set up to run it, and the agent may
   // be sitting on the machine already. Telling someone to install what they
   // have is advice that cannot work however many times they take it.
-  if (readiness === "not-configured") return "Not set up here"
-  if (failure === "unreachable") return "Can’t reach Nessa"
-  if (failure === "unreadable") return "Unexpected answer"
-  return "Checking…"
+  if (readiness === "not-configured") {
+    return { text: "Not set up here", Icon: CircleAlert }
+  }
+  if (failure === "unreachable") return { text: "Can’t reach Nessa", Icon: CircleAlert }
+  if (failure === "unreadable") return { text: "Unexpected answer", Icon: CircleAlert }
+  return { text: "Checking…", Icon: LoaderCircle, spin: true }
 }
+
+/** Every button in the picker pane: one height, one width, one shape, so the
+ * ones that stack under the list line up as a single column. */
+const PANE_BUTTON = "h-11 w-full rounded-full nessa-text-3 font-medium"
 
 /** One listed agent: its mark, its name, and what it is waiting on. An agent
  * that cannot run is shown with the reason rather than hidden — a missing
@@ -256,10 +267,10 @@ function AgentOption({
       // the markup actually does is the smaller of the two honest changes.
       aria-pressed={selected}
       aria-disabled={note ? true : undefined}
-      // The name and its note are separate elements with only a margin between
-      // them, which reads as one run-together word. Name the option outright so
-      // it is announced the way it is written.
-      aria-label={note ? `${name}, ${note.toLowerCase()}` : name}
+      // The note is only a mark on screen, so the option is named outright with
+      // the words the mark stands for.
+      aria-label={note ? `${name}, ${note.text.toLowerCase()}` : name}
+      title={note?.text}
       onClick={() => {
         if (note) return
         onSelect(id)
@@ -270,9 +281,12 @@ function AgentOption({
         <AgentMark id={id} name={name} />
       </span>
       <span className="nessa-text-4 font-medium text-foreground">{name}</span>
-      <span className="ml-auto flex items-center">
+      <span className="ml-auto flex size-5 shrink-0 items-center justify-center">
         {note ? (
-          <span className="nessa-text-2 text-muted-foreground">{note}</span>
+          <note.Icon
+            aria-hidden
+            className={`size-4 text-muted-foreground${note.spin ? " animate-spin" : ""}`}
+          />
         ) : (
           <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border">
             {selected ? <Check aria-hidden className="size-3.5" /> : null}
@@ -441,16 +455,47 @@ export function Onboarding({
     )
   }
 
+  // A gateway that did not come up is the only thing worth saying: no agent can
+  // be checked, chosen or started until it does, so the list gives way to it
+  // rather than printing one failure beside every agent. The host's own words
+  // for what went wrong are for its log, not for this screen.
+  if (gatewayStartup.state === "failed" || gatewayStartup.state === "unavailable") {
+    return (
+      <SetupStage>
+        <SetupPanel ref={step}>
+          {/* This replaces the list without the step changing, so nothing
+            moves focus to it; the failure has to announce itself. */}
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex flex-col items-center gap-3 pt-2 text-center"
+          >
+            <span className="flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground">
+              <CircleAlert aria-hidden className="size-5" />
+            </span>
+            <h1
+              id={SETUP_HEADING_ID}
+              className="nessa-text-6 font-semibold text-foreground"
+            >
+              Nessa couldn’t start
+            </h1>
+          </div>
+          <Button size="lg" className={PANE_BUTTON} onClick={onRetryGateway}>
+            Try starting Nessa again
+          </Button>
+        </SetupPanel>
+      </SetupStage>
+    )
+  }
+
   // Nothing on the list can be picked. Every reason for that can stop being
-  // true while this screen is up — a gateway still starting, a sign-in done in
-  // another window, an agent installed in a terminal — and until now the answer
-  // setup happened to get first was the answer it kept for good.
-  const gatewayUnavailable =
-    gatewayStartup.state === "starting" ||
-    gatewayStartup.state === "failed" ||
-    gatewayStartup.state === "unavailable"
+  // true while this screen is up — a sign-in done in another window, an agent
+  // installed in a terminal — and until now the answer setup happened to get
+  // first was the answer it kept for good. A gateway still starting is not
+  // stuck: every agent's mark says so, and the list fills in once it is up.
   const stuck =
-    gatewayUnavailable || !AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
+    gatewayStartup.state !== "starting" &&
+    !AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
   return (
     <SetupStage>
       <SetupPanel ref={step}>
@@ -478,17 +523,19 @@ export function Onboarding({
                   selected={state.agent === choice.id}
                   onSelect={onChoose}
                 />
-                {choice.id === "opencode" ? (
-                  <p className="nessa-text-2 text-muted-foreground">
-                    OpenCode connects through Zen using your API key. Depending on the
-                    configured model, messages may be metered.
-                  </p>
-                ) : null}
                 {canSaveApiKey ? (
                   <div className="flex flex-col gap-2">
                     <AgentApiKeyForm
                       agent={keyAgent}
                       agentName={choice.name}
+                      // A cost disclosure, so it stays — but beside the key it
+                      // is about, not under the list for everyone who never
+                      // enters one.
+                      hint={
+                        choice.id === "opencode"
+                          ? "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
+                          : undefined
+                      }
                       onSave={saveAgentApiKey}
                       onSaved={onRecheck}
                     />
@@ -506,60 +553,44 @@ export function Onboarding({
           </p>
         ) : null}
         {stuck ? (
-          // Said once, under the list, rather than repeated on every agent: the
-          // per-agent note says what each one is waiting on, and this says what
-          // to do about it. Polite rather than assertive, because it appears
-          // while the list beneath it is being read.
-          <div role="status" aria-live="polite" className="flex flex-col gap-2">
-            {gatewayStartup.state === "starting" ? (
-              <p className="nessa-text-2 text-muted-foreground">
-                Nessa is starting its background service. Agent availability will appear
-                when it’s ready.
-              </p>
-            ) : gatewayStartup.state === "failed" ||
-              gatewayStartup.state === "unavailable" ? (
-              <>
-                <p className="nessa-text-2 text-muted-foreground">
-                  {gatewayStartup.message}
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-full"
-                  onClick={onRetryGateway}
-                >
-                  Try starting Nessa again
-                </Button>
-              </>
-            ) : (
-              <>
-                <p className="nessa-text-2 text-muted-foreground">
-                  {state.readinessFailure
-                    ? "Nessa could not ask what is installed here."
-                    : "No agent here can start yet."}{" "}
-                  Sign in or start one, then check again.
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="rounded-full"
-                  disabled={checking}
-                  onClick={onRecheck}
-                >
-                  {checking ? "Checking…" : "Check again"}
-                </Button>
-              </>
-            )}
-          </div>
+          // Said once, under the list, rather than repeated on every agent:
+          // each agent's mark says what it is waiting on, and this says what to
+          // do about it. Polite rather than assertive, because it appears while
+          // the list above it is being read.
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-center nessa-text-2 text-muted-foreground"
+          >
+            {state.readinessFailure
+              ? "Couldn’t check your agents."
+              : "Install or sign in to an agent."}
+          </p>
         ) : null}
-        <Button
-          size="lg"
-          className="rounded-full"
-          disabled={!state.agent}
-          onClick={onConfirm}
-        >
-          Continue
-        </Button>
+        {/* One column of identical buttons, so a second one lines up with
+          Continue instead of sitting beside it at a different size. */}
+        <div className="flex flex-col gap-2">
+          {stuck ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className={PANE_BUTTON}
+              disabled={checking}
+              onClick={onRecheck}
+            >
+              {checking ? "Checking…" : "Check again"}
+            </Button>
+          ) : null}
+          <Button
+            size="lg"
+            className={PANE_BUTTON}
+            disabled={!state.agent}
+            onClick={onConfirm}
+          >
+            Continue
+          </Button>
+        </div>
       </SetupPanel>
     </SetupStage>
   )
