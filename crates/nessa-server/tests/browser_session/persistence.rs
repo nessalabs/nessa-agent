@@ -1381,9 +1381,11 @@ async fn an_append_that_never_finished_is_cut_off_and_the_rest_replays() {
     for tail in [second.clone(), second[..second.len() / 2].to_owned()] {
         std::fs::write(&path, format!("{valid}{tail}")).unwrap();
         let store = reopen(&path).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), valid);
         assert!(store.get(kept.clone()).await.unwrap().is_some());
+        // Read only once the store lets go: Windows refuses a read of a
+        // range another handle has locked.
         drop(store);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), valid);
     }
     // Only one record was ever acknowledged, so a new one is the second.
     let store = reopen(&path).unwrap();
