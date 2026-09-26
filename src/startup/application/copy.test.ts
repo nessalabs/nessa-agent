@@ -7,7 +7,10 @@ describe("what a person reads about startup (ADR 221)", () => {
     [{ revision: 1, state: "starting", step: "preparing" }, "Getting ready…"],
     [{ revision: 1, state: "starting", step: "replacing" }, "Finishing the last update…"],
     [{ revision: 1, state: "starting", step: "launching" }, "Starting…"],
-    [{ revision: 1, state: "failed", message: "launchctl bootstrap: 5" }, "Nessa couldn’t start."],
+    [
+      { revision: 1, state: "failed", message: "launchctl bootstrap: 5" },
+      "Nessa couldn’t start.",
+    ],
     [
       { state: "unavailable", message: "no host" },
       "Nessa couldn’t check whether it started.",

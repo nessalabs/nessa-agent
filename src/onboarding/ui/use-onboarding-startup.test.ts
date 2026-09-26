@@ -202,7 +202,11 @@ describe("the setup owner under Strict Mode", () => {
   })
 
   it("removes the live subscription and ignores events after unmount", async () => {
-    native.gatewayStartup.mockResolvedValue({ revision: 1, state: "starting", step: "preparing" })
+    native.gatewayStartup.mockResolvedValue({
+      revision: 1,
+      state: "starting",
+      step: "preparing",
+    })
     const agents = { read: vi.fn(async () => ({ ok: true as const, agents: {} })) }
     await render(agents)
     await flush()

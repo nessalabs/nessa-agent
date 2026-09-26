@@ -91,7 +91,9 @@ describe("onboarding credential-save outcomes", () => {
     expect(onRecheck).toHaveBeenCalledOnce()
     expect(container.textContent).not.toContain("opencode-private-value")
 
-    await React.act(async () => root.render(view({ revision: 2, state: "starting", step: "preparing" })))
+    await React.act(async () =>
+      root.render(view({ revision: 2, state: "starting", step: "preparing" })),
+    )
     expect(container.querySelector("input")).toBeNull()
     expect(container.textContent).toContain(
       "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",

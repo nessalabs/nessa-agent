@@ -21,5 +21,4 @@ export interface GatewayStartupSource {
  * reason, kept behind "Details" for whoever helps the person.
  */
 export type HostStartup =
-  | { readonly state: "ready" }
-  | { readonly state: "refused"; readonly details: string }
+  { readonly state: "ready" } | { readonly state: "refused"; readonly details: string }

@@ -14,7 +14,13 @@ import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
 
 import { BrowserApplication } from "./composition/browser"
-import { hasNativeHost, hostStartup, quitNessa, restartNessa, windowSurface } from "./host"
+import {
+  hasNativeHost,
+  hostStartup,
+  quitNessa,
+  restartNessa,
+  windowSurface,
+} from "./host"
 import { StartupRefused } from "./startup"
 
 import { environmentFromVite } from "./env/vite"
@@ -70,14 +76,14 @@ void hostStartup()
 
 function renderApplication() {
   root.render(
-  <React.StrictMode>
-    {windowSurface() === "setup" ? (
-      <SetupGate agents={dependencies.agents} apiKeys={nativeAgentApiKeys} />
-    ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
-      <BrowserApplication environment={environment} />
-    ) : (
-      panel
-    )}
-  </React.StrictMode>,
+    <React.StrictMode>
+      {windowSurface() === "setup" ? (
+        <SetupGate agents={dependencies.agents} apiKeys={nativeAgentApiKeys} />
+      ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
+        <BrowserApplication environment={environment} />
+      ) : (
+        panel
+      )}
+    </React.StrictMode>,
   )
 }

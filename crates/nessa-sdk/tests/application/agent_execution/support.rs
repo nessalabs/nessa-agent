@@ -28,11 +28,33 @@ impl ExecutionAudit for AcceptingAudit {
     }
 }
 
+/// Refuses every queue settlement record and accepts all other evidence.
+pub(super) struct QueueSettlementRejectingAudit;
+impl ExecutionAudit for QueueSettlementRejectingAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(record, ExecutionAuditRecord::QueueSettled(_)) {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
 pub(super) async fn attached_agent(
     provider: Arc<dyn AgentProvider>,
     manager: SessionManager,
 ) -> Result<Agent, AgentError> {
-    let agent = Agent::prepare(provider, manager, Arc::new(AcceptingAudit))
+    attached_agent_with_audit(provider, manager, Arc::new(AcceptingAudit)).await
+}
+
+pub(super) async fn attached_agent_with_audit(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+    audit: Arc<dyn ExecutionAudit>,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, audit)
         .await
         .map_err(|error| error.cause().clone())?;
     let authorization =

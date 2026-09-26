@@ -1172,6 +1172,11 @@ impl Agent {
     /// Concurrent explicit and failure cleanup share one provider shutdown attempt.
     /// In-flight control response waits are interrupted before cleanup is joined.
     /// StorageDuringClose retains evidence failure plus the cleanup outcome.
+    /// Any other pending-evidence failure keeps an unconfirmed cleanup visible:
+    /// `AuditFailure` means cleanup completed, `AuditAndCleanupFailure` means it
+    /// did not, and other failures combine with the cleanup error in
+    /// `MultipleOperationFailures` (enforced by
+    /// `scheduling_close_audit_failure_keeps_unconfirmed_cleanup_visible`).
     /// Once polled, close continues even if its caller stops waiting. Retries and
     /// final handle drop preserve the attachment's first shutdown cause and known
     /// initiator until cleanup is confirmed; a resumed attachment owns a new cause.

@@ -1,9 +1,5 @@
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
-import {
-  TRY_AGAIN_HINT,
-  startupSentence,
-  type GatewayStartupStatus,
-} from "../../startup"
+import { TRY_AGAIN_HINT, startupSentence, type GatewayStartupStatus } from "../../startup"
 
 /**
  * The connection's own notice while Nessa is still starting, or could not
@@ -22,7 +18,9 @@ export function startupNotice(
   const sentence = startupSentence(status)
   if (!sentence) return null
   if (status.state === "starting")
-    return <AgentNotification className="mb-2" state="reconnecting" description={sentence} />
+    return (
+      <AgentNotification className="mb-2" state="reconnecting" description={sentence} />
+    )
   return (
     <AgentNotification
       className="mb-2"
