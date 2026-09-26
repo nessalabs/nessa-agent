@@ -30,8 +30,7 @@ use crate::application::agent_execution::permissions::{
 use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream,
     ExecutionReportSource, ObservationFailure, ObservationFailureCause, OperationCapabilities,
-    ProviderExecutionReply, ProviderOperationFailure, ProviderSession, ProviderSessionState,
-    SessionCloseRequest,
+    ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, ProviderContext, SessionManager, StorageError,
@@ -1037,12 +1036,13 @@ impl Agent {
         let agent = self.clone();
         async move {
             let admission = agent.accept_control()?;
+            let attached = agent.inner.lifecycle.attached_provider(&admission)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
             tokio::spawn(async move {
                 agent
                     .run_control_observed(admission.clone(), async {
-                        agent.inner.session.answer_question(answer).await
+                        attached.session.answer_question(answer).await
                     })
                     .await
                     .map_err(ProviderOperationFailure::into_error)

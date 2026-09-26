@@ -1,6 +1,5 @@
 //! Restoration and cleanup must operate on the same attached resource generation.
 use super::*;
-use crate::application::agent_execution::permissions::QuestionAnswer;
 use crate::application::agent_execution::providers::ResourceCleanup;
 use std::{
     future::{poll_fn, Future},

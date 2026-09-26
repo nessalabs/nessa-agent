@@ -107,6 +107,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::QuestionAnswered(record) => {
                 panic!("a review is not a question: {record:?}")
             }
+            ExecutionAuditRecord::QuestionRefused(record) => {
+                panic!("a review is not a question: {record:?}")
+            }
         })
         .collect()
 }

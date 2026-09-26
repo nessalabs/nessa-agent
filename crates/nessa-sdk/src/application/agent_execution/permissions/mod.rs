@@ -27,6 +27,7 @@ pub use approval::{
     PermissionResolution,
 };
 pub use audit::{
-    PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, ReviewDeclineRecord,
+    PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord,
+    ReviewDeclineRecord,
 };
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};

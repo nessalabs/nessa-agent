@@ -287,7 +287,15 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (!asked.length) throw new Error("Question response asks nothing")
     const keys = new Set<string>()
     for (const one of asked) {
-      exact(one, ["key", "prompt", "header", "multiSelect", "freeText", "options"])
+      exact(one, [
+        "key",
+        "prompt",
+        "header",
+        "multiSelect",
+        "freeText",
+        "required",
+        "options",
+      ])
       const key = identity(one, "key")
       if (keys.has(key)) throw new Error("Question repeats a key")
       keys.add(key)
@@ -295,6 +303,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       if (one.header !== undefined && one.header !== null) text(one, "header", 1024)
       flag(one, "multiSelect")
       flag(one, "freeText")
+      flag(one, "required")
       const options = items(one, "options", 32)
       if (!options.length) throw new Error("Question offers no answers")
       const values = new Set<string>()

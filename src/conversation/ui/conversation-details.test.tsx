@@ -25,6 +25,7 @@ afterEach(() => {
 it("describes scoped support without implying missing policy integrations", () => {
   const item = conversation("conversation")
   item.remote = {
+    questions: [],
     running: false,
     permissions: [],
     tools: [],

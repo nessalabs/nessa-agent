@@ -179,6 +179,9 @@ pub struct ConversationAsked {
     pub multi_select: bool,
     /// Whether an answer in the answerer's own words is accepted.
     pub free_text: bool,
+    /// Whether an answer must include this question; declining the whole ask
+    /// is still possible.
+    pub required: bool,
     pub options: Vec<ConversationAnswerOption>,
 }
 /// One offered answer: what is recorded, and what is read.

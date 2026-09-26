@@ -194,7 +194,12 @@ pub(super) struct Asked {
     pub(super) prompt: String,
     pub(super) header: Option<String>,
     pub(super) many: bool,
-    pub(super) free_text: bool,
+    /// The field the asker named for prose. A restored ask that lost it would
+    /// send the answerer's words to a field the schema does not have.
+    pub(super) free_text_key: Option<String>,
+    /// Whether the asker said this may not be skipped. Lost on restore, a
+    /// required question would quietly become an optional one.
+    pub(super) required: bool,
     pub(super) options: Vec<AskedOption>,
 }
 /// One saved answer a question offered.
@@ -313,7 +318,8 @@ impl From<ExecutionEvent> for Event {
                             prompt: asked.prompt().into(),
                             header: asked.header().map(str::to_owned),
                             many: asked.shape() == AnswerShape::Many,
-                            free_text: asked.free_text(),
+                            free_text_key: asked.free_text_key().map(str::to_owned),
+                            required: asked.required(),
                             options: asked
                                 .options()
                                 .iter()
@@ -483,7 +489,8 @@ impl Event {
                                 AnswerShape::One
                             },
                             options,
-                            asked.free_text,
+                            asked.free_text_key,
+                            asked.required,
                         )
                         .map_err(corrupt)
                     })

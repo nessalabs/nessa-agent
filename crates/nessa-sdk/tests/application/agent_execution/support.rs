@@ -331,6 +331,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::QuestionAnswered(_) => {
                                 panic!("close cannot answer a question")
                             }
+                            ExecutionAuditRecord::QuestionRefused(_) => {
+                                panic!("close cannot refuse a question")
+                            }
                         }
                     }
                     Ok(CloseOutcome { forced: false })

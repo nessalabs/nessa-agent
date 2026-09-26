@@ -1,4 +1,4 @@
-use super::ApprovalAttribution;
+use super::{ActionContext, ApprovalAttribution};
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
@@ -78,6 +78,9 @@ pub struct PermissionAnswer {
 /// is the session's to know.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionAnswer {
+    /// Host-verified caller who answered. Carried to the audit record, because
+    /// an explicit answer without its initiator is not evidence of anything.
+    pub actor: ActionContext,
     /// Execution that owns the ask; a stale execution must not answer a later one.
     pub execution_id: ExecutionId,
     /// The ask being answered.

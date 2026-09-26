@@ -224,6 +224,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             events,
             sequence: 0,
             permission_sequence: Arc::new(AtomicU64::new(0)),
+            question_sequence: Arc::new(AtomicU64::new(0)),
             active: None,
             steering: None,
             steering_supported: false,
@@ -297,3 +298,16 @@ mod startup_responses;
 
 #[path = "worker/response_deadlines.rs"]
 mod response_deadlines;
+
+#[test]
+fn questions_are_advertised_in_the_shape_acp_reads_and_only_where_answerable() {
+    // ACP's schema reads `elicitation.form` as an object and discards anything
+    // else as absent, so `true` told the agent nothing and it never asked.
+    let advertised = initialize_params(true);
+    assert_eq!(
+        advertised["clientCapabilities"]["elicitation"],
+        json!({"form":{}})
+    );
+    let silent = initialize_params(false);
+    assert!(silent["clientCapabilities"].get("elicitation").is_none());
+}

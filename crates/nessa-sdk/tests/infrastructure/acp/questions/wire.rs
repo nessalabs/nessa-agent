@@ -1,6 +1,8 @@
 //! The schema an agent sends is the only description of what it wants, so what
 //! this reads out of it is checked against the shape the pinned harnesses emit.
 use super::*;
+use crate::domain::agent_execution::questions::{AcceptedAnswer, QuestionChoice};
+use crate::domain::agent_execution::ExecutionError;
 use crate::infrastructure::json_rpc::RpcId;
 use serde_json::json;
 
@@ -96,36 +98,131 @@ fn what_cannot_be_answered_here_is_refused_rather_than_flattened() {
     .is_err());
 }
 
+/// Three questions whose answers are each shaped by what was asked, not by
+/// what was chosen: a list, a single choice, and prose under a name the asker
+/// picked rather than one this binding would have guessed.
+fn shaped_ask() -> AgentQuestion {
+    question(&json!({
+        "mode":"form","sessionId":"session","message":"Please answer the following questions.",
+        "requestedSchema":{"type":"object","required":["environment"],"properties":{
+            "checks":{"type":"array","description":"Which checks?","items":{"anyOf":[
+                {"const":"tests"},{"const":"lint"}
+            ]}},
+            "environment":{"type":"string","description":"Which environment?","oneOf":[
+                {"const":"staging"},{"const":"production"}
+            ]},
+            "explanation":{"type":"string","title":"Other",
+                "_meta":{"_askUserQuestionCustomAnswer":{"questionId":"environment","isCustomAnswer":true}}}
+        }}
+    }))
+    .unwrap()
+}
+
 #[test]
-fn an_answer_is_written_as_the_content_the_schema_asked_for() {
-    let id = RpcId::Text("ask".into());
-    let value = accepted(
-        &id,
-        &[
-            ("question_0".into(), vec!["staging".into()], None),
-            (
-                "question_1".into(),
-                vec!["tests".into(), "lint".into()],
-                Some("and the smoke suite".into()),
-            ),
-            ("question_2".into(), vec![], None),
+fn an_answer_is_shaped_by_the_question_it_answers_not_by_how_much_was_chosen() {
+    // The regression the review reproduced: a list answered with one option was
+    // written as a string, and prose went to `<key>_custom` — a field this
+    // schema does not have.
+    let asked = shaped_ask();
+    let environment = asked
+        .questions()
+        .iter()
+        .find(|question| question.key() == "environment")
+        .unwrap();
+    assert_eq!(environment.free_text_key(), Some("explanation"));
+    assert!(environment.required());
+    let checks = asked
+        .questions()
+        .iter()
+        .find(|question| question.key() == "checks")
+        .unwrap();
+    assert!(!checks.required());
+    assert_eq!(checks.free_text_key(), None);
+
+    let answer = AcceptedAnswer::new(
+        &asked,
+        vec![
+            QuestionChoice::new("checks", vec!["tests".into()], None).unwrap(),
+            QuestionChoice::new(
+                "environment",
+                vec!["staging".into()],
+                Some("only the eu region".into()),
+            )
+            .unwrap(),
         ],
-    );
-    let content = &value["result"]["outcome"]["content"];
-    let content = if content.is_null() {
-        &value["result"]["content"]
-    } else {
-        content
-    };
+    )
+    .unwrap();
+    let id = RpcId::Text("ask".into());
+    let value = accepted(&id, &asked, &answer);
+    let content = &value["result"]["content"];
     assert_eq!(value["result"]["action"], "accept");
-    // One choice is a string, several are a list, and words of their own travel
-    // beside the choice rather than replacing it here.
-    assert_eq!(content["question_0"], "staging");
-    assert_eq!(content["question_1"], json!(["tests", "lint"]));
-    assert_eq!(content["question_1_custom"], "and the smoke suite");
-    // A question left alone contributes nothing: skipping is saying nothing.
-    assert!(content.get("question_2").is_none());
+    assert_eq!(
+        content["checks"],
+        json!(["tests"]),
+        "one choice of a list is still a list"
+    );
+    assert_eq!(content["environment"], json!("staging"));
+    assert_eq!(content["explanation"], json!("only the eu region"));
+    assert!(
+        content.get("environment_custom").is_none(),
+        "no invented field names"
+    );
 
     assert_eq!(declined(&id)["result"]["action"], "decline");
     assert_eq!(cancelled(&id)["result"]["action"], "cancel");
+}
+
+#[test]
+fn a_required_question_cannot_be_skipped_and_an_optional_one_can() {
+    let asked = shaped_ask();
+    // Skipping the required one is refused before anything is written, so the
+    // agent never receives content its own schema rejects.
+    assert_eq!(
+        AcceptedAnswer::new(
+            &asked,
+            vec![QuestionChoice::new("checks", vec!["lint".into()], None).unwrap()],
+        )
+        .unwrap_err(),
+        ExecutionError::UnansweredQuestion
+    );
+    // Words alone are not a choice. The asker required `environment`, and prose
+    // goes to `explanation`, so this answer would leave the required field
+    // empty. A second review reproduced exactly that being accepted.
+    let words_only =
+        vec![QuestionChoice::new("environment", vec![], Some("dev box".into())).unwrap()];
+    assert_eq!(
+        AcceptedAnswer::new(&asked, words_only).unwrap_err(),
+        ExecutionError::UnansweredQuestion
+    );
+    // A choice is an answer to it, words may accompany it, and the optional
+    // question may be left alone.
+    let answer = AcceptedAnswer::new(
+        &asked,
+        vec![QuestionChoice::new(
+            "environment",
+            vec!["staging".into()],
+            Some("dev box".into()),
+        )
+        .unwrap()],
+    )
+    .unwrap();
+    let content = &accepted(&RpcId::Text("ask".into()), &asked, &answer)["result"]["content"];
+    assert_eq!(content["environment"], json!("staging"));
+    assert!(content.get("checks").is_none());
+}
+
+#[test]
+fn an_ask_that_requires_prose_is_refused_rather_than_answered_against_its_schema() {
+    // Nothing here can make a person write something, so an asker that requires
+    // its own-words field cannot be satisfied; refusing the ask is what lets
+    // the worker answer it cancelled instead of sending content it refuses.
+    let ask = question(&json!({
+        "mode":"form","sessionId":"session","message":"Which environment?",
+        "requestedSchema":{"type":"object","required":["question_0_custom"],"properties":{
+            "question_0":{"type":"string","oneOf":[{"const":"staging"}]},
+            "question_0_custom":{"type":"string",
+                "_meta":{"_askUserQuestionCustomAnswer":{"questionId":"question_0","isCustomAnswer":true}}}
+        }}
+    }));
+    assert!(matches!(ask, Err(AgentError::Unsupported(_))), "{ask:?}");
 }

@@ -6,11 +6,12 @@
 //! a schema, and what goes back is the content for it.
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::questions::{
-    AgentQuestion, AnswerOption, AnswerShape, Question,
+    AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question,
 };
 use crate::infrastructure::acp::fields::string;
-use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::json_rpc::{protocol, success, RpcId};
 use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
 
 /// The `_meta` key marking a free-text field as one question's "other" box.
 ///
@@ -38,12 +39,36 @@ pub(crate) fn question(params: &Value) -> Result<AgentQuestion, AgentError> {
 
     // A free-text companion belongs to the question it names, so the companions
     // are collected first and then attached; field order in an object is not
-    // something to depend on.
-    let mut free_text = Vec::new();
+    // something to depend on. The companion's own field name is what travels:
+    // an answer written under a name the schema does not have is an answer the
+    // asker never receives.
+    let mut free_text = HashMap::new();
     for (key, field) in properties {
         if let Some(owner) = custom_answer_for(field) {
-            free_text.push(owner.unwrap_or(key.as_str()).to_owned());
+            free_text.insert(owner.unwrap_or(key.as_str()).to_owned(), key.clone());
         }
+    }
+    // A field the asker requires is one that may not be skipped. Reading it
+    // here is what lets an answer be checked against it later, rather than the
+    // agent rejecting what this sent.
+    let required = params
+        .pointer("/requestedSchema/required")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    // A required prose field says the answerer must write something, whatever
+    // they choose. Nothing here can require that of a person, so the ask is
+    // refused now rather than answered with content the asker's schema refuses.
+    if free_text.values().any(|field| required.contains(field)) {
+        return Err(AgentError::Unsupported(
+            "a question whose own-words field is required cannot be answered here".into(),
+        ));
     }
 
     let mut questions = Vec::new();
@@ -70,7 +95,8 @@ pub(crate) fn question(params: &Value) -> Result<AgentQuestion, AgentError> {
                 header,
                 shape,
                 options,
-                free_text.iter().any(|owner| owner == key),
+                free_text.get(key).cloned(),
+                required.contains(key.as_str()),
             )
             .map_err(|error| protocol(&error.to_string()))?,
         );
@@ -126,41 +152,50 @@ fn answer_options(options: &[Value]) -> Result<Vec<AnswerOption>, AgentError> {
 
 /// The answer to send back, as the content the agent's own schema asked for.
 ///
-/// `chosen` pairs a question's key with what was chosen for it: the option
-/// values, and the answerer's own words where they typed any. A question left
-/// alone contributes nothing, which is how skipping is expressed — the schema
-/// requires no field.
-pub(crate) fn accepted(
-    id: &crate::infrastructure::json_rpc::RpcId,
-    chosen: &[(String, Vec<String>, Option<String>)],
-) -> Value {
+/// Shaped by the question rather than by the answer: a field the asker declared
+/// an array stays an array even when one option was chosen, and prose goes to
+/// the field the asker named for it. Reading either from the answer instead —
+/// its length, or a name this invented — sends the agent content its own schema
+/// refuses.
+///
+/// A question left alone contributes nothing, which is how skipping is
+/// expressed. Whether the asker permits that is checked before we get here.
+pub(crate) fn accepted(id: &RpcId, asked: &AgentQuestion, answer: &AcceptedAnswer) -> Value {
     let mut content = Map::new();
-    for (key, values, own_words) in chosen {
-        match values.as_slice() {
-            [] => {}
-            [single] => {
-                content.insert(key.clone(), json!(single));
-            }
-            many => {
-                content.insert(key.clone(), json!(many));
-            }
+    for choice in answer.choices() {
+        let Some(question) = asked
+            .questions()
+            .iter()
+            .find(|question| question.key() == choice.key())
+        else {
+            continue;
+        };
+        let values = choice.values().collect::<Vec<_>>();
+        if !values.is_empty() {
+            content.insert(
+                question.key().to_owned(),
+                match question.shape() {
+                    AnswerShape::Many => json!(values),
+                    AnswerShape::One => json!(values[0]),
+                },
+            );
         }
-        if let Some(words) = own_words {
-            content.insert(format!("{key}_custom"), json!(words));
+        if let (Some(words), Some(field)) = (choice.own_words(), question.free_text_key()) {
+            content.insert(field.to_owned(), json!(words));
         }
     }
-    crate::infrastructure::json_rpc::success(id, json!({"action":"accept","content":content}))
+    success(id, json!({"action":"accept","content":content}))
 }
 
 /// The answer that declines to answer: asked, and answered with nothing.
-pub(crate) fn declined(id: &crate::infrastructure::json_rpc::RpcId) -> Value {
-    crate::infrastructure::json_rpc::success(id, json!({"action":"decline"}))
+pub(crate) fn declined(id: &RpcId) -> Value {
+    success(id, json!({"action":"decline"}))
 }
 
 /// The answer that no longer applies, because the question was withdrawn or the
 /// work it belonged to is over.
-pub(crate) fn cancelled(id: &crate::infrastructure::json_rpc::RpcId) -> Value {
-    crate::infrastructure::json_rpc::success(id, json!({"action":"cancel"}))
+pub(crate) fn cancelled(id: &RpcId) -> Value {
+    success(id, json!({"action":"cancel"}))
 }
 
 #[cfg(test)]

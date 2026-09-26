@@ -39,6 +39,7 @@ use nessa_sdk::{
             ReviewDeclineStage,
         },
         prompts::{PromptText, UserMessage},
+        questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::{ExecutionSessionId, ProviderContext, SessionId},
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
@@ -1031,4 +1032,380 @@ fn ordered_parts_keep_message_identity_and_non_text_observation_offsets() {
     assert_eq!(message["parts"][1]["offset"], 2);
     assert_eq!(message["parts"][1]["messageId"], "m1");
     assert_eq!(message["parts"][2]["messageId"], "m2");
+}
+
+fn asked(execution: &str, question: &str) -> ExecutionEvent {
+    ExecutionEvent::new(
+        ExecutionId::new(execution).unwrap(),
+        ExecutionUpdate::QuestionAsked {
+            id: QuestionId::new(question).unwrap(),
+            question: AgentQuestion::new(
+                "Which environment?",
+                vec![Question::new(
+                    "question_0",
+                    "Which environment?",
+                    None,
+                    AnswerShape::One,
+                    vec![AnswerOption::new("staging", "Staging", None).unwrap()],
+                    None,
+                    false,
+                )
+                .unwrap()],
+            )
+            .unwrap(),
+        },
+    )
+}
+fn closed(execution: &str, question: &str) -> ExecutionEvent {
+    ExecutionEvent::new(
+        ExecutionId::new(execution).unwrap(),
+        ExecutionUpdate::QuestionClosed {
+            id: QuestionId::new(question).unwrap(),
+        },
+    )
+}
+
+#[test]
+fn a_closed_ask_stays_closed_when_it_is_replayed() {
+    // The review reproduced a closure recorded as (question, question) instead
+    // of (execution, question): a replayed ask missed its tombstone and became
+    // answerable again. The execution and question ids differ here, which is
+    // exactly the case that exposed it.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    assert_eq!(projection.read().questions.len(), 1);
+    projection.event(&closed("execution", "1"));
+    assert!(projection.read().questions.is_empty());
+    projection.event(&asked("execution", "1"));
+    assert!(
+        projection.read().questions.is_empty(),
+        "a closed ask reopened on replay"
+    );
+}
+
+#[test]
+fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
+    // Removal matched on the question id alone, so closing one execution's ask
+    // took another execution's same-numbered ask with it.
+    let mut projection = projection();
+    projection.event(&asked("first", "1"));
+    projection.event(&asked("second", "1"));
+    projection.event(&closed("first", "1"));
+    let view = projection.read();
+    assert_eq!(view.questions.len(), 1);
+    assert_eq!(view.questions[0].execution_id, "second");
+}
+
+/// The view agrees with what the client checks before it will show it.
+///
+/// Every ask and review belongs to a message that is running, and everything
+/// pending to one that is queued — or, in a truncated view, to one no longer
+/// shown. The client refuses the whole view otherwise,
+/// so the projection has to agree with it rather than hope the two never meet.
+/// Returns how many asks are offered.
+fn offers_only_running_asks(projection: &mut Projection) -> usize {
+    let view = projection.read();
+    let status = |execution: &str| {
+        view.messages
+            .iter()
+            .find(|message| message.execution_id == execution)
+            .map(|message| message.status)
+    };
+    for execution in view
+        .questions
+        .iter()
+        .map(|question| &question.execution_id)
+        .chain(
+            view.permissions
+                .iter()
+                .map(|permission| &permission.execution_id),
+        )
+    {
+        // Absent is allowed only in a view that says it was truncated.
+        let found = status(execution);
+        assert!(
+            found == Some(ConversationMessageStatus::Running)
+                || (found.is_none() && view.truncated),
+            "{execution}: {found:?}"
+        );
+    }
+    for item in &view.pending {
+        let found = status(&item.execution_id);
+        assert!(
+            found == Some(ConversationMessageStatus::Queued) || (found.is_none() && view.truncated),
+            "{}: {found:?}",
+            item.execution_id
+        );
+    }
+    view.questions.len()
+}
+
+#[test]
+fn an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart() {
+    // The gateway stopped with an ask open, so the ask was saved and its
+    // closure was not. Restored, the message is unresolved; offering the ask
+    // beside it made the client refuse the view on every restart.
+    let snapshot = review_snapshot(vec![asked("execution", "1")]);
+    let mut restored = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    );
+    assert_eq!(offers_only_running_asks(&mut restored), 0);
+}
+
+#[test]
+fn an_ask_left_open_by_a_failed_execution_is_not_offered_once_it_settles() {
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
+    let mut snapshot = review_snapshot(vec![asked("execution", "1")]);
+    snapshot.invocations[0].result = Some(Err(AgentError::Closed));
+    projection.settled("execution", Some(&snapshot));
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+}
+
+#[test]
+fn an_ask_is_not_offered_beside_a_receipt_that_failed() {
+    // The receipt failed and storage held no result for the execution, so its
+    // message is marked failed without a record passing through: the path the
+    // settle-time rule never saw. A closure arriving after it is ignored.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    projection.settled(
+        "execution",
+        Some(&review_snapshot(vec![asked("execution", "1")])),
+    );
+    projection.receipt_failed("execution");
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+    projection.event(&closed("execution", "1"));
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+}
+
+#[test]
+fn an_ask_recovered_after_lag_is_offered_by_a_running_message() {
+    // Lag dropped the dispatch and the ask. Recovered from storage, the ask
+    // proves the execution was dispatched and is waiting; hiding it would leave
+    // the agent waiting on a question nobody can see, and showing it beside a
+    // queued message made the client refuse the view.
+    let mut projection = projection();
+    projection.admitted(
+        "execution",
+        &said("message"),
+        ConversationPendingMode::Queued,
+    );
+    projection.lagged();
+    projection.recover_permissions(Some(&review_snapshot(vec![asked("execution", "1")])));
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
+    projection.queue_order(&[]);
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
+}
+
+/// Saved turns in order, each settled as completed or left as the gateway
+/// stopped it.
+fn saved_turns(turns: Vec<(&str, Vec<ExecutionEvent>, bool)>) -> SessionSnapshot {
+    let mut snapshot = review_snapshot(vec![]);
+    let template = snapshot.invocations.remove(0);
+    for (id, events, settled) in turns {
+        let mut record = template.clone();
+        record.request.execution_id = ExecutionId::new(id).unwrap();
+        record.events = events;
+        if settled {
+            record.result = Some(Ok(ExecutionOutcome::Completed));
+        }
+        snapshot.invocations.push(record);
+    }
+    snapshot
+}
+fn restored(snapshot: &SessionSnapshot) -> Projection {
+    Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(snapshot),
+    )
+}
+
+#[test]
+fn recovery_does_not_bring_back_a_turn_from_before_a_restart() {
+    // An ask left open when the gateway stopped, from a turn now older than
+    // the view shows. Recovery recreated its message as running, offered an ask
+    // nothing in this process could answer, and pushed a real message out.
+    let names: Vec<String> = (0..24).map(|index| format!("done-{index}")).collect();
+    let mut turns = vec![("stale", vec![asked("stale", "1")], false)];
+    turns.extend(names.iter().map(|name| (name.as_str(), vec![], true)));
+    let snapshot = saved_turns(turns);
+    let mut projection = restored(&snapshot);
+    let before: Vec<_> = projection
+        .read()
+        .messages
+        .iter()
+        .map(|message| message.execution_id.clone())
+        .collect();
+    projection.lagged();
+    projection.recover_permissions(Some(&snapshot));
+    let view = projection.read();
+    assert!(view.questions.is_empty());
+    assert_eq!(
+        view.messages
+            .iter()
+            .map(|message| message.execution_id.clone())
+            .collect::<Vec<_>>(),
+        before,
+        "no message recreated, none pushed out"
+    );
+}
+
+#[test]
+fn asks_nobody_can_answer_do_not_crowd_out_one_somebody_can() {
+    // Eight unanswerable asks — from turns before a restart, or turns whose
+    // receipts failed — held every open slot while hidden from view, so a live
+    // ask was dropped and its agent waited with nothing on screen.
+    let names: Vec<String> = (0..8).map(|index| format!("stale-{index}")).collect();
+    let snapshot = saved_turns(
+        names
+            .iter()
+            .map(|name| (name.as_str(), vec![asked(name, "1")], false))
+            .collect(),
+    );
+    let mut after_restart = restored(&snapshot);
+    after_restart.lagged();
+    after_restart.recover_permissions(Some(&snapshot));
+    after_restart.admitted("live", &said("go"), ConversationPendingMode::Queued);
+    after_restart.event(&asked("live", "1"));
+    assert_eq!(offers_only_running_asks(&mut after_restart), 1);
+
+    let mut failed_receipts = projection();
+    for name in &names {
+        failed_receipts.event(&asked(name, "1"));
+        failed_receipts.receipt_failed(name);
+    }
+    failed_receipts.event(&asked("live", "1"));
+    assert_eq!(offers_only_running_asks(&mut failed_receipts), 1);
+}
+
+/// Twenty-four newer turns push a running turn's message out of the view. Its
+/// review or ask is still waiting, and a truncated view still offers it.
+fn evict_running_execution(projection: &mut Projection) {
+    for index in 0..24 {
+        projection.admitted(
+            &format!("queued-{index}"),
+            &said("later"),
+            ConversationPendingMode::Queued,
+        );
+    }
+    let view = projection.read();
+    assert!(view
+        .messages
+        .iter()
+        .all(|message| message.execution_id != "execution"));
+    assert!(view.truncated);
+}
+
+#[test]
+fn a_review_whose_message_was_pushed_out_survives_lag_recovery() {
+    // Absent is not the same as before a restart: this turn began here and is
+    // running. Recovery took its absence as death and dropped the review, and
+    // with another turn's review recovered beside it, dropped it silently.
+    let pending = review("{}".into());
+    let mut alone = projection();
+    alone.event(&pending);
+    evict_running_execution(&mut alone);
+    assert_eq!(alone.read().permissions.len(), 1);
+    alone.lagged();
+    alone.recover_permissions(Some(&review_snapshot(vec![pending.clone()])));
+    let view = alone.read();
+    assert_eq!(
+        view.permissions.len(),
+        1,
+        "{:?}",
+        view.permission_view_error
+    );
+    assert_eq!(view.permissions[0].execution_id, "execution");
+
+    let mut beside = projection();
+    beside.event(&pending);
+    for index in 0..23 {
+        beside.admitted(
+            &format!("queued-{index}"),
+            &said("later"),
+            ConversationPendingMode::Queued,
+        );
+    }
+    let other = ExecutionEvent::new(
+        ExecutionId::new("queued-22").unwrap(),
+        pending.update().clone(),
+    );
+    beside.event(&other);
+    beside.admitted("queued-23", &said("later"), ConversationPendingMode::Queued);
+    assert_eq!(beside.read().permissions.len(), 2);
+    beside.lagged();
+    let mut snapshot = review_snapshot(vec![pending]);
+    let mut second = snapshot.invocations[0].clone();
+    second.request.execution_id = ExecutionId::new("queued-22").unwrap();
+    second.events = vec![other];
+    snapshot.invocations.push(second);
+    beside.recover_permissions(Some(&snapshot));
+    assert_eq!(beside.read().permissions.len(), 2);
+}
+
+#[test]
+fn an_ask_lag_dropped_from_a_turn_whose_message_was_pushed_out_is_recovered() {
+    let mut projection = projection();
+    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
+        "working",
+    ))));
+    evict_running_execution(&mut projection);
+    // The ask is the event the lag dropped.
+    projection.lagged();
+    projection.recover_permissions(Some(&review_snapshot(vec![asked("execution", "1")])));
+    let view = projection.read();
+    assert_eq!(view.questions.len(), 1);
+    assert_eq!(view.questions[0].execution_id, "execution");
+}
+
+#[test]
+fn a_late_event_does_not_revive_a_turn_whose_receipt_failed() {
+    // An event buffered before the receipt failed, delivered after it, marked
+    // the turn as begun here again; once pushed out of view, lag recovery then
+    // offered an ask the agent had already stopped waiting on.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    let snapshot = review_snapshot(vec![asked("execution", "1")]);
+    projection.settled("execution", Some(&snapshot));
+    projection.receipt_failed("execution");
+    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text("late"))));
+    evict_running_execution(&mut projection);
+    projection.lagged();
+    projection.recover_permissions(Some(&snapshot));
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
+}
+
+#[test]
+fn a_retried_submission_does_not_hide_the_ask_its_turn_is_waiting_on() {
+    // Retrying a running turn whose message was pushed out rebuilt the message
+    // as queued, and a queued message offers nothing — the ask vanished while
+    // its agent waited on it.
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    evict_running_execution(&mut projection);
+    projection.admitted(
+        "execution",
+        &said("message"),
+        ConversationPendingMode::Queued,
+    );
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
 }

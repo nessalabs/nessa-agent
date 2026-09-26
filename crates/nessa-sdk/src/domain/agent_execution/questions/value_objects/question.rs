@@ -9,8 +9,22 @@ use crate::domain::agent_execution::ExecutionError;
 pub const MAX_QUESTIONS: usize = 16;
 /// The most options one question may offer.
 pub const MAX_OPTIONS: usize = 32;
+/// The most asks that may be open at once.
+///
+/// One number, because an ask nobody can see is an ask nobody can answer:
+/// admitting more than the surface showing them holds would strand the extras
+/// with no path to an answer. The binding that admits them and the view that
+/// shows them read it from here.
+pub const MAX_OPEN_QUESTIONS: usize = 8;
 /// The longest prompt, header, option label or description this retains.
 pub const MAX_TEXT_BYTES: usize = 1024;
+/// The longest field key this retains.
+///
+/// A key is an identity a host echoes back, and every layer that carries one —
+/// the product protocol and the client that validates it — bounds it here. One
+/// published contract: a key this accepts and the panel cannot display would be
+/// a question nobody could answer.
+pub const MAX_KEY_BYTES: usize = 256;
 
 /// How an answer to one question is shaped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,29 +101,42 @@ pub struct Question {
     header: Option<Box<str>>,
     shape: AnswerShape,
     options: Vec<AnswerOption>,
-    free_text: bool,
+    free_text_key: Option<Box<str>>,
+    required: bool,
 }
 
 impl Question {
-    /// Ask `prompt` under `key`, answerable by `options` and, where `free_text`,
-    /// by words of the answerer's own.
+    /// Ask `prompt` under `key`, answerable by `options` and, where
+    /// `free_text_key` names a field, by words of the answerer's own.
     ///
     /// `key` is how the answer is correlated back, so it is required and
-    /// bounded. At least one option is required: a question with nothing to
-    /// choose and no free text cannot be answered at all, and an agent that
-    /// sends one has asked nothing.
+    /// bounded like every other identity that crosses these layers.
+    /// `free_text_key` is the field the asker named for prose, kept as the
+    /// asker wrote it: assuming a name would send the answer to a field the
+    /// schema does not have. `required` is the asker saying this one may not be
+    /// skipped, which is checked when an answer is accepted rather than
+    /// remembered as a comment.
+    ///
+    /// At least one option is required: a question with nothing to choose and
+    /// no free text cannot be answered at all, and an agent that sends one has
+    /// asked nothing. Two options that record the same value are refused — a
+    /// host choosing between them could not say which it meant.
     pub fn new(
         key: impl Into<String>,
         prompt: impl Into<String>,
         header: Option<String>,
         shape: AnswerShape,
         options: Vec<AnswerOption>,
-        free_text: bool,
+        free_text_key: Option<String>,
+        required: bool,
     ) -> Result<Self, ExecutionError> {
-        let key = text(key.into(), "question key")?;
+        let key = identity(key.into(), "question key")?;
         let prompt = text(prompt.into(), "question prompt")?;
         let header = header
             .map(|value| text(value, "question header"))
+            .transpose()?;
+        let free_text_key = free_text_key
+            .map(|value| identity(value, "question free-text key"))
             .transpose()?;
         if options.is_empty() {
             return Err(ExecutionError::EmptyValue("question options"));
@@ -120,13 +147,20 @@ impl Question {
                 max: MAX_OPTIONS,
             });
         }
+        let mut values = std::collections::HashSet::with_capacity(options.len());
+        for option in &options {
+            if !values.insert(option.value()) {
+                return Err(ExecutionError::DuplicateAnswerOption);
+            }
+        }
         Ok(Self {
             key,
             prompt,
             header,
             shape,
             options,
-            free_text,
+            free_text_key,
+            required,
         })
     }
 
@@ -157,7 +191,21 @@ impl Question {
 
     /// Whether an answer in the answerer's own words is accepted here.
     pub fn free_text(&self) -> bool {
-        self.free_text
+        self.free_text_key.is_some()
+    }
+
+    /// The field the asker named for prose, where it invited any.
+    pub fn free_text_key(&self) -> Option<&str> {
+        self.free_text_key.as_deref()
+    }
+
+    /// Whether the asker said this question may not be skipped.
+    ///
+    /// A required question must be answered with at least one of its options;
+    /// words of the answerer's own may accompany the choice but do not stand in
+    /// for it, because the asker required the choice field, not the prose one.
+    pub fn required(&self) -> bool {
+        self.required
     }
 
     /// Owned bytes this question retains.
@@ -166,7 +214,8 @@ impl Question {
             self.key
                 .len()
                 .saturating_add(self.prompt.len())
-                .saturating_add(self.header.as_ref().map_or(0, |header| header.len())),
+                .saturating_add(self.header.as_ref().map_or(0, |header| header.len()))
+                .saturating_add(self.free_text_key.as_ref().map_or(0, |key| key.len())),
             |total, option| total.saturating_add(option.payload_bytes()),
         )
     }
@@ -227,6 +276,20 @@ impl AgentQuestion {
                 total.saturating_add(question.payload_bytes())
             })
     }
+}
+
+/// Bound and validate one retained identity, which every layer bounds alike.
+fn identity(value: String, field: &'static str) -> Result<Box<str>, ExecutionError> {
+    if value.trim().is_empty() {
+        return Err(ExecutionError::EmptyValue(field));
+    }
+    if value.len() > MAX_KEY_BYTES {
+        return Err(ExecutionError::ValueTooLong {
+            field,
+            max_bytes: MAX_KEY_BYTES,
+        });
+    }
+    Ok(value.into_boxed_str())
 }
 
 /// Bound and validate one piece of retained text.

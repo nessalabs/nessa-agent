@@ -1685,7 +1685,9 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            caller.actor()?;
+            // Kept, not merely checked: who answered is the one fact an audit of
+            // an explicit answer exists to record.
+            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let question_id =
@@ -1704,6 +1706,7 @@ impl ConversationService {
             let live = service.resolve(&id, &caller).await?;
             live.agent
                 .answer_question(QuestionAnswer {
+                    actor,
                     execution_id,
                     id: question_id,
                     choices,

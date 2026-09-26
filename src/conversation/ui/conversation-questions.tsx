@@ -27,8 +27,10 @@ type Asked = NonNullable<Conversation["remote"]>["questions"][number]
  * transcript on the agent's side, the way its messages do, rather than arriving
  * as a floating approval a person has to clear.
  *
- * Every question may be skipped — that is the agent's own offer, not a
- * shortcut this adds — and skipping everything is what declining sends.
+ * Skipping everything is what declining sends, and is always possible. Within
+ * an answer, a question the agent marked required needs one of its options
+ * chosen — the agent required that field, and own words go to another — so
+ * Answer waits until each required question has a choice.
  */
 export function ConversationQuestions({
   conversation,
@@ -65,12 +67,21 @@ function ConversationQuestion({
   const dispatch = useConversationDispatch()
   // Selections live here until they are sent: an answer is one act, so the
   // agent hears every question's answer at once rather than one at a time.
-  const [chosen, setChosen] = useState<Record<string, string[]>>({})
-  const [ownWords, setOwnWords] = useState<Record<string, string>>({})
+  //
+  // Maps, not objects: the keys are the agent's own field names, and an object
+  // answers for keys it does not own — `toString`, `__proto__` — with whatever
+  // it inherited. A question named that way would read a function where it
+  // expected text and throw on its first render.
+  const [chosen, setChosen] = useState<ReadonlyMap<string, string[]>>(new Map())
+  const [ownWords, setOwnWords] = useState<ReadonlyMap<string, string>>(new Map())
   const busy = !gatewayAvailable || conversation.controlPending
-  const answered = ask.questions.some(
-    (question) => chosen[question.key]?.length || ownWords[question.key]?.trim(),
-  )
+  const hasAnswer = (question: Asked["questions"][number]) =>
+    Boolean(chosen.get(question.key)?.length || ownWords.get(question.key)?.trim())
+  const answered =
+    ask.questions.some(hasAnswer) &&
+    ask.questions.every(
+      (question) => !question.required || Boolean(chosen.get(question.key)?.length),
+    )
 
   const send = (
     choices: { key: string; values: string[]; ownWords?: string }[] | null,
@@ -107,11 +118,17 @@ function ConversationQuestion({
           {ask.questions.length > 1 && question.header ? (
             <QuestionnaireDescription>{question.prompt}</QuestionnaireDescription>
           ) : null}
+          {/* Alone, a required question already holds Answer back; among
+              several, it says which of them does. */}
+          {ask.questions.length > 1 && question.required ? (
+            <QuestionnaireDescription>Choose an answer</QuestionnaireDescription>
+          ) : null}
           <QuestionnaireChoices
+            aria-required={question.required}
             multiple={question.multiSelect}
-            value={chosen[question.key] ?? []}
+            value={chosen.get(question.key) ?? []}
             onValueChange={(value) =>
-              setChosen((current) => ({ ...current, [question.key]: value }))
+              setChosen((current) => new Map(current).set(question.key, value))
             }
           >
             {question.options.map((option) => (
@@ -135,12 +152,11 @@ function ConversationQuestion({
               aria-label={`Your own answer to: ${question.prompt}`}
               placeholder="Or answer in your own words"
               disabled={busy}
-              value={ownWords[question.key] ?? ""}
+              value={ownWords.get(question.key) ?? ""}
               onChange={(event) =>
-                setOwnWords((current) => ({
-                  ...current,
-                  [question.key]: event.target.value,
-                }))
+                setOwnWords((current) =>
+                  new Map(current).set(question.key, event.target.value),
+                )
               }
             />
           ) : null}
@@ -163,8 +179,8 @@ function ConversationQuestion({
               ask.questions
                 .map((question) => ({
                   key: question.key,
-                  values: chosen[question.key] ?? [],
-                  ownWords: ownWords[question.key]?.trim() || undefined,
+                  values: chosen.get(question.key) ?? [],
+                  ownWords: ownWords.get(question.key)?.trim() || undefined,
                 }))
                 // A question nobody touched is left out rather than sent empty,
                 // which is how the agent's own form expresses a skip.

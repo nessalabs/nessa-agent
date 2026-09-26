@@ -14,7 +14,7 @@ use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
     prompts::UserMessage,
-    questions::AnswerShape,
+    questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
 use std::collections::HashSet;
@@ -37,6 +37,12 @@ pub(super) struct Projection {
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
+    /// Executions this process saw begin — admitted here, or observed live —
+    /// and has not seen stop running. Only these can be waiting on anybody
+    /// through this process, and a message missing from the view says nothing
+    /// either way: one from before a restart and one pushed out by newer turns
+    /// are both absent. This is what tells them apart during lag recovery.
+    live_here: HashSet<String>,
 }
 pub(super) fn clipped(value: &str, bytes: usize) -> String {
     let mut end = value.len().min(bytes);
@@ -106,9 +112,6 @@ fn failure_notice(record: &InvocationRecord) -> Option<String> {
     }
     Some(notice)
 }
-/// The most questions this view carries at once; an agent asking beyond it
-/// is truncated rather than allowed to fill the surface.
-const MAX_OPEN_QUESTIONS: usize = 8;
 impl Projection {
     pub fn new(
         id: String,
@@ -122,6 +125,7 @@ impl Projection {
             resolved_permissions: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
+            live_here: HashSet::new(),
             view: ConversationView {
                 conversation_id: id,
                 revision: String::new(),
@@ -206,6 +210,7 @@ impl Projection {
         self.view.messages.len() - 1
     }
     pub fn admitted(&mut self, id: &str, input: &UserMessage, mode: ConversationPendingMode) {
+        self.live_here.insert(id.to_owned());
         let text = input.text_str();
         let attachments: Vec<ConversationAttachment> =
             input.images().iter().map(Into::into).collect();
@@ -221,8 +226,28 @@ impl Projection {
         message.attachments = attachments.clone();
         message.files = files.clone();
         if !existed {
-            message.status = ConversationMessageStatus::Queued;
+            // A retried submission can rebuild a message newer turns pushed
+            // out. If its turn already has an ask or review open, it was
+            // dispatched and is waiting — only a dispatched turn can have one —
+            // and rebuilding it as queued hid exactly what it waits on.
+            let waiting = self
+                .view
+                .questions
+                .iter()
+                .any(|question| question.execution_id == id)
+                || self
+                    .view
+                    .permissions
+                    .iter()
+                    .any(|permission| permission.execution_id == id);
+            let message = &mut self.view.messages[index];
+            message.status = if waiting {
+                ConversationMessageStatus::Running
+            } else {
+                ConversationMessageStatus::Queued
+            };
         }
+        let message = &mut self.view.messages[index];
         if !self
             .view
             .pending
@@ -280,6 +305,7 @@ impl Projection {
             return;
         }
         let previous = serde_json::to_vec(&self.view.permissions).ok();
+        let previous_questions = serde_json::to_vec(&self.view.questions).ok();
         let previous_error = self.view.permission_view_error.clone();
         self.view.permissions.clear();
         self.view.permission_view_error = None;
@@ -306,7 +332,11 @@ impl Projection {
             }
             for event in &record.events {
                 match event.update() {
-                    ExecutionUpdate::PermissionRequested { .. } => self.observe_permission(event),
+                    ExecutionUpdate::PermissionRequested { .. } => {
+                        if self.recovered_waiting(execution) {
+                            self.observe_permission(event)
+                        }
+                    }
                     ExecutionUpdate::PermissionCancelled(cancellation) => {
                         let permission = cancellation.request().id().as_str();
                         self.resolved_permissions
@@ -323,7 +353,11 @@ impl Projection {
                             .questions
                             .retain(|question| question.execution_id != execution);
                     }
-                    ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
+                    ExecutionUpdate::QuestionAsked { .. } => {
+                        if self.recovered_waiting(execution) {
+                            self.observe_question(event)
+                        }
+                    }
                     ExecutionUpdate::QuestionClosed { id } => {
                         self.answered_questions
                             .insert((execution.to_owned(), id.as_str().to_owned()));
@@ -344,11 +378,65 @@ impl Projection {
                     .into(),
             );
         }
+        // Asks recovered or dropped here change the view as much as reviews do.
         if previous != serde_json::to_vec(&self.view.permissions).ok()
+            || previous_questions != serde_json::to_vec(&self.view.questions).ok()
             || previous_error != self.view.permission_view_error
         {
             self.bump();
         }
+    }
+
+    /// An ask or review on record for an execution that has not settled was made
+    /// by one that was dispatched and is waiting on it. Lag may have dropped the
+    /// dispatch, leaving the message queued; the evidence says otherwise, so the
+    /// message runs and leaves the queue, rather than the ask being hidden from
+    /// the only person who could answer it.
+    ///
+    /// Returns whether the execution is waiting, so its evidence may be offered.
+    /// A message present in the view decides by its status: queued or running
+    /// is waiting, anything else — unresolved above all, a turn from before a
+    /// restart that nothing here can answer for — is not. A message absent from
+    /// the view decides by where the turn began: one this process saw begin
+    /// was pushed out by newer turns and is still waiting, and is offered
+    /// without its message, as a truncated view allows; any other is not. A
+    /// message is never created here — recreating one put a dead turn back on
+    /// screen as running and pushed a live one out to make room.
+    fn recovered_waiting(&mut self, execution: &str) -> bool {
+        let Some(index) = self
+            .view
+            .messages
+            .iter()
+            .position(|message| message.execution_id == execution)
+        else {
+            return self.live_here.contains(execution) && self.view.truncated;
+        };
+        match self.view.messages[index].status {
+            ConversationMessageStatus::Running => true,
+            ConversationMessageStatus::Queued => {
+                self.view.messages[index].status = ConversationMessageStatus::Running;
+                self.view
+                    .pending
+                    .retain(|item| item.execution_id != execution);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// An execution's message has stopped running, so nothing it asked or
+    /// wanted reviewed is waiting any more. Removed here, on every path a
+    /// status leaves running, rather than only hidden when the view is read:
+    /// left in place, a stale entry still counted against the open limits and
+    /// crowded out an ask somebody could answer.
+    fn stop_waiting(&mut self, execution: &str) {
+        self.live_here.remove(execution);
+        self.view
+            .permissions
+            .retain(|permission| permission.execution_id != execution);
+        self.view
+            .questions
+            .retain(|question| question.execution_id != execution);
     }
 
     /// Put one question into the view, unless it has already been answered or
@@ -370,7 +458,14 @@ impl Projection {
         {
             return;
         }
-        if self.view.questions.len() >= MAX_OPEN_QUESTIONS {
+        if self
+            .view
+            .questions
+            .iter()
+            .filter(|open| offered(&self.view, &open.execution_id))
+            .count()
+            >= MAX_OPEN_QUESTIONS
+        {
             self.view.truncated = true;
             return;
         }
@@ -387,6 +482,7 @@ impl Projection {
                     header: asked.header().map(str::to_owned),
                     multi_select: asked.shape() == AnswerShape::Many,
                     free_text: asked.free_text(),
+                    required: asked.required(),
                     options: asked
                         .options()
                         .iter()
@@ -462,7 +558,13 @@ impl Projection {
                 .collect(),
         };
         let size = serde_json::to_vec(&value).map_or(usize::MAX, |bytes| bytes.len());
-        if size > 16_000 || self.view.permissions.len() >= MAX_PERMISSIONS {
+        let open = self
+            .view
+            .permissions
+            .iter()
+            .filter(|known| offered(&self.view, &known.execution_id))
+            .count();
+        if size > 16_000 || open >= MAX_PERMISSIONS {
             self.view.permission_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
             self.view.truncated = true;
         } else if !self.view.permissions.iter().any(|known| {
@@ -491,6 +593,21 @@ impl Projection {
     /// Apply one live broadcast observation. Live updates carry no durable
     /// cursor, so the lag fence drops their text.
     pub fn event(&mut self, event: &ExecutionEvent) {
+        // A live event says a turn began here, unless the view already shows
+        // it stopped: an event buffered before a failed receipt and delivered
+        // after it would otherwise revive a turn nothing is running any more.
+        let id = event.execution_id().as_str();
+        let stopped = self.terminal_executions.contains(id)
+            || self.view.messages.iter().any(|message| {
+                message.execution_id == id
+                    && !matches!(
+                        message.status,
+                        ConversationMessageStatus::Queued | ConversationMessageStatus::Running
+                    )
+            });
+        if !stopped {
+            self.live_here.insert(id.to_owned());
+        }
         self.observe(event, false);
     }
     /// Apply one observation. `authoritative` marks replay of a committed record
@@ -610,12 +727,7 @@ impl Projection {
             ExecutionUpdate::Finished(result) => {
                 self.view.messages[index].status = outcome(*result);
                 self.terminal_executions.insert(id.to_owned());
-                self.view
-                    .permissions
-                    .retain(|permission| permission.execution_id != id);
-                self.view
-                    .questions
-                    .retain(|question| question.execution_id != id);
+                self.stop_waiting(id);
             }
             ExecutionUpdate::PermissionCancelled(cancellation) => {
                 self.resolved_permission(id, cancellation.request().id().as_str())
@@ -626,12 +738,16 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
                 self.observe_question(event);
             }
-            ExecutionUpdate::QuestionClosed { id } => {
+            // `question`, not `id`: `id` here is the execution, and shadowing it
+            // recorded the closure under (question, question) — so a replayed
+            // ask missed its tombstone and reopened. An ask is identified by the
+            // execution that asked and its own identity, together.
+            ExecutionUpdate::QuestionClosed { id: question } => {
                 self.answered_questions
-                    .insert((id.as_str().to_owned(), id.as_str().to_owned()));
-                self.view
-                    .questions
-                    .retain(|question| question.question_id != id.as_str());
+                    .insert((id.to_owned(), question.as_str().to_owned()));
+                self.view.questions.retain(|open| {
+                    open.execution_id != id || open.question_id != question.as_str()
+                });
             }
             ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
@@ -781,10 +897,11 @@ impl Projection {
             }
         }
         self.view.messages[index].error = failure_notice(record);
-        if record.result.is_some() || restoring {
-            self.view
-                .permissions
-                .retain(|permission| permission.execution_id != id);
+        // An ask whose closure never reached storage — the gateway stopped
+        // while it was open — would otherwise come back beside a settled or
+        // unresolved message; the status is the authority, so it decides.
+        if self.view.messages[index].status != ConversationMessageStatus::Running {
+            self.stop_waiting(id);
         }
         self.view.pending.retain(|value| value.execution_id != id);
     }
@@ -820,6 +937,7 @@ impl Projection {
         if self.view.messages[index].status != ConversationMessageStatus::Cancelled {
             self.view.messages[index].status = ConversationMessageStatus::Failed;
         }
+        self.stop_waiting(id);
         // Both receipt watchers call `settled` under this same projection lock
         // first. Preserve any diagnostic derived from the refreshed durable
         // record; absent snapshot evidence still receives the generic fallback.
@@ -869,6 +987,28 @@ impl Projection {
     }
     pub fn read(&self) -> ConversationView {
         let mut view = self.view.clone();
+        // A review or an ask is offered only while its execution is running:
+        // nothing else is waiting on an answer, and the client refuses a view
+        // that says otherwise — the whole conversation would fail to load.
+        // Enforced here, where the view is handed out, rather than at each of
+        // the many places a message's status changes; any one of them missing
+        // it was enough to make a conversation unreadable. An execution whose
+        // message is not in the view is left as the client allows: only in a
+        // view that says it was truncated.
+        let questions = view
+            .questions
+            .iter()
+            .filter(|question| offered(&view, &question.execution_id))
+            .cloned()
+            .collect();
+        let permissions = view
+            .permissions
+            .iter()
+            .filter(|permission| offered(&view, &permission.execution_id))
+            .cloned()
+            .collect();
+        view.questions = questions;
+        view.permissions = permissions;
         // Bound actual encoded bytes, including JSON escaping. Permissions are
         // atomic review units: never truncate an option or fabricate a choice.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
@@ -901,4 +1041,17 @@ impl Projection {
         }
         view
     }
+}
+
+/// Whether `view` may offer an ask or review from `execution`: only while its
+/// message is running, or — where the message is no longer in the view — only
+/// in a view that says it was truncated. The client's own rule, in one place,
+/// used both to decide what is offered and what counts against the limits.
+fn offered(view: &ConversationView, execution: &str) -> bool {
+    view.messages
+        .iter()
+        .find(|message| message.execution_id == execution)
+        .map_or(view.truncated, |message| {
+            message.status == ConversationMessageStatus::Running
+        })
 }

@@ -78,6 +78,15 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "Agent question answered"
                     );
                 }
+                ExecutionAuditRecord::QuestionRefused(refused) => {
+                    tracing::info!(
+                        session = refused.session_id().as_str(),
+                        execution = refused.execution_id().as_str(),
+                        reason = ?refused.reason(),
+                        delivery = ?refused.delivery(),
+                        "Agent question refused without being asked"
+                    );
+                }
                 ExecutionAuditRecord::ReviewDeclined(declined) => {
                     tracing::info!(
                         session = declined.session_id().as_str(),
