@@ -20,6 +20,7 @@ use nessa_sdk::domain::agent_execution::{
     },
     questions::{
         AgentQuestion, AnswerShape, QuestionCancellation, QuestionRefusalReason, QuestionResponse,
+        MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
     },
     sessions::AttachmentCause,
 };
@@ -241,6 +242,16 @@ fn refused(record: &QuestionRefusalRecord) -> Value {
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
         "refusalId":record.id().as_str(),
+        // A refusal for room keeps both sides of its comparison: the ask that
+        // would not fit, what was already open, and the limits applied.
+        "refused":record.refused().map(|refused| json!({
+            "ask":asked(refused.ask()),
+            "askCost":refused.ask().carrying_cost(),
+            "openAsks":refused.open_asks(),
+            "openCost":refused.open_cost(),
+            "maxOpenAsks":MAX_OPEN_QUESTIONS,
+            "maxOpenCost":MAX_OPEN_ASK_COST,
+        })),
         "reason":match record.reason() {
             QuestionRefusalReason::TooManyOpen => "too_many_open",
             QuestionRefusalReason::TooLarge => "too_large",

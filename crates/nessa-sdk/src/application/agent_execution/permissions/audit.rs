@@ -9,6 +9,8 @@ use crate::domain::agent_execution::questions::{
     AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionChoice, QuestionId,
     QuestionRefusalReason, QuestionResponse,
 };
+#[cfg(doc)]
+use crate::domain::agent_execution::questions::{MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::agent_execution::ExecutionError;
 
@@ -250,6 +252,42 @@ impl QuestionAnswerRecord {
     }
 }
 
+/// What was open when an ask was refused for want of room, and the ask itself.
+///
+/// A refusal for room is a comparison, and a comparison is only evidence with
+/// both sides of it: the ask that was read and would not fit, and what was
+/// already open when it arrived. The limits it was held to are the published
+/// [`MAX_OPEN_QUESTIONS`] and [`MAX_OPEN_ASK_COST`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusedAsk {
+    ask: AgentQuestion,
+    open_asks: usize,
+    open_cost: usize,
+}
+impl RefusedAsk {
+    /// `ask` was refused while `open_asks` asks costing `open_cost` together
+    /// were already open.
+    pub fn new(ask: AgentQuestion, open_asks: usize, open_cost: usize) -> Self {
+        Self {
+            ask,
+            open_asks,
+            open_cost,
+        }
+    }
+    /// The ask as it arrived.
+    pub fn ask(&self) -> &AgentQuestion {
+        &self.ask
+    }
+    /// How many asks were already open.
+    pub fn open_asks(&self) -> usize {
+        self.open_asks
+    }
+    /// What the asks already open cost together to carry.
+    pub fn open_cost(&self) -> usize {
+        self.open_cost
+    }
+}
+
 /// Immutable evidence that an agent's question was refused before anybody saw it.
 ///
 /// The counterpart of [`ReviewDeclineRecord`] for asks, and for the same reason:
@@ -260,24 +298,33 @@ impl QuestionAnswerRecord {
 /// when several asks are refused in one execution or one of the records is
 /// missing. No initiator: this binding decided, which the record says by
 /// having no actor rather than by naming one.
+///
+/// A refusal for room — too many open, or too large beside them — carries the
+/// [`RefusedAsk`] it was decided on; every other refusal happens before there
+/// is an ask to keep, and carries none. The constructor holds the two to that.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionRefusalRecord {
     session_id: ExecutionSessionId,
     execution_id: ExecutionId,
     id: QuestionId,
     reason: QuestionRefusalReason,
+    refused: Option<RefusedAsk>,
     delivery: PermissionAnswerDelivery,
 }
 impl QuestionRefusalRecord {
     /// Record that ask `id`, from `execution_id` within `session_id`, was
-    /// refused for `reason`.
+    /// refused for `reason`, with `refused` where the refusal was for room.
     ///
     /// `id` is minted for the refused request, in the same sequence as the
-    /// asks that were admitted. `delivery` is this binding's own progress —
-    /// [`Selected`] before the refusal is written, then [`Written`] or
-    /// [`Failed`] once the write has been observed. It never claims the
-    /// provider acted on the refusal.
+    /// asks that were admitted. `refused` must be present exactly when
+    /// `reason` is [`TooManyOpen`] or [`TooLarge`]; any other pairing is
+    /// refused as [`ExecutionError::InvalidQuestionRefusal`]. `delivery` is
+    /// this binding's own progress — [`Selected`] before the refusal is
+    /// written, then [`Written`] or [`Failed`] once the write has been
+    /// observed. It never claims the provider acted on the refusal.
     ///
+    /// [`TooManyOpen`]: QuestionRefusalReason::TooManyOpen
+    /// [`TooLarge`]: QuestionRefusalReason::TooLarge
     /// [`Selected`]: PermissionAnswerDelivery::Selected
     /// [`Written`]: PermissionAnswerDelivery::Written
     /// [`Failed`]: PermissionAnswerDelivery::Failed
@@ -286,15 +333,28 @@ impl QuestionRefusalRecord {
         execution_id: ExecutionId,
         id: QuestionId,
         reason: QuestionRefusalReason,
+        refused: Option<RefusedAsk>,
         delivery: PermissionAnswerDelivery,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ExecutionError> {
+        let for_room = matches!(
+            reason,
+            QuestionRefusalReason::TooManyOpen | QuestionRefusalReason::TooLarge
+        );
+        if for_room != refused.is_some() {
+            return Err(ExecutionError::InvalidQuestionRefusal);
+        }
+        Ok(Self {
             session_id,
             execution_id,
             id,
             reason,
+            refused,
             delivery,
-        }
+        })
+    }
+    /// The same refusal at a later stage of its delivery.
+    pub fn with_delivery(self, delivery: PermissionAnswerDelivery) -> Self {
+        Self { delivery, ..self }
     }
     /// Provider session whose agent asked.
     pub fn session_id(&self) -> &ExecutionSessionId {
@@ -312,6 +372,10 @@ impl QuestionRefusalRecord {
     /// Which limit of this binding the ask ran into.
     pub fn reason(&self) -> QuestionRefusalReason {
         self.reason
+    }
+    /// The ask, and what was open, for a refusal made for room.
+    pub fn refused(&self) -> Option<&RefusedAsk> {
+        self.refused.as_ref()
     }
     /// Local decision or observed write result; never provider acknowledgement.
     pub fn delivery(&self) -> &PermissionAnswerDelivery {

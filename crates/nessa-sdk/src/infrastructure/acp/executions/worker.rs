@@ -34,7 +34,7 @@ use crate::application::agent_execution::permissions::{
     CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
     PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
     PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord,
-    ReviewDeclineRecord,
+    RefusedAsk, ReviewDeclineRecord,
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -2283,6 +2283,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &ExecutionController,
         wire_id: RpcId,
         reason: QuestionRefusalReason,
+        refused: Option<RefusedAsk>,
         response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
         let session_id = execution.id().clone();
@@ -2300,14 +2301,17 @@ impl<P: AcpProfile> Worker<P> {
         );
         // Its decision and its write are two records; this is what pairs them.
         let id = self.mint_question_id()?;
+        let selected = QuestionRefusalRecord::new(
+            session_id.clone(),
+            execution_id.clone(),
+            id,
+            reason,
+            refused,
+            PermissionAnswerDelivery::Selected,
+        )
+        .map_err(|error| json_rpc::protocol(&error.to_string()))?;
         let record = |delivery| {
-            ExecutionAuditRecord::QuestionRefused(QuestionRefusalRecord::new(
-                session_id.clone(),
-                execution_id.clone(),
-                id.clone(),
-                reason,
-                delivery,
-            ))
+            ExecutionAuditRecord::QuestionRefused(selected.clone().with_delivery(delivery))
         };
         let correlation = self.next_correlation();
         let decided = self
@@ -2402,25 +2406,14 @@ impl<P: AcpProfile> Worker<P> {
         }
         // Each refusal below is a decision with an effect — the agent abandons
         // the tool call that asked — so each is recorded, not only sent.
+        // Nothing is read once the session is ending: nobody could answer.
         if self.closing {
             return self
                 .refuse_question(
                     execution,
                     wire_id,
                     QuestionRefusalReason::SessionEnding,
-                    response_deadline,
-                )
-                .await;
-        }
-        // Bounded where the view that shows them is bounded: an ask nobody can
-        // see is an ask nobody can answer, so admitting more than the surface
-        // holds would strand the extras rather than queue them.
-        if self.questions.len() >= MAX_OPEN_QUESTIONS {
-            return self
-                .refuse_question(
-                    execution,
-                    wire_id,
-                    QuestionRefusalReason::TooManyOpen,
+                    None,
                     response_deadline,
                 )
                 .await;
@@ -2436,29 +2429,36 @@ impl<P: AcpProfile> Worker<P> {
                     _ => QuestionRefusalReason::UnreadableQuestion,
                 };
                 return self
-                    .refuse_question(execution, wire_id, reason, response_deadline)
+                    .refuse_question(execution, wire_id, reason, None, response_deadline)
                     .await;
             }
         };
-        // Minted here rather than taken from the provider's request id. That id
-        // is an attribute of one message: two asks can carry `1` and `"1"`,
-        // which are different requests and the same text, and a provider may
-        // reuse an id once its request is answered. An identity an answer names
-        // has to outlive both, so this mints its own, as a review does.
-        // What the open asks cost together is bounded where the view relies on
-        // it: an ask that would take them past it could not be shown whole,
-        // and so could never be answered. Refused now, the agent hears so.
+        // Room is decided from what is open, and a refusal for room keeps both
+        // sides of that comparison: the ask, and what was already there.
+        let open_asks = self.questions.len();
         let open_cost = self
             .questions
             .values()
             .map(|open| open.question.carrying_cost())
-            .fold(question.carrying_cost(), usize::saturating_add);
-        if open_cost > MAX_OPEN_ASK_COST {
+            .fold(0, usize::saturating_add);
+        // Bounded where the view that shows them is bounded: an ask nobody can
+        // see is an ask nobody can answer, so admitting more than the surface
+        // holds would strand the extras rather than queue them. What the open
+        // asks cost together is bounded the same way, and for the same reason.
+        let no_room = if open_asks >= MAX_OPEN_QUESTIONS {
+            Some(QuestionRefusalReason::TooManyOpen)
+        } else if open_cost.saturating_add(question.carrying_cost()) > MAX_OPEN_ASK_COST {
+            Some(QuestionRefusalReason::TooLarge)
+        } else {
+            None
+        };
+        if let Some(reason) = no_room {
             return self
                 .refuse_question(
                     execution,
                     wire_id,
-                    QuestionRefusalReason::TooLarge,
+                    reason,
+                    Some(RefusedAsk::new(question, open_asks, open_cost)),
                     response_deadline,
                 )
                 .await;

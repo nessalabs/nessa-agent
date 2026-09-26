@@ -28,6 +28,6 @@ pub use approval::{
 };
 pub use audit::{
     PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord,
-    ReviewDeclineRecord,
+    RefusedAsk, ReviewDeclineRecord,
 };
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};

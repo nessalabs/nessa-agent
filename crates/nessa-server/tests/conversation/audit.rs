@@ -8,7 +8,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
         PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord,
-        QuestionRefusalRecord, ReviewDeclineRecord,
+        QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
     },
     tools::ToolReviewInput,
 };
@@ -28,7 +28,7 @@ use nessa_sdk::domain::agent_execution::{
     },
     questions::{
         AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation, QuestionChoice,
-        QuestionId, QuestionRefusalReason,
+        QuestionId, QuestionRefusalReason, MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
     },
     tools::{ToolCallId, ToolCallUpdate},
     ExecutionError,
@@ -439,8 +439,17 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
 
 #[test]
 fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
+    let refusal = |reason, refused| {
+        QuestionRefusalRecord::new(
+            ExecutionSessionId::new("session").unwrap(),
+            ExecutionId::new("run").unwrap(),
+            QuestionId::new("7").unwrap(),
+            reason,
+            refused,
+            PermissionAnswerDelivery::Written,
+        )
+    };
     for (reason, code) in [
-        (QuestionRefusalReason::TooManyOpen, "too_many_open"),
         (QuestionRefusalReason::Unsupported, "unsupported"),
         (
             QuestionRefusalReason::UnreadableQuestion,
@@ -449,13 +458,7 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         (QuestionRefusalReason::SessionEnding, "session_ending"),
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionRefused(
-            QuestionRefusalRecord::new(
-                ExecutionSessionId::new("session").unwrap(),
-                ExecutionId::new("run").unwrap(),
-                QuestionId::new("7").unwrap(),
-                reason,
-                PermissionAnswerDelivery::Written,
-            ),
+            refusal(reason, None).unwrap(),
         ));
         assert_eq!(value["kind"], "question_refused");
         assert_eq!(value["sessionId"], "session");
@@ -463,11 +466,39 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         assert_eq!(value["reason"], code);
         assert_eq!(value["delivery"]["stage"], "written");
         assert_eq!(value["origin"]["kind"], "runtime");
-        // Refused before it became an ask, and chosen by nobody; its own
-        // identity is what pairs its decision with its write.
+        // Refused before there was an ask to keep, and chosen by nobody; its
+        // own identity is what pairs its decision with its write.
         assert_eq!(value["refusalId"], "7");
+        assert!(value["refused"].is_null());
         assert!(value.get("questionId").is_none());
         assert!(value.get("actor").is_none());
+        // Evidence of a comparison nobody made cannot be recorded.
+        let ask = RefusedAsk::new(deploy_question(), 0, 0);
+        assert_eq!(
+            refusal(reason, Some(ask)).unwrap_err(),
+            ExecutionError::InvalidQuestionRefusal
+        );
+    }
+    for (reason, code) in [
+        (QuestionRefusalReason::TooManyOpen, "too_many_open"),
+        (QuestionRefusalReason::TooLarge, "too_large"),
+    ] {
+        // A refusal for room keeps both sides of the comparison it made.
+        assert_eq!(
+            refusal(reason, None).unwrap_err(),
+            ExecutionError::InvalidQuestionRefusal
+        );
+        let value = record_value(&ExecutionAuditRecord::QuestionRefused(
+            refusal(reason, Some(RefusedAsk::new(deploy_question(), 3, 39_000))).unwrap(),
+        ));
+        assert_eq!(value["reason"], code);
+        let refused = &value["refused"];
+        assert_eq!(refused["ask"]["message"], "Where to?");
+        assert_eq!(refused["openAsks"], 3);
+        assert_eq!(refused["openCost"], 39_000);
+        assert_eq!(refused["askCost"], deploy_question().carrying_cost());
+        assert_eq!(refused["maxOpenAsks"], MAX_OPEN_QUESTIONS);
+        assert_eq!(refused["maxOpenCost"], MAX_OPEN_ASK_COST);
     }
 }
 

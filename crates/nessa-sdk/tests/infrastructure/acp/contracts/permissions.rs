@@ -1319,6 +1319,24 @@ fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
     assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
     // One refused request, named alike on its decision and its write.
     assert_eq!(records[0].id(), records[1].id());
+    // A refusal for room keeps the ask it could not fit and what was already
+    // open; any other refusal happened before there was an ask to keep.
+    for record in &records {
+        match reason {
+            QuestionRefusalReason::TooManyOpen | QuestionRefusalReason::TooLarge => {
+                let refused = record.refused().expect("a refusal for room keeps its ask");
+                assert!(!refused.ask().questions().is_empty());
+                if reason == QuestionRefusalReason::TooManyOpen {
+                    assert_eq!(refused.open_asks(), MAX_OPEN_QUESTIONS);
+                } else {
+                    assert!(
+                        refused.open_cost() + refused.ask().carrying_cost() > MAX_OPEN_ASK_COST
+                    );
+                }
+            }
+            _ => assert!(record.refused().is_none()),
+        }
+    }
 }
 
 /// An ask nobody here can answer is refused on the record, and the turn goes on.
