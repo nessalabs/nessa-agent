@@ -14,8 +14,9 @@ Diagrams use Mermaid and render on GitHub.
 
 The desktop app opens on all three systems. macOS and Linux can run the
 **gateway**, the background service that agents talk to. Linux uses a systemd
-user service and has a native disposable-manager CI proof, while its installed
-logout/login and packaging acceptance remain open. Windows still stops at the
+user service and has a native disposable-manager CI proof, and releases ship it
+as a `.deb` ([#216](https://github.com/nessalabs/nessa-agent/issues/216));
+its installed logout/login acceptance remains open. Windows still stops at the
 unsupported host boundary.
 
 ```mermaid
@@ -38,9 +39,9 @@ The remaining delivery pieces and the prepared runtime boundary are:
 | Piece | What it does | Where |
 | --- | --- | --- |
 | Gateway host adapter | Installs, starts, checks, and retires the background service | `src-tauri/src/gateway/infrastructure/macos/`, `src-tauri/src/gateway/infrastructure/linux/` |
-| Runtime staging | Downloads verified Node, builds the CLI tools, and packs them into local macOS and Linux builds | `scripts/desktop/prepare-runtime.mjs`, `scripts/desktop/prepare-node.mjs`, and the platform composers |
+| Runtime staging | Downloads verified Node, builds the CLI tools, and packs them into macOS and Linux builds | `scripts/desktop/prepare-runtime.mjs`, `scripts/desktop/prepare-node.mjs`, and the platform composers |
 | Release plumbing | Builds, signs, and publishes the app and the update feed | `scripts/desktop/release-assets.mjs`, `.github/workflows/release.yml` |
-| Bundle check | Proves the built app is signed and safe to ship | `scripts/desktop/verify-bundle.mjs` |
+| Bundle check | Proves the built app carries its verified runtime (and, on macOS, is signed) | `scripts/desktop/verify-macos-bundle.mjs`, `scripts/desktop/verify-linux-bundle.mjs` |
 
 ## 2. What the gateway lifecycle looks like
 
@@ -95,15 +96,19 @@ Do these once. Linux uses them first, Windows reuses them.
    publication coordinates cooperating preparation processes; it does not defend
    a returned cache path from a same-user process that can rewrite the cache.
    macOS signs the
-   executables; native Linux x86_64 probes them and includes the tree in local
-   bundles. Windows remains disabled.
-2. **Updater manifest for more targets.** `RELEASE_TARGETS` lists two Darwin
-   triples today. Add `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`,
-   and make `releaseTarget()` map them to `linux-x86_64` and `windows-x86_64`.
-3. **Release workflow matrix.** Add `ubuntu-latest` and `windows-latest` rows
-   to the build matrix. The `--bundles app,dmg` flag becomes per-row.
-4. **Bundle verification per OS.** `verify-bundle.mjs` only knows Apple tools.
-   Give each OS its own check, or make the Apple check macOS-only.
+   executables; native Linux x86_64 probes them and includes the tree in its
+   `.deb`. Windows remains disabled.
+2. **Updater manifest for more targets (Linux complete).** `RELEASE_TARGETS`
+   includes `x86_64-unknown-linux-gnu`, published as `linux-x86_64-deb`,
+   because the updater installs each kind of install from its own format.
+   Windows still needs `x86_64-pc-windows-msvc`.
+3. **Release workflow matrix (Linux complete).** An `ubuntu-22.04` row builds
+   the `.deb`; the macOS rows name their `bundles`, and the Linux row names
+   none because a Linux build makes exactly the release's `.deb`. Windows still
+   needs a row.
+4. **Bundle verification per OS (Linux complete).** `verify-macos-bundle.mjs`
+   keeps the Apple checks; `verify-linux-bundle.mjs` checks the runtime inside
+   the `.deb` and the libraries it declares. Windows still needs its own.
 5. **Unix-only code in the shared adapter.** Move `OpenOptionsExt` mode bits
    and `/bin/launchctl` calls behind OS gates so Windows compiles.
 
@@ -111,14 +116,14 @@ Do these once. Linux uses them first, Windows reuses them.
 flowchart TB
     subgraph Shared["Shared work (once)"]
         S1[Shared runtime staging<br/>Linux foundation DONE]
-        S2[Add Linux and Windows updater targets]
-        S3[Add runners to release matrix]
-        S4[Per-OS bundle verification]
+        S2[Add Linux and Windows updater targets<br/>Linux DONE]
+        S3[Add runners to release matrix<br/>Linux DONE]
+        S4[Per-OS bundle verification<br/>Linux DONE]
         S5[Gate Unix-only code]
     end
     subgraph Linux
         L1[systemd user unit adapter]
-        L2[.deb and AppImage packaging]
+        L2[.deb packaging<br/>DONE; AppImage blocked]
         L3[Install / start / quit / reopen test]
     end
     subgraph Windows
@@ -138,25 +143,33 @@ so the macOS adapter design carries over.
 The runtime resource foundation prepares native `x86_64-unknown-linux-gnu`
 builds in the existing Ubuntu CI matrix leg. The Linux adapter now stages that
 runtime, registers and reconciles a systemd user unit, and proves its lifecycle
-against a disposable native user manager. It does not add a Linux release
-target or prove an installed logout/login lifecycle.
+against a disposable native user manager. Releases package it as a `.deb`
+(#216). It does not yet prove an installed logout/login lifecycle.
 
 What remains to validate and ship:
 
-- Keep the normal user unit scoped to the signed-in user's manager. Lingering is
-  an explicit installation policy, not something the app enables silently:
-  `loginctl enable-linger` keeps that user's manager alive from boot and after
-  logout and is protected by the `org.freedesktop.login1.set-user-linger`
-  privilege. The installer/setup flow must establish and report this policy
-  through an authorized operation, or return an explicit unsupported/privilege
-  refusal; the app must not enable it silently or claim logged-out operation
-  without it.
+- Keep the normal user unit scoped to the signed-in user's manager. It runs
+  while that user is signed in: the manager starts it at every login and stops
+  it at a full logout, and recovery treats a manager replaced that way as a
+  fact. Registration does not require linger (#219 removed that prerequisite).
+  Lingering is an explicit installation policy, not something the app enables
+  silently: `loginctl enable-linger` keeps that user's manager alive from boot
+  and after logout and is protected by the
+  `org.freedesktop.login1.set-user-linger` privilege. Offering it at setup, with
+  an explicit report of what logind confirms, is
+  [#217](https://github.com/nessalabs/nessa-agent/issues/217); the app must not
+  enable it silently or claim logged-out operation without it.
 - Use `$XDG_DATA_HOME` for installed runtime files and `$XDG_STATE_HOME` for
   host lifecycle state. `$XDG_RUNTIME_DIR` is only for sockets, locks, and other
   disposable session objects; the XDG specification requires it to disappear
   after a full logout and reboot. Keep the backend namespace and credentials at
   their current root until the namespace work chooses one owner for that move.
-- Package as `.deb` and AppImage. Declare WebKitGTK as a runtime dependency.
+- Packaged as a `.deb` (done, #216), which declares WebKitGTK and the tray's
+  appindicator library. An AppImage is not released: linuxdeploy rewrites every
+  ELF file under `usr/lib`, the runtime's executables included, so the runtime
+  fails its fingerprint and the Claude agent's self-contained binary can be
+  damaged. Shipping one needs the runtime placed where linuxdeploy does not
+  reach, and the app finding it there.
 - No code signing is required on Linux.
 
 ```mermaid
@@ -240,10 +253,8 @@ is refused; remove it by hand (`systemctl --user disable --now <unit>` and
 delete its unit file) before registering again.
 
 Done when: fresh Ubuntu machine, install the `.deb`, open the app, chat works,
-quit, reopen, log out and back in, and chat still works. The native acceptance
-case authorizes linger explicitly and proves that setup reports the account-wide
-policy it changed; refusal to establish it is visible rather than a silent
-reduction of scope.
+quit, reopen, log out and back in, and chat still works, with linger off.
+Running while logged out is accepted separately under #217.
 
 ## 5. Windows
 
@@ -419,8 +430,9 @@ gantt
     Installer and end-to-end test            :w3, after w2, 2
 ```
 
-Linux runtime staging and its systemd adapter are complete. Installed
-logout/login, packaging, and release remain open. Windows still requires this
+Linux runtime staging, its systemd adapter, packaging, and the release row
+are implemented; no published release has carried Linux yet. Installed
+logout/login acceptance remains open (#188). Windows still requires this
 native model proof and a signing setup before adapter code is useful.
 
 ## 7. Existing cross-platform coverage
@@ -436,12 +448,16 @@ desktop host can replace a gateway safely.
 ## 8. Checklist
 
 - [x] Shared: split runtime staging into core + OS parts and verify Linux x86_64
-- [ ] Shared: add Linux and Windows updater targets and manifest keys
-- [ ] Shared: add `ubuntu-latest` and `windows-latest` to the release matrix
-- [ ] Shared: per-OS bundle verification
+- [x] Shared: add the Linux updater targets and manifest keys
+- [ ] Shared: add the Windows updater target and manifest key
+- [x] Shared: add `ubuntu-22.04` to the release matrix
+- [ ] Shared: add `windows-latest` to the release matrix
+- [x] Shared: Linux bundle verification
+- [ ] Shared: Windows bundle verification
 - [ ] Shared: gate Unix-only code in the gateway adapter
-- [x] Linux: `Systemd` adapter with XDG persistent/session paths; installed authorized linger acceptance remains #188
-- [ ] Linux: `.deb` and AppImage packaging with WebKitGTK deps
+- [x] Linux: `Systemd` adapter with XDG persistent/session paths; installed logout/login acceptance remains #188
+- [x] Linux: `.deb` packaging with WebKitGTK deps
+- [ ] Linux: AppImage, once the runtime is out of linuxdeploy's reach
 - [ ] Linux: end-to-end install / start / quit / reopen / logout test
 - [x] Windows: record the service model decision
 - [ ] Windows: prove Task Scheduler PID/restart/session behavior on native Windows

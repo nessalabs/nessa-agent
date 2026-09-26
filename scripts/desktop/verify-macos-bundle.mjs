@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { bundleArchitecture, includesDiskImage } from "./bundle-architecture.mjs"
+import { bundleArchitecture, includesBundle } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
 import { runtimeExecutables } from "./runtime-layout.mjs"
 import { signingProblems } from "./runtime-signing.mjs"
@@ -99,7 +99,7 @@ if (notarized) {
   })
 }
 
-if (includesDiskImage(process.env.NESSA_BUILD_BUNDLES, config.bundle.targets)) {
+if (includesBundle(process.env.NESSA_BUILD_BUNDLES, config.bundle.targets, "dmg")) {
   const architecture = bundleArchitecture(target, process.arch)
   const dmg = resolve(
     release,

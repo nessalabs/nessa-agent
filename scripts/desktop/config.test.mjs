@@ -1,8 +1,14 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
-import { bundleArchitecture, includesDiskImage } from "./bundle-architecture.mjs"
-import { parseBuildArguments, runDesktopBuild } from "./build-command.mjs"
+import { releaseBundles } from "./release-assets.mjs"
+import {
+  bundleArchitecture,
+  includesBundle,
+  linuxBundleArchitecture,
+  linuxBundles,
+} from "./bundle-architecture.mjs"
+import { choosesBundles, parseBuildArguments, runDesktopBuild } from "./build-command.mjs"
 
 const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
 const packageConfig = JSON.parse(readFileSync("package.json", "utf8"))
@@ -68,12 +74,25 @@ test("native bundle verification selects Intel, Apple Silicon, and universal ima
   assert.throws(() => bundleArchitecture("powerpc-apple-darwin", "x64"), /Unsupported/)
 })
 
-test("disk image verification follows explicit bundles or the authoritative default", () => {
+test("Linux package verification reads the names the bundler writes", () => {
+  assert.equal(linuxBundleArchitecture("x86_64-unknown-linux-gnu", "arm64"), "amd64")
+  assert.equal(linuxBundleArchitecture(undefined, "x64"), "amd64")
+  assert.throws(
+    () => linuxBundleArchitecture("aarch64-unknown-linux-gnu", "x64"),
+    /Unsupported/,
+  )
+  assert.throws(() => linuxBundleArchitecture(undefined, "arm64"), /Unsupported/)
+  assert.deepEqual(linuxBundles("Nessa", "0.1.0", "amd64"), {
+    deb: "deb/Nessa_0.1.0_amd64.deb",
+  })
+})
+
+test("bundle verification follows explicit bundles or the authoritative default", () => {
   assert.equal(config.bundle.targets, "all")
-  assert.equal(includesDiskImage(undefined, config.bundle.targets), true)
-  assert.equal(includesDiskImage("app", config.bundle.targets), false)
-  assert.equal(includesDiskImage("app,dmg", config.bundle.targets), true)
-  assert.equal(includesDiskImage("all", ["app"]), true)
+  assert.equal(includesBundle(undefined, config.bundle.targets, "dmg"), true)
+  assert.equal(includesBundle("app", config.bundle.targets, "dmg"), false)
+  assert.equal(includesBundle("app,dmg", config.bundle.targets, "dmg"), true)
+  assert.equal(includesBundle("all", ["app"], "dmg"), true)
 })
 
 test("the public desktop build command verifies the final bundle", () => {
@@ -194,7 +213,7 @@ test("equal-form build arguments reach final verification unchanged", () => {
   // leaving the image itself without a ticket for the verification to find.
   assert.equal(calls.length, 3)
   assert.deepEqual(calls[1].args, ["scripts/desktop/notarize-disk-image.mjs"])
-  assert.deepEqual(calls[2].args, ["scripts/desktop/verify-bundle.mjs"])
+  assert.deepEqual(calls[2].args, ["scripts/desktop/verify-macos-bundle.mjs"])
   for (const call of calls.slice(1)) {
     assert.equal(call.options.env.NESSA_BUILD_TARGET, "aarch64-apple-darwin")
     assert.equal(call.options.env.NESSA_BUILD_BUNDLES, "app,dmg")
@@ -217,9 +236,149 @@ test("a failed staple stops the build before verification", () => {
   })
   assert.equal(status, 1)
   assert.ok(
-    !calls.some((call) => call.includes("verify-bundle")),
+    !calls.some((call) => call.includes("verify-macos-bundle")),
     "the bundle was verified although its disk image had no ticket",
   )
+})
+
+test("a Linux build verifies its packages and staples nothing", () => {
+  const calls = []
+  const status = runDesktopBuild({
+    args: ["--target", "x86_64-unknown-linux-gnu"],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(status, 0)
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[1].args, ["scripts/desktop/verify-linux-bundle.mjs"])
+  assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, "x86_64-unknown-linux-gnu")
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
+})
+
+test("a Linux build makes exactly what a Linux release builds", () => {
+  // The config's "all" would include an AppImage, whose bundler rewrites the
+  // runtime (release-assets.mjs says why).
+  const calls = []
+  const status = runDesktopBuild({
+    args: [],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(status, 0)
+  const bundles = calls[0].args.indexOf("--bundles")
+  assert.equal(calls[0].args[bundles + 1], releaseBundles("x86_64-unknown-linux-gnu"))
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
+  // A choice of bundles is refused before the build starts, in every form
+  // Tauri reads one: the release's bundles are the only Linux build.
+  for (const args of [
+    ["--bundles", "rpm"],
+    ["--bundles", "deb", "rpm"],
+    ["--bundles=deb"],
+    ["-b", "deb"],
+    ["-bdeb"],
+    ["-b=deb"],
+    ["-db", "appimage"],
+    ["--no-bundle"],
+  ]) {
+    const refused = []
+    assert.throws(
+      () =>
+        runDesktopBuild({
+          args,
+          environment: {},
+          platform: "linux",
+          spawn(command, spawnArgs) {
+            refused.push(spawnArgs)
+            return { status: 0 }
+          },
+        }),
+      /drop --bundles and --no-bundle/,
+    )
+    assert.deepEqual(refused, [], `${args.join(" ")} started a build`)
+  }
+})
+
+test("the build's own options go to Tauri, before the runner's arguments", () => {
+  for (const [platform, target] of [
+    ["linux", "x86_64-unknown-linux-gnu"],
+    ["darwin", "aarch64-apple-darwin"],
+  ]) {
+    const calls = []
+    runDesktopBuild({
+      args: ["--target", target, "--", "--features", "x"],
+      environment: {},
+      platform,
+      spawn(command, args, options) {
+        calls.push({ command, args, options })
+        return { status: 0 }
+      },
+    })
+    const args = calls[0].args
+    const runner = args.indexOf("--")
+    assert.deepEqual(args.slice(runner), ["--", "--features", "x"], platform)
+    assert.ok(
+      args.indexOf("--config") < runner,
+      `${platform}: --config reached the runner`,
+    )
+    if (platform === "linux")
+      assert.ok(args.indexOf("--bundles") < runner, "--bundles reached the runner")
+  }
+})
+
+test("arguments after -- are the runner's: no option of ours is read there", () => {
+  const calls = []
+  runDesktopBuild({
+    args: ["--", "--bundles", "rpm", "--target", "elsewhere", "--stage", "dev"],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  const args = calls[0].args
+  assert.deepEqual(args.slice(args.indexOf("--")), [
+    "--",
+    "--bundles",
+    "rpm",
+    "--target",
+    "elsewhere",
+    "--stage",
+    "dev",
+  ])
+  assert.equal(args[args.indexOf("--bundles") + 1], "deb")
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
+  assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, undefined)
+  assert.equal(calls[0].options.env.NESSA_STAGE, "prod")
+  assert.equal(choosesBundles(["-vb", "deb"]), true)
+  assert.equal(choosesBundles(["--config", "{}"]), false)
+  // Errs toward refusing: an attached value is read as flags.
+  assert.equal(choosesBundles(['-c{"bundle":{}}']), true)
+  assert.equal(choosesBundles(["--config", '{"bundle":{}}']), false)
+})
+
+test("the verifier is told when the build began", () => {
+  // It checks the package this build wrote, not one an earlier build left.
+  const calls = []
+  runDesktopBuild({
+    args: [],
+    environment: { NESSA_BUILD_STARTED: "1" },
+    platform: "linux",
+    now: () => 1_790_000_000_000,
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(calls[1].options.env.NESSA_BUILD_STARTED, "1790000000000")
 })
 
 test("verification does not inherit artifact selectors without matching arguments", () => {
@@ -259,7 +418,7 @@ test("runtime preparation assembles supported POSIX resources without enabling W
       platform: "linux",
       loadLinuxRuntime: async () => () => loaded.push("linux"),
     }),
-    { managedGateway: false },
+    { managedGateway: true },
   )
   assert.deepEqual(
     await prepareDesktopRuntime({

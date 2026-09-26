@@ -1,11 +1,12 @@
-# Build, sign and stage a macOS release, then leave it as a draft for a person.
+# Build, sign and stage a macOS and Linux release, then leave it as a draft for
+# a person.
 #
 # Signing and notarization depend on the secrets being there. With APPLE_CERTIFICATE
 # and the App Store Connect key set, the CLI signs with a Developer ID identity,
 # submits the bundle to Apple and staples the ticket. With them absent it signs
 # ad-hoc (a "-" identity), and Gatekeeper then refuses the artifact on any machine
 # but the one that built it. Which of the two happened is not left to be guessed:
-# scripts/desktop/verify-bundle.mjs reads the built bundle and says so.
+# scripts/desktop/verify-macos-bundle.mjs reads the built bundle and says so.
 #
 # What v0.1.0 proved, in the order it failed: the tag resolves to a commit, the
 # versions agree, the updater key is the pair of the one in tauri.conf.json, the
@@ -18,23 +19,25 @@
 # agent actually running out of a downloaded bundle.
 #
 #   tag v* ──▶ version ──▶ updater-key ──┬─▶ build (macos-latest,    aarch64) ─┐
-#                                        └─▶ build (macos-15-intel, x86_64) ──┤
+#                                        ├─▶ build (macos-15-intel, x86_64) ──┤
+#                                        └─▶ build (ubuntu-22.04,   x86_64) ──┤
 #                                                                             ▼
 #                                                              release (draft)
 #                                                                latest.json
 #
 # Arrows are `needs`: nothing to the right starts until everything to its left
-# passed. The two builds converge because one `latest.json` has to describe both
-# architectures — `releases/latest/download/latest.json` is a single file, and an
-# architecture missing from it reports itself as up to date forever.
+# passed. The builds converge because one `latest.json` has to describe every
+# platform — `releases/latest/download/latest.json` is a single file, and a
+# platform missing from it reports itself as up to date forever.
 #
-# macOS only. The bundled gateway that actually runs an agent is macOS-only
-# (src-tauri/src/gateway/infrastructure/unsupported.rs) and Linux packaging is
-# an open TODO (docs/todo/linux-desktop-packaging.md). The shipped config's
+# macOS and x86_64 Linux: the platforms whose gateway host runs an agent
+# (launchd and a systemd user unit). Windows has no gateway host yet
+# (src-tauri/src/gateway/infrastructure/unsupported.rs). The shipped config's
 # bundle.targets stays "all" — scripts/desktop/config.test.mjs asserts it, and
-# it is what a contributor's local build should keep doing. This workflow narrows
-# it per build instead, with --bundles app,dmg, so a release cannot publish a
-# .deb or an NSIS installer that launches and then cannot run anything.
+# it is what a contributor's local macOS build keeps doing (a local Linux build
+# builds the release's Linux bundles; scripts/desktop/build-command.mjs). This
+# workflow narrows it per build instead, with each row's `bundles`, so a release
+# publishes only the packages an update can install and a person can run.
 name: Release
 run-name: Release ${{ inputs.tag || github.ref_name }}
 on:
@@ -167,14 +170,15 @@ jobs:
     name: Build ${{ matrix.updater-target }}
     needs: [version, updater-key]
     strategy:
-      # Both architectures' failures are worth seeing in one run; neither ships
-      # without the other regardless, because the release job needs both.
+      # Every row's failure is worth seeing in one run; none ships without the
+      # others regardless, because the release job needs all of them.
       fail-fast: false
       matrix:
         include:
           - runner: macos-latest
             target: aarch64-apple-darwin
             updater-target: darwin-aarch64
+            bundles: app,dmg
           # The Intel runner, not an Intel-emulating one. `macos-13` is retired;
           # `macos-15-intel` is the current x86_64 image, and `macos-latest` is
           # Apple Silicon. If either ever changes architecture underneath us the
@@ -182,39 +186,25 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             updater-target: darwin-x86_64
+            bundles: app,dmg
+          # The oldest supported Ubuntu, not the newest: the app and the runtime
+          # binaries link the glibc they are built against, and a package built
+          # on 24.04 refuses to start on 22.04. No `bundles`: a Linux build
+          # makes exactly the release's .deb and refuses to be told otherwise
+          # (scripts/desktop/build-command.mjs); no AppImage, because its
+          # bundler rewrites the runtime (scripts/desktop/release-assets.mjs).
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            updater-target: linux-x86_64
     runs-on: ${{ matrix.runner }}
     env:
-      # Produces the .app.tar.gz and its .sig alongside the bundle. Without it
-      # the bundle is built and signs nothing, and staging refuses it.
+      # Produces each update artifact's .sig beside it — the .app.tar.gz or the
+      # .deb. Without it the bundle is built and signs nothing,
+      # and staging refuses it.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # Every Apple secret is carried under a SECRET_ name that no tool reads,
-      # and promoted to the names the bundler reads by the step below — only
-      # when there is something to put in them.
-      #
-      # They cannot be mapped straight onto APPLE_CERTIFICATE and the rest. A
-      # job's `env:` has no way to write an unset variable, and a missing secret
-      # becomes an empty string; the bundler asks `var_os` whether the variable
-      # is set, so an empty APPLE_CERTIFICATE sends it to decode nothing and run
-      # `security import` on an empty file. The "dormant until the secrets
-      # exist" path would fail every build rather than sign ad-hoc.
-      #
-      # The CLI imports the certificate into a temporary keychain it makes and
-      # throws away, so nothing here touches a runner's login keychain, and it
-      # infers the identity from the certificate when one is not named. With the
-      # App Store Connect key present it also submits the bundle to Apple and
-      # staples the ticket, which is why there is no separate notarytool step:
-      # one tool, one place where a failure to sign or staple stops the build.
-      SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      # A key rather than an Apple ID and app-specific password: the key is
-      # scoped to this purpose, is revocable on its own, and is not a password
-      # for the account itself. The bundler wants its id in a variable and the
-      # key's own bytes in a file, which is what APPLE_API_KEY_FILE names.
-      SECRET_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      SECRET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      SECRET_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      # Where the App Store Connect key is written. Not a secret, and read by
+      # the cleanup step as well as by the credentials step.
       APPLE_API_KEY_FILE: ${{ github.workspace }}/.apple-api-key.p8
     steps:
       - uses: actions/checkout@v4
@@ -237,6 +227,37 @@ jobs:
       # removed after the build whatever the build did: a private key left on a
       # runner outlives the job's usefulness.
       - name: Choose what this build signs with
+        if: runner.os == 'macOS'
+        env:
+          # Every Apple secret is carried under a SECRET_ name that no tool reads,
+          # given to this step alone, and promoted to the names the bundler reads
+          # only when there is something to put in them. Step-level, not job-level:
+          # nothing else in the job — `pnpm install`'s lifecycle scripts, the
+          # Linux row's bundler — has any use for them.
+          #
+          # They cannot be mapped straight onto APPLE_CERTIFICATE and the rest. A
+          # job's `env:` has no way to write an unset variable, and a missing secret
+          # becomes an empty string; the bundler asks `var_os` whether the variable
+          # is set, so an empty APPLE_CERTIFICATE sends it to decode nothing and run
+          # `security import` on an empty file. The "dormant until the secrets
+          # exist" path would fail every build rather than sign ad-hoc.
+          #
+          # The CLI imports the certificate into a temporary keychain it makes and
+          # throws away, so nothing here touches a runner's login keychain, and it
+          # infers the identity from the certificate when one is not named. With the
+          # App Store Connect key present it also submits the bundle to Apple and
+          # staples the ticket, which is why there is no separate notarytool step:
+          # one tool, one place where a failure to sign or staple stops the build.
+          SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # A key rather than an Apple ID and app-specific password: the key is
+          # scoped to this purpose, is revocable on its own, and is not a password
+          # for the account itself. The bundler wants its id in a variable and the
+          # key's own bytes in a file, which is what APPLE_API_KEY_FILE names.
+          SECRET_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          SECRET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SECRET_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: node scripts/desktop/apple-credentials.mjs
       # The bundler imports the certificate when it signs the *app*, which is
       # after `beforeBuildCommand` has assembled and signed the runtime tree.
@@ -245,23 +266,30 @@ jobs:
       # Apple's notary service rejected v0.1.0 for exactly that, three errors
       # per binary. Dormant when there is no certificate to import.
       - name: Import the Developer ID certificate
+        if: runner.os == 'macOS'
         run: node scripts/desktop/import-certificate.mjs
+      # The same list `local-auth` compiles and tests the host against. Linux
+      # has no code signing; the updater signature is TAURI_SIGNING_PRIVATE_KEY,
+      # as on macOS.
+      - name: Install the desktop host's Linux build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/desktop/install-linux-build-deps.sh
       # --target is passed although it is always the runner's own architecture,
-      # and that is the point: scripts/desktop/prepare-macos.mjs refuses a triple
-      # that is not the host's, so if a runner image ever changes architecture
-      # under us this fails loudly instead of publishing a bundle labelled with
-      # the wrong one. It is also why there is no universal build — that script
-      # cannot produce one.
+      # and that is the point: prepare-macos.mjs and prepare-linux.mjs refuse a
+      # triple that is not the host's, so if a runner image ever changes
+      # architecture under us this fails loudly instead of publishing a bundle
+      # labelled with the wrong one. It is also why there is no universal build —
+      # that script cannot produce one.
       #
-      # --bundles app,dmg narrows the config's "all" to the two macOS outputs a
-      # release has any use for: `app`, which is what createUpdaterArtifacts
-      # archives into the .app.tar.gz an update installs, and `dmg`, which is
-      # what a person downloads. It also keeps .deb/NSIS out of a release they
-      # would be unrunnable in.
+      # --bundles narrows the config's "all" to the outputs a release has any
+      # use for. On macOS: `app`, which createUpdaterArtifacts archives into the
+      # .app.tar.gz an update installs, and `dmg`, which is what a person
+      # downloads. On Linux the build command makes the .deb, both what a
+      # person downloads and what an update of a .deb install installs.
       - name: Build, sign and verify the bundle
-        run: pnpm app:build --target ${{ matrix.target }} --bundles app,dmg
+        run: pnpm app:build --target ${{ matrix.target }} ${{ matrix.bundles && format('--bundles {0}', matrix.bundles) || '' }}
       - name: Remove the App Store Connect key and the signing keychain
-        if: always()
+        if: always() && runner.os == 'macOS'
         run: |
           rm -f "$APPLE_API_KEY_FILE"
           # Unset unless the import step ran and had something to import. The
@@ -269,8 +297,8 @@ jobs:
           if [ -n "${NESSA_SIGNING_KEYCHAIN:-}" ]; then
             security delete-keychain "$NESSA_SIGNING_KEYCHAIN" || true
           fi
-      # Both runners' bundlers write the identical name Nessa.app.tar.gz. A
-      # release has one flat asset namespace, so they are renamed to the names
+      # Both macOS runners' bundlers write the identical name Nessa.app.tar.gz.
+      # A release has one flat asset namespace, so they are renamed to the names
       # the manifest will point at before they leave the runner.
       - name: Stage the published assets
         run: node scripts/desktop/release-assets.mjs stage --target ${{ matrix.target }} --into release-staging
@@ -294,12 +322,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      # Both architectures land in one directory. `needs: build` already means
-      # neither is missing; the manifest step checks again anyway, because the
+      # Every platform lands in one directory. `needs: build` already means
+      # none is missing; the manifest step checks again anyway, because the
       # thing it is preventing is invisible after the fact.
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-darwin-*
+          pattern: release-*
           path: release-assets
           merge-multiple: true
       - name: Write the updater manifest
@@ -330,14 +358,17 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes.md <<'END'
-          Nessa for macOS, Apple Silicon and Intel.
+          Nessa for macOS (Apple Silicon and Intel) and x86_64 Linux (.deb for
+          Ubuntu 22.04 or later).
 
-          Whether these artifacts are notarized is decided by the repository's
-          secrets, so it is stated by the build rather than promised here: the
-          "Choose what this build signs with" step in each build's log says
-          which of the two happened, and `verify-bundle.mjs` checks the ticket
-          is stapled when it was. A bundle that is only signed ad-hoc is one
-          Gatekeeper refuses on any machine but the one that built it.
+          Whether the macOS artifacts are notarized is decided by the
+          repository's secrets, so it is stated by the build rather than
+          promised here: the "Choose what this build signs with" step in each
+          macOS build's log says which of the two happened, and
+          `verify-macos-bundle.mjs` checks the ticket is stapled when it was. A
+          bundle that is only signed ad-hoc is one Gatekeeper refuses on any
+          machine but the one that built it. Linux packages are not code-signed;
+          like every update, they are checked against the updater key.
 
           `latest.json` is the updater manifest. It only reaches installed apps
           once this release is published and is the newest non-prerelease.
@@ -388,4 +419,6 @@ jobs:
             echo "  ad-hoc bundle is refused by Gatekeeper everywhere but its own runner."
             echo "- Open the disk image on a clean machine and check the app launches."
             echo "- Check an agent actually runs, not only that the window appears."
+            echo "- On Ubuntu, install the .deb, chat, quit, reopen, log out and back in,"
+            echo "  and chat again."
           } >> "$GITHUB_STEP_SUMMARY"

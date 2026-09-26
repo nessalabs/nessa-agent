@@ -915,3 +915,40 @@ production allowance.
 To remove the background service, boot it out with
 `launchctl bootout gui/$(id -u)/so.nessa.gateway.prod` and remove its plist from
 `~/Library/LaunchAgents`. Do not delete user data to uninstall the service.
+
+## Installed Linux runtime
+
+Releases ship x86_64 Linux as a `.deb`, built on Ubuntu 22.04, for Ubuntu
+22.04 or later. It carries the same runtime as the macOS bundle,
+under `usr/lib/Nessa/runtime`, and declares WebKitGTK and the tray's
+`libayatana-appindicator3-1`. There is no AppImage: its bundler rewrites the
+runtime's executables, so the runtime would no longer match its fingerprint,
+and a Linux `pnpm app:build` builds only the `.deb`.
+
+Staging works as on macOS, with XDG locations in place of `Application Support`:
+the runtime is copied to
+`$XDG_DATA_HOME/nessa/gateway-runtimes/<unit>/<fingerprint>/` (by default
+`~/.local/share`), so the service never runs from the package's files. The
+gateway is the systemd **user** unit `nessa-gateway-prod.service` in
+`$XDG_CONFIG_HOME/systemd/user`, enabled for `default.target`, and its
+lifecycle journal lives under `$XDG_STATE_HOME/nessa`.
+Admission, recovery, and the inactive-unit cases are described in
+[the Linux plan](../todo/desktop-linux-windows-plan.md#4-linux).
+
+The unit runs while its user is signed in: systemd starts it at login and stops
+it with the user's manager after a full logout. Registration does not need
+linger. Keeping the gateway running while logged out does, and Nessa does not
+enable it
+([#217](https://github.com/nessalabs/nessa-agent/issues/217) tracks offering it).
+
+Updates install the new `.deb` through `pkexec dpkg -i`, which asks for an
+administrator's password. On Linux, `pnpm app:build` builds the `.deb` and
+verifies the runtime inside it before returning success.
+
+To remove the background service after uninstalling the package, stop and
+disable it with `systemctl --user disable --now nessa-gateway-prod.service`,
+delete `~/.config/systemd/user/nessa-gateway-prod.service`, and run
+`systemctl --user daemon-reload`. Removing the package does neither: the unit
+runs from its staged copy under `~/.local/share/nessa/gateway-runtimes/`, which
+can be deleted once the unit is stopped. Do not delete user data to uninstall
+the service.

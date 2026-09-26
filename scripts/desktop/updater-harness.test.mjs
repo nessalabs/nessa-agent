@@ -147,12 +147,9 @@ test("the harness looks for artifacts the release build is configured to produce
   assert.deepEqual(defaultArtifacts("darwin", config.version), [
     "target/release/bundle/macos/Nessa.app.tar.gz",
   ])
-  // Both shapes the bundler can write: `createUpdaterArtifacts: true` leaves
-  // the AppImage alone, `"v1Compatible"` also archives it, and the plugin
-  // installs either. Discovery must not depend on which one a build chose.
+  // The .deb, the one Linux package a release publishes.
   assert.deepEqual(defaultArtifacts("linux", "0.1.0"), [
-    "target/release/bundle/appimage/Nessa_0.1.0_amd64.AppImage",
-    "target/release/bundle/appimage/Nessa_0.1.0_amd64.AppImage.tar.gz",
+    "target/release/bundle/deb/Nessa_0.1.0_amd64.deb",
   ])
   assert.deepEqual(defaultArtifacts("win32", "0.1.0"), [
     "target/release/bundle/nsis/Nessa_0.1.0_x64-setup.exe",

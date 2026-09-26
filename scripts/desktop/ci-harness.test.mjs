@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import test from "node:test"
+import { RELEASE_TARGETS, releaseBundles } from "./release-assets.mjs"
 
 test("local-auth integration harness is locked to its declared tools", () => {
   const manifest = JSON.parse(
@@ -68,16 +69,48 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
 
-test("the existing Linux matrix leg uniquely owns real runtime assembly", () => {
+test("the existing Linux matrix leg uniquely owns direct runtime assembly", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   assert.equal(workflow.match(/run: node scripts\/desktop\/prepare\.mjs/g)?.length, 1)
   assert.match(
     workflow,
     /name: Assemble the Linux desktop runtime\s+if: runner\.os == 'Linux'\s+run: node scripts\/desktop\/prepare\.mjs/,
   )
+  // The release assembles the runtime only inside the bundle build, through
+  // the config's beforeBuildCommand, so what it verifies is what it packaged.
   const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8")
-  assert.doesNotMatch(releaseWorkflow, /target: x86_64-unknown-linux-gnu/)
-  assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
+  assert.doesNotMatch(releaseWorkflow, /scripts\/desktop\/prepare\.mjs/)
+  assert.match(
+    releaseWorkflow,
+    /target: x86_64-unknown-linux-gnu\s+updater-target: linux-x86_64\s/,
+  )
+  assert.match(
+    releaseWorkflow,
+    /run: pnpm app:build --target \$\{\{ matrix\.target \}\} \$\{\{ matrix\.bundles && format\('--bundles \{0\}', matrix\.bundles\) \|\| '' \}\}/,
+  )
+})
+
+test("every Linux build installs the one list of host build dependencies", () => {
+  const install = "bash scripts/desktop/install-linux-build-deps.sh"
+  for (const name of readdirSync(".github/workflows").filter((file) =>
+    /\.ya?ml$/.test(file),
+  )) {
+    // Continuation lines joined, so a package list below `apt-get install \`
+    // is on the same line as the command that installs it.
+    const workflow = readFileSync(`.github/workflows/${name}`, "utf8").replace(
+      /\\\r?\n\s*/g,
+      " ",
+    )
+    // A development package installed by hand is a second list of what the
+    // host builds against.
+    assert.doesNotMatch(
+      workflow,
+      /apt-get install[^\n]*-dev\b/,
+      `${name} installs its own list`,
+    )
+    if (/pnpm app:build|check-desktop\.mjs|desktop:smoke/.test(workflow))
+      assert.ok(workflow.includes(install), `${name} builds the host without the list`)
+  }
 })
 
 test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
@@ -324,18 +357,34 @@ test("nothing in a release is built or published before the key pairing gate", (
   assert.match(workflow, /needs: \[version, build\]/)
 })
 
-test("a release builds both macOS architectures and only macOS bundles", () => {
+test("a release builds every release target and only the bundles it publishes", () => {
   const workflow = readFileSync(".github/workflows/release.yml", "utf8")
-  // Separate runners, because prepare-macos.mjs cannot cross-compile and there
-  // is no universal build. Both must reach the same manifest.
-  for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin"])
-    assert.ok(workflow.includes(`target: ${target}`), `no release build for ${target}`)
-  // The shipped config says "all" and stays that way for local builds; a release
-  // narrows it, because a .deb or an NSIS installer would launch and then be
-  // unable to run an agent at all.
+  // One matrix row per target the manifest requires: a target built nowhere is
+  // a manifest that can never be written, and a row for a target the manifest
+  // does not know is a build whose output is thrown away. Separate runners,
+  // because neither prepare script cross-compiles and there is no universal
+  // build.
+  const rows = [
+    ...workflow.matchAll(
+      /target: (\S+)\s+updater-target: \S+(?:\s+bundles: ([^\s#]+))?/g,
+    ),
+  ]
+  assert.deepEqual(
+    rows.map(([, target]) => target),
+    RELEASE_TARGETS,
+  )
+  // The shipped config says "all" and stays that way for local macOS builds; a
+  // release row narrows it to what an update installs and a person downloads.
+  // A Linux row names none: the build command makes exactly the release's
+  // bundles there and refuses to be told otherwise.
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
   assert.equal(config.bundle.targets, "all")
-  assert.match(workflow, /--bundles app,dmg/)
+  for (const [, target, bundles] of rows)
+    assert.equal(
+      bundles,
+      target.endsWith("-linux-gnu") ? undefined : releaseBundles(target),
+      `${target} builds bundles its release does not publish`,
+    )
 })
 
 test("a release is staged as a draft, never published by the workflow", () => {
