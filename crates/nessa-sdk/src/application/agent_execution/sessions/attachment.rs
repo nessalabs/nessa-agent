@@ -15,7 +15,7 @@ use std::{
     future::poll_fn,
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex as StateMutex,
     },
     task::Poll,
@@ -29,6 +29,9 @@ pub(crate) struct AttachmentLease {
     // This synchronous evidence also governs final handle drop.
     cleanup_report: StateMutex<Option<CleanupReport>>,
     pending: AtomicBool,
+    // Provider opens still running. Whatever an open launched is armed above
+    // before its count is released, so the two facts leave no gap.
+    opening: AtomicUsize,
     drop_reason: StateMutex<CleanupReason>,
     runtime: Handle,
 }
@@ -105,12 +108,20 @@ impl Resources {
         result
     }
 }
+/// One provider open in flight, counted by [`AttachmentLease::opening`].
+pub(crate) struct OpenInFlight<'a>(&'a AtomicUsize);
+impl Drop for OpenInFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 impl AttachmentLease {
     pub(crate) fn empty() -> Self {
         Self {
             state: Mutex::new(AttachmentState::Empty),
             cleanup_report: StateMutex::new(None),
             pending: AtomicBool::new(false),
+            opening: AtomicUsize::new(0),
             drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
             runtime: Handle::current(),
         }
@@ -315,6 +326,15 @@ impl AttachmentLease {
     }
     pub(crate) fn needs_cleanup(&self) -> bool {
         self.pending.load(Ordering::SeqCst)
+    }
+    /// Count one provider open until the returned guard is dropped, including
+    /// when the open is cancelled or panics.
+    pub(crate) fn opening(&self) -> OpenInFlight<'_> {
+        self.opening.fetch_add(1, Ordering::SeqCst);
+        OpenInFlight(&self.opening)
+    }
+    pub(crate) fn open_in_flight(&self) -> bool {
+        self.opening.load(Ordering::SeqCst) > 0
     }
     pub(crate) async fn cleanup(&self) -> CleanupReport {
         let mut state = self.state.lock().await;

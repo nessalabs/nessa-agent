@@ -243,6 +243,9 @@ impl SessionManager {
         provider: &dyn AgentProvider,
         control: ProviderOpenControl,
     ) -> Result<AttachedProvider, AttachmentOpenError> {
+        // Held until this returns: every path that keeps what the open
+        // launched arms the lease first, so an observer never sees neither.
+        let _open = self.attachment.opening();
         let snapshot = self
             .evidence
             .lock()

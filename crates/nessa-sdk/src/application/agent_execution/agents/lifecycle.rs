@@ -980,6 +980,9 @@ impl SessionLifecycle {
     pub(super) fn attachment_needs_cleanup(&self) -> bool {
         self.attachment.needs_cleanup()
     }
+    pub(super) fn attachment_open_in_flight(&self) -> bool {
+        self.attachment.open_in_flight()
+    }
     /// Capture the work generation before polling a provider operation. Late failures only
     /// affect that work generation, never a restored or newly admitted provider generation.
     pub(super) fn work_generation(&self) -> WorkGeneration {
