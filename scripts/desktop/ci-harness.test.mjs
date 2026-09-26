@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 import test from "node:test"
 
 test("local-auth integration harness is locked to its declared tools", () => {
@@ -83,14 +83,28 @@ test("the existing Linux matrix leg uniquely owns real runtime assembly", () => 
 test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   const proof = "./scripts/desktop/check-windows-task-scheduler.ps1"
-  assert.equal(workflow.split(proof).length - 1, 1)
+  const localAuthStart = workflow.indexOf("  local-auth:")
+  assert.notEqual(localAuthStart, -1)
+  const afterStart = workflow.slice(localAuthStart + 1)
+  const nextJobOffset = afterStart.search(/\n  [a-z][a-z0-9-]+:\n/)
+  const localAuth = workflow.slice(
+    localAuthStart,
+    nextJobOffset === -1 ? undefined : localAuthStart + 1 + nextJobOffset,
+  )
+  assert.match(localAuth, /matrix:\s+os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+  assert.equal(localAuth.split(proof).length - 1, 1)
   assert.match(
-    workflow,
+    localAuth,
     /name: Prove the Windows Task Scheduler gateway model\s+if: runner\.os == 'Windows'\s+shell: powershell\s+run: \.\/scripts\/desktop\/check-windows-task-scheduler\.ps1/,
   )
-  assert.doesNotMatch(
-    readFileSync(".github/workflows/release.yml", "utf8"),
-    /check-windows-task-scheduler/,
+  const invocations = readdirSync(".github/workflows")
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => readFileSync(`.github/workflows/${name}`, "utf8"))
+    .reduce((count, contents) => count + (contents.split(proof).length - 1), 0)
+  assert.equal(
+    invocations,
+    1,
+    "the native proof must run once in the existing Windows matrix leg",
   )
 })
 
@@ -99,19 +113,30 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(script, /CreateDirectoryW/)
   assert.match(script, /SECURITY_ATTRIBUTES/)
   assert.match(script, /FILE_FLAG_OPEN_REPARSE_POINT/)
+  assert.doesNotMatch(script, /FILE_SHARE_DELETE/)
   assert.match(script, /DirectoryIdentity\(\$runRootHandle\)/)
-  assert.match(script, /run-root path identity changed; the path was preserved/)
+  assert.match(script, /MarkDirectoryForDeletion\(\$runRootHandle\)/)
   assert.doesNotMatch(script, /Directory\]::CreateDirectory|Directory\.CreateDirectory/)
   assert.match(script, /RegisterTaskDefinition\(\$taskName, \$definition, 2 -bor 16,/)
   assert.match(script, /MultipleInstances = 2/)
   assert.equal(script.match(/\$ownedTask\.Run\(\$null\)/g)?.length, 2)
   assert.match(script, /ActionPid', 'EnginePid'/)
   assert.match(script, /PlannedActionId', 'CurrentAction'/)
-  assert.match(script, /ReadTokenFacts\(\[uint32\]\$actionPid\)/)
+  assert.match(script, /OpenProcessForObservation\(\[uint32\]\$instance\.EnginePID\)/)
+  assert.match(script, /ReadTokenFacts\(\$engineProcess\)/)
+  assert.match(script, /ProcessHasExited\(\$engineProcess\)/)
+  assert.match(script, /ActionCreationTime', 'PidBoundCreationTime'/)
+  assert.doesNotMatch(script, /ReadTokenFacts\(\[uint32\]/)
+  assert.match(script, /Get-NativeException/)
+  assert.match(script, /MethodInvocationException/)
+  assert.match(script, /Assert-HResultClassification/)
   assert.match(script, /AceSids = \[string\]::Join/)
   assert.match(script, /ObjectAceCount/)
   assert.match(script, /confirmed-created-contradictory/)
   assert.match(script, /observed-matching-after-\$Acknowledgement-reply/)
+  assert.match(script, /Assert-LifecycleStateProbes/)
+  assert.match(script, /Invoke-StopSettlement/)
+  assert.match(script, /Invoke-DeleteSettlement/)
   assert.match(script, /\$ownedTask\.Stop\(0\)/)
   assert.match(script, /exact owned task instance collection to become empty/)
   assert.doesNotMatch(script, /Stop-Process|\.Kill\(|TerminateProcess/)

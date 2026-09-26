@@ -8,7 +8,7 @@ $script:TaskNotFoundHResult = -2147024894
 $script:FileAllAccess = 0x001f01ff
 $script:LocalSystemSid = 'S-1-5-18'
 $script:CleanupFailures = [System.Collections.Generic.List[string]]::new()
-$script:ObservedProcesses = [System.Collections.Generic.Dictionary[int, System.Diagnostics.Process]]::new()
+$script:ObservedProcesses = [System.Collections.Generic.Dictionary[int, Microsoft.Win32.SafeHandles.SafeProcessHandle]]::new()
 
 Add-Type -TypeDefinition @'
 using System;
@@ -22,6 +22,7 @@ public sealed class NessaTokenFacts
     public bool Elevated { get; set; }
     public int ElevationType { get; set; }
     public string IntegritySid { get; set; }
+    public long CreationTime { get; set; }
 }
 
 public static class NessaWindowsProofNative
@@ -34,11 +35,15 @@ public static class NessaWindowsProofNative
     private const int TokenIntegrityLevel = 25;
     private const uint FILE_READ_ATTRIBUTES = 0x0080;
     private const uint READ_CONTROL = 0x00020000;
+    private const uint DELETE = 0x00010000;
     private const uint OPEN_EXISTING = 3;
-    private const uint FILE_SHARE_READ_WRITE_DELETE = 7;
+    private const uint FILE_SHARE_READ_WRITE = 3;
     private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
     private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
     private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+    private const uint WAIT_OBJECT_0 = 0;
+    private const uint WAIT_TIMEOUT = 258;
+    private const uint WAIT_FAILED = 0xffffffff;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SECURITY_ATTRIBUTES
@@ -70,6 +75,13 @@ public static class NessaWindowsProofNative
         public uint FileIndexLow;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILE_DISPOSITION_INFO
+    {
+        [MarshalAs(UnmanagedType.U1)]
+        public bool DeleteFile;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateDirectoryW(string path, ref SECURITY_ATTRIBUTES attributes);
 
@@ -82,6 +94,11 @@ public static class NessaWindowsProofNative
     private static extern bool GetFileInformationByHandle(
         SafeFileHandle handle, out BY_HANDLE_FILE_INFORMATION information);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFileInformationByHandle(
+        SafeFileHandle handle, int informationClass,
+        ref FILE_DISPOSITION_INFO information, uint size);
+
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
         string descriptor, uint revision, out IntPtr securityDescriptor, out uint size);
@@ -90,13 +107,27 @@ public static class NessaWindowsProofNative
     private static extern IntPtr LocalFree(IntPtr memory);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+    private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(SafeProcessHandle process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+        SafeProcessHandle process,
+        out System.Runtime.InteropServices.ComTypes.FILETIME creation,
+        out System.Runtime.InteropServices.ComTypes.FILETIME exit,
+        out System.Runtime.InteropServices.ComTypes.FILETIME kernel,
+        out System.Runtime.InteropServices.ComTypes.FILETIME user);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    private static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out IntPtr token);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool GetTokenInformation(
@@ -130,7 +161,7 @@ public static class NessaWindowsProofNative
     public static SafeFileHandle OpenDirectory(string path)
     {
         var handle = CreateFileW(
-            path, FILE_READ_ATTRIBUTES | READ_CONTROL, FILE_SHARE_READ_WRITE_DELETE,
+            path, FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE, FILE_SHARE_READ_WRITE,
             IntPtr.Zero, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
         if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -156,6 +187,15 @@ public static class NessaWindowsProofNative
         return String.Format(
             "{0:x8}:{1:x8}:{2:x8}", information.VolumeSerialNumber,
             information.FileIndexHigh, information.FileIndexLow);
+    }
+
+    public static void MarkDirectoryForDeletion(SafeFileHandle handle)
+    {
+        var disposition = new FILE_DISPOSITION_INFO { DeleteFile = true };
+        if (!SetFileInformationByHandle(
+            handle, 4, ref disposition,
+            (uint)Marshal.SizeOf(typeof(FILE_DISPOSITION_INFO))))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 
     private static string SidText(IntPtr sid)
@@ -197,10 +237,48 @@ public static class NessaWindowsProofNative
         finally { pinned.Free(); }
     }
 
-    public static NessaTokenFacts ReadTokenFacts(uint processId)
+    public static SafeProcessHandle OpenProcessForObservation(uint processId)
     {
-        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
-        if (process == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        if (process.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        uint openedId = GetProcessId(process);
+        if (openedId == 0)
+        {
+            int error = Marshal.GetLastWin32Error();
+            process.Dispose();
+            throw new Win32Exception(error);
+        }
+        if (openedId != processId)
+        {
+            process.Dispose();
+            throw new InvalidOperationException("opened process handle does not match the requested PID");
+        }
+        return process;
+    }
+
+    public static bool ProcessHasExited(SafeProcessHandle process)
+    {
+        uint result = WaitForSingleObject(process, 0);
+        if (result == WAIT_OBJECT_0) return true;
+        if (result == WAIT_TIMEOUT) return false;
+        if (result == WAIT_FAILED) throw new Win32Exception(Marshal.GetLastWin32Error());
+        throw new InvalidOperationException("unexpected process wait result " + result);
+    }
+
+    public static long ProcessCreationTime(SafeProcessHandle process)
+    {
+        System.Runtime.InteropServices.ComTypes.FILETIME creation, exit, kernel, user;
+        if (!GetProcessTimes(process, out creation, out exit, out kernel, out user))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return ((long)(uint)creation.dwHighDateTime << 32) | (uint)creation.dwLowDateTime;
+    }
+
+    public static NessaTokenFacts ReadTokenFacts(SafeProcessHandle process)
+    {
+        if (process == null || process.IsInvalid || process.IsClosed)
+            throw new InvalidOperationException("process observation handle is not open");
+        if (ProcessHasExited(process))
+            throw new InvalidOperationException("process exited before its token could be observed");
         IntPtr token = IntPtr.Zero;
         try
         {
@@ -210,27 +288,51 @@ public static class NessaWindowsProofNative
                 Sid = TokenSid(token, TokenUser),
                 Elevated = BitConverter.ToInt32(TokenInformation(token, TokenElevation), 0) != 0,
                 ElevationType = BitConverter.ToInt32(TokenInformation(token, TokenElevationType), 0),
-                IntegritySid = TokenSid(token, TokenIntegrityLevel)
+                IntegritySid = TokenSid(token, TokenIntegrityLevel),
+                CreationTime = ProcessCreationTime(process)
             };
         }
         finally
         {
             if (token != IntPtr.Zero) CloseHandle(token);
-            CloseHandle(process);
         }
     }
 }
 '@
 
+function Get-NativeException {
+    param([Parameter(Mandatory)] [System.Exception] $Exception)
+    $native = $Exception
+    while ($null -ne $native.InnerException) { $native = $native.InnerException }
+    return $native
+}
+
 function Get-HResultHex {
     param([Parameter(Mandatory)] [System.Exception] $Exception)
-    $bits = [System.BitConverter]::ToUInt32([System.BitConverter]::GetBytes([int]$Exception.HResult), 0)
+    $native = Get-NativeException -Exception $Exception
+    $bits = [System.BitConverter]::ToUInt32([System.BitConverter]::GetBytes([int]$native.HResult), 0)
     return ('0x{0:x8}' -f $bits)
 }
 
 function Test-NotFound {
     param([Parameter(Mandatory)] [System.Exception] $Exception)
-    return $Exception.HResult -eq $script:TaskNotFoundHResult
+    return (Get-NativeException -Exception $Exception).HResult -eq $script:TaskNotFoundHResult
+}
+
+function Assert-HResultClassification {
+    $notFound = [System.Management.Automation.MethodInvocationException]::new(
+        'wrapped not found', [System.Runtime.InteropServices.COMException]::new('not found', -2147024894))
+    if (-not (Test-NotFound -Exception $notFound)) { throw 'wrapped task-not-found HRESULT was not recognized' }
+    foreach ($lost in @(-2147417848, -2147417851, -2147023174, -2147023170)) {
+        $wrapped = [System.Management.Automation.MethodInvocationException]::new(
+            'wrapped lost reply', [System.Runtime.InteropServices.COMException]::new('lost reply', $lost))
+        if ((Get-CallAcknowledgement -Exception $wrapped) -ne 'lost') { throw "wrapped lost-reply HRESULT $lost was not recognized" }
+    }
+    foreach ($rejected in @(-2147024891, -2147467259)) {
+        $wrapped = [System.Management.Automation.MethodInvocationException]::new(
+            'wrapped rejection', [System.Runtime.InteropServices.COMException]::new('rejected', $rejected))
+        if ((Get-CallAcknowledgement -Exception $wrapped) -ne 'rejected') { throw "wrapped rejected HRESULT $rejected was not preserved" }
+    }
 }
 
 function Get-CallAcknowledgement {
@@ -240,43 +342,143 @@ function Get-CallAcknowledgement {
     return 'rejected'
 }
 
-function Resolve-CreateDisposition {
+function Resolve-CreateOutcome {
     param(
         [Parameter(Mandatory)] [ValidateSet('success', 'lost', 'rejected')] [string] $Acknowledgement,
         [Parameter(Mandatory)] [ValidateSet('absent', 'matching', 'contradictory', 'unobservable')] [string] $Observation
     )
-    if ($Observation -eq 'absent') { return 'absent' }
-    if ($Observation -eq 'unobservable') { return 'effect-uncertain' }
+    $disposition = $null
+    if ($Observation -eq 'absent') { $disposition = 'absent' }
+    elseif ($Observation -eq 'unobservable') { $disposition = 'effect-uncertain' }
     if ($Acknowledgement -eq 'success') {
-        return "confirmed-created-$Observation"
+        if ($null -eq $disposition) { $disposition = "confirmed-created-$Observation" }
     }
-    if ($Observation -eq 'matching') {
-        return "observed-matching-after-$Acknowledgement-reply"
+    elseif ($Observation -eq 'matching') {
+        $disposition = "observed-matching-after-$Acknowledgement-reply"
     }
-    return 'foreign-or-unresolved-contradictory'
+    elseif ($null -eq $disposition) {
+        $disposition = 'foreign-or-unresolved-contradictory'
+    }
+    return [pscustomobject]@{
+        Disposition = $disposition
+        AcceptanceEligible = $Acknowledgement -eq 'success' -and $Observation -eq 'matching'
+        CleanupOwned = $disposition -like 'confirmed-created-*' -or $disposition -like 'observed-matching-*'
+        Preserve = $disposition -eq 'foreign-or-unresolved-contradictory'
+        Settled = $disposition -eq 'absent'
+        Uncertain = $disposition -eq 'effect-uncertain'
+    }
 }
 
 function Assert-LedgerMatrix {
     $expected = @{
-        'success/absent' = 'absent'
-        'success/matching' = 'confirmed-created-matching'
-        'success/contradictory' = 'confirmed-created-contradictory'
-        'success/unobservable' = 'effect-uncertain'
-        'lost/absent' = 'absent'
-        'lost/matching' = 'observed-matching-after-lost-reply'
-        'lost/contradictory' = 'foreign-or-unresolved-contradictory'
-        'lost/unobservable' = 'effect-uncertain'
-        'rejected/absent' = 'absent'
-        'rejected/matching' = 'observed-matching-after-rejected-reply'
-        'rejected/contradictory' = 'foreign-or-unresolved-contradictory'
-        'rejected/unobservable' = 'effect-uncertain'
+        'success/absent' = 'absent|False|False|False|True|False'
+        'success/matching' = 'confirmed-created-matching|True|True|False|False|False'
+        'success/contradictory' = 'confirmed-created-contradictory|False|True|False|False|False'
+        'success/unobservable' = 'effect-uncertain|False|False|False|False|True'
+        'lost/absent' = 'absent|False|False|False|True|False'
+        'lost/matching' = 'observed-matching-after-lost-reply|False|True|False|False|False'
+        'lost/contradictory' = 'foreign-or-unresolved-contradictory|False|False|True|False|False'
+        'lost/unobservable' = 'effect-uncertain|False|False|False|False|True'
+        'rejected/absent' = 'absent|False|False|False|True|False'
+        'rejected/matching' = 'observed-matching-after-rejected-reply|False|True|False|False|False'
+        'rejected/contradictory' = 'foreign-or-unresolved-contradictory|False|False|True|False|False'
+        'rejected/unobservable' = 'effect-uncertain|False|False|False|False|True'
     }
     foreach ($entry in $expected.GetEnumerator()) {
         $parts = $entry.Key.Split('/')
-        $actual = Resolve-CreateDisposition -Acknowledgement $parts[0] -Observation $parts[1]
+        $outcome = Resolve-CreateOutcome -Acknowledgement $parts[0] -Observation $parts[1]
+        $actual = [string]::Join('|', @(
+            $outcome.Disposition, $outcome.AcceptanceEligible, $outcome.CleanupOwned,
+            $outcome.Preserve, $outcome.Settled, $outcome.Uncertain))
         if ($actual -ne $entry.Value) {
             throw "ledger matrix $($entry.Key) resolved to $actual, expected $($entry.Value)"
         }
+    }
+}
+
+function Test-RunCleanupRequired {
+    param(
+        [bool] $TaskOwned,
+        [bool] $RunAttempted,
+        [ValidateSet('matching', 'contradictory', 'multiple', 'absent', 'unobservable')] [string] $Observation
+    )
+    return $TaskOwned -and $RunAttempted
+}
+
+function Invoke-StopSettlement {
+    param(
+        [Parameter(Mandatory)] [scriptblock] $StopEffect,
+        [Parameter(Mandatory)] [scriptblock] $ProcessesSettled,
+        [Parameter(Mandatory)] [scriptblock] $InstancesSettled
+    )
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $stopDiagnostic = $null
+    try { $null = & $StopEffect }
+    catch { $stopDiagnostic = $_.Exception.Message }
+    foreach ($probe in @(
+        [pscustomobject]@{ Name = 'retained task processes'; Check = $ProcessesSettled },
+        [pscustomobject]@{ Name = 'exact owned task instances'; Check = $InstancesSettled }
+    )) {
+        try {
+            if (-not (& $($probe.Check))) { throw "$($probe.Name) did not settle" }
+        }
+        catch {
+            $detail = if ($null -ne $stopDiagnostic) { "; stop call also failed: $stopDiagnostic" } else { '' }
+            $failures.Add("$($_.Exception.Message)$detail")
+        }
+    }
+    return [pscustomobject]@{ StopCalled = $true; Failures = @($failures) }
+}
+
+function Invoke-DeleteSettlement {
+    param(
+        [Parameter(Mandatory)] [string] $Resource,
+        [Parameter(Mandatory)] [scriptblock] $DeleteEffect,
+        [Parameter(Mandatory)] [scriptblock] $ObservePresent
+    )
+    $deleteDiagnostic = $null
+    try { $null = & $DeleteEffect }
+    catch { $deleteDiagnostic = $_.Exception.Message }
+    try {
+        if (& $ObservePresent) {
+            $detail = if ($null -ne $deleteDiagnostic) { ": $deleteDiagnostic" } else { '' }
+            return "$Resource remained after deletion$detail"
+        }
+        return $null
+    }
+    catch { return "$Resource absence could not be observed: $($_.Exception.Message)" }
+}
+
+function Format-ProofFailures {
+    param($PrimaryFailure, [string[]] $CleanupFailures)
+    $parts = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $PrimaryFailure) { $parts.Add("primary failure: $($PrimaryFailure.Exception.Message)") }
+    foreach ($failure in $CleanupFailures) { $parts.Add("cleanup failure: $failure") }
+    return [string]::Join([Environment]::NewLine, $parts)
+}
+
+function Assert-LifecycleStateProbes {
+    foreach ($observation in @('matching', 'contradictory', 'multiple', 'absent', 'unobservable')) {
+        if (-not (Test-RunCleanupRequired -TaskOwned $true -RunAttempted $true -Observation $observation)) {
+            throw "owned run cleanup was skipped for $observation"
+        }
+    }
+    if (Test-RunCleanupRequired -TaskOwned $false -RunAttempted $true -Observation 'multiple') { throw 'foreign task gained stop authority' }
+    $lostStop = Invoke-StopSettlement -StopEffect { throw 'lost stop reply' } -ProcessesSettled { $true } -InstancesSettled { $true }
+    if (-not $lostStop.StopCalled -or $lostStop.Failures.Count -ne 0) { throw 'lost stop reply did not settle through fresh observations' }
+    $failedStop = Invoke-StopSettlement -StopEffect { throw 'stop rejected' } -ProcessesSettled { $false } -InstancesSettled { $false }
+    if ($failedStop.Failures.Count -ne 2 -or $failedStop.Failures[0] -notmatch 'stop rejected') { throw 'stop failure and lingering effects were not retained' }
+    $lostDelete = Invoke-DeleteSettlement -Resource 'task' -DeleteEffect { throw 'lost delete reply' } -ObservePresent { $false }
+    if ($null -ne $lostDelete) { throw 'lost delete reply did not settle through confirmed absence' }
+    $failedDelete = Invoke-DeleteSettlement -Resource 'task' -DeleteEffect { throw 'delete rejected' } -ObservePresent { $true }
+    if ($failedDelete -notmatch 'task remained.*delete rejected') { throw 'delete rejection and retained object were not retained together' }
+    $unobservableDelete = Invoke-DeleteSettlement -Resource 'folder' -DeleteEffect { } -ObservePresent { throw 'observation failed' }
+    if ($unobservableDelete -notmatch 'absence could not be observed') { throw 'unobservable cleanup did not remain a failure' }
+    try { throw 'primary' }
+    catch { $primary = $_ }
+    $combined = Format-ProofFailures -PrimaryFailure $primary -CleanupFailures @('task remained', 'folder unobservable')
+    if ($combined -notmatch 'primary failure: primary[\s\S]*cleanup failure: task remained[\s\S]*cleanup failure: folder unobservable') {
+        throw 'primary and ordered cleanup failures were not retained together'
     }
 }
 
@@ -398,8 +600,7 @@ function Get-TaskInstances {
         $instances += $instance
         if ($instance.EnginePID -ne 0 -and -not $script:ObservedProcesses.ContainsKey([int]$instance.EnginePID)) {
             try {
-                $process = [System.Diagnostics.Process]::GetProcessById([int]$instance.EnginePID)
-                $null = $process.Handle
+                $process = [NessaWindowsProofNative]::OpenProcessForObservation([uint32]$instance.EnginePID)
                 $script:ObservedProcesses.Add([int]$instance.EnginePID, $process)
             }
             catch {
@@ -418,6 +619,7 @@ function Test-CompleteAgreement {
         @('CallerElevated', 'ActionElevated'), @('CallerElevated', 'PidBoundElevated'),
         @('CallerElevationType', 'ActionElevationType'), @('CallerElevationType', 'PidBoundElevationType'),
         @('CallerIntegritySid', 'ActionIntegritySid'), @('CallerIntegritySid', 'PidBoundIntegritySid'),
+        @('ActionCreationTime', 'PidBoundCreationTime'),
         @('ActionPid', 'EnginePid'), @('PlannedNonce', 'ActionNonce'),
         @('PlannedTaskPath', 'RunningTaskPath'), @('PlannedActionId', 'CurrentAction')
     )
@@ -425,7 +627,7 @@ function Test-CompleteAgreement {
         if ($Evidence.($pair[0]) -ne $Evidence.($pair[1])) { return $false }
     }
     if ([string]::IsNullOrWhiteSpace([string]$Evidence.InstanceGuid)) { return $false }
-    if ($Evidence.InstanceCount -ne 1 -or $Evidence.RunningState -ne 4 -or $Evidence.EnginePid -eq 0) { return $false }
+    if ($Evidence.InstanceCount -ne 1 -or $Evidence.RunningState -ne 4 -or $Evidence.EnginePid -eq 0 -or $Evidence.EngineProcessExited) { return $false }
     if (-not $Evidence.DefinitionMatches -or -not $Evidence.DescriptorMatches -or -not $Evidence.DaclProtected) { return $false }
     if ($Evidence.Owner -ne $Evidence.CallerSid -or $Evidence.Group -ne $Evidence.CallerSid -or $Evidence.AceCount -ne 2) { return $false }
     $expectedAceSids = @($Evidence.CallerSid, $script:LocalSystemSid) | Sort-Object
@@ -441,8 +643,9 @@ function Assert-NegativeEvidenceProbes {
         ActionSid = 'S-1-5-18'; ActionElevated = -not $Accepted.ActionElevated; ActionElevationType = -1
         ActionIntegritySid = 'S-1-16-0'; PidBoundSid = 'S-1-5-18'; PidBoundElevated = -not $Accepted.PidBoundElevated
         PidBoundElevationType = -1; PidBoundIntegritySid = 'S-1-16-0'; ActionPid = $Accepted.ActionPid + 1
+        ActionCreationTime = $Accepted.ActionCreationTime + 1; PidBoundCreationTime = $Accepted.PidBoundCreationTime + 1
         ActionNonce = "$($Accepted.ActionNonce)-wrong"; RunningTaskPath = "$($Accepted.RunningTaskPath)-wrong"
-        InstanceGuid = ''; InstanceCount = 2; RunningState = 3; EnginePid = 0
+        InstanceGuid = ''; InstanceCount = 2; RunningState = 3; EnginePid = 0; EngineProcessExited = $true
         CurrentAction = "$($Accepted.CurrentAction)-wrong"; PrincipalSid = 'S-1-5-18'
         TriggerSid = 'S-1-5-18'; DefinitionMatches = $false; DescriptorMatches = $false; DaclProtected = $false
         Owner = 'S-1-5-18'; Group = 'S-1-5-18'; AceSids = 'S-1-5-18|S-1-5-18'
@@ -469,7 +672,11 @@ if ($env:OS -ne 'Windows_NT') {
 }
 
 Assert-LedgerMatrix
-$caller = [NessaWindowsProofNative]::ReadTokenFacts([uint32]$PID)
+Assert-HResultClassification
+Assert-LifecycleStateProbes
+$callerHandle = [NessaWindowsProofNative]::OpenProcessForObservation([uint32]$PID)
+try { $caller = [NessaWindowsProofNative]::ReadTokenFacts($callerHandle) }
+finally { $callerHandle.Dispose() }
 if ($caller.Elevated) { throw 'the Windows runner process is elevated; the least-privilege current-user model is not proved' }
 
 $runId = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { 'local' }
@@ -489,6 +696,8 @@ $taskName = 'gateway-model'
 $taskPath = "$folderPath\$taskName"
 $actionId = "action-$nonce"
 $registrationSource = "Nessa WS8 #205 $nonce"
+$fixturePath = Join-Path $runRoot 'task-action.ps1'
+$evidencePath = Join-Path $runRoot 'action-evidence.json'
 $callerSid = $caller.Sid
 $sddl = "O:${callerSid}G:${callerSid}D:P(A;;FA;;;${callerSid})(A;;FA;;;SY)"
 $securityInformation = 1 -bor 2 -bor 4
@@ -521,16 +730,6 @@ try {
     if ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'created run root is a reparse point' }
     if ([System.IO.Path]::GetFullPath($rootItem.Parent.FullName).TrimEnd('\') -ne $parent.TrimEnd('\')) { throw 'created run root has the wrong canonical parent' }
     if (-not (Test-ExactDescriptor -Sddl (Get-FileDescriptor -Path $runRoot) -CallerSid $callerSid)) { throw 'created run root security descriptor contradicts the plan' }
-    $verificationHandle = [NessaWindowsProofNative]::OpenDirectory($runRoot)
-    try {
-        if ([NessaWindowsProofNative]::DirectoryIsReparsePoint($verificationHandle) -or [NessaWindowsProofNative]::DirectoryIdentity($verificationHandle) -ne $runRootIdentity) {
-            throw 'created run root path no longer identifies the retained directory'
-        }
-    }
-    finally { $verificationHandle.Dispose() }
-
-    $fixturePath = Join-Path $runRoot 'task-action.ps1'
-    $evidencePath = Join-Path $runRoot 'action-evidence.json'
     $fixture = @'
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$Nonce, [Parameter(Mandatory)][string]$EvidencePath)
@@ -544,6 +743,7 @@ public static class NessaActionToken {
     const uint TOKEN_QUERY=8; const int TokenUser=1, TokenElevationType=18, TokenElevation=20, TokenIntegrityLevel=25;
     [StructLayout(LayoutKind.Sequential)] struct SA { public IntPtr Sid; public uint Attributes; }
     [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr p,out System.Runtime.InteropServices.ComTypes.FILETIME c,out System.Runtime.InteropServices.ComTypes.FILETIME e,out System.Runtime.InteropServices.ComTypes.FILETIME k,out System.Runtime.InteropServices.ComTypes.FILETIME u);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr h);
     [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr p,uint a,out IntPtr t);
@@ -552,11 +752,12 @@ public static class NessaActionToken {
     static byte[] Info(IntPtr t,int c){int n;GetTokenInformation(t,c,IntPtr.Zero,0,out n);var b=new byte[n];var g=GCHandle.Alloc(b,GCHandleType.Pinned);try{if(!GetTokenInformation(t,c,g.AddrOfPinnedObject(),n,out n))throw new Win32Exception(Marshal.GetLastWin32Error());return b;}finally{g.Free();}}
     static string TokenSid(IntPtr t,int c){var b=Info(t,c);var g=GCHandle.Alloc(b,GCHandleType.Pinned);try{var v=(SA)Marshal.PtrToStructure(g.AddrOfPinnedObject(),typeof(SA));return Sid(v.Sid);}finally{g.Free();}}
     static string Sid(IntPtr s){IntPtr p;if(!ConvertSidToStringSidW(s,out p))throw new Win32Exception(Marshal.GetLastWin32Error());try{return Marshal.PtrToStringUni(p);}finally{LocalFree(p);}}
-    public static string Read(){IntPtr t;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,out t))throw new Win32Exception(Marshal.GetLastWin32Error());try{return String.Join("|",TokenSid(t,TokenUser),(BitConverter.ToInt32(Info(t,TokenElevation),0)!=0).ToString(),BitConverter.ToInt32(Info(t,TokenElevationType),0),TokenSid(t,TokenIntegrityLevel));}finally{CloseHandle(t);}}
+    static long Creation(){System.Runtime.InteropServices.ComTypes.FILETIME c,e,k,u;if(!GetProcessTimes(GetCurrentProcess(),out c,out e,out k,out u))throw new Win32Exception(Marshal.GetLastWin32Error());return((long)(uint)c.dwHighDateTime<<32)|(uint)c.dwLowDateTime;}
+    public static string Read(){IntPtr t;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,out t))throw new Win32Exception(Marshal.GetLastWin32Error());try{return String.Join("|",TokenSid(t,TokenUser),(BitConverter.ToInt32(Info(t,TokenElevation),0)!=0).ToString(),BitConverter.ToInt32(Info(t,TokenElevationType),0),TokenSid(t,TokenIntegrityLevel),Creation());}finally{CloseHandle(t);}}
 }
 "@
 $parts = [NessaActionToken]::Read().Split('|')
-$record = [ordered]@{ nonce=$Nonce; pid=$PID; sid=$parts[0]; elevated=[bool]::Parse($parts[1]); elevationType=[int]$parts[2]; integritySid=$parts[3] }
+$record = [ordered]@{ nonce=$Nonce; pid=$PID; sid=$parts[0]; elevated=[bool]::Parse($parts[1]); elevationType=[int]$parts[2]; integritySid=$parts[3]; creationTime=[long]$parts[4] }
 $temporary = "$EvidencePath.$PID.tmp"
 $bytes = [System.Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
 $stream = [System.IO.File]::Open($temporary,[System.IO.FileMode]::CreateNew,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None)
@@ -579,8 +780,8 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     $observedFolder = Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath
     if ($null -eq $observedFolder) { throw "scheduler folder creation was $folderAcknowledgement and the folder is absent" }
     $folderMatches = Test-ExactDescriptor -Sddl $observedFolder.GetSecurityDescriptor($securityInformation) -CallerSid $callerSid
-    $folderDisposition = Resolve-CreateDisposition -Acknowledgement $folderAcknowledgement -Observation $(if ($folderMatches) { 'matching' } else { 'contradictory' })
-    if ($folderDisposition -like 'confirmed-created-*' -or $folderDisposition -like 'observed-matching-*') {
+    $folderOutcome = Resolve-CreateOutcome -Acknowledgement $folderAcknowledgement -Observation $(if ($folderMatches) { 'matching' } else { 'contradictory' })
+    if ($folderOutcome.CleanupOwned) {
         $folderOwned = $true
         $ownedFolder = $observedFolder
     }
@@ -626,8 +827,8 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     if ($null -eq $observedTask) { throw "task registration was $taskAcknowledgement and the task is absent" }
     $taskDefinitionMatches = Test-TaskDefinition -Task $observedTask -CallerSid $callerSid -ActionId $actionId -Executable $powershell -Arguments $arguments -WorkingDirectory $runRoot -RegistrationSource $registrationSource
     $taskDescriptorMatches = Test-ExactDescriptor -Sddl $observedTask.GetSecurityDescriptor($securityInformation) -CallerSid $callerSid
-    $taskDisposition = Resolve-CreateDisposition -Acknowledgement $taskAcknowledgement -Observation $(if ($taskDefinitionMatches -and $taskDescriptorMatches) { 'matching' } else { 'contradictory' })
-    if ($taskDisposition -like 'confirmed-created-*' -or $taskDisposition -like 'observed-matching-*') {
+    $taskOutcome = Resolve-CreateOutcome -Acknowledgement $taskAcknowledgement -Observation $(if ($taskDefinitionMatches -and $taskDescriptorMatches) { 'matching' } else { 'contradictory' })
+    if ($taskOutcome.CleanupOwned) {
         $taskOwned = $true
         $ownedTask = $observedTask
     }
@@ -639,23 +840,19 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     $runAttempted = $true
     $firstReturned = $ownedTask.Run($null)
     Wait-Until -Description 'one running task instance and action evidence' -Condition {
-        if (-not [System.IO.File]::Exists($evidencePath)) { return $false }
-        return @(Get-TaskInstances -Task $ownedTask).Count -eq 1
+        $instances = @(Get-TaskInstances -Task $ownedTask)
+        return $instances.Count -eq 1 -and [System.IO.File]::Exists($evidencePath)
     }
     $firstInstances = @(Get-TaskInstances -Task $ownedTask)
     if ($firstInstances.Count -ne 1) { throw "first run exposed $($firstInstances.Count) instances" }
     $firstInstance = $firstInstances[0]
     $record = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
     $actionPid = [int]$record.pid
-    $actionProcess = [System.Diagnostics.Process]::GetProcessById($actionPid)
-    $null = $actionProcess.Handle
-    if (-not $script:ObservedProcesses.ContainsKey($actionPid)) {
-        $script:ObservedProcesses.Add($actionPid, $actionProcess)
-    }
-    else {
-        $actionProcess.Dispose()
-    }
-    $pidFacts = [NessaWindowsProofNative]::ReadTokenFacts([uint32]$actionPid)
+    $enginePid = [int]$firstInstance.EnginePID
+    if (-not $script:ObservedProcesses.ContainsKey($enginePid)) { throw "no retained process handle exists for EnginePID $enginePid" }
+    $engineProcess = $script:ObservedProcesses[$enginePid]
+    $engineProcessExited = [NessaWindowsProofNative]::ProcessHasExited($engineProcess)
+    $pidFacts = [NessaWindowsProofNative]::ReadTokenFacts($engineProcess)
     $observedDefinition = $observedTask.Definition
     $observedTrigger = $observedDefinition.Triggers.Item(1)
     $descriptorFacts = ConvertTo-ExactDescriptor -Sddl $observedTask.GetSecurityDescriptor($securityInformation)
@@ -665,7 +862,8 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         CallerElevated = $caller.Elevated; ActionElevated = [bool]$record.elevated; PidBoundElevated = $pidFacts.Elevated
         CallerElevationType = $caller.ElevationType; ActionElevationType = [int]$record.elevationType; PidBoundElevationType = $pidFacts.ElevationType
         CallerIntegritySid = $caller.IntegritySid; ActionIntegritySid = [string]$record.integritySid; PidBoundIntegritySid = $pidFacts.IntegritySid
-        ActionPid = $actionPid; EnginePid = [int]$firstInstance.EnginePID
+        ActionCreationTime = [long]$record.creationTime; PidBoundCreationTime = $pidFacts.CreationTime
+        ActionPid = $actionPid; EnginePid = $enginePid; EngineProcessExited = $engineProcessExited
         PlannedNonce = $nonce; ActionNonce = [string]$record.nonce
         PlannedTaskPath = $taskPath; RunningTaskPath = [string]$firstInstance.Path
         PlannedActionId = $actionId; CurrentAction = [string]$firstInstance.CurrentAction
@@ -703,11 +901,12 @@ finally {
             $recoveredFolder = Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath
             if ($null -ne $recoveredFolder) {
                 $recoveredFolderMatches = Test-ExactDescriptor -Sddl $recoveredFolder.GetSecurityDescriptor($securityInformation) -CallerSid $callerSid
-                if ($folderAcknowledgement -eq 'success' -or $recoveredFolderMatches) {
+                $recoveredFolderOutcome = Resolve-CreateOutcome -Acknowledgement $folderAcknowledgement -Observation $(if ($recoveredFolderMatches) { 'matching' } else { 'contradictory' })
+                if ($recoveredFolderOutcome.CleanupOwned) {
                     $folderOwned = $true
                     $ownedFolder = $recoveredFolder
                 }
-                else {
+                elseif ($recoveredFolderOutcome.Preserve) {
                     Add-CleanupFailure 'scheduler folder remained contradictory after a lost or rejected create reply; it was preserved'
                 }
             }
@@ -720,106 +919,97 @@ finally {
             if ($null -ne $recoveredTask) {
                 $recoveredDefinitionMatches = Test-TaskDefinition -Task $recoveredTask -CallerSid $callerSid -ActionId $actionId -Executable $powershell -Arguments $arguments -WorkingDirectory $runRoot -RegistrationSource $registrationSource
                 $recoveredDescriptorMatches = Test-ExactDescriptor -Sddl $recoveredTask.GetSecurityDescriptor($securityInformation) -CallerSid $callerSid
-                if ($taskAcknowledgement -eq 'success' -or ($recoveredDefinitionMatches -and $recoveredDescriptorMatches)) {
+                $recoveredTaskOutcome = Resolve-CreateOutcome -Acknowledgement $taskAcknowledgement -Observation $(if ($recoveredDefinitionMatches -and $recoveredDescriptorMatches) { 'matching' } else { 'contradictory' })
+                if ($recoveredTaskOutcome.CleanupOwned) {
                     $taskOwned = $true
                     $ownedTask = $recoveredTask
                 }
-                else {
+                elseif ($recoveredTaskOutcome.Preserve) {
                     Add-CleanupFailure 'scheduler task remained contradictory after a lost or rejected create reply; it was preserved'
                 }
             }
         }
         catch { Add-CleanupFailure "scheduler task effect remained unobservable: $($_.Exception.Message)" }
     }
-    if ($runAttempted -and $taskOwned -and $null -ne $ownedTask) {
+    if ((Test-RunCleanupRequired -TaskOwned $taskOwned -RunAttempted $runAttempted -Observation 'unobservable') -and $null -ne $ownedTask) {
         try { $null = Get-TaskInstances -Task $ownedTask }
         catch { Add-CleanupFailure "pre-stop exact-task enumeration failed: $($_.Exception.Message)" }
-        $stopDiagnostic = $null
-        try { $ownedTask.Stop(0) }
-        catch { $stopDiagnostic = $_.Exception.Message }
-        try {
+        $stopSettlement = Invoke-StopSettlement -StopEffect { $ownedTask.Stop(0) } -ProcessesSettled {
             Wait-Until -Description 'all retained task processes to exit' -Condition {
                 foreach ($process in $script:ObservedProcesses.Values) {
-                    $process.Refresh()
-                    if (-not $process.HasExited) { return $false }
+                    if (-not [NessaWindowsProofNative]::ProcessHasExited($process)) { return $false }
                 }
                 return $true
             }
-        }
-        catch {
-            $detail = if ($null -ne $stopDiagnostic) { "; stop call also failed: $stopDiagnostic" } else { '' }
-            Add-CleanupFailure "$($_.Exception.Message)$detail"
-        }
-        try {
+            return $true
+        } -InstancesSettled {
             Wait-Until -Description 'exact owned task instance collection to become empty' -Condition {
                 return @(Get-TaskInstances -Task $ownedTask).Count -eq 0
             }
+            return $true
         }
-        catch {
-            $detail = if ($null -ne $stopDiagnostic) { "; stop call also failed: $stopDiagnostic" } else { '' }
-            Add-CleanupFailure "$($_.Exception.Message)$detail"
-        }
+        foreach ($failure in $stopSettlement.Failures) { Add-CleanupFailure $failure }
     }
     foreach ($process in $script:ObservedProcesses.Values) { $process.Dispose() }
     if ($taskOwned -and $null -ne $ownedFolder) {
-        $taskDeleteDiagnostic = $null
-        try { $ownedFolder.DeleteTask($taskName, 0) }
-        catch { $taskDeleteDiagnostic = $_.Exception.Message }
-        try {
-            if ($null -ne (Get-ExactTask -Folder $ownedFolder -Name $taskName)) {
-                $detail = if ($null -ne $taskDeleteDiagnostic) { ": $taskDeleteDiagnostic" } else { '' }
-                Add-CleanupFailure "exact task remained after deletion$detail"
-            }
+        $taskDeleteFailure = Invoke-DeleteSettlement -Resource 'exact task' -DeleteEffect {
+            $ownedFolder.DeleteTask($taskName, 0)
+        } -ObservePresent {
+            return $null -ne (Get-ExactTask -Folder $ownedFolder -Name $taskName)
         }
-        catch { Add-CleanupFailure $_.Exception.Message }
+        if ($null -ne $taskDeleteFailure) { Add-CleanupFailure $taskDeleteFailure }
     }
     if ($folderOwned -and $null -ne $schedulerRoot) {
-        $folderDeleteDiagnostic = $null
-        try { $schedulerRoot.DeleteFolder($folderName, 0) }
-        catch { $folderDeleteDiagnostic = $_.Exception.Message }
-        try {
-            if ($null -ne (Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath)) {
-                $detail = if ($null -ne $folderDeleteDiagnostic) { ": $folderDeleteDiagnostic" } else { '' }
-                Add-CleanupFailure "exact scheduler folder remained after deletion$detail"
-            }
+        $folderDeleteFailure = Invoke-DeleteSettlement -Resource 'exact scheduler folder' -DeleteEffect {
+            $schedulerRoot.DeleteFolder($folderName, 0)
+        } -ObservePresent {
+            return $null -ne (Get-ExactFolder -RootFolder $schedulerRoot -Path $folderPath)
         }
-        catch { Add-CleanupFailure $_.Exception.Message }
+        if ($null -ne $folderDeleteFailure) { Add-CleanupFailure $folderDeleteFailure }
     }
     if ($rootOwned) {
-        $rootIdentityMatches = $false
-        $rootAlreadyAbsent = -not [System.IO.Directory]::Exists($runRoot)
-        if (-not $rootAlreadyAbsent) {
+        $rootAlreadyAbsent = $null -eq $runRootHandle -and -not [System.IO.Directory]::Exists($runRoot)
+        if ($rootAlreadyAbsent) { $rootOwned = $false }
+        $rootCanDelete = $null -ne $runRootHandle
+        if ($rootOwned -and -not $rootCanDelete) { Add-CleanupFailure 'cleanup-owned run root has no retained authority handle; the path was preserved' }
+        if ($rootCanDelete) {
             try {
-                $cleanupRootHandle = [NessaWindowsProofNative]::OpenDirectory($runRoot)
-                try {
-                    $rootIdentityMatches = -not [NessaWindowsProofNative]::DirectoryIsReparsePoint($cleanupRootHandle) -and [NessaWindowsProofNative]::DirectoryIdentity($cleanupRootHandle) -eq $runRootIdentity
+                if ([NessaWindowsProofNative]::DirectoryIsReparsePoint($runRootHandle) -or [NessaWindowsProofNative]::DirectoryIdentity($runRootHandle) -ne $runRootIdentity) {
+                    throw 'retained run-root handle identity changed'
                 }
-                finally { $cleanupRootHandle.Dispose() }
             }
-            catch { Add-CleanupFailure "exact run-root identity could not be reobserved: $($_.Exception.Message)" }
+            catch {
+                $rootCanDelete = $false
+                Add-CleanupFailure "exact run-root identity could not be reobserved through its retained handle: $($_.Exception.Message)"
+            }
+        }
+        if ($rootCanDelete) {
+            try {
+                foreach ($entry in [System.IO.DirectoryInfo]::new($runRoot).GetFileSystemInfos()) {
+                    $ownedFile = $entry.Name -eq 'task-action.ps1' -or $entry.Name -eq 'action-evidence.json' -or
+                        ($runAttempted -and $entry.Name -match '^action-evidence\.json\.\d+\.tmp$')
+                    if (-not $ownedFile -or $entry -is [System.IO.DirectoryInfo] -or ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                        throw "unexpected run-root entry was preserved: $($entry.Name)"
+                    }
+                    [System.IO.File]::Delete($entry.FullName)
+                }
+                if ([System.IO.DirectoryInfo]::new($runRoot).GetFileSystemInfos().Count -ne 0) {
+                    throw 'run root was not empty after exact owned-file cleanup'
+                }
+                [NessaWindowsProofNative]::MarkDirectoryForDeletion($runRootHandle)
+            }
+            catch {
+                $rootCanDelete = $false
+                Add-CleanupFailure "exact run-root cleanup failed: $($_.Exception.Message)"
+            }
         }
         if ($null -ne $runRootHandle) { $runRootHandle.Dispose() }
-        if ($rootAlreadyAbsent) {
-            $rootOwned = $false
-        }
-        elseif ($rootIdentityMatches) {
-            $rootDeleteDiagnostic = $null
-            try { [System.IO.Directory]::Delete($runRoot, $true) }
-            catch { $rootDeleteDiagnostic = $_.Exception.Message }
-            if ([System.IO.Directory]::Exists($runRoot)) {
-                $detail = if ($null -ne $rootDeleteDiagnostic) { ": $rootDeleteDiagnostic" } else { '' }
-                Add-CleanupFailure "exact run root remained after deletion$detail"
-            }
-        }
-        else {
-            Add-CleanupFailure 'run-root path identity changed; the path was preserved'
+        if ($rootCanDelete -and [System.IO.Directory]::Exists($runRoot)) {
+            Add-CleanupFailure 'exact run root remained after handle-bound deletion'
         }
     }
 }
 
 if ($null -ne $primaryFailure -or $script:CleanupFailures.Count -ne 0) {
-    $parts = [System.Collections.Generic.List[string]]::new()
-    if ($null -ne $primaryFailure) { $parts.Add("primary failure: $($primaryFailure.Exception.Message)") }
-    foreach ($failure in $script:CleanupFailures) { $parts.Add("cleanup failure: $failure") }
-    throw [string]::Join([Environment]::NewLine, $parts)
+    throw (Format-ProofFailures -PrimaryFailure $primaryFailure -CleanupFailures @($script:CleanupFailures))
 }
