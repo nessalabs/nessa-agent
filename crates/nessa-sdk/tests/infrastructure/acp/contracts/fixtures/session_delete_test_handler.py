@@ -91,8 +91,15 @@ for line in sys.stdin:
         elif mode == "list-malformed":
             # Names the session, but not under `sessionId`.
             send({"id": message["id"], "result": {"sessions": [{"id": asked, "cwd": str(root)}]}})
-        elif mode == "list-endless":
-            send({"id": message["id"], "result": {"sessions": [other], "nextCursor": str(int(params.get("cursor", "0")) + 1)}})
+        elif mode == "list-past-the-bound":
+            # Pages past the binding's bound, then one last page that does not
+            # name the session: a reader without the bound settles instead of
+            # reading forever.
+            # The binding's page bound, as the test publishes it.
+            page_bound = int(sys.argv[4])
+            page = int(params.get("cursor", "0")) + 1
+            following = {"nextCursor": str(page)} if page <= page_bound else {}
+            send({"id": message["id"], "result": {"sessions": [other], **following}})
         elif mode == "list-cycling-cursor":
             # a -> b -> a: never the same cursor twice in a row.
             following = {None: "a", "a": "b", "b": "a"}[params.get("cursor")]

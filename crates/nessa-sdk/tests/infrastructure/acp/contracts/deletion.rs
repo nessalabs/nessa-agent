@@ -7,7 +7,8 @@ use crate::infrastructure::acp::sessions::deletion::MAX_LIST_PAGES;
 use serde_json::{json, Value};
 
 /// The deletion handler in `mode`, answering as `agent`'s adapter would; a
-/// listing mode lists `session()` where the mode says.
+/// listing mode lists `session()` where the mode says, and knows the binding's
+/// page bound.
 fn handler(config: &mut AcpConfig, mode: &str, agent: &str) {
     config.arguments = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -16,12 +17,24 @@ fn handler(config: &mut AcpConfig, mode: &str, agent: &str) {
         mode.into(),
         agent.into(),
         session().as_str().into(),
+        MAX_LIST_PAGES.to_string().into(),
     ];
     config.startup_timeout = Duration::from_millis(500);
 }
 fn deleting(mode: &str) -> (TempDir, ClaudeAcpProvider) {
+    deleting_configured(mode, |_| {})
+}
+/// [`deleting`], with `startup_timeout` as each request's budget.
+fn deleting_within(mode: &str, startup_timeout: Duration) -> (TempDir, ClaudeAcpProvider) {
+    deleting_configured(mode, |config| config.startup_timeout = startup_timeout)
+}
+fn deleting_configured(
+    mode: &str,
+    adjust: impl FnOnce(&mut AcpConfig),
+) -> (TempDir, ClaudeAcpProvider) {
     let (root, mut config, model) = test_acp_configuration(mode, 16);
     handler(&mut config, mode, "claude");
+    adjust(&mut config);
     let provider = ClaudeAcpProvider::new(
         config,
         &model,
@@ -205,7 +218,7 @@ const LIST_MODES: [&str; 14] = [
     "list-too-many-values",
     "list-stuck-cursor",
     "list-cycling-cursor",
-    "list-endless",
+    "list-past-the-bound",
     "list-malformed",
     "list-no-sessions",
     "list-bad-cursor",
@@ -316,7 +329,7 @@ async fn only_the_list_is_read_past_the_protocol_s_bound_on_values() {
 #[tokio::test]
 async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
     // A list refused (with a code of its own, -32000), too large in bytes or
-    // in values, whose cursor repeats, or that never ends: nothing
+    // in values, whose cursor repeats, or longer than its page bound: nothing
     // is known of the session, so the delete's own refusal (-32603) is the
     // answer, never the list's failure and never a settlement.
     for mode in [
@@ -324,7 +337,7 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
         "list-unreadable+refuse",
         "list-too-many-values+refuse",
         "list-stuck-cursor+refuse",
-        "list-endless+refuse",
+        "list-past-the-bound+refuse",
         // It may name the session under another key: not read as not naming it.
         "list-malformed+refuse",
         // A page without `sessions`, a cursor neither a string nor null, and
@@ -349,6 +362,10 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
         );
         assert_gone(&root, "pid");
     }
+    // Where the pages read are counted, the list's budget must not be what
+    // stops the read: under contention 500 ms ended it after eight pages. A
+    // budget no page count here comes near leaves only the rule under test.
+    let unhurried = Duration::from_secs(60);
     // A cursor already followed is caught on the page that repeats it, not
     // read to the page bound: at once, or after others between.
     for (mode, pages) in [
@@ -356,14 +373,24 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
         ("list-cycling-cursor+refuse", 3),
     ] {
         let _process_slot = process_test_slot().await;
-        let (root, provider) = deleting(mode);
-        assert!(provider.delete_session(session()).await.is_err());
+        let (root, provider) = deleting_within(mode, unhurried);
+        assert!(
+            matches!(
+                provider.delete_session(session()).await,
+                Err(AgentError::Provider { code: -32603, .. })
+            ),
+            "{mode}"
+        );
         assert_eq!(listings(&root).len(), pages, "{mode}");
     }
-    // A list that never ends is read to its bound, not forever.
+    // A list longer than its bound is read to the bound and no further: one
+    // page more would end it without naming the session, and settle.
     let _process_slot = process_test_slot().await;
-    let (root, provider) = deleting("list-endless+refuse");
-    assert!(provider.delete_session(session()).await.is_err());
+    let (root, provider) = deleting_within("list-past-the-bound+refuse", unhurried);
+    assert!(matches!(
+        provider.delete_session(session()).await,
+        Err(AgentError::Provider { code: -32603, .. })
+    ));
     assert_eq!(listings(&root).len(), MAX_LIST_PAGES);
 }
 
