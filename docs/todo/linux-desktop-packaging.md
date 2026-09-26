@@ -6,8 +6,8 @@ acceptance remains.
 
 The release workflow builds the `.deb` on Ubuntu 22.04, verifies the
 fingerprinted runtime inside it with `scripts/desktop/verify-linux-bundle.mjs`,
-and publishes it in the draft release under the `linux-x86_64-deb` updater key. What
-an installed Linux app does is described in
+and publishes it in the draft release under the `linux-x86_64-deb` updater
+key. What an installed Linux app does is described in
 [Gateway chat](../guides/gateway-chat.md#installed-linux-runtime).
 
 What remains:

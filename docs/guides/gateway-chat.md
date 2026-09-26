@@ -928,9 +928,10 @@ and a Linux `pnpm app:build` builds only the `.deb`.
 Staging works as on macOS, with XDG locations in place of `Application Support`:
 the runtime is copied to
 `$XDG_DATA_HOME/nessa/gateway-runtimes/<unit>/<fingerprint>/` (by default
-`~/.local/share`), so the service never runs from the package's files. The gateway is the systemd **user** unit
-`nessa-gateway-prod.service` in `$XDG_CONFIG_HOME/systemd/user`, enabled for
-`default.target`, and its lifecycle journal lives under `$XDG_STATE_HOME/nessa`.
+`~/.local/share`), so the service never runs from the package's files. The
+gateway is the systemd **user** unit `nessa-gateway-prod.service` in
+`$XDG_CONFIG_HOME/systemd/user`, enabled for `default.target`, and its
+lifecycle journal lives under `$XDG_STATE_HOME/nessa`.
 Admission, recovery, and the inactive-unit cases are described in
 [the Linux plan](../todo/desktop-linux-windows-plan.md#4-linux).
 

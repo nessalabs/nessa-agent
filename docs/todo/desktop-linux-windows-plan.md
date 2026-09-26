@@ -100,8 +100,8 @@ Do these once. Linux uses them first, Windows reuses them.
    `.deb`. Windows remains disabled.
 2. **Updater manifest for more targets (Linux complete).** `RELEASE_TARGETS`
    includes `x86_64-unknown-linux-gnu`, published as `linux-x86_64-deb`,
-   because the updater installs each kind of install from its own format. Windows still needs
-   `x86_64-pc-windows-msvc`.
+   because the updater installs each kind of install from its own format.
+   Windows still needs `x86_64-pc-windows-msvc`.
 3. **Release workflow matrix (Linux complete).** An `ubuntu-22.04` row builds
    the `.deb`; the macOS rows name their `bundles`, and the Linux row names
    none because a Linux build makes exactly the release's `.deb`. Windows still
