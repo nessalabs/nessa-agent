@@ -14,6 +14,7 @@ import {
   REQUIRED_DEB_PACKAGES,
   builtPackage,
   packageBuiltIn,
+  uncheckedBundles,
   carriesIndicatorLibrary,
   dependencyClauses,
   missingDependencies,
@@ -94,7 +95,7 @@ test("an AppImage tree without the tray's indicator library is refused", () => {
 
 test("the package checked is the one this build wrote, whatever its version", () => {
   const started = 1_790_000_000_500
-  const pattern = { prefix: "Nessa_", suffix: "_amd64.deb", startedAt: started }
+  const pattern = "Nessa_*_amd64.deb"
   // An older app built by merging another version, beside the shipped one an
   // earlier build left: the newer write is this build's.
   assert.equal(
@@ -102,8 +103,8 @@ test("the package checked is the one this build wrote, whatever its version", ()
       [
         { name: "Nessa_0.1.0_amd64.deb", modified: started - 60_000 },
         { name: "Nessa_0.0.1_amd64.deb", modified: started + 90_000 },
-        { name: "Nessa_0.0.1_amd64.deb.sig", modified: started + 90_000 },
       ],
+      started,
       pattern,
     ),
     "Nessa_0.0.1_amd64.deb",
@@ -112,6 +113,7 @@ test("the package checked is the one this build wrote, whatever its version", ()
   assert.equal(
     builtPackage(
       [{ name: "Nessa_0.1.0_amd64.deb", modified: 1_790_000_000_000 }],
+      started,
       pattern,
     ),
     "Nessa_0.1.0_amd64.deb",
@@ -120,9 +122,10 @@ test("the package checked is the one this build wrote, whatever its version", ()
     () =>
       builtPackage(
         [{ name: "Nessa_0.1.0_amd64.deb", modified: started - 60_000 }],
+        started,
         pattern,
       ),
-    /found none/,
+    /Nessa_\*_amd64\.deb written by this build, found none/,
   )
   assert.throws(
     () =>
@@ -131,10 +134,26 @@ test("the package checked is the one this build wrote, whatever its version", ()
           { name: "Nessa_0.1.0_amd64.deb", modified: started + 1 },
           { name: "Nessa_0.0.1_amd64.deb", modified: started + 2 },
         ],
+        started,
         pattern,
       ),
     /found Nessa_0.1.0_amd64.deb, Nessa_0.0.1_amd64.deb/,
   )
+  // A start that is not a time says so, rather than finding no package.
+  assert.throws(
+    () =>
+      builtPackage([{ name: "Nessa_0.1.0_amd64.deb", modified: started }], NaN, pattern),
+    /not a time/,
+  )
+})
+
+test("a build is refused when it made a bundle no Linux check opens", () => {
+  assert.deepEqual(uncheckedBundles("deb", "all"), [])
+  assert.deepEqual(uncheckedBundles("deb,appimage", "all"), [])
+  assert.deepEqual(uncheckedBundles("deb,rpm", "all"), ["rpm"])
+  // With nothing named, the config's "all" includes rpm.
+  assert.deepEqual(uncheckedBundles(undefined, "all"), ["all"])
+  assert.deepEqual(uncheckedBundles(undefined, ["deb"]), [])
 })
 
 test("the package is found in the bundle's own directory for the pattern", () => {

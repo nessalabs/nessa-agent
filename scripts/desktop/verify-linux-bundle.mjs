@@ -17,6 +17,7 @@ import {
   includesBundle,
   linuxBundleArchitecture,
   linuxBundles,
+  selectedBundles,
 } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
 
@@ -83,22 +84,20 @@ function dpkgDeb(args, options) {
   }
 }
 
-/** The one package this build wrote in `directory`.
- *
- * Named for the product and architecture, any version, and modified no earlier
- * than the second the build started. The version is not predicted: a build can
- * merge another one through `--config` (the updater harness builds an older
- * app that way), and a package an earlier build left under another version is
- * not this build's, whatever it is named. */
-export function builtPackage(entries, { prefix, suffix, startedAt }) {
+/** The one candidate this build wrote: modified no earlier than the second
+ * the build started. The version is not predicted: a build can merge another
+ * one through `--config` (the updater harness builds an older app that way),
+ * and a package an earlier build left under another version is not this
+ * build's, whatever it is named. Which names are candidates is
+ * `packageBuiltIn`'s to decide. */
+export function builtPackage(candidates, startedAt, pattern) {
+  if (!Number.isFinite(startedAt))
+    throw new Error(`The build's start is not a time: ${startedAt}`)
   const since = Math.floor(startedAt / 1000) * 1000
-  const built = entries.filter(
-    ({ name, modified }) =>
-      name.startsWith(prefix) && name.endsWith(suffix) && modified >= since,
-  )
+  const built = candidates.filter(({ modified }) => modified >= since)
   if (built.length !== 1)
     throw new Error(
-      `Expected one ${prefix}*${suffix} written by this build, found ` +
+      `Expected one ${pattern} written by this build, found ` +
         `${built.length === 0 ? "none" : built.map(({ name }) => name).join(", ")}`,
     )
   return built[0].name
@@ -113,7 +112,19 @@ export function packageBuiltIn(bundle, pattern, startedAt) {
   const entries = readdirSync(directory)
     .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
     .map((name) => ({ name, modified: statSync(join(directory, name)).mtimeMs }))
-  return join(directory, builtPackage(entries, { prefix, suffix, startedAt }))
+  return join(directory, builtPackage(entries, startedAt, basename(pattern)))
+}
+
+/** The Linux bundles this script can check. */
+const CHECKED_BUNDLES = ["deb", "appimage"]
+
+/** Each selected bundle no check here covers. A build is not "verified" by a
+ * run that looked at none of what it made: "all" includes rpm, which nothing
+ * here opens. */
+export function uncheckedBundles(selected, configured) {
+  return selectedBundles(selected, configured).filter(
+    (bundle) => !CHECKED_BUNDLES.includes(bundle),
+  )
 }
 
 function withScratch(action) {
@@ -178,11 +189,13 @@ function main() {
     linuxBundleArchitecture(target, process.arch),
   )
   const startedAt = Number(process.env.NESSA_BUILD_STARTED ?? 0)
-  if (!Number.isFinite(startedAt))
-    throw new Error(
-      `NESSA_BUILD_STARTED is not a time: ${process.env.NESSA_BUILD_STARTED}`,
-    )
   const selected = process.env.NESSA_BUILD_BUNDLES
+  const unchecked = uncheckedBundles(selected, config.bundle.targets)
+  if (unchecked.length > 0)
+    throw new Error(
+      `No Linux check verifies the ${unchecked.join(", ")} bundle; ` +
+        `build with --bundles deb, or name only bundles this script checks.`,
+    )
   const product = { productName: config.productName }
   if (includesBundle(selected, config.bundle.targets, "deb"))
     verifyDeb(packageBuiltIn(bundle, patterns.deb, startedAt), product)
