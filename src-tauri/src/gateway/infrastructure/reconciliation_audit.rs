@@ -1839,7 +1839,10 @@ fn identity(gateway: &ReconciliationIncarnation) -> Value {
 mod tests {
     use super::*;
     use crate::gateway::{
-        application::{GatewayReconciliationEffectTiming, GatewayReconciliationIntentDelivery},
+        application::{
+            GatewayReconciliationEffectTiming, GatewayReconciliationIntentDelivery,
+            SystemMonotonicClock,
+        },
         domain::value_objects::{ReconciliationHistoryFact, SystemdInvocationId},
     };
     use std::{
@@ -2073,10 +2076,7 @@ mod tests {
     fn real_file_journal_accepts_and_restores_exact_systemd_publication_cleanup() {
         let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let root = temporary.path().join("Nessa");
-        let clock = Arc::new(AdvancingClock {
-            now: Mutex::new(Instant::now()),
-            waits: AtomicUsize::new(0),
-        });
+        let clock = Arc::new(SystemMonotonicClock);
         let request = GatewayReconciliationRequest::new(
             ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000501".into())
                 .unwrap(),
@@ -2266,10 +2266,7 @@ mod tests {
                 let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
                 let audit = Arc::new(FileReconciliationAudit::new(
                     Some(temporary.path().join("Nessa")),
-                    Arc::new(AdvancingClock {
-                        now: Mutex::new(Instant::now()),
-                        waits: AtomicUsize::new(0),
-                    }),
+                    Arc::new(SystemMonotonicClock),
                 ));
                 let request = GatewayReconciliationRequest::new(
                     ReconciliationCorrelation::parse(format!(
@@ -2468,6 +2465,47 @@ mod tests {
         assert_eq!(clock.now(), start + Duration::from_millis(100));
     }
 
+    /// A child spawned by any thread briefly shares every open description,
+    /// close-on-exec or not, until its exec closes them. The lock survives its
+    /// owner's close for that window, so reacquisition has to wait it out.
+    #[test]
+    fn stage_lock_waits_for_an_inherited_description_to_close() {
+        struct ReleasingClock {
+            inherited: Mutex<Option<File>>,
+            waits: AtomicUsize,
+        }
+
+        impl MonotonicClock for ReleasingClock {
+            fn now(&self) -> Instant {
+                Instant::now()
+            }
+
+            fn wait(&self, _duration: Duration) {
+                self.waits.fetch_add(1, Ordering::SeqCst);
+                self.inherited.lock().unwrap().take();
+            }
+        }
+
+        let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = temporary.path().join("Nessa");
+        let journal = root.join(DIRECTORY);
+        nessa_local_storage::create_private_directory_path(&root).unwrap();
+        nessa_local_storage::create_private_directory_path(&journal).unwrap();
+        let directory = PrivateDirectory::open_path(&root, &journal).unwrap();
+        let clock = ReleasingClock {
+            inherited: Mutex::new(None),
+            waits: AtomicUsize::new(0),
+        };
+        let owner = acquire_lock(&directory, None, &clock).unwrap();
+        *clock.inherited.lock().unwrap() = Some(owner.try_clone().unwrap());
+        drop(owner);
+
+        assert!(acquire_lock(&directory, None, &clock).is_ok());
+        // Children spawned by concurrent tests can add further inherited copies.
+        assert!(clock.waits.load(Ordering::SeqCst) >= 1);
+        assert!(clock.inherited.lock().unwrap().is_none());
+    }
+
     #[test]
     fn acknowledgement_requires_each_directory_sync_and_exact_retry_can_recover() {
         let record = stored(
@@ -2559,10 +2597,7 @@ mod tests {
     fn contradictory_outcome_is_classified_as_rejected_by_the_file_adapter() {
         let temporary = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let root = temporary.path().join("Nessa");
-        let clock = Arc::new(AdvancingClock {
-            now: Mutex::new(Instant::now()),
-            waits: AtomicUsize::new(0),
-        });
+        let clock = Arc::new(SystemMonotonicClock);
         let request = GatewayReconciliationRequest::new(
             ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000101".into())
                 .unwrap(),
