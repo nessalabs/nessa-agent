@@ -39,7 +39,9 @@ use nessa_sdk::{
             ReviewDeclineStage,
         },
         prompts::{PromptText, UserMessage},
-        questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
+        questions::{
+            AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
+        },
         sessions::{ExecutionSessionId, ProviderContext, SessionId},
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
@@ -1410,26 +1412,33 @@ fn a_retried_submission_does_not_hide_the_ask_its_turn_is_waiting_on() {
     assert_eq!(offers_only_running_asks(&mut projection), 1);
 }
 
-/// An ask of `options` options, each carrying `bytes` of label.
-fn large_ask(execution: &str, question: &str, options: usize, bytes: usize) -> ExecutionEvent {
+/// An ask as hard to carry as its text allows: every string full of the
+/// characters a text format escapes, under the longest identities.
+fn escaped_ask(execution: &str, question: &str, options: usize, bytes: usize) -> ExecutionEvent {
+    let text = |length: usize| "\"\\\n\t".repeat(length.div_ceil(4))[..length].to_owned();
     ExecutionEvent::new(
         ExecutionId::new(execution).unwrap(),
         ExecutionUpdate::QuestionAsked {
             id: QuestionId::new(question).unwrap(),
             question: AgentQuestion::new(
-                "Which?",
+                text(bytes),
                 vec![Question::new(
-                    "question_0",
-                    "Which?",
-                    None,
-                    AnswerShape::One,
+                    "k".repeat(64),
+                    text(bytes),
+                    Some(text(bytes)),
+                    AnswerShape::Many,
                     (0..options)
                         .map(|index| {
-                            AnswerOption::new(format!("v{index}"), "l".repeat(bytes), None).unwrap()
+                            AnswerOption::new(
+                                format!("{index}{}", text(bytes)),
+                                text(bytes),
+                                Some(text(bytes)),
+                            )
+                            .unwrap()
                         })
                         .collect(),
-                    None,
-                    false,
+                    Some("f".repeat(64)),
+                    true,
                 )
                 .unwrap()],
             )
@@ -1437,34 +1446,60 @@ fn large_ask(execution: &str, question: &str, options: usize, bytes: usize) -> E
         },
     )
 }
-
-#[test]
-fn an_ask_too_large_to_share_the_view_is_not_offered() {
-    // A valid ask can carry far more text than the view's budget. Offered, it
-    // took the view past its bound on every read; it is held to the bound a
-    // review is held to instead, and the view says something was left out.
-    let mut projection = projection();
-    projection.event(&large_ask("execution", "1", 32, 1024));
-    let view = projection.read();
-    assert!(view.questions.is_empty());
-    assert!(view.truncated);
+fn cost(event: &ExecutionEvent) -> usize {
+    let ExecutionUpdate::QuestionAsked { question, .. } = event.update() else {
+        unreachable!()
+    };
+    question.carrying_cost()
 }
 
 #[test]
-fn the_view_stays_within_its_bound_whatever_the_asks_hold() {
-    // Eight asks each just inside the per-ask bound still overflow the view
-    // together. The view gives up asks whole before it breaks its bound.
-    let mut projection = projection();
-    for index in 0..8 {
-        let execution = format!("execution-{index}");
-        projection.event(&large_ask(&execution, "1", 14, 1024));
+fn an_ask_is_never_written_larger_than_it_costs_to_carry() {
+    // The binding admits asks by their carrying cost and the view relies on
+    // it, so the cost must bound what the view actually writes — escapes, the
+    // longest identities and all.
+    let execution = "e".repeat(256);
+    for (options, bytes) in [(1, 1), (4, 64), (32, 16), (2, 1000)] {
+        let mut projection = projection();
+        let ask = escaped_ask(&execution, &"9".repeat(20), options, bytes);
+        projection.event(&ask);
+        let view = projection.read();
+        assert_eq!(view.questions.len(), 1);
+        let written = serde_json::to_vec(&view.questions[0]).unwrap().len();
+        assert!(
+            written <= cost(&ask),
+            "{written} > {} for {options}x{bytes}",
+            cost(&ask)
+        );
     }
+}
+
+#[test]
+fn every_ask_the_binding_admits_is_offered_whole_within_the_view() {
+    // Eight asks whose costs together fill the binding's budget, beside a
+    // transcript far larger than the view: every ask is still offered, and the
+    // view keeps its bound by giving up everything else first.
+    let mut projection = projection();
+    for index in 0..30 {
+        let execution = format!("chat-{index}");
+        projection.event(&ExecutionEvent::new(
+            ExecutionId::new(execution.as_str()).unwrap(),
+            ExecutionUpdate::Message(MessageChunk::text("x".repeat(4000))),
+        ));
+    }
+    let mut total = 0;
+    for index in 0..8 {
+        let ask = escaped_ask(&format!("asking-{index}"), "1", 3, 145);
+        total += cost(&ask);
+        projection.event(&ask);
+    }
+    assert!(total <= MAX_OPEN_ASK_COST, "{total}");
+    assert!(
+        total > MAX_OPEN_ASK_COST * 9 / 10,
+        "the budget is nearly spent: {total}"
+    );
     let view = projection.read();
     let bytes = serde_json::to_vec(&view).unwrap().len();
     assert!(bytes <= 60_000, "{bytes} bytes");
-    assert!(view.truncated);
-    assert!(
-        !view.questions.is_empty(),
-        "as many as fit are still offered"
-    );
+    assert_eq!(view.questions.len(), 8, "no admitted ask is given up");
 }

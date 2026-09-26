@@ -6,10 +6,11 @@ use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::questions::{
-    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason,
-    QuestionResponse,
+    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionChoice, QuestionId,
+    QuestionRefusalReason, QuestionResponse,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
+use crate::domain::agent_execution::ExecutionError;
 
 /// Observed delivery stage of an already selected permission answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,31 +159,43 @@ pub struct QuestionAnswerRecord {
     delivery: PermissionAnswerDelivery,
 }
 impl QuestionAnswerRecord {
-    /// Record that `actor` answered `question_id` — with `answer`, or declined
-    /// it where `answer` is `None`.
+    /// Record that `actor` answered `question_id` with `choices`, or declined
+    /// it where `choices` is `None`.
     ///
     /// `actor` is who answered, verified by the host that took the answer;
     /// leaving it out of an explicit answer would lose the one fact an audit
-    /// of it exists to keep. `question` is the ask as it was asked, which the
-    /// answer was validated against.
+    /// of it exists to keep. `choices` are validated here against `question`,
+    /// the ask as it was asked, so the record can only ever hold an answer to
+    /// the question it holds. Returns the domain's reason when they disagree.
     pub fn chosen(
         session_id: ExecutionSessionId,
         execution_id: ExecutionId,
         question_id: QuestionId,
         question: AgentQuestion,
-        answer: Option<AcceptedAnswer>,
+        choices: Option<Vec<QuestionChoice>>,
         actor: ActionContext,
         delivery: PermissionAnswerDelivery,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ExecutionError> {
+        let response = match choices {
+            Some(choices) => QuestionResponse::Answered(AcceptedAnswer::new(&question, choices)?),
+            None => QuestionResponse::Declined,
+        };
+        Ok(Self {
             session_id,
             execution_id,
             question_id,
             question,
-            response: answer.map_or(QuestionResponse::Declined, QuestionResponse::Answered),
+            response,
             actor: Some(actor),
             delivery,
-        }
+        })
+    }
+    /// The same decision at a later stage of its delivery.
+    ///
+    /// Everything but `delivery` is kept, so the written record of an answer
+    /// can only be the record of the answer that was selected.
+    pub fn with_delivery(self, delivery: PermissionAnswerDelivery) -> Self {
+        Self { delivery, ..self }
     }
     /// Record that `question_id` ended unanswered, for `cause`.
     ///

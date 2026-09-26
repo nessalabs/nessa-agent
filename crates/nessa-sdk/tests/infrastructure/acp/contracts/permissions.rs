@@ -1328,9 +1328,22 @@ async fn an_ask_that_cannot_be_put_to_anybody_is_refused_on_the_record() {
     for (mode, reason) in [
         ("ask-unsupported", QuestionRefusalReason::Unsupported),
         ("ask-unreadable", QuestionRefusalReason::UnreadableQuestion),
+        // Valid, and more than a surface could show: admitted, nobody could
+        // ever have answered it.
+        ("ask-too-large", QuestionRefusalReason::TooLarge),
     ] {
         let audit = Arc::new(RecordingAudit::default());
-        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        // Room for an ask that is valid on the wire and still too large to
+        // show: its carrying cost runs well ahead of its frame.
+        let (root, mut config, model) = test_acp_configuration(mode, 16);
+        config.max_incoming_frame_bytes = 64 * 1024;
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
         let mut opened = binding
             .open(ProviderOpenRequest::without_startup_control(None))
             .await

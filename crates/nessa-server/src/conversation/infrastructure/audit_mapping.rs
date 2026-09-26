@@ -243,6 +243,7 @@ fn refused(record: &QuestionRefusalRecord) -> Value {
         "refusalId":record.id().as_str(),
         "reason":match record.reason() {
             QuestionRefusalReason::TooManyOpen => "too_many_open",
+            QuestionRefusalReason::TooLarge => "too_large",
             QuestionRefusalReason::Unsupported => "unsupported",
             QuestionRefusalReason::UnreadableQuestion => "unreadable_question",
             QuestionRefusalReason::SessionEnding => "session_ending",

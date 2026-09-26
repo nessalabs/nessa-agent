@@ -14,7 +14,7 @@ mod refusal;
 pub use answer::{AcceptedAnswer, QuestionCancellation, QuestionChoice, QuestionResponse};
 pub use identity::QuestionId;
 pub use question::{
-    AgentQuestion, AnswerOption, AnswerShape, Question, MAX_KEY_BYTES, MAX_OPEN_QUESTIONS,
-    MAX_OPTIONS, MAX_QUESTIONS, MAX_TEXT_BYTES,
+    AgentQuestion, AnswerOption, AnswerShape, Question, MAX_KEY_BYTES, MAX_OPEN_ASK_COST,
+    MAX_OPEN_QUESTIONS, MAX_OPTIONS, MAX_QUESTIONS, MAX_TEXT_BYTES,
 };
 pub use refusal::QuestionRefusalReason;

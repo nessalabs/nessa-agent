@@ -299,7 +299,7 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
-        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel"):
+        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel", "ask-too-large"):
             def ask(ask_id):
                 send({"id": ask_id, "method": "elicitation/create", "params": {
                     "sessionId": session, "mode": "form", "message": "Which environment?",
@@ -325,6 +325,16 @@ for line in sys.stdin:
                     "sessionId": session, "mode": "form", "message": "Which environment?",
                     "requestedSchema": {"type": "object", "properties": {
                         "question_0": {"type": "string"}}}}})
+            elif mode == "ask-too-large":
+                # Every count within bounds, and far more than a surface can
+                # show at once: twelve questions of thirty-two long options.
+                properties = {}
+                for index in range(12):
+                    properties[f"question_{index}"] = {"type": "string", "description": "Which?",
+                        "oneOf": [{"const": f"v{option}", "title": "o" * 40} for option in range(32)]}
+                send({"id": "u", "method": "elicitation/create", "params": {
+                    "sessionId": session, "mode": "form", "message": "Pick everything",
+                    "requestedSchema": {"type": "object", "properties": properties}}})
             elif mode == "ask-after-cancel":
                 # One ask now; another once the session is being stopped.
                 ask("first")
@@ -463,7 +473,7 @@ for line in sys.stdin:
             pending = None
     elif mode == "permission-pair" and msg.get("id") in ("first-review", "second-review"):
         record(msg["id"] + "-outcome", json.dumps(msg["result"]["outcome"]))
-    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel") and "result" in msg:
+    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate", "ask-unreadable", "ask-after-cancel", "ask-too-large") and "result" in msg:
         # Every answer, in the order it arrived, with its id exactly as sent —
         # `1` and `"1"` are different requests and must stay different here.
         seen = root / "answers"
@@ -474,7 +484,7 @@ for line in sys.stdin:
             (mode == "asks-collide" and answered == 2)
             or (mode == "ask-withdrawn")
             or (mode == "asks-overflow" and msg["id"] == "a8")
-            or (mode in ("ask-unsupported", "ask-unreadable"))
+            or (mode in ("ask-unsupported", "ask-unreadable", "ask-too-large"))
         )
         if finished and pending is not None:
             text("done asking")

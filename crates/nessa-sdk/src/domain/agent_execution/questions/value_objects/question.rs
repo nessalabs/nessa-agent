@@ -25,6 +25,20 @@ pub const MAX_TEXT_BYTES: usize = 1024;
 /// published contract: a key this accepts and the panel cannot display would be
 /// a question nobody could answer.
 pub const MAX_KEY_BYTES: usize = 256;
+/// The most every open ask together may cost to carry, by
+/// [`AgentQuestion::carrying_cost`].
+///
+/// Open asks are shown all at once, and a surface has a fixed budget to show
+/// them in. An ask admitted beyond it could not be shown whole, and an ask that
+/// cannot be shown cannot be answered: the agent would wait on it for good. So
+/// the binding that admits asks refuses one that would take the open asks past
+/// this, and the view that shows them relies on it never being exceeded.
+pub const MAX_OPEN_ASK_COST: usize = 40_000;
+/// What each ask, question and option costs to carry beyond its own text: the
+/// names and punctuation that frame it, and the identities beside an ask.
+const ASK_FRAMING_BYTES: usize = 512;
+const QUESTION_FRAMING_BYTES: usize = 128;
+const OPTION_FRAMING_BYTES: usize = 64;
 
 /// How an answer to one question is shaped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,6 +281,38 @@ impl AgentQuestion {
         &self.questions
     }
 
+    /// What this ask costs a surface to carry, in bytes.
+    ///
+    /// Every byte of its text counts twice, because a text format may escape
+    /// it — a quote or a backslash, or one of the line breaks and tabs that are
+    /// the only control characters an ask may hold, each take two bytes — and
+    /// the framing of the ask, each question and each option is counted at a
+    /// fixed allowance. It is an upper bound on what showing the ask takes, not
+    /// an estimate, which is what lets [`MAX_OPEN_ASK_COST`] be relied on.
+    pub fn carrying_cost(&self) -> usize {
+        let text = |value: &str| value.len().saturating_mul(2);
+        self.questions.iter().fold(
+            ASK_FRAMING_BYTES.saturating_add(text(&self.message)),
+            |total, question| {
+                let own = QUESTION_FRAMING_BYTES
+                    .saturating_add(text(&question.key))
+                    .saturating_add(text(&question.prompt))
+                    .saturating_add(question.header.as_deref().map_or(0, text))
+                    .saturating_add(question.free_text_key.as_deref().map_or(0, text));
+                question
+                    .options
+                    .iter()
+                    .fold(total.saturating_add(own), |total, option| {
+                        total
+                            .saturating_add(OPTION_FRAMING_BYTES)
+                            .saturating_add(text(&option.value))
+                            .saturating_add(text(&option.label))
+                            .saturating_add(option.description.as_deref().map_or(0, text))
+                    })
+            },
+        )
+    }
+
     /// Owned bytes this ask retains, for the budget that holds it while a turn
     /// waits. Spare capacity is discarded at construction, so this is the text.
     pub fn payload_bytes(&self) -> usize {
@@ -279,9 +325,14 @@ impl AgentQuestion {
 }
 
 /// Bound and validate one retained identity, which every layer bounds alike.
+///
+/// An identity holds no control character at all: it is echoed back, not read.
 fn identity(value: String, field: &'static str) -> Result<Box<str>, ExecutionError> {
     if value.trim().is_empty() {
         return Err(ExecutionError::EmptyValue(field));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(ExecutionError::ControlCharacterInQuestion(field));
     }
     if value.len() > MAX_KEY_BYTES {
         return Err(ExecutionError::ValueTooLong {
@@ -293,9 +344,19 @@ fn identity(value: String, field: &'static str) -> Result<Box<str>, ExecutionErr
 }
 
 /// Bound and validate one piece of retained text.
+///
+/// Line breaks and tabs are text a person reads; any other control character
+/// is not, cannot be shown, and would cost several bytes to carry for each
+/// one — which is what bounds [`AgentQuestion::carrying_cost`] from above.
 fn text(value: String, field: &'static str) -> Result<Box<str>, ExecutionError> {
     if value.trim().is_empty() {
         return Err(ExecutionError::EmptyValue(field));
+    }
+    if value
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(ExecutionError::ControlCharacterInQuestion(field));
     }
     if value.len() > MAX_TEXT_BYTES {
         return Err(ExecutionError::ValueTooLong {

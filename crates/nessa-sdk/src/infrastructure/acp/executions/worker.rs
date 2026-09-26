@@ -53,8 +53,8 @@ use crate::domain::agent_execution::permissions::{
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
-    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason,
-    QuestionResponse, MAX_OPEN_QUESTIONS,
+    AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse,
+    MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -2445,6 +2445,24 @@ impl<P: AcpProfile> Worker<P> {
         // which are different requests and the same text, and a provider may
         // reuse an id once its request is answered. An identity an answer names
         // has to outlive both, so this mints its own, as a review does.
+        // What the open asks cost together is bounded where the view relies on
+        // it: an ask that would take them past it could not be shown whole,
+        // and so could never be answered. Refused now, the agent hears so.
+        let open_cost = self
+            .questions
+            .values()
+            .map(|open| open.question.carrying_cost())
+            .fold(question.carrying_cost(), usize::saturating_add);
+        if open_cost > MAX_OPEN_ASK_COST {
+            return self
+                .refuse_question(
+                    execution,
+                    wire_id,
+                    QuestionRefusalReason::TooLarge,
+                    response_deadline,
+                )
+                .await;
+        }
         let id = self.mint_question_id()?;
         let execution_id = self
             .active
@@ -2503,35 +2521,30 @@ impl<P: AcpProfile> Worker<P> {
             )));
             return Ok(());
         }
-        let response = match answer.choices {
-            Some(choices) => match AcceptedAnswer::new(&asked, choices) {
-                Ok(accepted) => QuestionResponse::Answered(accepted),
-                Err(error) => {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
-                        AgentError::InvalidInput(error.to_string()),
-                        ProviderSessionState::Usable,
-                    )));
-                    return Ok(());
-                }
-            },
-            None => QuestionResponse::Declined,
+        // The answer is validated where it is recorded, against the ask it is
+        // recorded beside, so an answer this refuses never becomes evidence and
+        // one it accepts can only be an answer to that ask.
+        let selected = match QuestionAnswerRecord::chosen(
+            execution.id().clone(),
+            answer.execution_id.clone(),
+            answer.id.clone(),
+            asked.clone(),
+            answer.choices,
+            answer.actor.clone(),
+            PermissionAnswerDelivery::Selected,
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::new(
+                    AgentError::InvalidInput(error.to_string()),
+                    ProviderSessionState::Usable,
+                )));
+                return Ok(());
+            }
         };
-
-        let session_id = execution.id().clone();
-        let chosen = match &response {
-            QuestionResponse::Answered(accepted) => Some(accepted.clone()),
-            _ => None,
-        };
+        let response = selected.response().clone();
         let record = |delivery| {
-            ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::chosen(
-                session_id.clone(),
-                answer.execution_id.clone(),
-                answer.id.clone(),
-                asked.clone(),
-                chosen.clone(),
-                answer.actor.clone(),
-                delivery,
-            ))
+            ExecutionAuditRecord::QuestionAnswered(selected.clone().with_delivery(delivery))
         };
         // The decision is evidence before the wire sees it, and an unrecordable
         // decision is not sent: an answered review returns here rather than

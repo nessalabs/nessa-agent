@@ -10,6 +10,10 @@ pub enum QuestionRefusalReason {
     /// As many asks were already open as a surface can show; one more would
     /// have been admitted where nobody could see it, let alone answer it.
     TooManyOpen,
+    /// The ask, beside those already open, costs more to carry than a surface
+    /// can show at once. Admitted, it could not be shown whole, and an ask
+    /// that cannot be shown cannot be answered.
+    TooLarge,
     /// The ask is a kind this binding does not put to people — a page to visit,
     /// or a form that requires something only the answerer could write.
     Unsupported,

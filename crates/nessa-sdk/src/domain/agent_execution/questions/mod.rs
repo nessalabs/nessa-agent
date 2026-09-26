@@ -11,5 +11,5 @@ pub mod value_objects;
 pub use value_objects::{
     AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation,
     QuestionChoice, QuestionId, QuestionRefusalReason, QuestionResponse, MAX_KEY_BYTES,
-    MAX_OPEN_QUESTIONS, MAX_OPTIONS, MAX_QUESTIONS, MAX_TEXT_BYTES,
+    MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS, MAX_OPTIONS, MAX_QUESTIONS, MAX_TEXT_BYTES,
 };

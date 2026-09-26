@@ -27,10 +27,11 @@ use nessa_sdk::domain::agent_execution::{
         ReviewDeclineReason,
     },
     questions::{
-        AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation,
-        QuestionChoice, QuestionId, QuestionRefusalReason,
+        AgentQuestion, AnswerOption, AnswerShape, Question, QuestionCancellation, QuestionChoice,
+        QuestionId, QuestionRefusalReason,
     },
     tools::{ToolCallId, ToolCallUpdate},
+    ExecutionError,
 };
 use std::fs;
 struct TestClock;
@@ -529,22 +530,30 @@ fn deploy_question() -> AgentQuestion {
 fn audit_maps_an_answer_with_its_answerer_and_the_ask_it_answered() {
     // The ask travels with the answer, so the record alone shows the choice
     // was one the question offered, and who chose it is the verified caller.
-    let asked = deploy_question();
-    let answer = AcceptedAnswer::new(
-        &asked,
-        vec![QuestionChoice::new("question_0", vec!["staging".into()], Some("eu".into())).unwrap()],
-    )
-    .unwrap();
-    let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
+    let chosen = |asked: AgentQuestion, value: &str| {
         QuestionAnswerRecord::chosen(
             ExecutionSessionId::new("session").unwrap(),
             ExecutionId::new("run").unwrap(),
             QuestionId::new("1").unwrap(),
             asked,
-            Some(answer),
+            Some(vec![QuestionChoice::new(
+                "question_0",
+                vec![value.into()],
+                Some("eu".into()),
+            )
+            .unwrap()]),
             actor(),
             PermissionAnswerDelivery::Written,
-        ),
+        )
+    };
+    // A choice the recorded ask never offered cannot be recorded beside it,
+    // whatever other question it might have been checked against.
+    assert_eq!(
+        chosen(deploy_question(), "production").unwrap_err(),
+        ExecutionError::UnofferedAnswer
+    );
+    let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
+        chosen(deploy_question(), "staging").unwrap(),
     ));
     assert_eq!(value["response"]["kind"], "answered");
     assert_eq!(value["response"]["choices"][0]["values"][0], "staging");
