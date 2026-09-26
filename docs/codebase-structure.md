@@ -524,7 +524,8 @@ independently of whether that turn contains text.
   service. A Linux build bundles that prepared resource into a `.deb`, exactly
   what a Linux release builds, and refuses `--bundles` and `--no-bundle` before
   compiling. `verify-linux-bundle.mjs` checks the runtime inside the `.deb` this
-  build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`. `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
+  build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`.
+  `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
   the release build against. `release-assets.mjs` names what each release
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
