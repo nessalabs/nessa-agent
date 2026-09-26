@@ -5,13 +5,14 @@
 //! ```
 //! Arrows mean durable writes. One retained session validates the whole stage,
 //! holds its lock, and orders every record for its attempt.
+use super::startup_failure::validated_authority;
 use crate::gateway::{
     application::{
-        GatewayError, GatewayLifecycleRecovery, GatewayLifecycleRecoveryStep,
-        GatewayReconciliationAttempt, GatewayReconciliationAudit, GatewayReconciliationEffect,
-        GatewayReconciliationIntent, GatewayReconciliationJournalSession,
-        GatewayReconciliationOutcome, GatewayReconciliationOutcomeError,
-        GatewayReconciliationRequest, MonotonicClock,
+        GatewayError, GatewayLifecycleRecovery, GatewayLifecycleRecoveryAuthority,
+        GatewayLifecycleRecoveryStep, GatewayReconciliationAttempt, GatewayReconciliationAudit,
+        GatewayReconciliationEffect, GatewayReconciliationIntent,
+        GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
+        GatewayReconciliationOutcomeError, GatewayReconciliationRequest, MonotonicClock,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -20,8 +21,8 @@ use crate::gateway::{
         LifecycleRecordKind, LifecycleRecordPayload, ReconciliationCause,
         ReconciliationCleanupDecision, ReconciliationCorrelation, ReconciliationEvidence,
         ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget,
-        SystemdJobAttempt, SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity,
-        SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
+        StartupFailureRecoveryAuthority, SystemdJobAttempt, SystemdJobMode, SystemdJobOperation,
+        SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory, PrivateFileType};
@@ -228,7 +229,7 @@ impl StoredRecord {
 
 fn validate_payload_shape(kind: &str, payload: &Value) -> Result<(), GatewayError> {
     let expected: &[&str] = match record_kind(kind) {
-        Some(LifecycleRecordKind::Intent) => &["origin", "target", "before"],
+        Some(LifecycleRecordKind::Intent) => &["origin", "target", "before", "startupFailure"],
         Some(LifecycleRecordKind::JoinedRequest) => &["originRequestCorrelation", "joinedRequest"],
         Some(LifecycleRecordKind::EffectPlan) => {
             &["planId", "expectedBefore", "target", "primary", "cleanup"]
@@ -292,6 +293,27 @@ fn parse_target(value: &Value) -> Result<ReconciliationTarget, GatewayError> {
         string(value, "serviceGeneration")?,
     )
     .map_err(|error| invalid_record(&error.to_string()))
+}
+
+fn parse_startup_failure(
+    value: &Value,
+) -> Result<Option<StartupFailureRecoveryAuthority>, GatewayError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = object(value, &["target", "reason", "exitCode", "processId"])?;
+    let target = parse_target(&value["target"])?;
+    let exit_code = value["exitCode"]
+        .as_u64()
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| invalid_record("startup failure exit code must be a byte"))?;
+    let process_id = value["processId"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| invalid_record("startup failure process ID must be a u32"))?;
+    validated_authority(string(value, "reason")?, exit_code, target, process_id)
+        .map(Some)
+        .ok_or_else(|| invalid_record("startup failure authority is not recordable"))
 }
 
 fn parse_identity(value: &Value) -> Result<ReconciliationIncarnation, GatewayError> {
@@ -638,6 +660,7 @@ fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError
             "targetArtifactPresent",
             "systemd",
             "systemdState",
+            "retainedTarget",
         ],
     )?;
     let version = value["version"]
@@ -647,6 +670,11 @@ fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError
         .as_bool()
         .ok_or_else(|| invalid_record("invalid target artifact fact"))?;
     let incarnation = optional_identity(&value["incarnation"])?;
+    let retained_target = if value["retainedTarget"].is_null() {
+        None
+    } else {
+        Some(parse_target(&value["retainedTarget"])?)
+    };
     let systemd_state = if value["systemdState"].is_null() {
         None
     } else {
@@ -656,6 +684,19 @@ fn parse_observation(value: &Value) -> Result<LifecycleObservation, GatewayError
         )
     };
     if value["systemd"].is_null() {
+        if let Some(retained) = retained_target {
+            if incarnation.is_none()
+                && !artifact
+                && systemd_state == Some(SystemdUnitState::Inactive)
+            {
+                return Ok(LifecycleObservation::with_retained_systemd_target(
+                    version, retained,
+                ));
+            }
+            return Err(invalid_record(
+                "retained target contradicts its observation",
+            ));
+        }
         return match systemd_state {
             Some(state) => LifecycleObservation::with_systemd_state(version, artifact, state)
                 .map_err(|error| invalid_record(&error.to_string())),
@@ -803,7 +844,7 @@ fn domain_record(stored: &StoredRecord) -> Result<LifecycleRecord, GatewayError>
     let payload = object(
         &stored.payload,
         match record_kind(&stored.kind) {
-            Some(LifecycleRecordKind::Intent) => &["origin", "target", "before"],
+            Some(LifecycleRecordKind::Intent) => &["origin", "target", "before", "startupFailure"],
             Some(LifecycleRecordKind::JoinedRequest) => {
                 &["originRequestCorrelation", "joinedRequest"]
             }
@@ -826,6 +867,7 @@ fn domain_record(stored: &StoredRecord) -> Result<LifecycleRecord, GatewayError>
                 initiator,
                 target: parse_target(&payload["target"])?,
                 before: optional_identity(&payload["before"])?,
+                startup_failure: parse_startup_failure(&payload["startupFailure"])?,
             }
         }
         LifecycleRecordKind::JoinedRequest => {
@@ -1026,6 +1068,7 @@ fn unresolved_recovery(
             initiator,
             target,
             before,
+            startup_failure,
         } = chain[0].payload()
         else {
             return Err(GatewayError::Registration(
@@ -1050,8 +1093,11 @@ fn unresolved_recovery(
         return Ok(Some((
             GatewayLifecycleRecovery::new(
                 attempt,
-                target.clone(),
-                before.clone(),
+                GatewayLifecycleRecoveryAuthority::new(
+                    target.clone(),
+                    before.clone(),
+                    startup_failure.clone(),
+                ),
                 has_effect_plan,
                 history.latest_observation().cloned(),
                 pending_step,
@@ -1382,11 +1428,13 @@ impl GatewayReconciliationJournalSession for FileJournalSession {
                 initiator: intent.attempt().origin().evidence().initiator(),
                 target: intent.target().clone(),
                 before: intent.before().cloned(),
+                startup_failure: intent.startup_failure().cloned(),
             },
             json!({
                 "origin": request(intent.attempt().origin()),
                 "target": target(intent.target()),
                 "before": intent.before().map(identity),
+                "startupFailure": intent.startup_failure().map(startup_failure),
             }),
         )
         .map_err(JournalAppendError::into_gateway_error)?;
@@ -1747,6 +1795,7 @@ fn observation(state: &LifecycleObservation) -> Value {
         "targetArtifactPresent":state.target_artifact_present(),
         "systemd":state.systemd().map(systemd_runtime),
         "systemdState":state.systemd_state().map(SystemdUnitState::as_str),
+        "retainedTarget":state.retained_target().map(target),
     })
 }
 
@@ -1836,6 +1885,15 @@ fn target(target: &ReconciliationTarget) -> Value {
     })
 }
 
+fn startup_failure(authority: &StartupFailureRecoveryAuthority) -> Value {
+    json!({
+        "target": target(authority.target()),
+        "reason": authority.reason(),
+        "exitCode": authority.exit_code(),
+        "processId": authority.process_id(),
+    })
+}
+
 fn identity(gateway: &ReconciliationIncarnation) -> Value {
     json!({
         "service": gateway.target().service(),
@@ -1884,6 +1942,7 @@ mod tests {
             "targetArtifactPresent":false,
             "systemd":null,
             "systemdState":null,
+            "retainedTarget":null,
         });
         let payload = match kind {
             LifecycleRecordKind::Intent => json!({
@@ -1898,6 +1957,7 @@ mod tests {
                     "serviceGeneration":"b".repeat(64),
                 },
                 "before":null,
+                "startupFailure":null,
             }),
             LifecycleRecordKind::EffectPlan => json!({
                 "planId":"stage-runtime",
@@ -2354,6 +2414,35 @@ mod tests {
             stored(second, 0, LifecycleRecordKind::Intent),
         ];
         assert!(validate_stage_records(&records).is_err());
+    }
+
+    #[test]
+    fn stored_startup_failure_authority_reuses_the_shared_validator() {
+        let mut base = stored(
+            "00000000-0000-4000-8000-000000000001",
+            0,
+            LifecycleRecordKind::Intent,
+        );
+        let target = base.payload["target"].clone();
+        let valid = json!({
+            "target":target,
+            "reason":"configuration",
+            "exitCode":20,
+            "processId":41,
+        });
+        base.payload["startupFailure"] = valid.clone();
+        assert!(domain_record(&base).is_ok());
+        for invalid in [
+            json!({"target":valid["target"], "reason":"stoppedOnRequest", "exitCode":31, "processId":41}),
+            json!({"target":valid["target"], "reason":"unknown", "exitCode":99, "processId":41}),
+            json!({"target":valid["target"], "reason":"configuration", "exitCode":28, "processId":41}),
+            json!({"target":valid["target"], "reason":"configuration", "exitCode":20}),
+            json!({"target":valid["target"], "reason":"configuration", "exitCode":20, "processId":41, "extra":true}),
+        ] {
+            let mut stored = base.clone();
+            stored.payload["startupFailure"] = invalid;
+            assert!(domain_record(&stored).is_err());
+        }
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::gateway::domain::value_objects::{
     ReconciliationIntentDeliveryRecord, ReconciliationIntentRecord,
     ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
     ReconciliationRejectedReport, ReconciliationRequestRecord, ReconciliationTarget, SearchPath,
-    SearchPathError, SystemdJobAttempt, SystemdRuntimeObservation,
+    SearchPathError, StartupFailureRecoveryAuthority, SystemdJobAttempt, SystemdRuntimeObservation,
 };
 use std::{
     error::Error,
@@ -770,6 +770,22 @@ impl GatewayReconciliationIntent {
         Ok(Self { record, attempt })
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn with_startup_failure(
+        attempt: GatewayReconciliationAttempt,
+        target: ReconciliationTarget,
+        authority: StartupFailureRecoveryAuthority,
+    ) -> Result<Self, GatewayError> {
+        let record = ReconciliationIntentRecord::with_startup_failure(
+            attempt.record().clone(),
+            target,
+            None,
+            Some(authority),
+        )
+        .map_err(|error| GatewayError::Registration(error.to_string()))?;
+        Ok(Self { record, attempt })
+    }
+
     #[cfg_attr(
         all(not(any(target_os = "macos", target_os = "linux")), not(test)),
         allow(
@@ -801,6 +817,11 @@ impl GatewayReconciliationIntent {
     )]
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.record.before()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn startup_failure(&self) -> Option<&StartupFailureRecoveryAuthority> {
+        self.record.startup_failure()
     }
 
     pub(crate) fn record(&self) -> &ReconciliationIntentRecord {
@@ -1073,12 +1094,32 @@ pub trait GatewayReconciliationJournalSession: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayLifecycleRecovery {
     attempt: GatewayReconciliationAttempt,
-    target: ReconciliationTarget,
-    before: Option<ReconciliationIncarnation>,
+    authority: GatewayLifecycleRecoveryAuthority,
     has_effect_plan: bool,
     latest_observation: Option<LifecycleObservation>,
     pending_step: Option<GatewayLifecycleRecoveryStep>,
     pending_observation_source: Option<LifecycleObservationSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GatewayLifecycleRecoveryAuthority {
+    target: ReconciliationTarget,
+    before: Option<ReconciliationIncarnation>,
+    startup_failure: Option<StartupFailureRecoveryAuthority>,
+}
+
+impl GatewayLifecycleRecoveryAuthority {
+    pub(crate) fn new(
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+        startup_failure: Option<StartupFailureRecoveryAuthority>,
+    ) -> Self {
+        Self {
+            target,
+            before,
+            startup_failure,
+        }
+    }
 }
 
 /// Exact persisted effect boundary awaiting completion or observation.
@@ -1141,8 +1182,7 @@ impl GatewayLifecycleRecoveryStep {
 impl GatewayLifecycleRecovery {
     pub(crate) fn new(
         attempt: GatewayReconciliationAttempt,
-        target: ReconciliationTarget,
-        before: Option<ReconciliationIncarnation>,
+        authority: GatewayLifecycleRecoveryAuthority,
         has_effect_plan: bool,
         latest_observation: Option<LifecycleObservation>,
         pending_step: Option<GatewayLifecycleRecoveryStep>,
@@ -1150,8 +1190,7 @@ impl GatewayLifecycleRecovery {
     ) -> Self {
         Self {
             attempt,
-            target,
-            before,
+            authority,
             has_effect_plan,
             latest_observation,
             pending_step,
@@ -1164,11 +1203,16 @@ impl GatewayLifecycleRecovery {
     }
 
     pub fn target(&self) -> &ReconciliationTarget {
-        &self.target
+        &self.authority.target
     }
 
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
-        self.before.as_ref()
+        self.authority.before.as_ref()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn startup_failure(&self) -> Option<&StartupFailureRecoveryAuthority> {
+        self.authority.startup_failure.as_ref()
     }
 
     pub fn has_effect_plan(&self) -> bool {

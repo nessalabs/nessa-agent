@@ -1,5 +1,6 @@
 //! Reconciles one packaged gateway with the account's systemd user manager.
 
+use super::super::startup_failure::{recorded_failure, RecordedFailure};
 use super::{
     paths::LinuxGatewayPaths,
     process::{
@@ -20,8 +21,8 @@ use super::{
 };
 use crate::gateway::{
     application::{
-        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
-        GatewayReconciliationAttempt, GatewayReconciliationIntent,
+        GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayLifecycleRecoveryAuthority,
+        GatewayPhysicalResult, GatewayReconciliationAttempt, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
         MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
     },
@@ -30,9 +31,9 @@ use crate::gateway::{
         LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
         LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationCause,
         ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
-        ServiceConfiguration, SystemdJobAttempt, SystemdJobConclusion, SystemdJobMode,
-        SystemdJobOperation, SystemdJobTerminal, SystemdManagerIdentity, SystemdRuntimeObservation,
-        SystemdUnitName, SystemdUnitState,
+        ServiceConfiguration, StartupFailureRecoveryAuthority, SystemdJobAttempt,
+        SystemdJobConclusion, SystemdJobMode, SystemdJobOperation, SystemdJobTerminal,
+        SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
 };
 use nessa_gateway_endpoint::{
@@ -112,6 +113,7 @@ struct PreflightEvidence<'a> {
     installed: Option<&'a UnitSnapshot>,
     data: &'a Path,
     advertisement: Option<&'a GatewayEndpointAdvertisement>,
+    startup_failure: Option<&'a StartupFailureRecoveryAuthority>,
 }
 
 struct SystemdJobAuthority<'a> {
@@ -340,6 +342,12 @@ impl SystemdGateway {
                 .as_ref()
                 .map(LinuxEndpointHealth::advertisement)
                 != evidence.advertisement
+            || evidence.startup_failure.is_some_and(|authority| {
+                recorded_failure(&evidence.data.join("logs"))
+                    .and_then(|record| record.authority(authority.target().clone()))
+                    .as_ref()
+                    != Some(authority)
+            })
         {
             return Err(GatewayError::Registration(
                 "Gateway source, paths, installed unit, or endpoint changed during preflight"
@@ -414,7 +422,7 @@ impl GatewayHost for SystemdGateway {
             .map(LinuxEndpointHealth::advertisement);
         let before = portable_incarnation(&unit, installed.as_ref(), advertisement)
             .map_err(pre_admission)?;
-        let prior_definition = match (installed.as_ref(), before.as_ref()) {
+        let (prior_definition, startup_failure) = match (installed.as_ref(), before.as_ref()) {
             (Some(snapshot), Some(prior)) => {
                 native_from_snapshot(snapshot, prior.target(), &unit, true)
                     .map_err(pre_admission)?;
@@ -456,14 +464,66 @@ impl GatewayHost for SystemdGateway {
                         "The running systemd gateway lacks exact owned unit identity",
                     ));
                 }
-                Some(prior_rendered.bytes)
+                (Some(prior_rendered.bytes), None)
             }
-            (Some(_), None) => {
-                return Err(pre_admission(
-                    "An installed systemd unit has no corroborated managed endpoint; it was preserved",
-                ));
+            (Some(snapshot), None) => {
+                let arguments = snapshot.exec_start_ex.first().map(|entry| &entry.1);
+                let fingerprint = arguments
+                    .and_then(|values| environment_value(values, "NESSA_RUNTIME_FINGERPRINT"));
+                let generation = arguments
+                    .and_then(|values| environment_value(values, "NESSA_SERVICE_GENERATION"));
+                let agent = arguments
+                    .and_then(|values| environment_value(values, "NESSA_AGENT_PATH"))
+                    .and_then(|value| SearchPath::parse(value).ok());
+                let authority = match (fingerprint, generation, agent) {
+                    (Some(fingerprint), Some(generation), Some(agent))
+                        if digest(fingerprint) && digest(generation) =>
+                    {
+                        let installed_target = ReconciliationTarget::new(
+                            unit.as_str().into(),
+                            fingerprint.into(),
+                            generation.into(),
+                        )
+                        .map_err(pre_admission)?;
+                        let rendered = render(UnitDefinition {
+                            unit: &unit,
+                            runtime: &paths.runtime_root.join(fingerprint),
+                            configuration: &self.configuration,
+                            data: &data,
+                            home: &self.home,
+                            agent_path: &agent,
+                            fingerprint,
+                            generation,
+                        })
+                        .map_err(pre_admission)?;
+                        let record = recorded_failure(&data.join("logs"));
+                        match record.and_then(|record| {
+                            inactive_startup_failure_authority(snapshot, &record, installed_target)
+                        }) {
+                            Some(authority)
+                                if installed_definition_matches(
+                                    snapshot,
+                                    manager.as_ref(),
+                                    &paths,
+                                    &unit,
+                                    &rendered,
+                                )? =>
+                            {
+                                Some((rendered.bytes, authority))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                let Some((bytes, authority)) = authority else {
+                    return Err(pre_admission(
+                        "An installed systemd unit has no corroborated managed endpoint; it was preserved",
+                    ));
+                };
+                (Some(bytes), Some(authority))
             }
-            _ => None,
+            _ => (None, None),
         };
         let staged_runtime = paths.runtime_root.join(&fingerprint);
         let path = chosen_agent_path(agent_path, installed.as_ref(), &staged_runtime)
@@ -499,15 +559,22 @@ impl GatewayHost for SystemdGateway {
                 installed: installed.as_ref(),
                 data: &data,
                 advertisement,
+                startup_failure: startup_failure.as_ref(),
             },
         )
         .map_err(pre_admission)?;
 
-        progress.intent_admitted(GatewayReconciliationIntent::new(
-            attempt.clone(),
-            target.clone(),
-            before.clone(),
-        )?)?;
+        let intent = match startup_failure {
+            Some(authority) => GatewayReconciliationIntent::with_startup_failure(
+                attempt.clone(),
+                target.clone(),
+                authority,
+            )?,
+            None => {
+                GatewayReconciliationIntent::new(attempt.clone(), target.clone(), before.clone())?
+            }
+        };
+        progress.intent_admitted(intent)?;
 
         if let Some(ready) = exact_ready(
             manager.as_ref(),
@@ -628,7 +695,7 @@ impl GatewayHost for SystemdGateway {
                         .map_err(|error| error.to_string())
                 },
                 run: || match prior_definition.as_ref() {
-                    Some(prior) if prior != &rendered.bytes => replace_owned_bytes(
+                    Some(prior) => replace_owned_bytes(
                         &paths.unit_file,
                         prior,
                         &rendered.bytes,
@@ -1012,19 +1079,69 @@ impl GatewayHost for SystemdGateway {
             }
             observation.clone()
         } else {
-            if recovery.has_effect_plan()
-                || observed.incarnation.as_ref() != recovery.before()
-                || broad_artifact_present
-                || !matches!(
-                    observed.unit_state,
-                    SystemdUnitState::Absent | SystemdUnitState::Inactive
-                )
-            {
-                return Err(GatewayError::Registration(
-                    "The unresolved systemd lifecycle lacks an exact safe closure".into(),
-                ));
-            }
-            let observation = observed.lifecycle_observation(1, false)?;
+            let observation = if let Some(authority) = recovery.startup_failure() {
+                if recovery.has_effect_plan()
+                    || observed.incarnation.is_some()
+                    || !matches!(
+                        observed.unit_state,
+                        SystemdUnitState::Absent | SystemdUnitState::Inactive
+                    )
+                {
+                    return Err(GatewayError::Registration(
+                        "The unresolved startup-failure recovery lacks an exact safe closure"
+                            .into(),
+                    ));
+                }
+                if observed.unit_state == SystemdUnitState::Absent {
+                    LifecycleObservation::with_systemd_state(1, false, SystemdUnitState::Absent)
+                        .map_err(|error| GatewayError::Registration(error.to_string()))?
+                } else {
+                    let retained = exact_target_artifact_present(
+                        &paths,
+                        &unit,
+                        authority.target(),
+                        observed.snapshot.as_ref(),
+                        DefinitionAuthority {
+                            configuration: &self.configuration,
+                            data: &data,
+                            home: &self.home,
+                        },
+                    )
+                    .map_err(GatewayError::Registration)?;
+                    if !retained {
+                        return Err(GatewayError::Registration(
+                            "The unresolved startup-failure authority target is not retained exactly".into(),
+                        ));
+                    }
+                    if authority.target() == recovery.target() {
+                        LifecycleObservation::with_systemd_state(
+                            1,
+                            true,
+                            SystemdUnitState::Inactive,
+                        )
+                        .map_err(|error| GatewayError::Registration(error.to_string()))?
+                    } else {
+                        LifecycleObservation::with_retained_systemd_target(
+                            1,
+                            authority.target().clone(),
+                        )
+                    }
+                }
+            } else {
+                if recovery.has_effect_plan()
+                    || observed.incarnation.as_ref() != recovery.before()
+                    || broad_artifact_present
+                    || !matches!(
+                        observed.unit_state,
+                        SystemdUnitState::Absent | SystemdUnitState::Inactive
+                    )
+                {
+                    return Err(GatewayError::Registration(
+                        "The unresolved systemd lifecycle lacks an exact safe closure".into(),
+                    ));
+                }
+                observed.lifecycle_observation(1, false)?
+            };
             retry(|| journal.observation(&LifecycleObservationSource::Intent, &observation))?;
             observation
         };
@@ -2256,6 +2373,61 @@ fn snapshot_matches(
             .map_err(GatewayError::Registration)?)
 }
 
+fn installed_definition_matches(
+    snapshot: &UnitSnapshot,
+    manager: &dyn LinuxUserManager,
+    paths: &LinuxGatewayPaths,
+    unit: &SystemdUnitName,
+    rendered: &RenderedUnit,
+) -> Result<bool, GatewayError> {
+    manager
+        .recheck_identity()
+        .map_err(GatewayError::Registration)?;
+    let expected_fragment = paths
+        .unit_file
+        .to_str()
+        .ok_or_else(|| GatewayError::Registration("The unit path is not UTF-8".into()))?;
+    Ok(snapshot.manager == *manager.identity()
+        && snapshot.id == unit.as_str()
+        && snapshot.names == [unit.as_str()]
+        && snapshot.fragment_path == expected_fragment
+        && fs::canonicalize(&paths.unit_file).is_ok_and(|canonical| canonical == paths.unit_file)
+        && snapshot.drop_in_paths.is_empty()
+        && snapshot.service_type == "simple"
+        && snapshot.restart == "on-failure"
+        && snapshot.restart_microseconds == 5_000_000
+        && snapshot.timeout_stop_microseconds == 30_000_000
+        && snapshot.working_directory == rendered.working_directory
+        && snapshot.environment.is_empty()
+        && snapshot.exec_start_ex.len() == 1
+        && snapshot.exec_start_ex[0].0 == "/usr/bin/env"
+        && snapshot.exec_start_ex[0].1 == rendered.arguments
+        && snapshot.exec_start_ex[0].2 == ["no-env-expand"]
+        && snapshot.unit_file_state == "enabled"
+        && snapshot.unit_path == manager.unit_path().map_err(GatewayError::Registration)?
+        && bytes_match(&paths.unit_file, &rendered.bytes).map_err(GatewayError::Registration)?
+        && wants_link_matches(&paths.wants_link, &paths.unit_file)
+            .map_err(GatewayError::Registration)?)
+}
+
+fn inactive_startup_failure_authority(
+    snapshot: &UnitSnapshot,
+    record: &RecordedFailure,
+    target: ReconciliationTarget,
+) -> Option<StartupFailureRecoveryAuthority> {
+    let execution = snapshot.exec_start_ex.first()?;
+    (snapshot.active_state == "inactive"
+        && snapshot.sub_state == "dead"
+        && snapshot.main_process_id == 0
+        && snapshot.exec_start_ex.len() == 1
+        && execution.7 == record.process_id()
+        && execution.8 == 1
+        && execution.9 == 0
+        && record.belongs_to(target.service_generation()))
+    .then(|| record.authority(target))
+    .flatten()
+}
+
 fn gateway_from_evidence(
     unit: &SystemdUnitName,
     target: &ReconciliationTarget,
@@ -2991,6 +3163,7 @@ mod tests {
             LifecycleRecordKind, ReconciliationCorrelation, ReconciliationEvidence,
             ReconciliationInitiator, SystemdInvocationId, SystemdManagerIdentity,
         },
+        infrastructure::startup_failure::parse_record,
     };
     use nessa_gateway_endpoint::domain::{
         EndpointIdentity, GatewayEndpoint, ManagedRuntimeIdentity,
@@ -3153,6 +3326,77 @@ mod tests {
             unit_path: vec!["/home/me/.config/systemd/user".into()],
         };
         (unit, target, snapshot)
+    }
+
+    fn startup_failure_record(generation: &str, process_id: u32) -> RecordedFailure {
+        parse_record(
+            serde_json::json!({
+                "reason": "configuration",
+                "exitCode": 20,
+                "message": "invalid configuration",
+                "serviceGeneration": generation,
+                "processId": process_id,
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn inactive_startup_failure_requires_exact_systemd_exit_correlation() {
+        let (_, target, mut snapshot) = fixture();
+        snapshot.active_state = "inactive".into();
+        snapshot.sub_state = "dead".into();
+        snapshot.invocation = None;
+        snapshot.main_process_id = 0;
+        snapshot.exec_start_ex[0].7 = 731;
+        snapshot.exec_start_ex[0].8 = 1;
+        snapshot.exec_start_ex[0].9 = 0;
+        let record = startup_failure_record(target.service_generation(), 731);
+        assert_eq!(
+            inactive_startup_failure_authority(&snapshot, &record, target.clone())
+                .unwrap()
+                .process_id(),
+            731
+        );
+
+        let mut contradictions = Vec::new();
+        let mut wrong = snapshot.clone();
+        wrong.active_state = "failed".into();
+        contradictions.push(wrong);
+        let mut wrong = snapshot.clone();
+        wrong.sub_state = "exited".into();
+        contradictions.push(wrong);
+        let mut wrong = snapshot.clone();
+        wrong.main_process_id = 731;
+        contradictions.push(wrong);
+        let mut wrong = snapshot.clone();
+        wrong.exec_start_ex[0].7 = 732;
+        contradictions.push(wrong);
+        let mut wrong = snapshot.clone();
+        wrong.exec_start_ex[0].8 = 2;
+        contradictions.push(wrong);
+        let mut wrong = snapshot.clone();
+        wrong.exec_start_ex[0].9 = 1;
+        contradictions.push(wrong);
+        let mut wrong = snapshot.clone();
+        wrong.exec_start_ex.push(wrong.exec_start_ex[0].clone());
+        contradictions.push(wrong);
+
+        for contradictory in contradictions {
+            assert!(
+                inactive_startup_failure_authority(&contradictory, &record, target.clone(),)
+                    .is_none()
+            );
+        }
+        let other_target = ReconciliationTarget::new(
+            target.service().into(),
+            target.runtime_fingerprint().into(),
+            "c".repeat(64),
+        )
+        .unwrap();
+        assert!(inactive_startup_failure_authority(&snapshot, &record, other_target).is_none());
     }
 
     #[test]
@@ -4073,8 +4317,14 @@ mod tests {
         .unwrap();
         let request = GatewayReconciliationRequest::new(correlation(1), evidence);
         let attempt = GatewayReconciliationAttempt::new(correlation(2), request).unwrap();
-        let recovery =
-            GatewayLifecycleRecovery::new(attempt.clone(), target, None, false, None, None, None);
+        let recovery = GatewayLifecycleRecovery::new(
+            attempt.clone(),
+            GatewayLifecycleRecoveryAuthority::new(target, None, None),
+            false,
+            None,
+            None,
+            None,
+        );
         let journal = discard_reconciliation_audit().open(&attempt, None).unwrap();
         let identity = active.manager.clone();
         let effective_uid = unsafe { libc::geteuid() };
@@ -4350,10 +4600,27 @@ mod tests {
         ))
         .unwrap();
         let failing_path = unit_root.join(failing_unit.as_str());
+        let startup_failure_unit = SystemdUnitName::parse(format!(
+            "nessa-gateway-startup-failure-{}.service",
+            std::process::id()
+        ))
+        .unwrap();
+        let startup_failure_path = unit_root.join(startup_failure_unit.as_str());
         let script = runtime.join(format!(
             ".nessa-gateway-acceptance-{}.sh",
             std::process::id()
         ));
+        let startup_failure_script = runtime.join(format!(
+            ".nessa-gateway-startup-failure-{}.sh",
+            std::process::id()
+        ));
+        let startup_failure_logs = runtime.join(format!(
+            ".nessa-gateway-startup-failure-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&startup_failure_logs)
+            .expect("disposable startup-failure log directory must be creatable");
+        fs::set_permissions(&startup_failure_logs, fs::Permissions::from_mode(0o700)).unwrap();
         let wants = unit_root.join("default.target.wants");
         let wants_preexisting = wants.exists();
         fs::create_dir_all(&wants).expect("disposable systemd wants directory must be creatable");
@@ -4375,6 +4642,26 @@ mod tests {
             .unwrap();
         script_file.sync_all().unwrap();
         drop(script_file);
+        let mut startup_failure_script_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&startup_failure_script)
+            .expect("disposable startup-failure fixture must be creatable");
+        startup_failure_script_file
+            .write_all(
+                format!(
+                    "#!/bin/sh\numask 077\nprintf '{{\"reason\":\"configuration\",\"exitCode\":20,\"message\":\"fixture\",\"serviceGeneration\":\"{}\",\"processId\":%s}}' \"$$\" > '{}'\nexit 0\n",
+                    "a".repeat(64),
+                    startup_failure_logs
+                        .join("gateway-startup-failure.json")
+                        .display(),
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        startup_failure_script_file.sync_all().unwrap();
+        drop(startup_failure_script_file);
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -4387,6 +4674,12 @@ mod tests {
             .mode(0o600)
             .open(&failing_path)
             .expect("disposable failing systemd unit must be creatable");
+        let mut startup_failure_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&startup_failure_path)
+            .expect("disposable startup-failure systemd unit must be creatable");
         let clock = SystemMonotonicClock;
         let result = (|| -> Result<(), String> {
             file.write_all(
@@ -4406,10 +4699,24 @@ mod tests {
                 .map_err(|error| error.to_string())?;
             failing_file.sync_all().map_err(|error| error.to_string())?;
             drop(failing_file);
+            startup_failure_file
+                .write_all(
+                    format!(
+                        "[Unit]\nDescription=Nessa disposable startup-failure fixture\n[Service]\nType=simple\nExecStart={}\nRestart=on-failure\nRestartSec=5s\nTimeoutStopSec=30s\n",
+                        startup_failure_script.display()
+                    )
+                    .as_bytes(),
+                )
+                .map_err(|error| error.to_string())?;
+            startup_failure_file
+                .sync_all()
+                .map_err(|error| error.to_string())?;
+            drop(startup_failure_file);
             let verification = std::process::Command::new("systemd-analyze")
                 .args(["--user", "verify"])
                 .arg(&path)
                 .arg(&failing_path)
+                .arg(&startup_failure_path)
                 .output()
                 .map_err(|error| format!("systemd-analyze could not start: {error}"))?;
             if !verification.status.success() {
@@ -4499,6 +4806,46 @@ mod tests {
                 return Err("real non-done JobRemoved evidence was not rejected".into());
             }
 
+            let startup_failure =
+                manager.enqueue(SystemdJobOperation::Start, &startup_failure_unit, &clock)?;
+            let startup_failure_terminal =
+                startup_failure.wait(&clock, clock.now() + JOB_TIMEOUT)?;
+            if startup_failure_terminal.result != "done" {
+                return Err(format!(
+                    "startup-failure fixture StartUnit returned {}",
+                    startup_failure_terminal.result
+                ));
+            }
+            let deadline = clock.now() + JOB_TIMEOUT;
+            let stopped = loop {
+                let snapshot = manager.snapshot(&startup_failure_unit)?.ok_or_else(|| {
+                    "startup-failure fixture disappeared after StartUnit".to_string()
+                })?;
+                if snapshot.active_state == "inactive" && snapshot.sub_state == "dead" {
+                    break snapshot;
+                }
+                if clock.now() >= deadline {
+                    return Err("startup-failure fixture did not become inactive/dead".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let recorded = recorded_failure(&startup_failure_logs)
+                .ok_or_else(|| "startup-failure fixture record was invalid".to_string())?;
+            let execution = stopped.exec_start_ex.first().ok_or_else(|| {
+                "startup-failure fixture lost retained execution status".to_string()
+            })?;
+            if stopped.main_process_id != 0
+                || stopped.exec_start_ex.len() != 1
+                || execution.7 != recorded.process_id()
+                || execution.8 != 1
+                || execution.9 != 0
+            {
+                return Err(
+                    "Type=simple success did not retain exact PID/CLD_EXITED/status evidence"
+                        .into(),
+                );
+            }
+
             let stop = manager.enqueue(SystemdJobOperation::Stop, &unit, &clock)?;
             let stop_attempt = stop.attempt().clone();
             let terminal = stop.wait(&clock, clock.now() + JOB_TIMEOUT)?;
@@ -4552,15 +4899,31 @@ mod tests {
         if let Ok(job) = manager.enqueue(SystemdJobOperation::Stop, &failing_unit, &clock) {
             let _ = job.wait(&clock, clock.now() + JOB_TIMEOUT);
         }
+        if let Ok(job) = manager.enqueue(SystemdJobOperation::Stop, &startup_failure_unit, &clock) {
+            let _ = job.wait(&clock, clock.now() + JOB_TIMEOUT);
+        }
         let link_removal = fs::remove_file(&link);
         let removal = fs::remove_file(&path);
         let failing_removal = fs::remove_file(&failing_path);
+        let startup_failure_removal = fs::remove_file(&startup_failure_path);
         let script_removal = fs::remove_file(&script);
+        let startup_failure_script_removal = fs::remove_file(&startup_failure_script);
+        let startup_failure_record_removal =
+            fs::remove_file(startup_failure_logs.join("gateway-startup-failure.json"));
+        let startup_failure_logs_removal = fs::remove_dir(&startup_failure_logs);
         let reload = manager.reload();
         link_removal.expect("disposable systemd wants link cleanup must succeed");
         removal.expect("disposable systemd unit cleanup must succeed");
         failing_removal.expect("disposable failing systemd unit cleanup must succeed");
+        startup_failure_removal
+            .expect("disposable startup-failure systemd unit cleanup must succeed");
         script_removal.expect("disposable signal fixture cleanup must succeed");
+        startup_failure_script_removal
+            .expect("disposable startup-failure fixture cleanup must succeed");
+        startup_failure_record_removal
+            .expect("disposable startup-failure record cleanup must succeed");
+        startup_failure_logs_removal
+            .expect("disposable startup-failure directory cleanup must succeed");
         if !wants_preexisting {
             fs::remove_dir(&wants).expect("disposable empty wants directory cleanup must succeed");
         }

@@ -182,6 +182,46 @@ pub struct ReconciliationTarget {
     service_generation: String,
 }
 
+/// Exact server evidence that permits retrying an inactive managed registration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StartupFailureRecoveryAuthority {
+    target: ReconciliationTarget,
+    reason: String,
+    exit_code: u8,
+    process_id: u32,
+}
+
+impl StartupFailureRecoveryAuthority {
+    pub(crate) fn new(
+        target: ReconciliationTarget,
+        reason: String,
+        exit_code: u8,
+        process_id: u32,
+    ) -> Result<Self, ReconciliationConsistencyError> {
+        if reason.trim().is_empty() || exit_code == 0 || process_id == 0 {
+            return Err(ReconciliationConsistencyError::InvalidStartupFailureAuthority);
+        }
+        Ok(Self {
+            target,
+            reason,
+            exit_code,
+            process_id,
+        })
+    }
+    pub fn target(&self) -> &ReconciliationTarget {
+        &self.target
+    }
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+    pub fn exit_code(&self) -> u8 {
+        self.exit_code
+    }
+    pub fn process_id(&self) -> u32 {
+        self.process_id
+    }
+}
+
 impl ReconciliationTarget {
     pub fn new(
         service: String,
@@ -358,6 +398,7 @@ pub struct ReconciliationIntentRecord {
     attempt: ReconciliationAttemptRecord,
     target: ReconciliationTarget,
     before: Option<ReconciliationIncarnation>,
+    startup_failure: Option<StartupFailureRecoveryAuthority>,
 }
 
 impl ReconciliationIntentRecord {
@@ -373,16 +414,31 @@ impl ReconciliationIntentRecord {
         target: ReconciliationTarget,
         before: Option<ReconciliationIncarnation>,
     ) -> Result<Self, ReconciliationConsistencyError> {
+        Self::with_startup_failure(attempt, target, before, None)
+    }
+
+    pub(crate) fn with_startup_failure(
+        attempt: ReconciliationAttemptRecord,
+        target: ReconciliationTarget,
+        before: Option<ReconciliationIncarnation>,
+        startup_failure: Option<StartupFailureRecoveryAuthority>,
+    ) -> Result<Self, ReconciliationConsistencyError> {
         if before
             .as_ref()
             .is_some_and(|before| before.target().service() != target.service())
         {
             return Err(ReconciliationConsistencyError::PriorServiceMismatch);
         }
+        if startup_failure.as_ref().is_some_and(|authority| {
+            authority.target().service() != target.service() || before.is_some()
+        }) {
+            return Err(ReconciliationConsistencyError::InvalidStartupFailureAuthority);
+        }
         Ok(Self {
             attempt,
             target,
             before,
+            startup_failure,
         })
     }
     pub fn target(&self) -> &ReconciliationTarget {
@@ -390,6 +446,9 @@ impl ReconciliationIntentRecord {
     }
     pub fn before(&self) -> Option<&ReconciliationIncarnation> {
         self.before.as_ref()
+    }
+    pub fn startup_failure(&self) -> Option<&StartupFailureRecoveryAuthority> {
+        self.startup_failure.as_ref()
     }
 }
 
@@ -804,6 +863,7 @@ pub enum ReconciliationConsistencyError {
         )
     )]
     PriorServiceMismatch,
+    InvalidStartupFailureAuthority,
 }
 
 impl Display for ReconciliationConsistencyError {
@@ -814,6 +874,9 @@ impl Display for ReconciliationConsistencyError {
             }
             Self::PriorServiceMismatch => {
                 "gateway reconciliation intent disagrees with its prior service"
+            }
+            Self::InvalidStartupFailureAuthority => {
+                "gateway startup-failure authority contradicts its reconciliation intent"
             }
         })
     }

@@ -18,9 +18,9 @@
 use super::{
     ReconciliationCause, ReconciliationCleanupDecision, ReconciliationCorrelation,
     ReconciliationEvidence, ReconciliationIncarnation, ReconciliationInitiator,
-    ReconciliationTarget, SystemdEvidenceError, SystemdJobAttempt, SystemdJobMode,
-    SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName,
-    SystemdUnitState,
+    ReconciliationTarget, StartupFailureRecoveryAuthority, SystemdEvidenceError, SystemdJobAttempt,
+    SystemdJobMode, SystemdJobOperation, SystemdManagerIdentity, SystemdRuntimeObservation,
+    SystemdUnitName, SystemdUnitState,
 };
 use std::{
     collections::BTreeMap,
@@ -246,6 +246,7 @@ pub struct LifecycleObservation {
     target_artifact_present: bool,
     systemd: Option<Box<SystemdRuntimeObservation>>,
     systemd_state: Option<SystemdUnitState>,
+    retained_target: Option<Box<ReconciliationTarget>>,
 }
 
 impl LifecycleObservation {
@@ -260,6 +261,7 @@ impl LifecycleObservation {
             target_artifact_present,
             systemd: None,
             systemd_state: None,
+            retained_target: None,
         }
     }
 
@@ -277,6 +279,7 @@ impl LifecycleObservation {
             target_artifact_present,
             systemd: None,
             systemd_state: Some(state),
+            retained_target: None,
         })
     }
 
@@ -297,6 +300,7 @@ impl LifecycleObservation {
             target_artifact_present,
             systemd: Some(Box::new(systemd)),
             systemd_state: Some(SystemdUnitState::Active),
+            retained_target: None,
         })
     }
 
@@ -318,6 +322,24 @@ impl LifecycleObservation {
 
     pub fn systemd_state(&self) -> Option<SystemdUnitState> {
         self.systemd_state
+    }
+
+    pub fn retained_target(&self) -> Option<&ReconciliationTarget> {
+        self.retained_target.as_deref()
+    }
+
+    pub fn with_retained_systemd_target(
+        version: u64,
+        retained_target: ReconciliationTarget,
+    ) -> Self {
+        Self {
+            version,
+            incarnation: None,
+            target_artifact_present: false,
+            systemd: None,
+            systemd_state: Some(SystemdUnitState::Inactive),
+            retained_target: Some(Box::new(retained_target)),
+        }
     }
 }
 
@@ -364,6 +386,7 @@ pub enum LifecycleRecordPayload {
         initiator: ReconciliationInitiator,
         target: ReconciliationTarget,
         before: Option<ReconciliationIncarnation>,
+        startup_failure: Option<StartupFailureRecoveryAuthority>,
     },
     JoinedRequest {
         origin_request_correlation: ReconciliationCorrelation,
@@ -509,6 +532,7 @@ pub struct LifecycleHistory {
     attempt_correlation: ReconciliationCorrelation,
     target: ReconciliationTarget,
     before: Option<ReconciliationIncarnation>,
+    startup_failure: Option<StartupFailureRecoveryAuthority>,
     next_sequence: u64,
     plans: BTreeMap<String, PlanState>,
     plan_order: Vec<String>,
@@ -530,6 +554,7 @@ impl LifecycleHistory {
             initiator,
             target,
             before,
+            startup_failure,
             ..
         } = first.payload()
         else {
@@ -544,6 +569,9 @@ impl LifecycleHistory {
             || before
                 .as_ref()
                 .is_some_and(|prior| prior.target().service() != first.namespace())
+            || startup_failure.as_ref().is_some_and(|authority| {
+                before.is_some() || authority.target().service() != first.namespace()
+            })
         {
             return Err(LifecycleJournalError::TargetMismatch);
         }
@@ -555,6 +583,7 @@ impl LifecycleHistory {
             attempt_correlation: first.attempt_correlation().clone(),
             target: target.clone(),
             before: before.clone(),
+            startup_failure: startup_failure.clone(),
             next_sequence: 1,
             plans: BTreeMap::new(),
             plan_order: Vec::new(),
@@ -859,9 +888,37 @@ impl LifecycleHistory {
                             .latest_observation
                             .as_ref()
                             .ok_or(LifecycleJournalError::MissingNoEffectObservation)?;
-                        if observation.incarnation() != self.before.as_ref()
-                            || observation.target_artifact_present()
-                        {
+                        let startup_closure =
+                            self.startup_failure.as_ref().is_some_and(|authority| {
+                                if *cleanup != ReconciliationCleanupDecision::RetainPrior
+                                    || observation.incarnation().is_some()
+                                {
+                                    return false;
+                                }
+                                match observation.systemd_state() {
+                                    Some(SystemdUnitState::Absent) => {
+                                        !observation.target_artifact_present()
+                                            && observation.retained_target().is_none()
+                                    }
+                                    Some(SystemdUnitState::Inactive)
+                                        if authority.target() == &self.target =>
+                                    {
+                                        observation.target_artifact_present()
+                                            && observation.retained_target().is_none()
+                                    }
+                                    Some(SystemdUnitState::Inactive) => {
+                                        !observation.target_artifact_present()
+                                            && observation.retained_target()
+                                                == Some(authority.target())
+                                    }
+                                    _ => false,
+                                }
+                            });
+                        let ordinary_closure = self.startup_failure.is_none()
+                            && observation.incarnation() == self.before.as_ref()
+                            && !observation.target_artifact_present()
+                            && observation.retained_target().is_none();
+                        if !startup_closure && !ordinary_closure {
                             return Err(LifecycleJournalError::InvalidNoEffectClosure);
                         }
                     }
@@ -884,6 +941,11 @@ impl LifecycleHistory {
 
     pub fn has_effect_plan(&self) -> bool {
         !self.plans.is_empty()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn startup_failure(&self) -> Option<&StartupFailureRecoveryAuthority> {
+        self.startup_failure.as_ref()
     }
 
     pub fn pending_observation_source(&self) -> Option<LifecycleObservationSource> {
@@ -1256,6 +1318,7 @@ mod tests {
                 initiator: ReconciliationInitiator::DesktopHost,
                 target: systemd_target(),
                 before: None,
+                startup_failure: None,
             },
         )
     }
@@ -1326,8 +1389,95 @@ mod tests {
                 initiator: ReconciliationInitiator::DesktopHost,
                 target: target(),
                 before,
+                startup_failure: None,
             },
         )
+    }
+
+    fn startup_intent(authority_target: ReconciliationTarget) -> LifecycleRecord {
+        record(
+            0,
+            LifecycleRecordPayload::Intent {
+                request_correlation: ReconciliationCorrelation::parse(
+                    "00000000-0000-4000-8000-000000000099".into(),
+                )
+                .unwrap(),
+                cause: ReconciliationCause::Startup,
+                initiator: ReconciliationInitiator::DesktopHost,
+                target: target(),
+                before: None,
+                startup_failure: Some(
+                    StartupFailureRecoveryAuthority::new(
+                        authority_target,
+                        "configuration".into(),
+                        20,
+                        41,
+                    )
+                    .unwrap(),
+                ),
+            },
+        )
+    }
+
+    #[test]
+    fn startup_failure_no_plan_closure_preserves_intended_and_retained_targets() {
+        let intended = target();
+        let old =
+            ReconciliationTarget::new(intended.service().into(), "e".repeat(64), "f".repeat(64))
+                .unwrap();
+        let cases = [
+            (
+                startup_intent(intended.clone()),
+                LifecycleObservation::with_systemd_state(1, true, SystemdUnitState::Inactive)
+                    .unwrap(),
+                true,
+            ),
+            (
+                startup_intent(old.clone()),
+                LifecycleObservation::with_retained_systemd_target(1, old.clone()),
+                true,
+            ),
+            (
+                startup_intent(old.clone()),
+                LifecycleObservation::with_systemd_state(1, false, SystemdUnitState::Absent)
+                    .unwrap(),
+                true,
+            ),
+            (
+                startup_intent(old),
+                LifecycleObservation::with_systemd_state(1, true, SystemdUnitState::Inactive)
+                    .unwrap(),
+                false,
+            ),
+        ];
+        for (intent, observation, accepted) in cases {
+            let mut history = LifecycleHistory::restore(&[intent]).unwrap();
+            history
+                .append(&record(
+                    1,
+                    LifecycleRecordPayload::Observation {
+                        source: LifecycleObservationSource::Intent,
+                        state: observation.clone(),
+                    },
+                ))
+                .unwrap();
+            let before = history.next_sequence();
+            let result = history.append(&record(
+                2,
+                LifecycleRecordPayload::Outcome {
+                    physical: LifecyclePhysicalOutcome::Failed {
+                        phase: LifecycleFailedPhase::Observation,
+                        message: "closed".into(),
+                    },
+                    last_confirmed: Some(observation),
+                    cleanup: ReconciliationCleanupDecision::RetainPrior,
+                },
+            ));
+            assert_eq!(result.is_ok(), accepted);
+            if !accepted {
+                assert_eq!(history.next_sequence(), before);
+            }
+        }
     }
 
     fn plan(sequence: u64) -> LifecycleRecord {
