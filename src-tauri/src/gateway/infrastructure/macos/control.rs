@@ -10,7 +10,8 @@ use std::{
     net::TcpStream,
     os::fd::AsRawFd,
     path::Path,
-    process::Command,
+    process::{Command, Output, Stdio},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -87,10 +88,13 @@ pub(super) fn classify(
 }
 /// `print` is diagnostic output: unknown, missing or ambiguous PID syntax fails closed.
 pub(super) fn service_status(service: &str) -> Result<ServiceStatus, String> {
-    let output = Command::new("/bin/launchctl")
-        .args(["print", service])
-        .output()
-        .map_err(|error| error.to_string())?;
+    let output = bounded_output(
+        Command::new("/bin/launchctl")
+            .args(["print", service])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        LAUNCHCTL_DEADLINE,
+    )?;
     if !output.status.success() {
         return Ok(ServiceStatus {
             loaded: false,
@@ -209,10 +213,13 @@ pub(super) fn lock_namespace(data: &Path) -> Result<NamespaceLock, String> {
     }
 }
 pub(super) fn launchctl(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("/bin/launchctl")
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let output = bounded_output(
+        Command::new("/bin/launchctl")
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        LAUNCHCTL_DEADLINE,
+    )?;
     if output.status.success() {
         Ok(())
     } else {
@@ -222,6 +229,55 @@ pub(super) fn launchctl(args: &[&str]) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+/// The longest any one `launchctl` call in a registration may take (ADR 221).
+/// A call past it is ended and fails the step it belongs to, so every startup
+/// step finishes, one way or the other, without the panel keeping a timer.
+pub(super) const LAUNCHCTL_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Run a `launchctl` command with piped output, ending it at `deadline`.
+pub(super) fn bounded_output(command: &mut Command, deadline: Duration) -> Result<Output, String> {
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().ok_or("launchctl stdout unavailable")?;
+    let stderr = child.stderr.take().ok_or("launchctl stderr unavailable")?;
+    let stdout = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut output = stdout;
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut output = stderr;
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let until = Instant::now() + deadline;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout.join();
+            let _ = stderr.join();
+            return Err(format!(
+                "launchctl did not finish within {} s",
+                deadline.as_secs()
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Output {
+        status,
+        stdout: stdout
+            .join()
+            .map_err(|_| "launchctl stdout reader panicked")?
+            .map_err(|error| error.to_string())?,
+        stderr: stderr
+            .join()
+            .map_err(|_| "launchctl stderr reader panicked")?
+            .map_err(|error| error.to_string())?,
+    })
 }
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let directory = path.parent().ok_or("Missing parent directory")?;

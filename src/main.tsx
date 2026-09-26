@@ -14,7 +14,8 @@ import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
 
 import { BrowserApplication } from "./composition/browser"
-import { hasNativeHost, windowSurface } from "./host"
+import { hasNativeHost, hostStartup, restartNessa, windowSurface } from "./host"
+import { StartupRefused } from "./startup"
 
 import { environmentFromVite } from "./env/vite"
 import { installDevConsoleForwarding } from "./diagnostics/dev-console"
@@ -43,7 +44,31 @@ const panel = (
   </Provider>
 )
 
-createRoot(container).render(
+const root = createRoot(container)
+
+// Asked before anything is mounted (ADR 221): a host that could not put itself
+// together answers nothing else, so the panel below would only fail in pieces.
+// An unanswerable question is treated as ready, which is what this page did
+// before it could ask.
+void hostStartup()
+  .catch(() => ({ state: "ready" }) as const)
+  .then((startup) => {
+    if (startup.state === "refused") {
+      root.render(
+        <React.StrictMode>
+          <StartupRefused
+            details={startup.details}
+            onTryAgain={() => void restartNessa()}
+          />
+        </React.StrictMode>,
+      )
+      return
+    }
+    renderApplication()
+  })
+
+function renderApplication() {
+  root.render(
   <React.StrictMode>
     {windowSurface() === "setup" ? (
       <SetupGate agents={dependencies.agents} apiKeys={nativeAgentApiKeys} />
@@ -53,4 +78,5 @@ createRoot(container).render(
       panel
     )}
   </React.StrictMode>,
-)
+  )
+}

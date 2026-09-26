@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
 import { Onboarding } from "./onboarding"
-import type { GatewayStartupStatus } from "../application/gateway-startup"
+import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
 import {
   beginOnboarding,
   chooseAgent,
@@ -75,10 +75,11 @@ describe("the managed gateway while setup is open", () => {
     const markup = picker(recordReadiness(asking, { claude: "ready" }), {
       revision: 4,
       state: "starting",
+      step: "replacing",
     })
 
     expect(markup).toContain("Starting Nessa…")
-    expect(markup).toContain("Nessa is starting its background service.")
+    expect(markup).toContain("Finishing the last update…")
     expect(markup).not.toContain("Can’t reach Nessa")
     expect(markup).not.toContain("Check again")
   })
@@ -91,6 +92,9 @@ describe("the managed gateway while setup is open", () => {
     })
 
     expect(markup).toContain("Nessa needs attention")
+    expect(markup).toContain("Nessa couldn’t start.")
+    // The host's own words are kept, folded behind Details, for whoever helps.
+    expect(markup).toContain("<summary")
     expect(markup).toContain("Nessa’s background service could not be registered.")
     expect(markup).toContain("Try starting Nessa again")
     expect(markup).not.toContain("Check again")
@@ -103,6 +107,7 @@ describe("the managed gateway while setup is open", () => {
     })
 
     expect(markup).toContain("Can’t check Nessa startup")
+    expect(markup).toContain("Nessa couldn’t check whether it started.")
     expect(markup).toContain("Nessa could not read its background service startup state.")
     expect(markup).not.toContain("Nessa needs attention")
   })

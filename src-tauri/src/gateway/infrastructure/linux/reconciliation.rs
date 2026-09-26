@@ -23,7 +23,7 @@ use crate::gateway::{
         GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
         GatewayReconciliationAttempt, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
-        MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
+        MonotonicClock, ReconciledGateway, ReconciliationHistoryFact, StartupStep,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -590,6 +590,7 @@ impl GatewayHost for SystemdGateway {
         }
 
         if let Some(prior) = before.as_ref().filter(|prior| prior.target() != &target) {
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             retire_prior(
                 progress,
@@ -788,6 +789,7 @@ impl GatewayHost for SystemdGateway {
 
         progress.history_observed(ReconciliationHistoryFact::BootstrapCommandRequested);
         authorize_unit_change().map_err(GatewayError::Registration)?;
+        progress.step_started(StartupStep::Launching);
         let ready_deadline = self.clock.now() + READY_TIMEOUT;
         start_unit(
             progress,

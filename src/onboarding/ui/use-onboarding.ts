@@ -2,11 +2,11 @@ import * as React from "react"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
-import { nativeGatewayStartup } from "../adapters/gateway-startup"
+import { nativeGatewayStartup } from "../../startup/adapters/gateway-startup"
 import {
   createGatewayStartupMonitor,
   type GatewayStartupStatus,
-} from "../application/gateway-startup"
+} from "../../startup/application/gateway-startup"
 import { playCue } from "./sound"
 import { listenForDismiss } from "./dismiss-shortcut"
 import { createReadinessCheck } from "../application/readiness-check"
@@ -157,7 +157,11 @@ export function useOnboarding(
     void readiness.check()
   }, [readiness])
   const [gatewayStartupState, setGatewayStartupState] =
-    React.useState<GatewayStartupStatus>({ revision: -1, state: "starting" })
+    React.useState<GatewayStartupStatus>({
+      revision: -1,
+      state: "starting",
+      step: "preparing",
+    })
   const startup = React.useMemo(
     () =>
       createGatewayStartupMonitor(nativeGatewayStartup, (next) => {

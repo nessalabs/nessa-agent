@@ -9,7 +9,9 @@ import { Check } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
-import type { GatewayStartupStatus } from "../application/gateway-startup"
+import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
+import { startupDetails, startupSentence } from "../../startup/application/copy"
+import { StartupDetails } from "../../startup/ui/startup-details"
 import type { ShortcutPlatform } from "../model/shortcut-display"
 import { Button } from "@nessa-ui/react/button"
 import {
@@ -513,15 +515,16 @@ export function Onboarding({
           <div role="status" aria-live="polite" className="flex flex-col gap-2">
             {gatewayStartup.state === "starting" ? (
               <p className="nessa-text-2 text-muted-foreground">
-                Nessa is starting its background service. Agent availability will appear
-                when it’s ready.
+                {startupSentence(gatewayStartup)} Agent availability will appear when
+                Nessa is ready.
               </p>
             ) : gatewayStartup.state === "failed" ||
               gatewayStartup.state === "unavailable" ? (
               <>
                 <p className="nessa-text-2 text-muted-foreground">
-                  {gatewayStartup.message}
+                  {startupSentence(gatewayStartup)}
                 </p>
+                <StartupDetails details={startupDetails(gatewayStartup)} />
                 <Button
                   type="button"
                   variant="outline"

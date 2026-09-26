@@ -73,8 +73,13 @@ impl ShortcutsFile {
     /// The real file, under the config root composition resolved.
     pub fn at(config_root: Option<PathBuf>) -> Self {
         Self {
+            storage: Arc::new(
+                config_root
+                    .as_deref()
+                    .map(storage::FileStorage::repairing)
+                    .unwrap_or_default(),
+            ),
             path: config_root.map(|root| root.join("shortcuts.json")),
-            storage: Arc::new(storage::FileStorage),
         }
     }
 }

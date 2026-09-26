@@ -6,18 +6,15 @@
  * declared here and again in `src-tauri/src/host.rs`; a Rust test fails if a
  * name on that side is missing from this file.
  */
-import type {
-  AgentApiKeySave,
-  ApiKeyAgent,
-  GatewayStartup,
-} from "../onboarding/application/ports"
+import type { AgentApiKeySave, ApiKeyAgent } from "../onboarding/application/ports"
 import {
   AgentApiKeySaveRejected,
   AgentApiKeySaveUncertain,
   type AgentApiKeyAuditStatus,
   type AgentApiKeySaveRejectionReason,
 } from "../onboarding/application/ports"
-export type { GatewayStartup } from "../onboarding/application/ports"
+import type { GatewayStartup, HostStartup } from "../startup/application/ports"
+export type { GatewayStartup, HostStartup } from "../startup/application/ports"
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
@@ -50,6 +47,23 @@ export async function forwardWebviewConsole(entry: WebviewConsoleEntry): Promise
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("plugin:dev-console|forward_webview_console", { entry })
+}
+
+/**
+ * Whether the host could put itself together at launch (ADR 221). Asked before
+ * anything else is mounted; the browser has no native host and is always ready.
+ */
+export async function hostStartup(): Promise<HostStartup> {
+  if (!inTauri) return { state: "ready" }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<HostStartup>("host_startup")
+}
+
+/** Starts Nessa again from the beginning: the only retry a refused launch has. */
+export async function restartNessa(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("restart_nessa")
 }
 
 /**

@@ -3,6 +3,8 @@
 //! `settings.rs` decides when defaults are allowed. This adapter only reads or
 //! durably replaces one path, so failed reads and writes cannot become policy.
 
+use super::repair::{SharedReadRepair, RECORDS};
+use nessa_local_storage::SharedReadKind;
 use std::{io, io::Read, io::Write, path::Path};
 
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
@@ -12,9 +14,23 @@ pub(crate) trait Storage: Send + Sync {
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
 }
 
-pub(crate) struct FileStorage;
-impl Storage for FileStorage {
-    fn read(&self, path: &Path) -> io::Result<String> {
+/// The real adapter. Built by [`FileStorage::repairing`] it makes one repair
+/// before giving up on a read (ADR 221); the default repairs nothing.
+#[derive(Default)]
+pub(crate) struct FileStorage {
+    repair: Option<SharedReadRepair>,
+}
+
+impl FileStorage {
+    /// Reads that first make a shared-read settings file, or its folder,
+    /// private, recording each change under `config_root`.
+    pub(crate) fn repairing(config_root: &Path) -> Self {
+        Self {
+            repair: Some(SharedReadRepair::recording_in(config_root.join(RECORDS))),
+        }
+    }
+
+    fn read_private(path: &Path) -> io::Result<String> {
         let file = nessa_local_storage::open(path, nessa_local_storage::OpenMode::ReadNonblocking)?;
         let mut bytes = Vec::new();
         file.take(MAX_SETTINGS_BYTES + 1).read_to_end(&mut bytes)?;
@@ -25,6 +41,39 @@ impl Storage for FileStorage {
             ));
         }
         String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+}
+
+impl Storage for FileStorage {
+    fn read(&self, path: &Path) -> io::Result<String> {
+        let Some(repair) = &self.repair else {
+            return Self::read_private(path);
+        };
+        // Reading never depended on the folder, so a folder that cannot be made
+        // private is left as it was; writing still refuses it.
+        if let Some(folder) = path.parent() {
+            match repair.repair(folder, SharedReadKind::Directory) {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => eprintln!(
+                    "[nessa] could not make {} private: {error}",
+                    folder.display()
+                ),
+            }
+        }
+        match Self::read_private(path) {
+            Err(refused) if nessa_local_storage::is_unsafe_file(&refused) => {
+                match repair.repair(path, SharedReadKind::File) {
+                    Ok(true) => Self::read_private(path),
+                    Ok(false) => Err(refused),
+                    Err(error) => {
+                        eprintln!("[nessa] could not make {} private: {error}", path.display());
+                        Err(refused)
+                    }
+                }
+            }
+            read => read,
+        }
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -126,7 +175,7 @@ mod tests {
         file.write_all(br#"{"stopAgentsOnQuit":false}"#).unwrap();
         drop(file);
         assert_eq!(
-            FileStorage.read(&regular).unwrap(),
+            FileStorage::default().read(&regular).unwrap(),
             r#"{"stopAgentsOnQuit":false}"#
         );
 
@@ -136,8 +185,45 @@ mod tests {
             .status()
             .unwrap()
             .success());
-        assert!(FileStorage.read(&fifo).is_err());
+        assert!(FileStorage::default().read(&fifo).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The state found on 2026-09-26 (#221): the config folder `0755` and
+    /// `settings.json` `0644`. The read repairs both, records four steps, and
+    /// returns the person's settings. A file others can write stays refused.
+    #[test]
+    fn a_shared_read_config_folder_and_file_are_made_private_before_reading() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("so.nessa.app");
+        std::fs::create_dir(&config).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = config.join("settings.json");
+        std::fs::write(&path, br#"{"stopAgentsOnQuit":false}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(FileStorage::default().read(&path).is_err());
+
+        let storage = FileStorage::repairing(&config);
+        assert_eq!(
+            storage.read(&path).unwrap(),
+            r#"{"stopAgentsOnQuit":false}"#
+        );
+        assert_eq!((mode_of(&config), mode_of(&path)), (0o700, 0o600));
+        assert_eq!(
+            std::fs::read_dir(config.join(super::super::repair::RECORDS))
+                .unwrap()
+                .count(),
+            4
+        );
+        storage.write(&path, b"{}").unwrap();
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(nessa_local_storage::is_unsafe_file(
+            &storage.read(&path).unwrap_err()
+        ));
+        assert_eq!(mode_of(&path), 0o664);
     }
 
     #[test]
@@ -150,7 +236,7 @@ mod tests {
             .unwrap();
         drop(file);
         assert_eq!(
-            FileStorage.read(&path).unwrap_err().kind(),
+            FileStorage::default().read(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
         std::fs::remove_dir_all(root).unwrap();

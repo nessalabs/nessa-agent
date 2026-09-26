@@ -55,6 +55,20 @@ pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
 /// subscribing before asking cannot lose or reorder a transition.
 pub const GATEWAY_STARTUP: &str = "nessa://gateway-startup";
 
+/// Whether the host could put itself together at launch (ADR 221). Asked by
+/// the page before anything else; `Refused` means no other command that needs
+/// the host's dependencies will answer, and the page shows only the refusal.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum HostStartup {
+    Ready,
+    /// `details` is the technical reason, for whoever helps the person. The
+    /// page shows a plain sentence and keeps this behind "Details".
+    Refused {
+        details: String,
+    },
+}
+
 /// What the desktop host currently knows about gateway startup.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
@@ -62,12 +76,21 @@ pub enum GatewayStartup {
     /// This build does not manage a packaged gateway. The surface keeps using
     /// its direct readiness probe and draws no conclusion from the host.
     Unmanaged { revision: u64 },
-    /// The host is reconciling its registered service.
-    Starting { revision: u64 },
+    /// The host is reconciling its registered service; `step` says where.
+    Starting { revision: u64, step: StartupStep },
     /// The exact registered PID, generation, instance and fingerprint agree.
     Ready { revision: u64 },
     /// Reconciliation stopped. `message` names the safe next action when known.
     Failed { revision: u64, message: String },
+}
+
+/// Where a starting gateway is. The page turns each into a plain sentence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StartupStep {
+    Preparing,
+    Replacing,
+    Launching,
 }
 
 /// Why a clicked link did nothing.
@@ -211,7 +234,7 @@ mod tests {
 
     #[test]
     fn shell_gateway_startup_matches_the_host() {
-        let shell = include_str!("../../src/onboarding/application/ports.ts");
+        let shell = include_str!("../../src/startup/application/ports.ts");
         let at = shell
             .find("export type GatewayStartup")
             .expect("the shell is missing GatewayStartup");
@@ -229,5 +252,25 @@ mod tests {
             );
         }
         assert!(declaration.contains("message: string"));
+        assert!(declaration.contains("step: StartupStep"));
+        let at = shell
+            .find("export type StartupStep")
+            .expect("the shell is missing StartupStep");
+        let steps = &shell[at..shell[at..].find('\n').map(|end| at + end).unwrap()];
+        for step in ["preparing", "replacing", "launching"] {
+            assert!(steps.contains(&format!("\"{step}\"")), "StartupStep is missing {step}");
+        }
+    }
+
+    #[test]
+    fn shell_host_startup_matches_the_host() {
+        let shell = include_str!("../../src/startup/application/ports.ts");
+        let at = shell
+            .find("export type HostStartup")
+            .expect("the shell is missing HostStartup");
+        let declaration = &shell[at..];
+        for piece in ["state: \"ready\"", "state: \"refused\"", "details: string"] {
+            assert!(declaration.contains(piece), "HostStartup is missing {piece}");
+        }
     }
 }

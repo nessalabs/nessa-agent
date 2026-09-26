@@ -1494,3 +1494,30 @@ fn host_exchange_reads_reject_fifos_without_waiting_for_a_writer() {
     fs::remove_file(result_path).unwrap();
     fs::remove_dir_all(data).unwrap();
 }
+
+/// ADR 221: a native call that hangs ends at its deadline and fails its step,
+/// so a startup step cannot run forever behind a spinner.
+#[test]
+fn a_command_past_its_deadline_is_ended_and_fails() {
+    let started = Instant::now();
+    let refused = super::bounded_output(
+        std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+        Duration::from_millis(200),
+    )
+    .unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(5), "{refused}");
+
+    let answered = super::bounded_output(
+        std::process::Command::new("/bin/echo")
+            .arg("done")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert!(answered.status.success());
+    assert_eq!(answered.stdout, b"done\n");
+}

@@ -69,6 +69,8 @@ import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices
 import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
 import { ComposerNotices } from "./composer-notices"
+import { startupNotice } from "./startup-notice"
+import { usePanelStartup } from "./use-panel-startup"
 import { WaveformIcon } from "./waveform-icon"
 
 // Draft and stream updates must not reparse the unchanged pasted document.
@@ -143,6 +145,10 @@ export function App({
     attachments.refuse,
   )
   const session = useSession()
+  // What the host says about starting the gateway (ADR 221). Until it is ready
+  // this is the connection's notice: the session cannot connect to a gateway
+  // that is not up, and its own error would only restate this less plainly.
+  const startup = usePanelStartup(session)
   // Panel-level, not conversation-level: an available update is a fact about
   // the application, it outlives every tab somebody opens or closes, and both
   // of its surfaces — the notice over the composer and the tab beside the
@@ -653,11 +659,13 @@ export function App({
                 ) : null
               }
               conversation={
-                <ConversationNotification
-                  conversation={chat.active}
-                  connection={session}
-                  gatewayAvailable={chat.gatewayAvailable}
-                />
+                startupNotice(startup.status, startup.retry) ?? (
+                  <ConversationNotification
+                    conversation={chat.active}
+                    connection={session}
+                    gatewayAvailable={chat.gatewayAvailable}
+                  />
+                )
               }
             />
             {/* Keyed per conversation so the queue is rebuilt rather than

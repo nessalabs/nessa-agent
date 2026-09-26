@@ -52,10 +52,11 @@ describe("onboarding credential-save outcomes", () => {
     })
     const save = vi.fn(async () => ({ status: "saved" as const }))
     const onRecheck = vi.fn(async () => {})
-    const view = (gatewayStartup: {
-      revision: number
-      state: "ready" | "starting" | "unmanaged"
-    }) => (
+    const view = (
+      gatewayStartup:
+        | { revision: number; state: "ready" | "unmanaged" }
+        | { revision: number; state: "starting"; step: "preparing" },
+    ) => (
       <Onboarding
         state={state}
         gatewayStartup={gatewayStartup}
@@ -90,7 +91,7 @@ describe("onboarding credential-save outcomes", () => {
     expect(onRecheck).toHaveBeenCalledOnce()
     expect(container.textContent).not.toContain("opencode-private-value")
 
-    await React.act(async () => root.render(view({ revision: 2, state: "starting" })))
+    await React.act(async () => root.render(view({ revision: 2, state: "starting", step: "preparing" })))
     expect(container.querySelector("input")).toBeNull()
     expect(container.textContent).toContain(
       "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",

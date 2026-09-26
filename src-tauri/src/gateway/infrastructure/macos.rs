@@ -3,7 +3,7 @@ use crate::gateway::application::{
     GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
     GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
     GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-    ReconciliationHistoryFact,
+    ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -24,8 +24,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::Arc,
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 mod control;
@@ -34,9 +33,10 @@ mod pruning;
 mod staging;
 mod startup;
 use control::{
-    classify, forward_recovery, health, launchctl, legacy_listener_pid, lock_namespace,
-    read_pending_retirement, read_retirement_evidence, retire, service_status, wait_fingerprint,
-    Health, InstallFailure, ManagedRuntime, Registration, ServiceState, ServiceStatus,
+    bounded_output, classify, forward_recovery, health, launchctl, legacy_listener_pid,
+    lock_namespace, read_pending_retirement, read_retirement_evidence, retire, service_status,
+    wait_fingerprint, Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    ServiceStatus, LAUNCHCTL_DEADLINE,
 };
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
@@ -72,10 +72,15 @@ impl Launchctl for NativeLaunchctl {
         health(port)
     }
     fn bootstrap(&self, domain: &str, plist: &Path) -> std::io::Result<Output> {
-        Command::new("/bin/launchctl")
-            .args(["bootstrap", domain])
-            .arg(plist)
-            .output()
+        bounded_output(
+            Command::new("/bin/launchctl")
+                .args(["bootstrap", domain])
+                .arg(plist)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+            LAUNCHCTL_DEADLINE,
+        )
+        .map_err(std::io::Error::other)
     }
     fn bootout(&self, service: &str) -> Result<(), String> {
         launchctl(&["bootout", service])
@@ -1493,6 +1498,7 @@ fn register(
             return Ok(gateway);
         }
         ServiceState::ManagedStale(running) => {
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             let old_definition = read_definition(&path)?;
             let old_data = old_definition
@@ -1554,6 +1560,7 @@ fn register(
             // This exact pre-upgrade registration has no retirement protocol.
             // SIGTERM cancels its active agents; never send it SIGUSR2.
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             unload_service(
                 progress,
@@ -1596,6 +1603,7 @@ fn register(
                     recorded.describe()
                 );
             }
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             unload_service(
                 progress,
@@ -1665,6 +1673,7 @@ fn register(
                 ))
             },
         )?;
+        progress.step_started(StartupStep::Launching);
         bootstrap_service(
             progress,
             launchctl,
@@ -2092,47 +2101,6 @@ impl DisabledServiceStatus for LaunchctlDisabledServiceStatus {
         }
         disabled_service(&String::from_utf8_lossy(&output.stdout), label)
     }
-}
-
-fn bounded_output(command: &mut Command, deadline: Duration) -> Result<Output, String> {
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take().ok_or("launchctl stdout unavailable")?;
-    let stderr = child.stderr.take().ok_or("launchctl stderr unavailable")?;
-    let stdout = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let mut output = stdout;
-        output.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stderr = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let mut output = stderr;
-        output.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let until = Instant::now() + deadline;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
-        }
-        if Instant::now() >= until {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout.join();
-            let _ = stderr.join();
-            return Err("launchctl print-disabled exceeded its deadline".into());
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    Ok(Output {
-        status,
-        stdout: stdout
-            .join()
-            .map_err(|_| "launchctl stdout reader panicked")?
-            .map_err(|error| error.to_string())?,
-        stderr: stderr
-            .join()
-            .map_err(|_| "launchctl stderr reader panicked")?
-            .map_err(|error| error.to_string())?,
-    })
 }
 
 fn disabled_service(output: &str, label: &str) -> Result<bool, String> {
