@@ -95,7 +95,12 @@ test("every Linux build installs the one list of host build dependencies", () =>
   for (const name of readdirSync(".github/workflows").filter((file) =>
     /\.ya?ml$/.test(file),
   )) {
-    const workflow = readFileSync(`.github/workflows/${name}`, "utf8")
+    // Continuation lines joined, so a package list below `apt-get install \`
+    // is on the same line as the command that installs it.
+    const workflow = readFileSync(`.github/workflows/${name}`, "utf8").replace(
+      /\\\r?\n\s*/g,
+      " ",
+    )
     // A development package installed by hand is a second list of what the
     // host builds against.
     assert.doesNotMatch(

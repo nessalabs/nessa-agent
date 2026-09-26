@@ -5642,7 +5642,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn native_manager_factory_refuses_a_manager_owned_by_another_account() {
+    fn native_manager_factory_refuses_an_unknown_account() {
         let temporary = tempfile::tempdir().unwrap();
         let sentinel = temporary.path().join("must-remain-absent.service");
         assert!(!sentinel.exists());
@@ -5668,8 +5668,11 @@ mod tests {
             "the native fixture must be invoked by the explicit disposable-manager gate"
         );
         let effective_uid = unsafe { libc::geteuid() };
-        let manager = UserManager::connect(effective_uid)
-            .map(|manager| Box::new(manager) as Box<dyn LinuxUserManager>)
+        // Through the production factory, prerequisites included, so an
+        // account without linger (the check script reports the runner's) is
+        // proven to register.
+        let manager = NativeLinuxManagerFactory
+            .connect(effective_uid)
             .expect("Linux acceptance requires the disposable user manager to be reachable");
         assert_eq!(manager.identity().user_id(), effective_uid);
         manager.recheck_identity().unwrap();

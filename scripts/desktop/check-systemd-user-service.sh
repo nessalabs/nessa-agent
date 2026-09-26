@@ -31,7 +31,13 @@ fi
 # The hosted runner's existing manager supplies only a delegated cgroup. The
 # nested manager and its bus remain isolated under the temporary runtime root.
 # Registration does not need linger, and CI never changes the runner account's
-# linger setting.
+# linger setting. It is reported, read from logind's own record, so a run shows
+# which case the acceptance fixture proved.
+if [ -e "/var/lib/systemd/linger/$(id -un)" ]; then
+  echo "Linger is on for $(id -un); registration is proven with it on."
+else
+  echo "Linger is off for $(id -un); registration is proven without it."
+fi
 XDG_RUNTIME_DIR="$runner_runtime" systemd-run --user --pipe --wait --collect --quiet \
   --unit="$transient_unit" \
   -p Delegate=yes -p Type=exec -d \

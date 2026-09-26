@@ -201,33 +201,8 @@ jobs:
       # and staging refuses it.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # Every Apple secret is carried under a SECRET_ name that no tool reads,
-      # and promoted to the names the bundler reads by the step below — only
-      # when there is something to put in them.
-      #
-      # They cannot be mapped straight onto APPLE_CERTIFICATE and the rest. A
-      # job's `env:` has no way to write an unset variable, and a missing secret
-      # becomes an empty string; the bundler asks `var_os` whether the variable
-      # is set, so an empty APPLE_CERTIFICATE sends it to decode nothing and run
-      # `security import` on an empty file. The "dormant until the secrets
-      # exist" path would fail every build rather than sign ad-hoc.
-      #
-      # The CLI imports the certificate into a temporary keychain it makes and
-      # throws away, so nothing here touches a runner's login keychain, and it
-      # infers the identity from the certificate when one is not named. With the
-      # App Store Connect key present it also submits the bundle to Apple and
-      # staples the ticket, which is why there is no separate notarytool step:
-      # one tool, one place where a failure to sign or staple stops the build.
-      SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      # A key rather than an Apple ID and app-specific password: the key is
-      # scoped to this purpose, is revocable on its own, and is not a password
-      # for the account itself. The bundler wants its id in a variable and the
-      # key's own bytes in a file, which is what APPLE_API_KEY_FILE names.
-      SECRET_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      SECRET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      SECRET_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      # Where the App Store Connect key is written. Not a secret, and read by
+      # the cleanup step as well as by the credentials step.
       APPLE_API_KEY_FILE: ${{ github.workspace }}/.apple-api-key.p8
     steps:
       - uses: actions/checkout@v4
@@ -251,6 +226,36 @@ jobs:
       # runner outlives the job's usefulness.
       - name: Choose what this build signs with
         if: runner.os == 'macOS'
+        env:
+          # Every Apple secret is carried under a SECRET_ name that no tool reads,
+          # given to this step alone, and promoted to the names the bundler reads
+          # only when there is something to put in them. Step-level, not job-level:
+          # nothing else in the job — `pnpm install`'s lifecycle scripts, the
+          # Linux row's AppImage tooling — has any use for them.
+          #
+          # They cannot be mapped straight onto APPLE_CERTIFICATE and the rest. A
+          # job's `env:` has no way to write an unset variable, and a missing secret
+          # becomes an empty string; the bundler asks `var_os` whether the variable
+          # is set, so an empty APPLE_CERTIFICATE sends it to decode nothing and run
+          # `security import` on an empty file. The "dormant until the secrets
+          # exist" path would fail every build rather than sign ad-hoc.
+          #
+          # The CLI imports the certificate into a temporary keychain it makes and
+          # throws away, so nothing here touches a runner's login keychain, and it
+          # infers the identity from the certificate when one is not named. With the
+          # App Store Connect key present it also submits the bundle to Apple and
+          # staples the ticket, which is why there is no separate notarytool step:
+          # one tool, one place where a failure to sign or staple stops the build.
+          SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # A key rather than an Apple ID and app-specific password: the key is
+          # scoped to this purpose, is revocable on its own, and is not a password
+          # for the account itself. The bundler wants its id in a variable and the
+          # key's own bytes in a file, which is what APPLE_API_KEY_FILE names.
+          SECRET_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          SECRET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SECRET_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: node scripts/desktop/apple-credentials.mjs
       # The bundler imports the certificate when it signs the *app*, which is
       # after `beforeBuildCommand` has assembled and signed the runtime tree.
@@ -352,7 +357,7 @@ jobs:
           set -euo pipefail
           cat > release-notes.md <<'END'
           Nessa for macOS (Apple Silicon and Intel) and x86_64 Linux (.deb for
-          Debian and Ubuntu 22.04 or later, AppImage elsewhere).
+          Ubuntu 22.04 or later and Debian 12 or later, AppImage elsewhere).
 
           Whether the macOS artifacts are notarized is decided by the
           repository's secrets, so it is stated by the build rather than

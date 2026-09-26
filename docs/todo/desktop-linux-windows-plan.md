@@ -166,7 +166,8 @@ What remains to validate and ship:
   after a full logout and reboot. Keep the backend namespace and credentials at
   their current root until the namespace work chooses one owner for that move.
 - Packaged as `.deb` and AppImage (done, #216). The `.deb` declares WebKitGTK
-  and the tray's appindicator library; the AppImage carries them.
+  and the tray's appindicator library; the AppImage carries the appindicator
+  library itself.
 - No code signing is required on Linux.
 
 ```mermaid
