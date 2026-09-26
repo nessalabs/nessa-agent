@@ -859,6 +859,56 @@ function Get-ExactTask {
     }
 }
 
+# Each disagreement is named with both values, so a native contradiction says
+# which fact Task Scheduler read back differently rather than only that one did.
+function Get-TaskDefinitionMismatches {
+    param(
+        $Task,
+        [string] $CallerSid,
+        [string] $ActionId,
+        [string] $Executable,
+        [string] $Arguments,
+        [string] $WorkingDirectory,
+        [string] $RegistrationSource
+    )
+    $mismatches = [System.Collections.Generic.List[string]]::new()
+    function Compare-Fact([string] $Name, $Observed, $Planned) {
+        if ($Observed -ne $Planned) { $mismatches.Add("$Name observed '$Observed' planned '$Planned'") }
+    }
+    $definition = $Task.Definition
+    Compare-Fact 'Principal.UserId' $definition.Principal.UserId $CallerSid
+    Compare-Fact 'Principal.LogonType' $definition.Principal.LogonType 3
+    Compare-Fact 'Principal.RunLevel' $definition.Principal.RunLevel 0
+    Compare-Fact 'Triggers.Count' $definition.Triggers.Count 1
+    if ($definition.Triggers.Count -eq 1) {
+        $trigger = $definition.Triggers.Item(1)
+        Compare-Fact 'Trigger.Type' $trigger.Type 9
+        Compare-Fact 'Trigger.Enabled' $trigger.Enabled $true
+        Compare-Fact 'Trigger.UserId' $trigger.UserId $CallerSid
+    }
+    Compare-Fact 'Actions.Count' $definition.Actions.Count 1
+    if ($definition.Actions.Count -eq 1) {
+        $action = $definition.Actions.Item(1)
+        Compare-Fact 'Action.Type' $action.Type 0
+        Compare-Fact 'Action.Id' $action.Id $ActionId
+        Compare-Fact 'Action.Path' $action.Path $Executable
+        Compare-Fact 'Action.Arguments' $action.Arguments $Arguments
+        Compare-Fact 'Action.WorkingDirectory' $action.WorkingDirectory $WorkingDirectory
+    }
+    $settings = $definition.Settings
+    Compare-Fact 'Settings.MultipleInstances' $settings.MultipleInstances 2
+    Compare-Fact 'Settings.AllowDemandStart' $settings.AllowDemandStart $true
+    Compare-Fact 'Settings.ExecutionTimeLimit' $settings.ExecutionTimeLimit 'PT0S'
+    Compare-Fact 'Settings.DisallowStartIfOnBatteries' $settings.DisallowStartIfOnBatteries $false
+    Compare-Fact 'Settings.StopIfGoingOnBatteries' $settings.StopIfGoingOnBatteries $false
+    Compare-Fact 'Settings.RunOnlyIfIdle' $settings.RunOnlyIfIdle $false
+    Compare-Fact 'Settings.RunOnlyIfNetworkAvailable' $settings.RunOnlyIfNetworkAvailable $false
+    Compare-Fact 'Settings.RestartCount' $settings.RestartCount 3
+    Compare-Fact 'Settings.RestartInterval' $settings.RestartInterval 'PT1M'
+    Compare-Fact 'RegistrationInfo.Source' $definition.RegistrationInfo.Source $RegistrationSource
+    return , $mismatches.ToArray()
+}
+
 function Test-TaskDefinition {
     param(
         $Task,
@@ -869,20 +919,7 @@ function Test-TaskDefinition {
         [string] $WorkingDirectory,
         [string] $RegistrationSource
     )
-    $definition = $Task.Definition
-    if ($definition.Principal.UserId -ne $CallerSid -or $definition.Principal.LogonType -ne 3 -or $definition.Principal.RunLevel -ne 0) { return $false }
-    if ($definition.Triggers.Count -ne 1) { return $false }
-    $trigger = $definition.Triggers.Item(1)
-    if ($trigger.Type -ne 9 -or -not $trigger.Enabled -or $trigger.UserId -ne $CallerSid) { return $false }
-    if ($definition.Actions.Count -ne 1) { return $false }
-    $action = $definition.Actions.Item(1)
-    if ($action.Type -ne 0 -or $action.Id -ne $ActionId -or $action.Path -ne $Executable -or $action.Arguments -ne $Arguments -or $action.WorkingDirectory -ne $WorkingDirectory) { return $false }
-    $settings = $definition.Settings
-    if ($settings.MultipleInstances -ne 2 -or -not $settings.AllowDemandStart -or $settings.ExecutionTimeLimit -ne 'PT0S') { return $false }
-    if ($settings.DisallowStartIfOnBatteries -or $settings.StopIfGoingOnBatteries -or $settings.RunOnlyIfIdle -or $settings.RunOnlyIfNetworkAvailable) { return $false }
-    if ($settings.RestartCount -ne 3 -or $settings.RestartInterval -ne 'PT1M') { return $false }
-    if ($definition.RegistrationInfo.Source -ne $RegistrationSource) { return $false }
-    return $true
+    return (Get-TaskDefinitionMismatches @PSBoundParameters).Count -eq 0
 }
 
 function Wait-Until {
@@ -1191,7 +1228,10 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         $ownedTask = $observedTask
     }
     if ($taskAcknowledgement -ne 'success') { throw "task registration was $taskAcknowledgement`: $taskFailure" }
-    if (-not $taskDefinitionMatches) { throw 'registered task definition contradicts the plan' }
+    if (-not $taskDefinitionMatches) {
+        $mismatches = Get-TaskDefinitionMismatches -Task $observedTask -CallerSid $callerSid -ActionId $actionId -Executable $powershell -Arguments $arguments -WorkingDirectory $runRoot -RegistrationSource $registrationSource
+        throw "registered task definition contradicts the plan: $([string]::Join('; ', $mismatches))"
+    }
     if (-not $taskDescriptorMatches) { throw 'registered task descriptor contradicts the plan' }
     if (-not (Test-TaskXmlCarriesNoCredential -Xml $observedTask.Xml)) { throw 'registered task XML carries a credential field or an unexpected principal element' }
 
