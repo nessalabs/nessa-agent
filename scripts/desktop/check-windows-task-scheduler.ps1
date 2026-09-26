@@ -1,5 +1,13 @@
 [CmdletBinding()]
-param()
+param(
+    # The product model is a standard user's non-elevated token, and that is the
+    # default. GitHub-hosted Windows runners are administrators with UAC off, so
+    # the hosted leg declares Administrator: it proves the same identity and
+    # cleanup agreement for an elevated caller and says so, and nothing more.
+    # The declared context must match the caller token either way.
+    [ValidateSet('StandardUser', 'Administrator')]
+    [string] $CallerContext = 'StandardUser'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -990,7 +998,9 @@ Assert-LedgerMatrix
 Assert-HResultClassification
 Assert-LifecycleStateProbes
 $caller = [NessaWindowsProofNative]::ReadCurrentProcessTokenFacts()
-if ($caller.Elevated) { throw 'the Windows runner process is elevated; the least-privilege current-user model is not proved' }
+if ($CallerContext -eq 'StandardUser' -and $caller.Elevated) { throw 'the Windows runner process is elevated; the least-privilege current-user model is not proved' }
+if ($CallerContext -eq 'Administrator' -and -not $caller.Elevated) { throw 'the declared Administrator caller context is not elevated; this run is not in the environment it declares' }
+Write-Host "Caller context ${CallerContext}: SID $($caller.Sid), elevated $($caller.Elevated), elevation type $($caller.ElevationType), integrity $($caller.IntegritySid)"
 
 $runId = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { 'local' }
 $attempt = if ($env:GITHUB_RUN_ATTEMPT) { $env:GITHUB_RUN_ATTEMPT } else { '0' }
@@ -1230,7 +1240,7 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     $null = Invoke-RunAttemptObservation -Observation $secondRunObservation -Instances $secondInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstInstance.InstanceGuid) -ExpectedPid ([int]$firstInstance.EnginePID) -Accepted $evidence -Snapshot $secondSnapshot -CompleteAcceptance -Final
     if ($secondReturned.InstanceGuid -ne $firstInstance.InstanceGuid) { throw 'second Run did not return the original IgnoreNew instance' }
     if ([NessaWindowsProofNative]::ProcessHasExited($secondProcess)) { throw 'retained action process exited before proof completion' }
-    Write-Host "Windows Task Scheduler model proved exact action PID $actionPid for $taskPath"
+    Write-Host "Windows Task Scheduler model proved exact action PID $actionPid for $taskPath in the $CallerContext caller context"
 }
 catch {
     $primaryFailure = $_

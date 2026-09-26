@@ -252,6 +252,14 @@ reduction of scope.
 Decision date: 2026-09-22. Status: selected for implementation, pending the
 native exact-process identity proof below.
 
+GitHub-hosted Windows runners are administrators with UAC off, so the
+`local-auth (windows-latest)` leg runs the #205 proof with
+`-CallerContext Administrator`: it proves exact action identity, `IgnoreNew`,
+and cleanup for an elevated caller and declares that context. The product
+model is the script's default, `StandardUser`, which refuses an elevated
+caller; proving it needs a non-elevated standard user's interactive desktop
+session and remains open in #205.
+
 Use a Task Scheduler 2.0 task registered through the COM API. Register it for
 the current user's SID with `TASK_LOGON_INTERACTIVE_TOKEN`, `LeastPrivilege`,
 and an exact-user logon trigger. This stores no password and can be registered

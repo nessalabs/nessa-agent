@@ -95,7 +95,7 @@ test("the existing Windows matrix leg uniquely owns the Task Scheduler model pro
   assert.equal(localAuth.split(proof).length - 1, 1)
   assert.match(
     localAuth,
-    /name: Prove the Windows Task Scheduler gateway model\s+if: runner\.os == 'Windows'\s+shell: powershell\s+run: \.\/scripts\/desktop\/check-windows-task-scheduler\.ps1/,
+    /name: Prove the Windows Task Scheduler gateway model\s+if: runner\.os == 'Windows'\s+shell: powershell\s+run: \.\/scripts\/desktop\/check-windows-task-scheduler\.ps1 -CallerContext Administrator\n/,
   )
   const invocations = readdirSync(".github/workflows")
     .filter((name) => /\.ya?ml$/.test(name))
@@ -130,6 +130,22 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(
     script,
     /\$caller = \[NessaWindowsProofNative\]::ReadCurrentProcessTokenFacts\(\)/,
+  )
+  assert.match(
+    script,
+    /\[ValidateSet\('StandardUser', 'Administrator'\)\]\s+\[string\] \$CallerContext = 'StandardUser'/,
+  )
+  assert.match(
+    script,
+    /if \(\$CallerContext -eq 'StandardUser' -and \$caller\.Elevated\) \{ throw /,
+  )
+  assert.match(
+    script,
+    /if \(\$CallerContext -eq 'Administrator' -and -not \$caller\.Elevated\) \{ throw /,
+  )
+  assert.doesNotMatch(
+    script,
+    /LogonType\s*=\s*(1|2|5|6)\b|TASK_LOGON_(PASSWORD|S4U|GROUP)/,
   )
   assert.doesNotMatch(script, /OpenProcessForObservation[^\r\n]*\$PID/)
   assert.doesNotMatch(script, /\$callerHandle\s*=/)
