@@ -12,7 +12,7 @@ export function bundleArchitecture(target, hostArchitecture) {
 
 /** The architecture the Linux bundler writes into package names.
  *
- * Debian's spelling, for the `.deb` and the AppImage alike. x86_64 is the one
+ * Debian's spelling. x86_64 is the one
  * Linux target `prepare-linux.mjs` assembles a runtime for. */
 export function linuxBundleArchitecture(target, hostArchitecture) {
   if (target === "x86_64-unknown-linux-gnu") return "amd64"
@@ -24,7 +24,6 @@ export function linuxBundleArchitecture(target, hostArchitecture) {
 export function linuxBundles(productName, version, architecture) {
   return {
     deb: `deb/${productName}_${version}_${architecture}.deb`,
-    appimage: `appimage/${productName}_${version}_${architecture}.AppImage`,
   }
 }
 

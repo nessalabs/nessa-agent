@@ -15,8 +15,6 @@ import {
   buildSelection,
   builtPackage,
   packageBuiltIn,
-  uncheckedBundles,
-  carriesIndicatorLibrary,
   dependencyClauses,
   missingDependencies,
 } from "./verify-linux-bundle.mjs"
@@ -68,30 +66,6 @@ test("a package that leaves out a required library is named, alternatives count"
     missingDependencies("libwebkit2gtk-4.1-0-dbg", ["libwebkit2gtk-4.1-0"]),
     ["libwebkit2gtk-4.1-0"],
   )
-})
-
-test("an AppImage tree without the tray's indicator library is refused", () => {
-  const root = mkdtempSync(join(tmpdir(), "nessa-indicator-"))
-  try {
-    mkdirSync(join(root, "usr/lib"), { recursive: true })
-    writeFileSync(join(root, "usr/lib/libgtk-3.so.0"), "")
-    assert.equal(carriesIndicatorLibrary(root), false)
-    // An empty file and a dangling link load nothing.
-    writeFileSync(join(root, "usr/lib/libayatana-appindicator3.so.1"), "")
-    assert.equal(carriesIndicatorLibrary(root), false)
-    rmSync(join(root, "usr/lib/libayatana-appindicator3.so.1"))
-    symlinkSync("absent.so", join(root, "usr/lib/libayatana-appindicator3.so.1"))
-    assert.equal(carriesIndicatorLibrary(root), false)
-    rmSync(join(root, "usr/lib/libayatana-appindicator3.so.1"))
-    writeFileSync(join(root, "usr/lib/libayatana-appindicator3.so.1.0.0"), "\x7fELF")
-    symlinkSync(
-      "libayatana-appindicator3.so.1.0.0",
-      join(root, "usr/lib/libayatana-appindicator3.so.1"),
-    )
-    assert.equal(carriesIndicatorLibrary(root), true)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
 })
 
 test("the package checked is the one this build wrote, whatever its version", () => {
@@ -148,14 +122,6 @@ test("the package checked is the one this build wrote, whatever its version", ()
   )
 })
 
-test("a build is refused when it would make a bundle no Linux check opens", () => {
-  assert.deepEqual(uncheckedBundles("deb"), [])
-  assert.deepEqual(uncheckedBundles("deb,appimage"), [])
-  assert.deepEqual(uncheckedBundles("deb,rpm"), ["rpm"])
-  // The config's "all" includes rpm.
-  assert.deepEqual(uncheckedBundles("all"), ["all"])
-})
-
 test("the package is found in the bundle's own directory for the pattern", () => {
   const bundle = mkdtempSync(join(tmpdir(), "nessa-built-"))
   try {
@@ -179,7 +145,7 @@ test("the package is found in the bundle's own directory for the pattern", () =>
 test("the verifier checks only what a build told it it made", () => {
   assert.deepEqual(
     buildSelection({ NESSA_BUILD_BUNDLES: "deb", NESSA_BUILD_STARTED: "1790000000000" }),
-    { bundles: ["deb"], started: 1_790_000_000_000 },
+    { started: 1_790_000_000_000 },
   )
   // Run on its own, it refuses rather than guessing either.
   for (const environment of [
@@ -188,9 +154,10 @@ test("the verifier checks only what a build told it it made", () => {
     { NESSA_BUILD_STARTED: "1790000000000" },
   ])
     assert.throws(() => buildSelection(environment), /Run through `pnpm app:build`/)
-  // The owner holds its rule whoever asked first.
-  assert.throws(
-    () => buildSelection({ NESSA_BUILD_BUNDLES: "deb,rpm", NESSA_BUILD_STARTED: "1" }),
-    /No Linux check verifies the rpm bundle/,
-  )
+  // It verifies the .deb alone, and refuses to be told otherwise.
+  for (const bundles of ["deb,rpm", "appimage", "all"])
+    assert.throws(
+      () => buildSelection({ NESSA_BUILD_BUNDLES: bundles, NESSA_BUILD_STARTED: "1" }),
+      /verifies the \.deb alone/,
+    )
 })

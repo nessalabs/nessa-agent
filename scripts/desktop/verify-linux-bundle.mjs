@@ -1,12 +1,12 @@
 /**
  * What a Linux build must hold before it is published.
  *
- * Each selected package carries the fingerprinted runtime where the app looks
- * for it — `usr/lib/<productName>/runtime`, the Linux `resource_dir` in
- * tauri-utils — and can load the libraries the app needs at run time: the
- * `.deb` declares them for the package manager, the AppImage carries the
- * tray's indicator library inside itself. Nothing is code-signed on Linux; the
- * updater's `.sig` files are checked when a release is staged.
+ * The `.deb` carries the fingerprinted runtime where the app looks for it —
+ * `usr/lib/<productName>/runtime`, the Linux `resource_dir` in tauri-utils —
+ * and declares the libraries the app needs at run time. It is the one Linux
+ * bundle built (`release-assets.mjs` says why there is no AppImage). Nothing
+ * is code-signed on Linux; the updater's `.sig` is checked when a release is
+ * staged.
  */
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
@@ -45,40 +45,6 @@ export function missingDependencies(field, required) {
   return required.filter((name) => !declared.has(name))
 }
 
-/** Whether a directory tree holds the tray's indicator library.
- *
- * The tray loads `libayatana-appindicator3` (or the older `libappindicator3`)
- * with `dlopen`, so nothing that follows ELF dependencies finds it; the
- * AppImage has to carry it explicitly. */
-export function carriesIndicatorLibrary(directory) {
-  return readdirSync(directory, { recursive: true }).some((path) => {
-    // By file name: a recursive listing separates with the host's own
-    // separator, which is not `/` everywhere this is tested.
-    if (!/^lib(ayatana-)?appindicator3\.so/.test(basename(path))) return false
-    // Followed through links: a dangling one or an empty file loads nothing.
-    try {
-      const target = statSync(join(directory, path))
-      return target.isFile() && target.size > 0
-    } catch {
-      return false
-    }
-  })
-}
-
-function dpkgDeb(args, options) {
-  try {
-    return execFileSync("dpkg-deb", args, options)
-  } catch (error) {
-    if (error.code === "ENOENT")
-      throw new Error(
-        "Verifying a .deb needs dpkg-deb, which this host does not have. " +
-          "Build it on Debian or Ubuntu.",
-        { cause: error },
-      )
-    throw error
-  }
-}
-
 /** The one candidate this build wrote: modified no earlier than the second
  * the build started. The version is not predicted: a build can merge another
  * one through `--config` (the updater harness builds an older app that way),
@@ -110,30 +76,19 @@ export function packageBuiltIn(bundle, pattern, startedAt) {
   return join(directory, builtPackage(entries, startedAt, basename(pattern)))
 }
 
-/** The Linux bundles this script can check. */
-const CHECKED_BUNDLES = ["deb", "appimage"]
-
-/** Each of a build's `--bundles` no check here covers. A build is not
- * "verified" by a run that looked at none of what it made, so the build
- * command asks this before it starts, and refuses. */
-export function uncheckedBundles(bundles) {
-  return bundles.split(",").filter((bundle) => !CHECKED_BUNDLES.includes(bundle))
-}
-
 /** What the build that ran this made, and when it began.
  *
  * Only as part of a build: `pnpm app:build` says both, and which package is
  * this build's is decided by when it was written (`builtPackage`), whatever
- * its version. A bundle no check here opens is refused, whoever asked. */
+ * its version. It verifies the .deb alone, and refuses to be told otherwise. */
 export function buildSelection(environment) {
   const selected = environment.NESSA_BUILD_BUNDLES
   const started = environment.NESSA_BUILD_STARTED
   if (!selected || !started)
     throw new Error("Run through `pnpm app:build`, which says what it built and when.")
-  const unchecked = uncheckedBundles(selected)
-  if (unchecked.length > 0)
-    throw new Error(`No Linux check verifies the ${unchecked.join(", ")} bundle`)
-  return { bundles: selected.split(","), started: Number(started) }
+  if (selected !== "deb")
+    throw new Error(`This check verifies the .deb alone, not: ${selected}`)
+  return { started: Number(started) }
 }
 
 function withScratch(action) {
@@ -159,25 +114,8 @@ function verifyDeb(path, { productName }) {
   console.error(`  verified ${path}`)
 }
 
-function verifyAppImage(path, { productName }) {
-  withScratch((scratch) => {
-    // `--appimage-extract` is the AppImage runtime's own: it needs no FUSE,
-    // which a CI container rarely has, and it proves the file is one.
-    // Its listing of every extracted file is noise; its errors are the reason.
-    execFileSync(path, ["--appimage-extract"], {
-      cwd: scratch,
-      stdio: ["ignore", "ignore", "inherit"],
-    })
-    const root = join(scratch, "squashfs-root")
-    verifyRuntimeFingerprint(join(root, "usr/lib", productName, "runtime"))
-    if (!carriesIndicatorLibrary(root))
-      throw new Error(`${path} does not carry the tray's appindicator library`)
-  })
-  console.error(`  verified ${path}`)
-}
-
 function main() {
-  const { bundles, started } = buildSelection(process.env)
+  const { started } = buildSelection(process.env)
   const root = resolve(import.meta.dirname, "../..")
   const metadata = JSON.parse(
     execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
@@ -196,9 +134,7 @@ function main() {
     linuxBundleArchitecture(target, process.arch),
   )
   const product = { productName: config.productName }
-  const verify = { deb: verifyDeb, appimage: verifyAppImage }
-  for (const kind of bundles)
-    verify[kind](packageBuiltIn(bundle, patterns[kind], started), product)
+  verifyDeb(packageBuiltIn(bundle, patterns.deb, started), product)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()

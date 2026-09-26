@@ -1,6 +1,5 @@
 import { LINUX_RUNTIME_TARGET } from "./prepare-linux.mjs"
 import { releaseBundles } from "./release-assets.mjs"
-import { uncheckedBundles } from "./verify-linux-bundle.mjs"
 import { desktopStageEnvironment, resolveDesktopStage } from "./stage.mjs"
 
 function optionValue(args, longName, shortName) {
@@ -65,25 +64,25 @@ export function parseBuildArguments(args) {
 export function runDesktopBuild({ args, environment, platform, spawn, now = Date.now }) {
   const parsed = parseBuildArguments(args)
   const { stage: requestedStage, target } = parsed
-  // Linux builds what a Linux release builds unless told otherwise: the
-  // config's "all" includes an AppImage, whose bundler rewrites the runtime,
-  // and the verifier refuses it (release-assets.mjs says why).
+  // A Linux build makes exactly what a Linux release makes, and nothing a
+  // caller names: the verifier checks the .deb alone, so any other choice of
+  // bundles is refused here, before minutes of compiling, rather than parsed.
+  if (
+    platform === "linux" &&
+    args.some(
+      (argument) =>
+        argument === "--no-bundle" ||
+        argument === "--bundles" ||
+        argument.startsWith("--bundles=") ||
+        argument.startsWith("-b"),
+    )
+  )
+    throw new Error(
+      "A Linux build makes the release's bundles; drop --bundles and --no-bundle",
+    )
   const bundles =
     parsed.bundles ??
     (platform === "linux" ? releaseBundles(target ?? LINUX_RUNTIME_TARGET) : undefined)
-  // A Linux build is verified, so it may make only bundles the verifier
-  // checks; anything else is refused before minutes of compiling, not after.
-  if (platform === "linux") {
-    if (args.includes("--no-bundle"))
-      throw new Error(
-        "A Linux build is verified, so it must make a bundle: drop --no-bundle",
-      )
-    const unchecked = uncheckedBundles(bundles)
-    if (unchecked.length > 0)
-      throw new Error(
-        `No Linux check verifies the ${unchecked.join(", ")} bundle; build --bundles deb`,
-      )
-  }
   const stage = resolveDesktopStage({
     environment,
     fallback: "prod",

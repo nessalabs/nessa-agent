@@ -84,7 +84,6 @@ test("Linux package verification reads the names the bundler writes", () => {
   assert.throws(() => linuxBundleArchitecture(undefined, "arm64"), /Unsupported/)
   assert.deepEqual(linuxBundles("Nessa", "0.1.0", "amd64"), {
     deb: "deb/Nessa_0.1.0_amd64.deb",
-    appimage: "appimage/Nessa_0.1.0_amd64.AppImage",
   })
 })
 
@@ -94,8 +93,6 @@ test("bundle verification follows explicit bundles or the authoritative default"
   assert.equal(includesBundle("app", config.bundle.targets, "dmg"), false)
   assert.equal(includesBundle("app,dmg", config.bundle.targets, "dmg"), true)
   assert.equal(includesBundle("all", ["app"], "dmg"), true)
-  assert.equal(includesBundle("deb,appimage", config.bundle.targets, "appimage"), true)
-  assert.equal(includesBundle("deb", config.bundle.targets, "appimage"), false)
 })
 
 test("the public desktop build command verifies the final bundle", () => {
@@ -247,7 +244,7 @@ test("a failed staple stops the build before verification", () => {
 test("a Linux build verifies its packages and staples nothing", () => {
   const calls = []
   const status = runDesktopBuild({
-    args: ["--target", "x86_64-unknown-linux-gnu", "--bundles", "deb"],
+    args: ["--target", "x86_64-unknown-linux-gnu"],
     environment: {},
     platform: "linux",
     spawn(command, args, options) {
@@ -262,8 +259,9 @@ test("a Linux build verifies its packages and staples nothing", () => {
   assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
 })
 
-test("a Linux build with no bundles named builds what a Linux release builds", () => {
-  // The config's "all" would include an AppImage, which the verifier refuses.
+test("a Linux build makes exactly what a Linux release builds", () => {
+  // The config's "all" would include an AppImage, whose bundler rewrites the
+  // runtime (release-assets.mjs says why).
   const calls = []
   const status = runDesktopBuild({
     args: [],
@@ -278,8 +276,17 @@ test("a Linux build with no bundles named builds what a Linux release builds", (
   const bundles = calls[0].args.indexOf("--bundles")
   assert.equal(calls[0].args[bundles + 1], releaseBundles("x86_64-unknown-linux-gnu"))
   assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb")
-  // Anything the verifier cannot check is refused before the build starts.
-  for (const args of [["--bundles", "rpm"], ["--bundles", "all"], ["--no-bundle"]]) {
+  // A choice of bundles is refused before the build starts, in every form
+  // Tauri reads one: the release's bundles are the only Linux build.
+  for (const args of [
+    ["--bundles", "rpm"],
+    ["--bundles", "deb", "rpm"],
+    ["--bundles=deb"],
+    ["-b", "deb"],
+    ["-bdeb"],
+    ["-b=deb"],
+    ["--no-bundle"],
+  ]) {
     const refused = []
     assert.throws(
       () =>
@@ -292,23 +299,10 @@ test("a Linux build with no bundles named builds what a Linux release builds", (
             return { status: 0 }
           },
         }),
-      /No Linux check verifies|--no-bundle/,
+      /drop --bundles and --no-bundle/,
     )
     assert.deepEqual(refused, [], `${args.join(" ")} started a build`)
   }
-  // Named bundles the verifier checks are the caller's.
-  const named = []
-  runDesktopBuild({
-    args: ["--bundles", "deb,appimage"],
-    environment: {},
-    platform: "linux",
-    spawn(command, spawnArgs, options) {
-      named.push({ command, args: spawnArgs, options })
-      return { status: 0 }
-    },
-  })
-  assert.equal(named[0].args.filter((argument) => argument === "--bundles").length, 1)
-  assert.equal(named[1].options.env.NESSA_BUILD_BUNDLES, "deb,appimage")
 })
 
 test("the verifier is told when the build began", () => {

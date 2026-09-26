@@ -82,11 +82,11 @@ test("the existing Linux matrix leg uniquely owns direct runtime assembly", () =
   assert.doesNotMatch(releaseWorkflow, /scripts\/desktop\/prepare\.mjs/)
   assert.match(
     releaseWorkflow,
-    /target: x86_64-unknown-linux-gnu\s+updater-target: linux-x86_64\s+bundles: deb\s/,
+    /target: x86_64-unknown-linux-gnu\s+updater-target: linux-x86_64\s/,
   )
   assert.match(
     releaseWorkflow,
-    /run: pnpm app:build --target \$\{\{ matrix\.target \}\} --bundles \$\{\{ matrix\.bundles \}\}/,
+    /run: pnpm app:build --target \$\{\{ matrix\.target \}\} \$\{\{ matrix\.bundles && format\('--bundles \{0\}', matrix\.bundles\) \|\| '' \}\}/,
   )
 })
 
@@ -365,21 +365,24 @@ test("a release builds every release target and only the bundles it publishes", 
   // because neither prepare script cross-compiles and there is no universal
   // build.
   const rows = [
-    ...workflow.matchAll(/target: (\S+)\s+updater-target: \S+\s+bundles: (\S+)/g),
+    ...workflow.matchAll(
+      /target: (\S+)\s+updater-target: \S+(?:\s+bundles: ([^\s#]+))?/g,
+    ),
   ]
   assert.deepEqual(
     rows.map(([, target]) => target),
     RELEASE_TARGETS,
   )
-  // The shipped config says "all" and stays that way for local builds; a
-  // release narrows it to what an update installs and a person downloads, so
-  // it cannot publish an installer for a platform with no gateway host.
+  // The shipped config says "all" and stays that way for local macOS builds; a
+  // release row narrows it to what an update installs and a person downloads.
+  // A Linux row names none: the build command makes exactly the release's
+  // bundles there and refuses to be told otherwise.
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
   assert.equal(config.bundle.targets, "all")
   for (const [, target, bundles] of rows)
     assert.equal(
       bundles,
-      releaseBundles(target),
+      target.endsWith("-linux-gnu") ? undefined : releaseBundles(target),
       `${target} builds bundles its release does not publish`,
     )
 })

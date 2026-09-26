@@ -189,12 +189,13 @@ jobs:
             bundles: app,dmg
           # The oldest supported Ubuntu, not the newest: the app and the runtime
           # binaries link the glibc they are built against, and a package built
-          # on 24.04 refuses to start on 22.04. No AppImage: its bundler
-          # rewrites the runtime's executables (scripts/desktop/release-assets.mjs).
+          # on 24.04 refuses to start on 22.04. No `bundles`: a Linux build
+          # makes exactly the release's .deb and refuses to be told otherwise
+          # (scripts/desktop/build-command.mjs); no AppImage, because its
+          # bundler rewrites the runtime (scripts/desktop/release-assets.mjs).
           - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             updater-target: linux-x86_64
-            bundles: deb
     runs-on: ${{ matrix.runner }}
     env:
       # Produces each update artifact's .sig beside it — the .app.tar.gz or the
@@ -283,10 +284,10 @@ jobs:
       # --bundles narrows the config's "all" to the outputs a release has any
       # use for. On macOS: `app`, which createUpdaterArtifacts archives into the
       # .app.tar.gz an update installs, and `dmg`, which is what a person
-      # downloads. On Linux: the .deb, both what a person downloads and what an
-      # update of a .deb install installs.
+      # downloads. On Linux the build command makes the .deb, both what a
+      # person downloads and what an update of a .deb install installs.
       - name: Build, sign and verify the bundle
-        run: pnpm app:build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        run: pnpm app:build --target ${{ matrix.target }} ${{ matrix.bundles && format('--bundles {0}', matrix.bundles) || '' }}
       - name: Remove the App Store Connect key and the signing keychain
         if: always() && runner.os == 'macOS'
         run: |
@@ -358,7 +359,7 @@ jobs:
           set -euo pipefail
           cat > release-notes.md <<'END'
           Nessa for macOS (Apple Silicon and Intel) and x86_64 Linux (.deb for
-          Ubuntu 22.04 or later and Debian 12 or later).
+          Ubuntu 22.04 or later).
 
           Whether the macOS artifacts are notarized is decided by the
           repository's secrets, so it is stated by the build rather than

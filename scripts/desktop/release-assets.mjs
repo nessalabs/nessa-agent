@@ -27,7 +27,7 @@
  * No AppImage is released. Its bundler (linuxdeploy) rewrites every ELF file
  * under `usr/lib`, the runtime's executables included, so the runtime no
  * longer matches its fingerprint and the Claude agent's self-contained binary
- * can be damaged; `verify-linux-bundle.mjs` refuses such an AppImage.
+ * can be damaged, so a Linux build makes the .deb alone.
  *
  * `stage` runs on each build runner and renames that target's output to the
  * name it will be published under. `manifest` runs once afterwards, over every

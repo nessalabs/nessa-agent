@@ -35,7 +35,7 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD="
           } >> "$GITHUB_ENV"
       - name: Build, sign and verify the bundle
-        run: pnpm app:build --target x86_64-unknown-linux-gnu --bundles deb
+        run: pnpm app:build --target x86_64-unknown-linux-gnu
       - name: Stage the published assets
         run: node scripts/desktop/release-assets.mjs stage --target x86_64-unknown-linux-gnu --into release-staging
       - name: Write a Linux-only manifest

@@ -521,12 +521,10 @@ independently of whether that turn contains text.
   processes, while a same-user process with cache write access can still replace
   an object after one invocation has returned. `prepare-macos.mjs` supplies Apple signing; `prepare-linux.mjs`
   requires native x86_64 GNU/Linux and probes each executable without starting a
-  service. Linux builds bundle that prepared resource into a `.deb`, the bundles
-  a Linux release builds, and accept only bundles `verify-linux-bundle.mjs`
-  checks, refusing others (and `--no-bundle`) before compiling. The verifier
-  checks the runtime inside the package this build wrote, and refuses an
-  AppImage, whose bundler rewrites it; it is the Linux counterpart of
-  `verify-macos-bundle.mjs`. `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
+  service. A Linux build bundles that prepared resource into a `.deb`, exactly
+  what a Linux release builds, and refuses `--bundles` and `--no-bundle` before
+  compiling. `verify-linux-bundle.mjs` checks the runtime inside the `.deb` this
+  build wrote; it is the Linux counterpart of `verify-macos-bundle.mjs`. `install-linux-build-deps.sh` is the one list of Ubuntu packages that CI and
   the release build against. `release-assets.mjs` names what each release
   target publishes and its updater key: one per macOS architecture, and
   `linux-x86_64-deb`. Windows has no preparation.
