@@ -4569,6 +4569,76 @@ mod tests {
         }
     }
 
+    /// ADR 221: after the signal, a gateway's refusal of this very request
+    /// ends the wait at once as a typed refusal carrying its published name;
+    /// the host's shared rule then decides what it allows.
+    #[test]
+    fn a_refused_retirement_ends_the_wait_as_a_typed_refusal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().canonicalize().unwrap().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        let directory = data.join("gateway-upgrade");
+        nessa_local_storage::create_directory(&directory).unwrap();
+        let (unit, prior_target, _) = fixture();
+        let prior = ReconciliationIncarnation::new(
+            prior_target,
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            99,
+            7420,
+        )
+        .unwrap();
+        let target =
+            ReconciliationTarget::new(unit.as_str().into(), "c".repeat(64), "d".repeat(64))
+                .unwrap();
+        let request_id = "550e8400-e29b-41d4-a716-446655440000";
+        let refused = serde_json::to_vec(&serde_json::json!({
+            "requestId": request_id,
+            "targetFingerprint": target.runtime_fingerprint(),
+            "runningFingerprint": prior.target().runtime_fingerprint(),
+            "runningInstance": prior.runtime_instance(),
+            "requestedInstance": prior.runtime_instance(),
+            "runningGeneration": prior.target().service_generation(),
+            "requestedRunningGeneration": prior.target().service_generation(),
+            "targetGeneration": target.service_generation(),
+            "retired": false,
+            "retirementRequestId": request_id,
+            "retirementCause": {
+                "principalId": "gateway",
+                "surfaceId": "gateway_upgrade",
+                "requestId": request_id,
+            },
+            "cleanupError": "conversation service: Retirement(..)",
+            "auditError": null,
+            "refusal": "data_missing",
+        }))
+        .unwrap();
+        atomic_write(&directory, Path::new("result.json"), &refused).unwrap();
+        let signals = Arc::new(AtomicUsize::new(0));
+
+        let answer = retire(
+            &data,
+            request_id,
+            &prior,
+            &target,
+            Box::new(FakeHeldProcess {
+                process_id: prior.process_id(),
+                live: true,
+                signals: signals.clone(),
+            }),
+            &SystemMonotonicClock,
+            || Ok(()),
+        );
+
+        assert_eq!(signals.load(Ordering::SeqCst), 1);
+        match answer {
+            Err(RetirementFailure::Refused { refusal, message }) => {
+                assert_eq!(refusal, RetirementRefusal::DataMissing);
+                assert!(message.contains("not acknowledged"), "{message}");
+            }
+            other => panic!("expected a typed refusal, got {other:?}"),
+        }
+    }
+
     /// An exact owned unit installed for a runtime staged beside it, stopped
     /// with no process, with its definition and wants link on disk.
     struct Installed {

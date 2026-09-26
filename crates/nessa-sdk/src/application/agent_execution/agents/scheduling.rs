@@ -2112,21 +2112,13 @@ impl Agent {
             agent.inner.lifecycle.wait_for_work().await;
             let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
             let cleanup = cleanup.into_result();
-            // Keep the cleanup outcome visible beside a pending-evidence failure,
-            // so an unconfirmed cleanup reads differently from a completed one.
-            match (saved, cleanup) {
-                (Ok(()), cleanup) => cleanup,
-                (Err(AgentError::Storage(error)), cleanup) => Err(AgentError::StorageDuringClose {
+            match saved {
+                Ok(()) => cleanup,
+                Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
                     error,
                     cleanup_result: Box::new(cleanup),
                 }),
-                (Err(error), Ok(_)) => Err(error),
-                (Err(AgentError::AuditFailure), Err(_)) => Err(AgentError::AuditAndCleanupFailure),
-                (Err(error), Err(cleanup_error)) => Err(AgentError::MultipleOperationFailures {
-                    first_error: Box::new(error),
-                    subsequent_error: Box::new(cleanup_error),
-                }
-                .bounded()),
+                Err(error) => Err(error),
             }
         })
         .await

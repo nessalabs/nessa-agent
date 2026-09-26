@@ -131,14 +131,16 @@ list's empty state no longer says "gateway".
 
 | `refusal` | The gateway sets it when | The host does |
 | --- | --- | --- |
-| `data_missing` | every agent's stop was confirmed and only its record failed (`AuditFailure` alone, for every owner), and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
+| `data_missing` | its stops failed, but nothing it started still holds resources (the SDK's `attachment_cleanup_pending` is false for every agent, and no opening is unsettled or holding), and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
 | `not_confirmed` | anything else: a stop that did not finish or was not confirmed, an admission that could not drain, or the retirement audit failing | Fails the attempt; **Try again** asks again |
 | absent | the gateway predates this field | Same as `not_confirmed` |
 
-`data_missing` is safe to act on because both halves hold: nothing the gateway
-started is still running, and the evidence it could not record has nowhere left
-to go. A missing directory alone is not enough; a stop that did not finish keeps
-the refusal `not_confirmed` whatever the disk says. The host syncs the result
+`data_missing` is safe to act on because nothing the gateway started is still
+running. That is read from the SDK's own cleanup fact, never from which error a
+failed stop returned: an error's variant is a diagnostic, and a provider may call
+an unconfirmed cleanup an `AuditFailure` while a released one can still fail. A
+missing directory alone is not enough; a stop that did not release its resources
+keeps the refusal `not_confirmed` whatever the disk says. The host syncs the result
 before acting on it, as it does before acting on a success, and its own journal
 records the stop: the failed retirement step, whose text names the refusal, the
 plan `unload-unretirable-service`, its completion and observation, and the
@@ -185,6 +187,11 @@ is a separate decision, not taken here.
   `not_confirmed`.
 - **Ask the person whether to stop an unretirable gateway.** They cannot judge
   it, and for `data_missing` there is nothing to protect. Rejected.
+- **Decide `data_missing` from the stop's error variant** (`AuditFailure` alone
+  meaning "cleanup done, only the record failed"). Tried first; review found
+  both directions wrong — a provider can report unconfirmed cleanup as
+  `AuditFailure`, and a released cleanup can come back as a combined failure.
+  Rejected for the SDK's typed fact.
 - **Have a gateway with missing data stop itself.** It would also stop a gateway
   whose data was restored a moment later, with nobody asking. Rejected.
 

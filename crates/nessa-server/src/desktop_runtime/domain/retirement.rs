@@ -237,9 +237,9 @@ impl RetirementCause {
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetirementRefusal {
-    /// Every agent was stopped, and only the record of stopping it failed,
-    /// because this gateway's conversation data is no longer where it was
-    /// opened.
+    /// Every agent's resources were released, but retirement could not be
+    /// completed, and this gateway's conversation data is no longer where it
+    /// was opened.
     DataMissing,
     /// Anything else that could not be confirmed.
     NotConfirmed,
@@ -248,11 +248,11 @@ pub(crate) enum RetirementRefusal {
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 impl RetirementRefusal {
     /// The refusal for a retirement that did not happen. `DataMissing` needs
-    /// both facts: every owner's stop was confirmed and only its record failed,
-    /// and the data those records belong in is gone. Then stopping this
-    /// gateway leaves nothing running and loses nothing that still exists.
-    pub(crate) fn of(stops_confirmed_but_unrecorded: bool, data_missing: bool) -> Self {
-        if stops_confirmed_but_unrecorded && data_missing {
+    /// both facts: nothing this gateway started still holds resources, by the
+    /// SDK's own cleanup fact, and the data its records belong in is gone.
+    /// Then stopping this gateway leaves nothing running.
+    pub(crate) fn of(nothing_left_running: bool, data_missing: bool) -> Self {
+        if nothing_left_running && data_missing {
             Self::DataMissing
         } else {
             Self::NotConfirmed

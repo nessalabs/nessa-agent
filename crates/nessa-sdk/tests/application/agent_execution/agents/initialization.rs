@@ -70,6 +70,7 @@ enum AuditPanic {
 }
 struct PanickingAudit(AuditPanic);
 struct QueuePanickingAudit(AuditPanic);
+struct QueueSettlementRejectingAudit;
 struct AutomaticCloseAudit {
     starting_entered: Notify,
     starting_release: Mutex<Option<oneshot::Receiver<()>>>,
@@ -94,6 +95,17 @@ impl ExecutionAudit for QueuePanickingAudit {
             panic!("queue audit construction panic");
         }
         Box::pin(PanickingAuditFuture(self.0))
+    }
+}
+impl ExecutionAudit for QueueSettlementRejectingAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            if matches!(record, ExecutionAuditRecord::QueueSettled(_)) {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 impl ExecutionAudit for AutomaticCloseAudit {

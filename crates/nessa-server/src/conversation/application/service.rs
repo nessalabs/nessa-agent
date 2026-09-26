@@ -2739,6 +2739,31 @@ impl ConversationService {
         retired
     }
 
+    /// Whether any conversation this service opened may still hold provider or
+    /// storage resources: an agent whose release the SDK has not confirmed, an
+    /// opening that has not settled, or a failed opening that holds what it
+    /// launched. A successful stop releases its slot, so it is not counted.
+    ///
+    /// It reads the SDK's own cleanup fact, `Agent::attachment_cleanup_pending`,
+    /// never the variant of the error a stop returned: that variant is a
+    /// diagnostic and does not say whether resources remain (ADR 221).
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
+    pub(crate) async fn owns_unreleased_resources(&self) -> bool {
+        let slots: Vec<_> = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        slots.iter().any(|slot| match slot.value.get() {
+            None => true,
+            Some(Ok(live)) => live.agent.attachment_cleanup_pending(),
+            Some(Err(failed)) => failed.holds,
+        })
+    }
+
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) fn retirement_cause(&self) -> Option<ActionContext> {
         self.inner.retirement.get().cloned()

@@ -20,8 +20,6 @@ struct GatedProvider {
     saved_before_steering: Mutex<Vec<InvocationRecord>>,
     storage: MemoryStorage,
     closed: AtomicUsize,
-    /// When set, provider cleanup reports this error as unconfirmed.
-    close_failure: Mutex<Option<AgentError>>,
     steering_wait: Mutex<Option<oneshot::Receiver<()>>>,
     steering_started: Notify,
 }
@@ -182,10 +180,7 @@ impl ProviderSessionBackend for GatedBackend {
                     self.closing.send_replace(true);
                     // Closing the stream lets execution settle even before its Finished observation.
                     self.events.lock().unwrap().take();
-                    match self.provider.close_failure.lock().unwrap().clone() {
-                        Some(error) => Err(error),
-                        None => Ok(CloseOutcome { forced: false }),
-                    }
+                    Ok(CloseOutcome { forced: false })
                 }
             }
             .await;
@@ -209,17 +204,6 @@ async fn fixture(
     Arc<GatedProvider>,
     mpsc::UnboundedReceiver<Started>,
 ) {
-    fixture_with_audit(steering, Arc::new(AcceptingAudit)).await
-}
-async fn fixture_with_audit(
-    steering: Result<SteeringOutcome, AgentError>,
-    audit: Arc<dyn ExecutionAudit>,
-) -> (
-    Agent,
-    MemoryStorage,
-    Arc<GatedProvider>,
-    mpsc::UnboundedReceiver<Started>,
-) {
     let storage = MemoryStorage::default();
     let (started, receiver) = mpsc::unbounded_channel();
     let provider = Arc::new(GatedProvider {
@@ -229,14 +213,12 @@ async fn fixture_with_audit(
         saved_before_steering: Mutex::new(Vec::new()),
         storage: storage.clone(),
         closed: AtomicUsize::new(0),
-        close_failure: Mutex::new(None),
         steering_wait: Mutex::new(None),
         steering_started: Notify::new(),
     });
-    let agent = attached_agent_with_audit(
+    let agent = attached_agent(
         Arc::new(GatedFactory(provider.clone())),
         storage.manager().await,
-        audit,
     )
     .await
     .unwrap();
@@ -638,54 +620,6 @@ async fn scheduling_failed_close_audit_reports_failure_and_still_cleans_every_pe
         assert_eq!(saved.scheduling.last().unwrap().actor, Some(close_action()));
     }
     assert!(calls.try_recv().is_err());
-}
-
-/// Closes with `pending` queued items whose cancellation audit is refused,
-/// while provider cleanup is confirmed or reports `close_failure`.
-async fn close_with_refused_pending_audit(
-    pending: &[&str],
-    close_failure: Option<AgentError>,
-) -> Result<CloseOutcome, AgentError> {
-    let (agent, _, provider, mut calls) = fixture_with_audit(
-        Ok(SteeringOutcome::Injected),
-        Arc::new(QueueSettlementRejectingAudit),
-    )
-    .await;
-    *provider.close_failure.lock().unwrap() = close_failure;
-    let _active = agent.enqueue(request("active"), actor()).await.unwrap();
-    let _running = started(&mut calls, "active").await;
-    for id in pending {
-        agent.enqueue(request(id), actor()).await.unwrap();
-    }
-    within(agent.close(close_action())).await
-}
-
-#[tokio::test]
-async fn scheduling_close_audit_failure_keeps_unconfirmed_cleanup_visible() {
-    assert_eq!(
-        close_with_refused_pending_audit(&["pending"], None).await,
-        Err(AgentError::AuditFailure)
-    );
-    assert_eq!(
-        close_with_refused_pending_audit(&["pending"], Some(AgentError::CleanupUncertain)).await,
-        Err(AgentError::AuditAndCleanupFailure)
-    );
-    let both_refused = AgentError::MultipleOperationFailures {
-        first_error: Box::new(AgentError::AuditFailure),
-        subsequent_error: Box::new(AgentError::AuditFailure),
-    };
-    assert_eq!(
-        close_with_refused_pending_audit(&["first", "second"], None).await,
-        Err(both_refused.clone())
-    );
-    assert_eq!(
-        close_with_refused_pending_audit(&["first", "second"], Some(AgentError::CleanupUncertain))
-            .await,
-        Err(AgentError::MultipleOperationFailures {
-            first_error: Box::new(both_refused),
-            subsequent_error: Box::new(AgentError::CleanupUncertain),
-        })
-    );
 }
 
 #[tokio::test]

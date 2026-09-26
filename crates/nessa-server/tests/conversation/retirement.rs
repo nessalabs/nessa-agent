@@ -314,12 +314,16 @@ impl crate::desktop_runtime::application::ConversationData for PresentData {
     }
 }
 
-/// ADR 221: a gateway says its data is missing only when every owner's stop was
-/// confirmed and only the record of it failed, and the data is gone. A stop
-/// that did not finish keeps the refusal `not_confirmed` whatever the disk says.
+/// ADR 221: a gateway says its data is missing only when nothing it started
+/// still holds resources, by the SDK's own cleanup fact, and its data is gone.
+/// Which error a failed stop returned decides nothing: a provider may call an
+/// unconfirmed cleanup an `AuditFailure`, and a released one may still fail.
 #[tokio::test]
-async fn data_missing_needs_confirmed_stops_as_well_as_missing_data() {
+async fn data_missing_needs_released_resources_as_well_as_missing_data() {
     use crate::desktop_runtime::domain::RetirementRefusal;
+    use nessa_sdk::application::agent_execution::providers::{
+        CleanupReport, CloseOutcome, ResourceCleanup,
+    };
     struct Accept;
     impl RetirementAudit for Accept {
         fn record(
@@ -335,29 +339,36 @@ async fn data_missing_needs_confirmed_stops_as_well_as_missing_data() {
             self.0
         }
     }
+    let released = |error: AgentError| {
+        CleanupReport::new(
+            ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+            Err(error),
+        )
+    };
+    let held = |error: AgentError| CleanupReport::unconfirmed(error);
 
-    for (close_failure, missing, expected) in [
+    for (report, missing, expected) in [
         (
-            AgentError::AuditFailure,
+            released(AgentError::AuditFailure),
             true,
             RetirementRefusal::DataMissing,
         ),
         (
-            AgentError::AuditFailure,
+            released(AgentError::AuditFailure),
             false,
             RetirementRefusal::NotConfirmed,
         ),
         (
-            AgentError::CleanupUncertain,
+            held(AgentError::CleanupUncertain),
             true,
             RetirementRefusal::NotConfirmed,
         ),
+        // The same variant as the released case, with resources still held.
         (
-            AgentError::AuditAndCleanupFailure,
+            held(AgentError::AuditFailure),
             true,
             RetirementRefusal::NotConfirmed,
         ),
-        (AgentError::Deadline, true, RetirementRefusal::NotConfirmed),
     ] {
         let (service, provider, _, _) = fixture(ConversationLimits::default());
         service
@@ -373,7 +384,8 @@ async fn data_missing_needs_confirmed_stops_as_well_as_missing_data() {
             )
             .await
             .unwrap();
-        *provider.close_failure.lock().unwrap() = Some(close_failure.clone());
+        let described = format!("{report:?} missing={missing}");
+        provider.close_reports.lock().unwrap().push_back(report);
         let result = retire(
             RetirementRequest::new(
                 Uuid::new_v4().to_string(),
@@ -389,11 +401,7 @@ async fn data_missing_needs_confirmed_stops_as_well_as_missing_data() {
             &Accept,
         )
         .await;
-        assert!(!result.retired, "{close_failure:?}");
-        assert_eq!(
-            result.refusal,
-            Some(expected),
-            "{close_failure:?} missing={missing}"
-        );
+        assert!(!result.retired, "{described}");
+        assert_eq!(result.refusal, Some(expected), "{described}");
     }
 }

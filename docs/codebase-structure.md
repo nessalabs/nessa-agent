@@ -696,8 +696,8 @@ preserves the old process. An admitted retirement cause fences admission even wh
 that evidence forces a stale-service retry and, with one exception, never
 authorizes bootout. A result that did not retire names why, as `refusal` from
 `protocol/defaults/gateway-retirement-refusals.json`. The exception is
-`data_missing`: every agent was confirmed stopped and only the record of it
-failed, because the gateway's conversation data is gone. The host then stops the
+`data_missing`: nothing the gateway started still holds resources, by the SDK's
+own cleanup fact, and the gateway's conversation data is gone. The host then stops the
 old service itself: launchd unloads it under its own plan,
 `unload-unretirable-service`, and systemd stops the unit with its ordinary stop
 step (ADR 221). A pending
