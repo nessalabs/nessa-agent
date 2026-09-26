@@ -51,6 +51,15 @@ pub(super) trait Launchctl: Send + Sync {
     fn bootstrap(&self, domain: &str, plist: &Path) -> std::io::Result<Output>;
     /// `launchctl bootout <service>`.
     fn bootout(&self, service: &str) -> Result<(), String>;
+    /// `launchctl kill <signal> <service>`. `keep_waiting` is asked while
+    /// launchctl has not returned; once it answers false the command is
+    /// abandoned and its result is indeterminate.
+    fn signal(
+        &self,
+        service: &str,
+        signal: &str,
+        keep_waiting: &mut dyn FnMut() -> bool,
+    ) -> LifecycleCommandResult;
 }
 
 pub(super) struct NativeLaunchctl;
@@ -70,6 +79,44 @@ impl Launchctl for NativeLaunchctl {
     }
     fn bootout(&self, service: &str) -> Result<(), String> {
         launchctl(&["bootout", service])
+    }
+    fn signal(
+        &self,
+        service: &str,
+        signal: &str,
+        keep_waiting: &mut dyn FnMut() -> bool,
+    ) -> LifecycleCommandResult {
+        let mut child = match Command::new("/bin/launchctl")
+            .args(["kill", signal, service])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => return LifecycleCommandResult::Failed(error.to_string()),
+        };
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return LifecycleCommandResult::Accepted,
+                Ok(Some(_)) => {
+                    let output = child.wait_with_output();
+                    return LifecycleCommandResult::Rejected(
+                        output
+                            .map(|output| String::from_utf8_lossy(&output.stderr).trim().to_owned())
+                            .unwrap_or_else(|error| error.to_string()),
+                    );
+                }
+                Ok(None) if keep_waiting() => {}
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return LifecycleCommandResult::Indeterminate(
+                        "launchctl did not return before the quit deadline".into(),
+                    );
+                }
+                Err(error) => return LifecycleCommandResult::Indeterminate(error.to_string()),
+            }
+        }
     }
 }
 
@@ -443,8 +490,11 @@ impl GatewayHost for Launchd {
     ) -> Result<LifecycleObservation, GatewayError> {
         let token = session.begin_proof()?;
         let gateway = session.request().intended();
-        let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
-        let running = health(gateway.port());
+        let status = self
+            .launchctl
+            .status(gateway.service())
+            .map_err(GatewayError::Stop)?;
+        let running = self.launchctl.health(gateway.port());
         if !matches_reconciled_gateway(gateway, &status, running.as_ref()) {
             return Err(GatewayError::Stop(
                 "Gateway runtime identity changed; no agent stop request was sent".into(),
@@ -456,7 +506,7 @@ impl GatewayHost for Launchd {
         session.claim(token, plan, &candidate, observation_version)?;
         // Claim and spawn are adjacent: no filesystem, lock, health, or manager
         // query can invalidate an unconsumed proof between them.
-        let command = dispatch_stop_command(gateway.service(), session);
+        let command = dispatch_stop_command(self.launchctl.as_ref(), gateway.service(), session);
         session.command_result(command.clone())?;
         retry_journal_delivery(|| {
             journal.effect_completion("stop-agents-on-desktop-quit", "signal-agents", &command)
@@ -471,8 +521,11 @@ impl GatewayHost for Launchd {
                 "Gateway stop deadline passed before fresh observation".into(),
             ));
         }
-        let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
-        let running = health(gateway.port());
+        let status = self
+            .launchctl
+            .status(gateway.service())
+            .map_err(GatewayError::Stop)?;
+        let running = self.launchctl.health(gateway.port());
         let observed = observed_incarnation(gateway.service(), gateway.port(), &status, running);
         let stop = LifecycleEffect::StopAgents {
             incarnation: candidate.clone(),
@@ -510,38 +563,18 @@ fn retry_journal_delivery<T>(
     }
 }
 
-fn dispatch_stop_command(service: &str, session: &GatewayStopSession) -> LifecycleCommandResult {
-    let mut child = match Command::new("/bin/launchctl")
-        .args(["kill", "SIGUSR1", service])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => return LifecycleCommandResult::Failed(error.to_string()),
-    };
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return LifecycleCommandResult::Accepted,
-            Ok(Some(_)) => {
-                let output = child.wait_with_output();
-                return LifecycleCommandResult::Rejected(
-                    output
-                        .map(|output| String::from_utf8_lossy(&output.stderr).trim().to_owned())
-                        .unwrap_or_else(|error| error.to_string()),
-                );
-            }
-            Ok(None) if !session.deadline_passed() => session.wait(Duration::from_millis(10)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return LifecycleCommandResult::Indeterminate(
-                    "launchctl did not return before the quit deadline".into(),
-                );
-            }
-            Err(error) => return LifecycleCommandResult::Indeterminate(error.to_string()),
+fn dispatch_stop_command(
+    launchctl: &dyn Launchctl,
+    service: &str,
+    session: &GatewayStopSession,
+) -> LifecycleCommandResult {
+    launchctl.signal(service, "SIGUSR1", &mut || {
+        if session.deadline_passed() {
+            return false;
         }
-    }
+        session.wait(Duration::from_millis(10));
+        true
+    })
 }
 
 fn observed_incarnation(
@@ -1082,6 +1115,35 @@ fn bootstrap_cleanup(service: &str) -> Result<LifecyclePlanStep, String> {
     .map_err(|error| error.to_string())
 }
 
+/// Unloads the service as one journaled plan, observing what launchd shows
+/// afterwards. The stale, legacy and unavailable registrations all leave this
+/// way.
+fn unload_service(
+    progress: &dyn GatewayReconciliationProgress,
+    launchctl: &dyn Launchctl,
+    artifacts: &LaunchdArtifacts,
+    plan_id: &str,
+    service: &str,
+    port: u16,
+) -> Result<(), RegisterFailure> {
+    let effect = LifecycleEffect::UnloadService {
+        service: service.into(),
+    };
+    run_planned_effect(
+        progress,
+        plan_id,
+        effect.clone(),
+        || launchctl.bootout(service),
+        || {
+            let status = launchctl.status(service)?;
+            Ok((
+                observed_incarnation(service, port, &status, launchctl.health(port)),
+                artifacts.present(&effect, status.loaded)?,
+            ))
+        },
+    )
+}
+
 /// What one bootstrap step needs to know about its registration.
 struct BootstrapRequest<'a> {
     domain: &'a str,
@@ -1202,6 +1264,7 @@ fn register(
     progress: &dyn GatewayReconciliationProgress,
 ) -> Result<ReconciledGateway, RegisterFailure> {
     let configuration = &host.configuration;
+    let launchctl = host.launchctl.as_ref();
     let home = host.home.as_path();
     let location = runtime.to_string_lossy();
     if location.starts_with("/Volumes/") || location.contains("/AppTranslocation/") {
@@ -1227,7 +1290,7 @@ fn register(
     let uid = unsafe { libc::getuid() };
     let domain = format!("gui/{uid}");
     let service = format!("{domain}/{label}");
-    let status = service_status(&service)?;
+    let status = launchctl.status(&service)?;
     let loaded = status.loaded;
     let loaded_pid = status.pid;
     let process_identity_known = status.process_identity_known;
@@ -1283,7 +1346,7 @@ fn register(
         Some(data) => read_retirement_evidence(data)?,
         None => None,
     };
-    let running = if loaded { health(port) } else { None };
+    let running = if loaded { launchctl.health(port) } else { None };
     let pending = match (&running, installed_data.as_deref()) {
         (Some(Health::Managed(runtime)), Some(data)) => read_pending_retirement(data, runtime)?,
         _ => None,
@@ -1360,9 +1423,9 @@ fn register(
                 )
             },
             || {
-                let status = service_status(&service)?;
+                let status = launchctl.status(&service)?;
                 Ok((
-                    observed_incarnation(&service, port, &status, health(port)),
+                    observed_incarnation(&service, port, &status, launchctl.health(port)),
                     artifacts.present(&staged_effect, status.loaded)?,
                 ))
             },
@@ -1394,9 +1457,9 @@ fn register(
                 }
             },
             || {
-                let status = service_status(&service)?;
+                let status = launchctl.status(&service)?;
                 Ok((
-                    observed_incarnation(&service, port, &status, health(port)),
+                    observed_incarnation(&service, port, &status, launchctl.health(port)),
                     artifacts.present(&staged_effect, status.loaded)?,
                 ))
             },
@@ -1456,43 +1519,34 @@ fn register(
                 retirement.clone(),
                 || {
                     retire(
+                        launchctl,
                         &old_data,
-                        &service,
-                        &fingerprint,
-                        &running.fingerprint,
-                        &running.instance,
-                        &running.generation,
-                        &generation,
+                        control::Retirement {
+                            service: &service,
+                            target: &fingerprint,
+                            running: &running.fingerprint,
+                            instance: &running.instance,
+                            running_generation: &running.generation,
+                            target_generation: &generation,
+                        },
                     )
                 },
                 || {
-                    let status = service_status(&service)?;
+                    let status = launchctl.status(&service)?;
                     Ok((
-                        observed_incarnation(&service, port, &status, health(port)),
+                        observed_incarnation(&service, port, &status, launchctl.health(port)),
                         artifacts.present(&retirement, status.loaded)?,
                     ))
                 },
             )?;
             progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
-            run_planned_effect(
+            unload_service(
                 progress,
+                launchctl,
+                &artifacts,
                 "unload-stale-service",
-                LifecycleEffect::UnloadService {
-                    service: service.clone(),
-                },
-                || launchctl(&["bootout", &service]),
-                || {
-                    let status = service_status(&service)?;
-                    Ok((
-                        observed_incarnation(&service, port, &status, health(port)),
-                        artifacts.present(
-                            &LifecycleEffect::UnloadService {
-                                service: service.clone(),
-                            },
-                            status.loaded,
-                        )?,
-                    ))
-                },
+                &service,
+                port,
             )?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
         }
@@ -1501,25 +1555,13 @@ fn register(
             // SIGTERM cancels its active agents; never send it SIGUSR2.
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
             progress.readiness_invalidated();
-            run_planned_effect(
+            unload_service(
                 progress,
+                launchctl,
+                &artifacts,
                 "unload-legacy-service",
-                LifecycleEffect::UnloadService {
-                    service: service.clone(),
-                },
-                || launchctl(&["bootout", &service]),
-                || {
-                    let status = service_status(&service)?;
-                    Ok((
-                        observed_incarnation(&service, port, &status, health(port)),
-                        artifacts.present(
-                            &LifecycleEffect::UnloadService {
-                                service: service.clone(),
-                            },
-                            status.loaded,
-                        )?,
-                    ))
-                },
+                &service,
+                port,
             )?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
         }
@@ -1555,25 +1597,13 @@ fn register(
                 );
             }
             progress.readiness_invalidated();
-            run_planned_effect(
+            unload_service(
                 progress,
+                launchctl,
+                &artifacts,
                 "unload-unavailable-service",
-                LifecycleEffect::UnloadService {
-                    service: service.clone(),
-                },
-                || launchctl(&["bootout", &service]),
-                || {
-                    let status = service_status(&service)?;
-                    Ok((
-                        observed_incarnation(&service, port, &status, health(port)),
-                        artifacts.present(
-                            &LifecycleEffect::UnloadService {
-                                service: service.clone(),
-                            },
-                            status.loaded,
-                        )?,
-                    ))
-                },
+                &service,
+                port,
             )?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
             if recorded.is_some() {
@@ -1628,16 +1658,16 @@ fn register(
                 )
             },
             || {
-                let status = service_status(&service)?;
+                let status = launchctl.status(&service)?;
                 Ok((
-                    observed_incarnation(&service, port, &status, health(port)),
+                    observed_incarnation(&service, port, &status, launchctl.health(port)),
                     artifacts.present(&publication, status.loaded)?,
                 ))
             },
         )?;
         bootstrap_service(
             progress,
-            host.launchctl.as_ref(),
+            launchctl,
             host.disabled_services.as_ref(),
             BootstrapRequest {
                 domain: &domain,
@@ -1659,40 +1689,42 @@ fn register(
         progress
             .effect_planned("adopt-ready-incarnation", &readiness_step, &[])
             .map_err(RegisterFailure::Audit)?;
-        let running = match wait_fingerprint(&service, (&fingerprint, &generation), port, &log) {
-            Ok(running) => {
-                progress
-                    .effect_completed(
-                        "adopt-ready-incarnation",
-                        readiness_step.id(),
-                        &LifecycleCommandResult::Accepted,
-                    )
-                    .map_err(RegisterFailure::Audit)?;
-                running
-            }
-            Err(error) => {
-                progress
-                    .effect_completed(
-                        "adopt-ready-incarnation",
-                        readiness_step.id(),
-                        &LifecycleCommandResult::Failed(format!("{error:?}")),
-                    )
-                    .map_err(RegisterFailure::Audit)?;
-                let status = service_status(&service)?;
-                let observed = observed_incarnation(&service, port, &status, health(port));
-                progress
-                    .physical_observed(
-                        &LifecycleObservationSource::Effect {
-                            plan_id: "adopt-ready-incarnation".into(),
-                            step_id: "primary".into(),
-                        },
-                        observed,
-                        artifacts.present(readiness_step.effect(), status.loaded)?,
-                    )
-                    .map_err(RegisterFailure::Audit)?;
-                return Err(error.into());
-            }
-        };
+        let running =
+            match wait_fingerprint(launchctl, &service, (&fingerprint, &generation), port, &log) {
+                Ok(running) => {
+                    progress
+                        .effect_completed(
+                            "adopt-ready-incarnation",
+                            readiness_step.id(),
+                            &LifecycleCommandResult::Accepted,
+                        )
+                        .map_err(RegisterFailure::Audit)?;
+                    running
+                }
+                Err(error) => {
+                    progress
+                        .effect_completed(
+                            "adopt-ready-incarnation",
+                            readiness_step.id(),
+                            &LifecycleCommandResult::Failed(format!("{error:?}")),
+                        )
+                        .map_err(RegisterFailure::Audit)?;
+                    let status = launchctl.status(&service)?;
+                    let observed =
+                        observed_incarnation(&service, port, &status, launchctl.health(port));
+                    progress
+                        .physical_observed(
+                            &LifecycleObservationSource::Effect {
+                                plan_id: "adopt-ready-incarnation".into(),
+                                step_id: "primary".into(),
+                            },
+                            observed,
+                            artifacts.present(readiness_step.effect(), status.loaded)?,
+                        )
+                        .map_err(RegisterFailure::Audit)?;
+                    return Err(error.into());
+                }
+            };
         let running_identity = ReconciledGateway::new(
             service.clone(),
             running.fingerprint.clone(),
@@ -3278,7 +3310,14 @@ mod recovery_tests {
         state: Mutex<FakeState>,
         /// The exit code `bootstrap` returns, and the state it leaves.
         bootstrap: Option<(i32, FakeState)>,
+        /// Whether commands may run at all; recovery's fake allows none.
+        commands: bool,
+        /// What a bootout returns when it fails.
+        bootout_failure: Option<String>,
+        /// What a signal returns.
+        signal_result: Option<LifecycleCommandResult>,
         bootouts: Mutex<usize>,
+        signals: Mutex<Vec<String>>,
     }
 
     #[derive(Clone, Default)]
@@ -3294,7 +3333,11 @@ mod recovery_tests {
                 target: target.clone(),
                 state: Mutex::new(state),
                 bootstrap: None,
+                commands: false,
+                bootout_failure: None,
+                signal_result: None,
                 bootouts: Mutex::new(0),
+                signals: Mutex::new(Vec::new()),
             }
         }
     }
@@ -3325,6 +3368,7 @@ mod recovery_tests {
         }
         fn bootstrap(&self, _: &str, _: &Path) -> std::io::Result<Output> {
             use std::os::unix::process::ExitStatusExt;
+            assert!(self.commands, "recovery runs no command");
             let (code, after) = self.bootstrap.clone().expect("no bootstrap was scripted");
             *self.state.lock().unwrap() = after;
             Ok(Output {
@@ -3334,10 +3378,25 @@ mod recovery_tests {
             })
         }
         fn bootout(&self, _: &str) -> Result<(), String> {
-            assert!(self.bootstrap.is_some(), "recovery runs no command");
+            assert!(self.commands, "recovery runs no command");
             *self.bootouts.lock().unwrap() += 1;
+            if let Some(failure) = &self.bootout_failure {
+                return Err(failure.clone());
+            }
             *self.state.lock().unwrap() = FakeState::default();
             Ok(())
+        }
+        fn signal(
+            &self,
+            _: &str,
+            signal: &str,
+            _: &mut dyn FnMut() -> bool,
+        ) -> LifecycleCommandResult {
+            assert!(self.commands, "recovery runs no command");
+            self.signals.lock().unwrap().push(signal.into());
+            self.signal_result
+                .clone()
+                .expect("no signal result was scripted")
         }
     }
 
@@ -4169,6 +4228,7 @@ mod recovery_tests {
     ) -> (Result<(), RegisterFailure>, JournalProgress, usize) {
         let scenario = Scenario::new(None);
         let mut launchctl = FakeLaunchctl::new(&scenario.target, FakeState::default());
+        launchctl.commands = true;
         launchctl.bootstrap = Some((exit, after));
         let progress = JournalProgress::new(&scenario.target, refuse);
         let artifacts = LaunchdArtifacts::for_label(scenario.home.path(), &scenario.label);
@@ -4445,6 +4505,109 @@ mod recovery_tests {
             written,
             [completed("primary", UNRETURNED), observed("primary", true)]
         );
+    }
+
+    fn unload_with(
+        state: FakeState,
+        bootout_failure: Option<&str>,
+    ) -> (Result<(), RegisterFailure>, JournalProgress, usize) {
+        let scenario = Scenario::new(None);
+        let mut launchctl = FakeLaunchctl::new(&scenario.target, state);
+        launchctl.commands = true;
+        launchctl.bootout_failure = bootout_failure.map(str::to_owned);
+        let progress = JournalProgress::new(&scenario.target, None);
+        let artifacts = LaunchdArtifacts::for_label(scenario.home.path(), &scenario.label);
+        let result = unload_service(
+            &progress,
+            &launchctl,
+            &artifacts,
+            "unload-stale-service",
+            scenario.target.service(),
+            7398,
+        );
+        let bootouts = *launchctl.bootouts.lock().unwrap();
+        (result, progress, bootouts)
+    }
+
+    #[test]
+    fn an_unload_boots_out_the_label_and_records_what_launchd_shows_after() {
+        let (result, progress, bootouts) = unload_with(running_target(), None);
+        assert!(result.is_ok());
+        assert_eq!(bootouts, 1);
+        assert_eq!(
+            progress.written(),
+            [
+                "plan:unload-stale-service",
+                "primary:accepted",
+                "observed:primary:false",
+            ]
+        );
+        assert!(progress.settled());
+
+        // launchd refuses the bootout: the failure is recorded, with the label
+        // still loaded.
+        let (result, progress, bootouts) =
+            unload_with(running_target(), Some("Boot-out failed: 5"));
+        let Err(RegisterFailure::Physical(message)) = result else {
+            panic!("a refused bootout fails the step");
+        };
+        assert!(message.contains("Boot-out failed"), "{message}");
+        assert_eq!(bootouts, 1);
+        assert_eq!(
+            progress.written(),
+            [
+                "plan:unload-stale-service",
+                "primary:failed",
+                "observed:primary:true",
+            ]
+        );
+    }
+
+    #[test]
+    fn readiness_is_read_through_launchctl() {
+        let scenario = Scenario::new(None);
+        let launchctl = FakeLaunchctl::new(&scenario.target, running_target());
+        let log = scenario.home.path().join("logs/gateway.log");
+        let running = control::wait_fingerprint(
+            &launchctl,
+            scenario.target.service(),
+            (
+                scenario.target.runtime_fingerprint(),
+                scenario.target.service_generation(),
+            ),
+            7398,
+            &log,
+        )
+        .unwrap();
+        assert_eq!(running.pid, 42);
+    }
+
+    #[test]
+    fn the_retirement_signal_goes_through_launchctl() {
+        let scenario = Scenario::new(None);
+        let mut launchctl = FakeLaunchctl::new(&scenario.target, running_target());
+        launchctl.commands = true;
+        launchctl.signal_result = Some(LifecycleCommandResult::Rejected(
+            "Could not find service".into(),
+        ));
+        let data = scenario.home.path().join("data");
+        let target_generation = "d".repeat(64);
+        let running = "c".repeat(64);
+        let refused = control::retire(
+            &launchctl,
+            &data,
+            control::Retirement {
+                service: scenario.target.service(),
+                target: scenario.target.runtime_fingerprint(),
+                running: &running,
+                instance: "550e8400-e29b-41d4-a716-446655440001",
+                running_generation: scenario.target.service_generation(),
+                target_generation: &target_generation,
+            },
+        )
+        .unwrap_err();
+        assert!(refused.contains("Could not find service"), "{refused}");
+        assert_eq!(*launchctl.signals.lock().unwrap(), ["SIGUSR2"]);
     }
 
     #[test]

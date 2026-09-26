@@ -543,15 +543,29 @@ fn read_acknowledgement(
         Err(error) => Err(error.to_string()),
     }
 }
+/// The running gateway asked to retire, and the runtime replacing it.
+pub(super) struct Retirement<'a> {
+    pub service: &'a str,
+    pub target: &'a str,
+    pub running: &'a str,
+    pub instance: &'a str,
+    pub running_generation: &'a str,
+    pub target_generation: &'a str,
+}
+
 pub(super) fn retire(
+    launchctl: &dyn super::Launchctl,
     data: &Path,
-    service: &str,
-    target: &str,
-    running: &str,
-    instance: &str,
-    running_generation: &str,
-    target_generation: &str,
+    retirement: Retirement<'_>,
 ) -> Result<(), String> {
+    let Retirement {
+        service,
+        target,
+        running,
+        instance,
+        running_generation,
+        target_generation,
+    } = retirement;
     let directory = data.join("gateway-upgrade");
     nessa_local_storage::create_directory(&directory).map_err(|e| e.to_string())?;
     let output = Command::new("/usr/bin/uuidgen")
@@ -572,7 +586,18 @@ pub(super) fn retire(
         running_generation,
         target_generation,
     )?;
-    launchctl(&["kill", "SIGUSR2", service])?;
+    // The request is durable, so the signal waits for launchctl to answer.
+    match launchctl.signal(service, "SIGUSR2", &mut || {
+        std::thread::sleep(Duration::from_millis(10));
+        true
+    }) {
+        super::LifecycleCommandResult::Accepted => {}
+        super::LifecycleCommandResult::Rejected(message)
+        | super::LifecycleCommandResult::Failed(message)
+        | super::LifecycleCommandResult::Indeterminate(message) => {
+            return Err(format!("launchctl kill SIGUSR2 {service}: {message}"))
+        }
+    }
     let deadline = Instant::now() + Duration::from_secs(75);
     loop {
         if read_acknowledgement(
@@ -802,6 +827,7 @@ pub(super) trait ServiceWatch {
 /// The real one: a loopback probe, `launchctl print`, the system clock, and the
 /// gateway's own record beside its log.
 struct LaunchdWatch<'a> {
+    launchctl: &'a dyn super::Launchctl,
     service: &'a str,
     port: u16,
     logs: &'a Path,
@@ -817,10 +843,10 @@ impl ServiceWatch for LaunchdWatch<'_> {
         std::thread::sleep(duration);
     }
     fn health(&mut self) -> Option<Health> {
-        health(self.port)
+        self.launchctl.health(self.port)
     }
     fn status(&mut self) -> Result<ServiceStatus, String> {
-        service_status(self.service)
+        self.launchctl.status(self.service)
     }
 }
 
@@ -831,6 +857,7 @@ impl ServiceWatch for LaunchdWatch<'_> {
 /// starting slowly, and waiting the rest of the deadline out only delays the
 /// same answer by half a minute.
 pub(super) fn wait_fingerprint(
+    launchctl: &dyn super::Launchctl,
     service: &str,
     expected: (&str, &str),
     port: u16,
@@ -842,6 +869,7 @@ pub(super) fn wait_fingerprint(
     let logs = log.parent().unwrap_or(Path::new(".")).to_path_buf();
     wait_ready(
         &mut LaunchdWatch {
+            launchctl,
             service,
             port,
             logs: &logs,
