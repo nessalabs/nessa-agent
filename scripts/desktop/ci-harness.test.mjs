@@ -127,6 +127,8 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(script, /ActionPid', 'EnginePid'/)
   assert.match(script, /PlannedActionId', 'CurrentAction'/)
   assert.match(script, /OpenProcessForObservation\(\[uint32\]\$instance\.EnginePID\)/)
+  assert.match(script, /ReadCurrentProcessTokenFacts\(\)/)
+  assert.doesNotMatch(script, /OpenProcessForObservation\(\[uint32\]\$PID\)/)
   assert.match(script, /ReadTokenFacts\(\$engineProcess\)/)
   assert.match(script, /ProcessHasExited\(\$engineProcess\)/)
   assert.match(script, /ActionCreationTime', 'PidBoundCreationTime'/)

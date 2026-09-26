@@ -109,6 +109,9 @@ public static class NessaWindowsProofNative
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint processId);
 
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint GetProcessId(SafeProcessHandle process);
 
@@ -128,6 +131,9 @@ public static class NessaWindowsProofNative
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out IntPtr token);
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenProcessToken", SetLastError = true)]
+    private static extern bool OpenCurrentProcessToken(IntPtr process, uint access, out IntPtr token);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool GetTokenInformation(
@@ -284,18 +290,38 @@ public static class NessaWindowsProofNative
         {
             if (!OpenProcessToken(process, TOKEN_QUERY, out token))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
-            return new NessaTokenFacts {
-                Sid = TokenSid(token, TokenUser),
-                Elevated = BitConverter.ToInt32(TokenInformation(token, TokenElevation), 0) != 0,
-                ElevationType = BitConverter.ToInt32(TokenInformation(token, TokenElevationType), 0),
-                IntegritySid = TokenSid(token, TokenIntegrityLevel),
-                CreationTime = ProcessCreationTime(process)
-            };
+            return ReadTokenFacts(token, ProcessCreationTime(process));
         }
         finally
         {
             if (token != IntPtr.Zero) CloseHandle(token);
         }
+    }
+
+    public static NessaTokenFacts ReadCurrentProcessTokenFacts()
+    {
+        IntPtr token = IntPtr.Zero;
+        try
+        {
+            if (!OpenCurrentProcessToken(GetCurrentProcess(), TOKEN_QUERY, out token))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            return ReadTokenFacts(token, 0);
+        }
+        finally
+        {
+            if (token != IntPtr.Zero) CloseHandle(token);
+        }
+    }
+
+    private static NessaTokenFacts ReadTokenFacts(IntPtr token, long creationTime)
+    {
+        return new NessaTokenFacts {
+            Sid = TokenSid(token, TokenUser),
+            Elevated = BitConverter.ToInt32(TokenInformation(token, TokenElevation), 0) != 0,
+            ElevationType = BitConverter.ToInt32(TokenInformation(token, TokenElevationType), 0),
+            IntegritySid = TokenSid(token, TokenIntegrityLevel),
+            CreationTime = creationTime
+        };
     }
 }
 '@
@@ -894,9 +920,7 @@ if ($env:OS -ne 'Windows_NT') {
 Assert-LedgerMatrix
 Assert-HResultClassification
 Assert-LifecycleStateProbes
-$callerHandle = [NessaWindowsProofNative]::OpenProcessForObservation([uint32]$PID)
-try { $caller = [NessaWindowsProofNative]::ReadTokenFacts($callerHandle) }
-finally { $callerHandle.Dispose() }
+$caller = [NessaWindowsProofNative]::ReadCurrentProcessTokenFacts()
 if ($caller.Elevated) { throw 'the Windows runner process is elevated; the least-privilege current-user model is not proved' }
 
 $runId = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { 'local' }
