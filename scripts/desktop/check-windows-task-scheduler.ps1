@@ -919,6 +919,38 @@ function Get-TaskInstances {
     return $instances
 }
 
+# Field names, not text: a benign temp path containing "secret" is an action
+# argument, and a text match can never show that a value is not a credential.
+# The principal of an interactive-token task names a user, its logon type, and
+# at most a run level; the typed definition check owns their values.
+function Test-TaskXmlCarriesNoCredential {
+    param([Parameter(Mandatory)] [string] $Xml)
+    $document = [xml]$Xml
+    foreach ($node in $document.SelectNodes('//* | //@*')) {
+        if ($node.LocalName -match '(?i)password|credential|secret') { return $false }
+    }
+    $principals = @($document.SelectNodes("//*[local-name()='Principals']/*[local-name()='Principal']"))
+    if ($principals.Count -ne 1) { return $false }
+    $children = @($principals[0].ChildNodes | Where-Object { $_ -is [System.Xml.XmlElement] } | ForEach-Object { $_.LocalName })
+    if ($children -notcontains 'UserId' -or $children -notcontains 'LogonType') { return $false }
+    foreach ($child in $children) {
+        if ($child -notin @('UserId', 'LogonType', 'RunLevel')) { return $false }
+    }
+    return $children.Count -eq @($children | Sort-Object -Unique).Count
+}
+
+function Assert-CredentialFieldProbes {
+    $principal = '<Principals><Principal id="Author"><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>'
+    $benign = "<Task xmlns='http://schemas.microsoft.com/windows/2004/02/mit/task'>$principal<Actions><Exec><Arguments>-File C:\secret-credential-password\a.ps1</Arguments></Exec></Actions></Task>"
+    if (-not (Test-TaskXmlCarriesNoCredential -Xml $benign)) { throw 'credential probe rejected a benign path that only mentions a credential word' }
+    $withPassword = $benign.Replace('<RunLevel>', '<Password>x</Password><RunLevel>')
+    if (Test-TaskXmlCarriesNoCredential -Xml $withPassword) { throw 'credential probe accepted a Password element' }
+    $withAttribute = $benign.Replace('<Exec>', '<Exec credential="x">')
+    if (Test-TaskXmlCarriesNoCredential -Xml $withAttribute) { throw 'credential probe accepted a credential attribute' }
+    $withExtraChild = $benign.Replace('<RunLevel>', '<GroupId>S-1-5-32-545</GroupId><RunLevel>')
+    if (Test-TaskXmlCarriesNoCredential -Xml $withExtraChild) { throw 'credential probe accepted an unexpected principal element' }
+}
+
 function Test-CompleteAgreement {
     param([Parameter(Mandatory)] $Evidence)
     $equalFields = @(
@@ -997,6 +1029,7 @@ if ($env:OS -ne 'Windows_NT') {
 Assert-LedgerMatrix
 Assert-HResultClassification
 Assert-LifecycleStateProbes
+Assert-CredentialFieldProbes
 $caller = [NessaWindowsProofNative]::ReadCurrentProcessTokenFacts()
 if ($CallerContext -eq 'StandardUser' -and $caller.Elevated) { throw 'the Windows runner process is elevated; the least-privilege current-user model is not proved' }
 if ($CallerContext -eq 'Administrator' -and -not $caller.Elevated) { throw 'the declared Administrator caller context is not elevated; this run is not in the environment it declares' }
@@ -1160,7 +1193,7 @@ while ($true) { Start-Sleep -Milliseconds 100 }
     if ($taskAcknowledgement -ne 'success') { throw "task registration was $taskAcknowledgement`: $taskFailure" }
     if (-not $taskDefinitionMatches) { throw 'registered task definition contradicts the plan' }
     if (-not $taskDescriptorMatches) { throw 'registered task descriptor contradicts the plan' }
-    if ($observedTask.Xml -match '(?i)password|credential|secret') { throw 'registered task XML contains a credential-shaped field' }
+    if (-not (Test-TaskXmlCarriesNoCredential -Xml $observedTask.Xml)) { throw 'registered task XML carries a credential field or an unexpected principal element' }
 
     $runAttempted = $true
     $firstReturned = $ownedTask.Run($null)
