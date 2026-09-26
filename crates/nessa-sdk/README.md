@@ -308,7 +308,8 @@ profiles injected by `infrastructure::claude_acp::sessions::ClaudeAcpProvider`,
 `infrastructure::codex_acp::sessions::CodexAcpProvider` and
 `infrastructure::opencode_acp::sessions::OpencodeAcpProvider`.
 `infrastructure::acp::sessions::AcpConfig` supplies
-common launch and runtime limits. JSON-RPC framing reuses the pinned event-stream
+common launch and runtime limits, and the `infrastructure::clock::Clock` they
+are measured on. JSON-RPC framing reuses the pinned event-stream
 codec; process ownership lives in `infrastructure/process.rs`. See the
 [session and boundary guide](docs/agent_execution/lifecycle.md).
 

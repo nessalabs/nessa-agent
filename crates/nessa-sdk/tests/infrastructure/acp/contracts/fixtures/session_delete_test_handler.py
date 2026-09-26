@@ -96,6 +96,18 @@ for line in sys.stdin:
         elif mode == "list-malformed":
             # Names the session, but not under `sessionId`.
             send({"id": message["id"], "result": {"sessions": [{"id": asked, "cwd": str(root)}]}})
+        elif mode == "list-held":
+            # The second page waits for the test to create `release`; the
+            # third never answers.
+            page = params.get("cursor")
+            if page is None:
+                send({"id": message["id"], "result": {"sessions": [other], "nextCursor": "p2"}})
+            elif page == "p2":
+                while not (root / "release").exists():
+                    time.sleep(0.01)
+                send({"id": message["id"], "result": {"sessions": [other], "nextCursor": "p3"}})
+            else:
+                never_answer()
         elif mode == "list-past-the-bound":
             # Pages past the binding's bound, then one last page that does not
             # name the session: a reader without the bound settles instead of

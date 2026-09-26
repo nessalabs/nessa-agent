@@ -52,6 +52,7 @@ use crate::domain::agent_execution::permissions::{
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+use crate::infrastructure::clock::{within, Clock, ClockInstant, ClockSleep};
 use crate::infrastructure::{
     json_rpc::{self, Envelope, Reader, RpcError, RpcId},
     process::ProcessScope,
@@ -67,10 +68,7 @@ use std::{
     },
     task::Poll,
 };
-use tokio::{
-    sync::{mpsc, oneshot, watch},
-    time::{timeout, Instant},
-};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// What this client says about itself in `initialize`, on every connection
 /// it opens to an agent, whatever the connection is for.
@@ -152,7 +150,7 @@ struct ActiveExecution {
     id: i64,
     execution_id: ExecutionId,
     reply: ExecutionReply,
-    deadline: Option<Instant>,
+    deadline: Option<ClockInstant>,
 }
 /// Ensures a selected local refusal gets a final publication attempt even when
 /// the async operation is cancelled between selection and response settlement.
@@ -308,7 +306,7 @@ struct Worker<P> {
     /// provider that reuses one identifier for two requests is already outside
     /// JSON-RPC, and is not something this could hold enough state to repair.
     declined: Option<RpcId>,
-    shutdown_deadline: Option<Instant>,
+    shutdown_deadline: Option<ClockInstant>,
     /// True once every request from `session_configuration` has been applied.
     ///
     /// The session's configuration requests are answered in order, and the
@@ -423,7 +421,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
             worker.commands.close();
             let grace = worker
                 .begin_shutdown_grace()
-                .saturating_duration_since(Instant::now());
+                .saturating_duration_since(worker.config.clock.now());
             let physical =
                 catch_worker_panic(worker.scope.cleanup(grace, worker.config.kill_timeout)).await;
             if execution_reply.is_none() {
@@ -606,7 +604,7 @@ impl<P: AcpProfile> Worker<P> {
         }
         let grace = self
             .begin_shutdown_grace()
-            .saturating_duration_since(Instant::now());
+            .saturating_duration_since(self.config.clock.now());
         let physical = self.scope.cleanup(grace, self.config.kill_timeout).await;
         if let (Some(active), Some(execution)) = (self.active.take(), execution.as_mut()) {
             *execution_reply = Some(active.reply);
@@ -695,11 +693,12 @@ impl<P: AcpProfile> Worker<P> {
     async fn send_encoded(
         &mut self,
         bytes: Vec<u8>,
-        deadline: Option<Instant>,
+        deadline: Option<ClockInstant>,
     ) -> Result<(), AgentError> {
         let stdin = self.scope.stdin.as_mut().ok_or(AgentError::Closed)?;
         let allowed = json_rpc::write_allowance(bytes.len());
-        let result = json_rpc::send_encoded(stdin, &bytes, allowed, deadline).await;
+        let result =
+            json_rpc::send_encoded(&*self.config.clock, stdin, &bytes, allowed, deadline).await;
         if result == Err(AgentError::Deadline) && !self.closing {
             self.failure_cause = ObservationFailureCause::DeadlineExceeded;
             self.cancellation_cause.get_or_insert((
@@ -709,17 +708,18 @@ impl<P: AcpProfile> Worker<P> {
         }
         result
     }
-    fn begin_shutdown_grace(&mut self) -> Instant {
+    fn begin_shutdown_grace(&mut self) -> ClockInstant {
         *self
             .shutdown_deadline
-            .get_or_insert_with(|| Instant::now() + self.config.shutdown_grace)
+            .get_or_insert_with(|| self.config.clock.now() + self.config.shutdown_grace)
     }
     async fn send_cancellation(&mut self, session_id: &str) -> Result<(), AgentError> {
         let deadline = self.begin_shutdown_grace();
-        match tokio::time::timeout_at(deadline, self.cancel_wire_permissions()).await {
-            Err(_) => return Ok(()),
-            Ok(Err(AgentError::Deadline)) if Instant::now() >= deadline => return Ok(()),
-            Ok(result) => result?,
+        let clock = self.config.clock.clone();
+        match within(&*clock, deadline, self.cancel_wire_permissions()).await {
+            None => return Ok(()),
+            Some(Err(AgentError::Deadline)) if clock.now() >= deadline => return Ok(()),
+            Some(result) => result?,
         }
         let frame = json_rpc::encode(
             json_rpc::notification("session/cancel", json!({"sessionId": session_id})),
@@ -727,11 +727,11 @@ impl<P: AcpProfile> Worker<P> {
         )?;
         match self.send_encoded(frame, Some(deadline)).await {
             // Expiry means cooperative grace ended, not that explicit close failed.
-            Err(AgentError::Deadline) if Instant::now() >= deadline => Ok(()),
+            Err(AgentError::Deadline) if self.config.clock.now() >= deadline => Ok(()),
             result => result,
         }
     }
-    fn current_deadline(&self) -> Option<Instant> {
+    fn current_deadline(&self) -> Option<ClockInstant> {
         self.shutdown_deadline.or_else(|| {
             self.active
                 .as_ref()
@@ -747,7 +747,7 @@ impl<P: AcpProfile> Worker<P> {
     async fn send_before(
         &mut self,
         value: Value,
-        deadline: Option<Instant>,
+        deadline: Option<ClockInstant>,
     ) -> Result<(), AgentError> {
         let frame = json_rpc::encode(value, self.config.max_frame_bytes)?;
         self.send_encoded(frame, deadline).await
@@ -757,7 +757,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         method: &str,
         params: Value,
-        deadline: Instant,
+        deadline: ClockInstant,
         mut execution: Option<&mut ExecutionController>,
     ) -> Result<Value, AgentError> {
         let id = self.next_id()?;
@@ -779,7 +779,7 @@ impl<P: AcpProfile> Worker<P> {
                     self.cancellation_cause = Some((requested_close_reason(&request, false), request.origin()));
                     return Err(AgentError::Closed);
                 },
-                _ = wait_for_deadline(Some(deadline)) => { self.failure_cause = ObservationFailureCause::DeadlineExceeded; self.cancellation_cause = Some((PermissionCancellationReason::deadline_exceeded(), CancellationOrigin::Runtime)); return Err(AgentError::Deadline); },
+                _ = wait_for_deadline(&*self.config.clock, Some(deadline)) => { self.failure_cause = ObservationFailureCause::DeadlineExceeded; self.cancellation_cause = Some((PermissionCancellationReason::deadline_exceeded(), CancellationOrigin::Runtime)); return Err(AgentError::Deadline); },
                 message = self.reader.next() => message?,
             };
             if let Some(method) = message.method {
@@ -833,7 +833,7 @@ impl<P: AcpProfile> Worker<P> {
         // and it is generous. Protocol work afterwards is the provider
         // answering questions it is already running to answer, and keeps the
         // tighter `startup_timeout`.
-        let spawn_deadline = Instant::now() + self.config.launch_timeout;
+        let spawn_deadline = self.config.clock.now() + self.config.launch_timeout;
         // Whether saved context is being restored is decided before any step
         // runs, so every step's deadline reports it. Reading it off the step
         // would call a restoration that expired during `initialize` new.
@@ -849,7 +849,7 @@ impl<P: AcpProfile> Worker<P> {
         // The child has answered, so it is running and scanned. Start the
         // protocol budget here rather than carrying the remainder of a budget
         // that was sized for the operating system's work.
-        let deadline = Instant::now() + self.config.startup_timeout;
+        let deadline = self.config.clock.now() + self.config.startup_timeout;
         check_initialize(&self.profile, &init)?;
         self.steering_supported = self.profile.supports_steering(&init);
         self.agent_accepts_images =
@@ -993,7 +993,7 @@ impl<P: AcpProfile> Worker<P> {
                 tokio::select! { biased;
                     _ = self.close_requested.changed(), if !self.closing => Input::Close,
                     _ = self.events.closed() => Input::ConsumerGone,
-                    _ = wait_for_deadline(deadline), if deadline.is_some() => Input::Deadline,
+                    _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => Input::Deadline,
                     command = self.commands.recv(), if !self.closing => Input::Command(command),
                     message = self.reader.next() => Input::Message(message),
                 }
@@ -1112,7 +1112,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         execution: &mut ExecutionController,
         caller: &DispatchCaller<'_>,
-        dispatch_deadline: Option<Instant>,
+        dispatch_deadline: Option<ClockInstant>,
     ) -> Result<DispatchReadiness, WorkerFailure> {
         loop {
             for _ in 0..32 {
@@ -1128,12 +1128,12 @@ impl<P: AcpProfile> Worker<P> {
                 }
                 if self
                     .current_deadline()
-                    .is_some_and(|deadline| Instant::now() >= deadline)
+                    .is_some_and(|deadline| self.config.clock.now() >= deadline)
                 {
                     // The drive loop owns this already-established lifecycle deadline.
                     return Ok(DispatchReadiness::Interrupted(AgentError::Deadline));
                 }
-                if dispatch_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                if dispatch_deadline.is_some_and(|deadline| self.config.clock.now() >= deadline) {
                     self.failure_cause = ObservationFailureCause::DeadlineExceeded;
                     self.cancellation_cause = Some((
                         PermissionCancellationReason::deadline_exceeded(),
@@ -1184,7 +1184,7 @@ impl<P: AcpProfile> Worker<P> {
                             _ = self.events.closed() => {
                                 return Ok(DispatchReadiness::Interrupted(AgentError::Backpressure));
                             }
-                            _ = wait_for_deadline(deadline), if deadline.is_some() => {
+                            _ = wait_for_deadline(&*self.config.clock, deadline), if deadline.is_some() => {
                                 self.failure_cause = ObservationFailureCause::DeadlineExceeded;
                                 self.cancellation_cause = Some((
                                     PermissionCancellationReason::deadline_exceeded(),
@@ -1601,7 +1601,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         execution: &mut ExecutionController,
         message: Envelope,
-        response_deadline: Option<Instant>,
+        response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
         if let Some(method) = message.method {
             let params = message.params.unwrap_or(Value::Null);
@@ -1725,9 +1725,10 @@ impl<P: AcpProfile> Worker<P> {
             // Successful normal completion leaves the reusable session without it.
             let previous_deadline = self.shutdown_deadline;
             let deadline = self.begin_shutdown_grace();
-            match tokio::time::timeout_at(deadline, self.cancel_wire_permissions()).await {
-                Ok(result) => result?,
-                Err(_) => {
+            let clock = self.config.clock.clone();
+            match within(&*clock, deadline, self.cancel_wire_permissions()).await {
+                Some(result) => result?,
+                None => {
                     self.failure_cause = ObservationFailureCause::DeadlineExceeded;
                     self.cancellation_cause.get_or_insert((
                         PermissionCancellationReason::deadline_exceeded(),
@@ -1868,7 +1869,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut ExecutionController,
         wire_id: RpcId,
         params: Value,
-        response_deadline: Option<Instant>,
+        response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
         self.check_session(execution, &params)?;
         if self.closing || self.active.is_none() || !self.config.tools_enabled {
@@ -1987,7 +1988,7 @@ impl<P: AcpProfile> Worker<P> {
         wire_id: RpcId,
         params: &Value,
         reason: ReviewDeclineReason,
-        response_deadline: Option<Instant>,
+        response_deadline: Option<ClockInstant>,
     ) -> Result<(), WorkerFailure> {
         let decline = ReviewDecline::new(declared_tool_name(params), reason);
         let session_id = execution.id().clone();
@@ -2171,9 +2172,14 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let result = catch_worker_panic(async {
             // The trait call itself may panic before returning its future.
-            timeout(self.config.shutdown_grace, self.audit.record(record))
-                .await
-                .map_err(|_| AgentError::AuditFailure)?
+            let clock = &*self.config.clock;
+            within(
+                clock,
+                clock.now() + self.config.shutdown_grace,
+                self.audit.record(record),
+            )
+            .await
+            .ok_or(AgentError::AuditFailure)?
         })
         .await;
         if result.is_err() {
@@ -2352,10 +2358,10 @@ fn rejection_option(params: &Value, policy: &PermissionOfferPolicy) -> Option<St
 }
 
 /// No artificial far-future timestamp: no configured limit means no timer.
-async fn wait_for_deadline(deadline: Option<Instant>) {
+fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> ClockSleep {
     match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending().await,
+        Some(deadline) => clock.sleep_until(deadline),
+        None => Box::pin(std::future::pending()),
     }
 }
 

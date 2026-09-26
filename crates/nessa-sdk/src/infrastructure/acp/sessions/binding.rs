@@ -32,15 +32,13 @@ use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex},
     time::Duration,
 };
-use tokio::{
-    sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore},
-    time::Instant,
-};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore};
 
 pub(crate) type ProcessFactory =
     Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
@@ -644,7 +642,8 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             // execution's own deadline starts here, before the read, so reading
             // spends it instead of adding to it.
             let execution_timeout = self.factory.config.execution_timeout;
-            let deadline = execution_timeout.map(|limit| Instant::now() + limit);
+            let clock = &*self.factory.config.clock;
+            let deadline = execution_timeout.map(|limit| clock.now() + limit);
             let limit =
                 execution_timeout.map_or(IMAGE_READ_TIMEOUT, |limit| limit.min(IMAGE_READ_TIMEOUT));
             let images = match self
@@ -702,7 +701,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             // active execution keeps being driven, and can finish, meanwhile.
             // The steering deadline starts here, before the read, so the whole
             // call is answered within it rather than within it twice over.
-            let deadline = Instant::now() + RESPONSE_TIMEOUT;
+            let deadline = self.factory.config.clock.now() + RESPONSE_TIMEOUT;
             let limit = IMAGE_READ_TIMEOUT.min(RESPONSE_TIMEOUT);
             let images = self
                 .images(&input.user_message, &commands, closing, limit)
@@ -879,10 +878,11 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 () = commands.closed() => {}
             }
         };
+        let clock = &*self.factory.config.clock;
         let blocks = read_images(
             self.factory.config.images.as_deref(),
             message,
-            limit,
+            clock.sleep_until(clock.now() + limit),
             stopped,
         )
         .await?;
@@ -938,7 +938,7 @@ pub(crate) struct DispatchedPrompt {
     pub images: ImageBlocks,
     /// When this phase must be finished. `None` only for an execution the host
     /// left unbounded in time; the frame's own write allowance may extend it.
-    pub deadline: Option<Instant>,
+    pub deadline: Option<ClockInstant>,
 }
 
 pub(crate) enum Command {

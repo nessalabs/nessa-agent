@@ -521,7 +521,10 @@ async fn a_source_that_never_answers_is_unavailable_at_the_read_bound_and_keeps_
     let _slot = process_test_slot().await;
     let (source, mut begins) = stalling();
     // No execution timeout: the read still has a bound of its own.
-    let (root, provider) = image_provider("image-input", Some(source));
+    let (root, mut config, _) = test_acp_configuration("image-input", 32);
+    config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
+    let (root, provider) = image_provider_from(root, config, Some(source), true);
     let opened = provider
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -535,11 +538,8 @@ async fn a_source_that_never_answers_is_unavailable_at_the_read_bound_and_keeps_
     let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
     begins.recv().await.unwrap();
 
-    // Only the simulated read deadline is advanced; real time resumes before
-    // anything waits on the agent process again.
-    tokio::time::pause();
-    tokio::time::advance(IMAGE_READ_TIMEOUT).await;
-    tokio::time::resume();
+    // Only the read's bound is reached; nothing else the test waits on is.
+    clock.advance(IMAGE_READ_TIMEOUT);
     let result = timeout(Duration::from_secs(5), running).await.unwrap();
     assert_eq!(
         result.unwrap(),
@@ -560,6 +560,7 @@ async fn a_shorter_execution_timeout_shortens_the_read_bound() {
     let limit = Duration::from_secs(2);
     assert!(limit < IMAGE_READ_TIMEOUT);
     config.execution_timeout = Some(limit);
+    let clock = manual_clock(&mut config);
     let (root, provider) = image_provider_from(root, config, Some(source), true);
     let opened = provider
         .open(ProviderOpenRequest::without_startup_control(None))
@@ -574,9 +575,7 @@ async fn a_shorter_execution_timeout_shortens_the_read_bound() {
     let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
     begins.recv().await.unwrap();
 
-    tokio::time::pause();
-    tokio::time::advance(limit).await;
-    tokio::time::resume();
+    clock.advance(limit);
     let result = timeout(Duration::from_secs(5), running).await.unwrap();
     assert_eq!(
         result.unwrap(),
@@ -620,7 +619,12 @@ async fn a_source_that_panics_costs_one_message_and_not_the_worker() {
 async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_execution() {
     let _slot = process_test_slot().await;
     let (source, mut begins) = stalling();
-    let (root, provider) = image_provider("steering-image-injected", Some(source));
+    let (root, mut config, _) = test_acp_configuration("steering-image-injected", 32);
+    config.execution_timeout = None;
+    // The read's own bound never passes here: only the worker is being asked
+    // about, never the clock.
+    let _clock = manual_clock(&mut config);
+    let (root, provider) = image_provider_from(root, config, Some(source), true);
     let mut opened = provider
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -681,7 +685,10 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
 async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound() {
     let _slot = process_test_slot().await;
     let (source, mut begins) = stalling();
-    let (root, provider) = image_provider("steering-image-injected", Some(source));
+    let (root, mut config, _) = test_acp_configuration("steering-image-injected", 32);
+    config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
+    let (root, provider) = image_provider_from(root, config, Some(source), true);
     let mut opened = provider
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -705,9 +712,7 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
     begins.recv().await.unwrap();
 
     assert!(RESPONSE_TIMEOUT < IMAGE_READ_TIMEOUT);
-    tokio::time::pause();
-    tokio::time::advance(RESPONSE_TIMEOUT).await;
-    tokio::time::resume();
+    clock.advance(RESPONSE_TIMEOUT);
     let failure = timeout(Duration::from_secs(5), steering)
         .await
         .unwrap()
@@ -737,9 +742,9 @@ async fn reading_a_prompts_images_spends_the_executions_deadline_rather_than_add
     let image = reference(&bytes, ImageMediaType::Png);
     let (source, mut begins) = gated(bytes);
     let (root, mut config, _) = test_acp_configuration("image-stall", 32);
-    // Long enough that half of it is still plenty of real time for the agent.
     let limit = Duration::from_secs(4);
     config.execution_timeout = Some(limit);
+    let clock = manual_clock(&mut config);
     let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
     let mut opened = provider
         .open(ProviderOpenRequest::without_startup_control(None))
@@ -751,9 +756,7 @@ async fn reading_a_prompts_images_spends_the_executions_deadline_rather_than_add
     begins.recv().await.unwrap();
 
     // Half of the execution's four seconds goes on reading its image.
-    tokio::time::pause();
-    tokio::time::advance(limit / 2).await;
-    tokio::time::resume();
+    clock.advance(limit / 2);
     source.release.add_permits(1);
     // The agent has the prompt, says so, and never finishes it.
     assert_eq!(
@@ -762,9 +765,7 @@ async fn reading_a_prompts_images_spends_the_executions_deadline_rather_than_add
     );
 
     // The other half is all that is left. A fresh timer would want four more.
-    tokio::time::pause();
-    tokio::time::advance(limit / 2).await;
-    tokio::time::resume();
+    clock.advance(limit / 2);
     // A fresh timer would still want two more seconds at this point.
     let result = timeout(Duration::from_secs(1), running)
         .await
@@ -782,6 +783,7 @@ async fn reading_a_steerings_images_spends_the_steering_deadline_rather_than_add
     let (source, mut begins) = gated(bytes);
     let (root, mut config, _) = test_acp_configuration("steering-image-stall", 32);
     config.execution_timeout = None;
+    let clock = manual_clock(&mut config);
     let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
     let mut opened = provider
         .open(ProviderOpenRequest::without_startup_control(None))
@@ -804,17 +806,13 @@ async fn reading_a_steerings_images_spends_the_steering_deadline_rather_than_add
 
     // Three fifths of the five-second steering deadline goes on the read.
     let read = RESPONSE_TIMEOUT * 3 / 5;
-    tokio::time::pause();
-    tokio::time::advance(read).await;
-    tokio::time::resume();
+    clock.advance(read);
     source.release.add_permits(1);
     // The agent has the steering request and never acknowledges it.
     wait_for_file(&root, "steering-observed").await;
 
     // The remaining two fifths, and no more.
-    tokio::time::pause();
-    tokio::time::advance(RESPONSE_TIMEOUT - read).await;
-    tokio::time::resume();
+    clock.advance(RESPONSE_TIMEOUT - read);
     // A fresh interval would still want three more seconds at this point.
     let result = timeout(Duration::from_secs(1), steering)
         .await

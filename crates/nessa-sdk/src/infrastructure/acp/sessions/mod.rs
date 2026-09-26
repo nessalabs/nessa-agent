@@ -19,10 +19,8 @@
 //! delete.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
-mod clock;
 mod config;
 pub(crate) mod configuration;
 pub(crate) mod deletion;
 pub(crate) mod identity;
-pub use clock::{AcpClock, BudgetExpiry, RuntimeClock};
 pub use config::{AcpConfig, StdioMcpServer};

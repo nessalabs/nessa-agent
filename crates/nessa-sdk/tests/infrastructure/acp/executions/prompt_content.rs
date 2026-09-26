@@ -6,6 +6,7 @@ use crate::domain::{
     agent_execution::prompts::{LinkedFile, PromptText},
     common::value_objects::{ImageMediaType, Sha256Digest},
 };
+use crate::infrastructure::clock::{Clock, RuntimeClock};
 use crate::infrastructure::json_rpc;
 use std::{
     future::pending,
@@ -106,7 +107,10 @@ async fn a_source_that_never_answers_is_unavailable_exactly_at_the_bound() {
     let (source, _began, dropped) = stalled();
     let sent = message(Some("look"), vec![reference(b"image", ImageMediaType::Png)]);
     let began_at = Instant::now();
-    let result = read_images(Some(&source), &sent, IMAGE_READ_TIMEOUT, pending()).await;
+    // The bound a binding gives it, on the runtime's (paused) clock.
+    let clock = RuntimeClock::new();
+    let limit_passed = clock.sleep_until(clock.now() + IMAGE_READ_TIMEOUT);
+    let result = read_images(Some(&source), &sent, limit_passed, pending()).await;
     assert_eq!(
         result.err(),
         Some(AgentError::UserImage(UserImageError::Unavailable))
@@ -123,7 +127,7 @@ async fn stopping_abandons_a_read_that_never_answers() {
     let (source, began, dropped) = stalled();
     let sent = message(None, vec![reference(b"image", ImageMediaType::Png)]);
     let (stop, stopped) = oneshot::channel::<()>();
-    let reading = read_images(Some(&source), &sent, IMAGE_READ_TIMEOUT, async {
+    let reading = read_images(Some(&source), &sent, pending(), async {
         let _ = stopped.await;
     });
     let stopping = async {
@@ -150,7 +154,7 @@ async fn a_source_that_panics_is_a_typed_failure_not_an_unwinding_caller() {
                 reference(b"second", ImageMediaType::Png),
             ],
         );
-        let result = read_images(Some(&source), &sent, IMAGE_READ_TIMEOUT, pending()).await;
+        let result = read_images(Some(&source), &sent, pending(), pending()).await;
         assert_eq!(
             result.err(),
             Some(AgentError::UserImage(UserImageError::Unavailable)),
@@ -170,7 +174,7 @@ async fn a_message_without_images_touches_neither_the_source_nor_the_clock() {
     let sent = message(Some("text"), Vec::new());
     // Already stopped, and no source at all: neither matters without an image.
     for source in [Some(&source as &dyn UserImageSource), None] {
-        let blocks = read_images(source, &sent, IMAGE_READ_TIMEOUT, async {})
+        let blocks = read_images(source, &sent, pending(), async {})
             .await
             .unwrap();
         assert_eq!(
@@ -184,7 +188,7 @@ async fn a_message_without_images_touches_neither_the_source_nor_the_clock() {
 #[tokio::test]
 async fn images_without_a_source_are_the_typed_refusal() {
     let sent = message(None, vec![reference(b"image", ImageMediaType::Png)]);
-    let result = read_images(None, &sent, IMAGE_READ_TIMEOUT, pending()).await;
+    let result = read_images(None, &sent, pending(), pending()).await;
     assert_eq!(
         result.err(),
         Some(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
@@ -201,7 +205,7 @@ async fn an_answer_of_any_other_length_is_a_mismatch_even_when_its_digest_agrees
     let result = read_images(
         Some(&Always(answer)),
         &message(None, vec![claimed]),
-        IMAGE_READ_TIMEOUT,
+        pending(),
         pending(),
     )
     .await;
@@ -384,14 +388,9 @@ async fn a_message_that_passes_the_frame_check_always_encodes_inside_the_frame()
     let image = reference(&bytes, ImageMediaType::Jpeg);
     for text in [None, Some("line\nbreak \"quoted\" \u{2} 😀")] {
         let sent = message(text, vec![image, image, image]);
-        let blocks = read_images(
-            Some(&Always(bytes.clone())),
-            &sent,
-            IMAGE_READ_TIMEOUT,
-            pending(),
-        )
-        .await
-        .unwrap();
+        let blocks = read_images(Some(&Always(bytes.clone())), &sent, pending(), pending())
+            .await
+            .unwrap();
         let frame = json_rpc::encode(
             json_rpc::request(
                 i64::MAX,

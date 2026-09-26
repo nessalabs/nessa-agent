@@ -3,63 +3,23 @@
 //! each binding saying what an acknowledged delete means for its agent.
 use super::support::*;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
-use crate::infrastructure::acp::sessions::{deletion::MAX_LIST_PAGES, AcpClock, BudgetExpiry};
+use crate::infrastructure::{
+    acp::sessions::deletion::MAX_LIST_PAGES,
+    clock::{manual::ManualClock, ClockInstant},
+};
 use serde_json::{json, Value};
-use tokio::sync::watch;
 
 /// The budget `initialize` is given.
 const LAUNCH: Duration = Duration::from_secs(30);
 /// The budget the delete is given, and the whole list another: distinct from
-/// [`LAUNCH`] so a test can tell which a wait was given. Neither runs out
-/// unless a test runs it out on the [`TestClock`].
+/// [`LAUNCH`] so a test can tell which a wait was given. Neither passes unless
+/// a test moves the [`ManualClock`] past it.
 const STARTUP: Duration = Duration::from_secs(20);
-
-/// A clock on which a budget runs out only when the test runs it out, so what
-/// a test checks is never cut short by a slow machine.
-struct TestClock {
-    /// Every budget started, in order: its limit, and what runs it out.
-    budgets: std::sync::Mutex<Vec<(Duration, watch::Sender<bool>)>>,
-    started: watch::Sender<usize>,
-}
-impl TestClock {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            budgets: std::sync::Mutex::default(),
-            started: watch::channel(0).0,
-        })
-    }
-    /// Once the budget numbered `index` (from 0, in the order they started)
-    /// has started, run it out.
-    async fn run_out(&self, index: usize) {
-        self.started
-            .subscribe()
-            .wait_for(|started| *started > index)
-            .await
-            .unwrap();
-        self.budgets.lock().unwrap()[index].1.send_replace(true);
-    }
-    /// The limit of every budget started, in order.
-    fn limits(&self) -> Vec<Duration> {
-        let budgets = self.budgets.lock().unwrap();
-        budgets.iter().map(|(limit, _)| *limit).collect()
-    }
-}
-impl AcpClock for TestClock {
-    fn budget(&self, limit: Duration) -> BudgetExpiry {
-        let (run_out, mut expired) = watch::channel(false);
-        self.budgets.lock().unwrap().push((limit, run_out));
-        self.started.send_modify(|started| *started += 1);
-        Box::pin(async move {
-            // The clock holds every sender for as long as it lives.
-            let _ = expired.wait_for(|expired| *expired).await;
-        })
-    }
-}
 
 /// The deletion handler in `mode`, answering as `agent`'s adapter would; a
 /// listing mode lists `session()` where the mode says, and knows the binding's
 /// page bound. Its budgets are measured on the clock returned.
-fn handler(config: &mut AcpConfig, mode: &str, agent: &str) -> Arc<TestClock> {
+fn handler(config: &mut AcpConfig, mode: &str, agent: &str) -> Arc<ManualClock> {
     config.arguments = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/session_delete_test_handler.py")
@@ -71,11 +31,11 @@ fn handler(config: &mut AcpConfig, mode: &str, agent: &str) -> Arc<TestClock> {
     ];
     config.launch_timeout = LAUNCH;
     config.startup_timeout = STARTUP;
-    let clock = TestClock::new();
+    let clock = Arc::new(ManualClock::default());
     config.clock = clock.clone();
     clock
 }
-fn deleting(mode: &str) -> (TempDir, ClaudeAcpProvider, Arc<TestClock>) {
+fn deleting(mode: &str) -> (TempDir, ClaudeAcpProvider, Arc<ManualClock>) {
     let (root, mut config, model) = test_acp_configuration(mode, 16);
     let clock = handler(&mut config, mode, "claude");
     let provider = ClaudeAcpProvider::new(
@@ -100,40 +60,40 @@ fn methods(root: &TempDir) -> Vec<String> {
         .filter_map(|message| message["method"].as_str().map(str::to_owned))
         .collect()
 }
-/// Once the agent has been sent `method`: real progress by another process,
-/// so it is bounded, generously, in real time.
-async fn asked(root: &TempDir, method: &str) {
+/// Once the agent has been sent `method` `times` times: real progress by
+/// another process, so it is bounded, generously, in real time.
+async fn asked_times(root: &TempDir, method: &str, times: usize) {
     timeout(Duration::from_secs(10), async {
         while !root.path().join("methods").exists()
-            || !methods(root).iter().any(|sent| sent == method)
+            || methods(root).iter().filter(|sent| *sent == method).count() < times
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("the agent was never sent {method}"));
+    .unwrap_or_else(|_| panic!("the agent was not sent {method} {times} times"));
+}
+async fn asked(root: &TempDir, method: &str) {
+    asked_times(root, method, 1).await;
 }
 
-/// `provider`'s delete, with budget `index` run out on `clock` once the
-/// agent has been sent `method`. Running out a budget nothing is waiting on
-/// would leave the delete waiting for ever; a minute of real time turns that
-/// into a failure, and is never what answers it.
-async fn deleting_until_run_out(
+/// `provider`'s delete while `moving` moves `clock`. A clock moved short of
+/// what the delete waits for would leave it waiting for ever; a minute of
+/// real time turns that into a failure, and is never what answers it.
+async fn deleting_while(
     provider: &ClaudeAcpProvider,
-    root: &TempDir,
-    clock: &TestClock,
-    method: &str,
-    index: usize,
+    moving: impl std::future::Future<Output = ()>,
 ) -> Result<ProviderSessionDeletion, AgentError> {
     let (answer, ()) = timeout(Duration::from_secs(60), async {
-        tokio::join!(provider.delete_session(session()), async {
-            asked(root, method).await;
-            clock.run_out(index).await;
-        })
+        tokio::join!(provider.delete_session(session()), moving)
     })
     .await
-    .unwrap_or_else(|_| panic!("budget {index} ran out and nothing answered"));
+    .expect("the clock was moved and nothing answered");
     answer
+}
+/// The moment `after` past the start of a test's clock.
+fn at(after: Duration) -> ClockInstant {
+    ClockInstant::from_origin(after)
 }
 
 /// An agent that does not list its sessions is asked to delete directly.
@@ -201,13 +161,15 @@ async fn an_agent_that_refuses_initialize_is_its_provider_error_and_nothing_is_d
 async fn an_agent_that_never_answers_runs_out_of_the_startup_budget_and_is_stopped() {
     let _process_slot = process_test_slot().await;
     let (root, provider, clock) = deleting("stall");
-    assert_eq!(
-        deleting_until_run_out(&provider, &root, &clock, "session/delete", 1).await,
-        Err(AgentError::Deadline)
-    );
-    // `initialize` was given the launch budget and the delete the startup
-    // budget: the two `session_deletion_limit` counts before a list.
-    assert_eq!(clock.limits(), [LAUNCH, STARTUP]);
+    // Once the agent has the delete, its startup budget passes, and only
+    // then: the launch budget, which `initialize` was given, is longer.
+    let answer = deleting_while(&provider, async {
+        asked(&root, "session/delete").await;
+        clock.advance_to(at(STARTUP));
+    })
+    .await;
+    assert_eq!(answer, Err(AgentError::Deadline));
+    assert!(clock.waits().iter().any(|wait| wait.limit() == LAUNCH));
     assert_gone(&root, "pid");
 }
 
@@ -374,7 +336,7 @@ async fn a_listing_larger_than_the_protocol_frame_is_still_read() {
 async fn the_listing_is_followed_page_by_page() {
     let _process_slot = process_test_slot().await;
     // Named only on the third page: the refusal stands.
-    let (root, provider, clock) = deleting("list-paged+refuse");
+    let (root, provider, _) = deleting("list-paged+refuse");
     assert!(matches!(
         provider.delete_session(session()).await,
         Err(AgentError::Provider { code: -32603, .. })
@@ -383,8 +345,29 @@ async fn the_listing_is_followed_page_by_page() {
     assert_eq!(asked.len(), 3);
     assert_eq!(asked[1]["cursor"], "p2");
     assert_eq!(asked[2]["cursor"], "p3");
-    // Three pages, one budget: the list's, however many pages it has.
-    assert_eq!(clock.limits(), [LAUNCH, STARTUP, STARTUP]);
+}
+
+#[tokio::test]
+async fn the_whole_listing_shares_one_budget() {
+    let _process_slot = process_test_slot().await;
+    // The second page is held until the clock has moved half the budget, and
+    // the third never answers: the list's one budget, begun before the first
+    // page, passes at `STARTUP`, where a budget per page would not.
+    let (root, provider, clock) = deleting("list-held+refuse");
+    let answer = deleting_while(&provider, async {
+        asked_times(&root, "session/list", 2).await;
+        clock.advance(STARTUP / 2);
+        std::fs::write(root.path().join("release"), "").unwrap();
+        asked_times(&root, "session/list", 3).await;
+        clock.advance_to(at(STARTUP));
+    })
+    .await;
+    assert!(matches!(
+        answer,
+        Err(AgentError::Provider { code: -32603, .. })
+    ));
+    assert_eq!(listings(&root).len(), 3);
+    assert_gone(&root, "pid");
 }
 
 #[tokio::test]
@@ -440,8 +423,13 @@ async fn a_refused_delete_the_list_cannot_explain_stays_the_refusal() {
     {
         let _process_slot = process_test_slot().await;
         let (root, provider, clock) = deleting("list-stall+refuse");
+        let answer = deleting_while(&provider, async {
+            asked(&root, "session/list").await;
+            clock.advance_to(at(STARTUP));
+        })
+        .await;
         assert!(matches!(
-            deleting_until_run_out(&provider, &root, &clock, "session/list", 2).await,
+            answer,
             Err(AgentError::Provider { code: -32603, .. })
         ));
         assert_gone(&root, "pid");

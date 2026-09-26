@@ -1,6 +1,9 @@
 //! Framing and exact outbound preflight through the shared JSON-RPC transport.
 use super::*;
-use crate::infrastructure::json_rpc::RpcId;
+use crate::infrastructure::{
+    clock::{Clock, RuntimeClock},
+    json_rpc::RpcId,
+};
 use serde_json::json;
 #[cfg(unix)]
 use std::process::Stdio;
@@ -113,6 +116,7 @@ async fn writes_are_bounded_and_round_trip_without_a_provider() {
         Err(AgentError::InvalidInput(_))
     ));
     send_encoded(
+        &RuntimeClock::new(),
         &mut writer,
         &encode(value.clone(), 128).unwrap(),
         Duration::from_secs(1),
@@ -124,6 +128,7 @@ async fn writes_are_bounded_and_round_trip_without_a_provider() {
     let (mut stalled, _unread) = duplex(1);
     assert_eq!(
         send_encoded(
+            &RuntimeClock::new(),
             &mut stalled,
             &encode(value, 128).unwrap(),
             Duration::from_millis(10),
@@ -147,9 +152,15 @@ async fn outbound_preflight_counts_utf8_and_json_escapes_at_the_exact_byte_bound
     assert_eq!(&encoded[..expected.len()], expected);
     assert_eq!(encoded.last(), Some(&b'\n'));
     let mut output = Vec::new();
-    send_encoded(&mut output, &encoded, Duration::from_secs(1), None)
-        .await
-        .unwrap();
+    send_encoded(
+        &RuntimeClock::new(),
+        &mut output,
+        &encoded,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(output, encoded);
 }
 
@@ -185,17 +196,32 @@ async fn cancellation_writes_share_one_absolute_grace_under_backpressure() {
         1024,
     )
     .unwrap();
+    let clock = RuntimeClock::new();
     let began = tokio::time::Instant::now();
-    let deadline = began + Duration::from_millis(20);
+    let deadline = clock.now() + Duration::from_millis(20);
     assert_eq!(
-        send_encoded(&mut output, &frame, Duration::from_secs(1), Some(deadline)).await,
+        send_encoded(
+            &clock,
+            &mut output,
+            &frame,
+            Duration::from_secs(1),
+            Some(deadline)
+        )
+        .await,
         Err(AgentError::Deadline)
     );
     let first = tokio::time::Instant::now();
     assert!(first - began >= Duration::from_millis(20));
     assert!(first - began <= Duration::from_millis(21));
     assert_eq!(
-        send_encoded(&mut output, &frame, Duration::from_secs(1), Some(deadline)).await,
+        send_encoded(
+            &clock,
+            &mut output,
+            &frame,
+            Duration::from_secs(1),
+            Some(deadline)
+        )
+        .await,
         Err(AgentError::Deadline)
     );
     assert_eq!(
@@ -208,10 +234,12 @@ async fn cancellation_writes_share_one_absolute_grace_under_backpressure() {
 #[tokio::test(start_paused = true)]
 async fn cancellation_write_transport_bound_remains_earlier_than_long_shutdown_grace() {
     let (mut output, _unread) = duplex(1);
-    let began = tokio::time::Instant::now();
+    let clock = RuntimeClock::new();
+    let began = clock.now();
     let deadline = began + Duration::from_secs(5);
     assert_eq!(
         send_encoded(
+            &clock,
             &mut output,
             b"session/cancel",
             Duration::from_secs(1),
@@ -220,10 +248,10 @@ async fn cancellation_write_transport_bound_remains_earlier_than_long_shutdown_g
         .await,
         Err(AgentError::Deadline)
     );
-    let now = tokio::time::Instant::now();
+    let now = clock.now();
     assert!(now < deadline);
-    assert!(now - began >= Duration::from_secs(1));
-    assert!(now - began <= Duration::from_millis(1001));
+    assert!(now.saturating_duration_since(began) >= Duration::from_secs(1));
+    assert!(now.saturating_duration_since(began) <= Duration::from_millis(1001));
 }
 
 #[test]
@@ -278,7 +306,14 @@ async fn a_frame_carrying_images_is_not_failed_by_the_bound_meant_for_small_fram
     let (mut output, input) = duplex(64 * 1024);
     let reader = tokio::spawn(read_slowly(input));
     assert_eq!(
-        send_encoded(&mut output, &frame, Duration::from_secs(1), None).await,
+        send_encoded(
+            &RuntimeClock::new(),
+            &mut output,
+            &frame,
+            Duration::from_secs(1),
+            None
+        )
+        .await,
         Err(AgentError::Deadline)
     );
     drop(output);
@@ -289,14 +324,23 @@ async fn a_frame_carrying_images_is_not_failed_by_the_bound_meant_for_small_fram
     let reader = tokio::spawn(read_slowly(input));
     let began = tokio::time::Instant::now();
     assert_eq!(
-        send_encoded(&mut output, &frame, write_allowance(frame.len()), None).await,
+        send_encoded(
+            &RuntimeClock::new(),
+            &mut output,
+            &frame,
+            write_allowance(frame.len()),
+            None
+        )
+        .await,
         Ok(())
     );
     assert!(began.elapsed() < write_allowance(frame.len()));
     // An operation deadline still ends the write earlier.
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    let clock = RuntimeClock::new();
+    let deadline = clock.now() + Duration::from_millis(500);
     assert_eq!(
         send_encoded(
+            &clock,
             &mut output,
             &frame,
             write_allowance(frame.len()),

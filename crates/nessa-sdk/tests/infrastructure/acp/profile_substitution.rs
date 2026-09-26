@@ -401,7 +401,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         max_frame_bytes: 4096,
         max_incoming_frame_bytes: 4096,
         images: None,
-        clock: Arc::new(crate::infrastructure::acp::sessions::RuntimeClock),
+        clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
     };
     config.validate().unwrap();
     (root, config, capabilities)

@@ -904,7 +904,17 @@ async fn opencode_permission_cancellation_audit_failure_is_visible_after_cleanup
 async fn opencode_execution_deadline_retains_runtime_cause_and_correlation() {
     let _process_slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
-    let (root, binding) = test_opencode_binding_with_audit("stall", 16, audit.clone());
+    let (root, mut config, model) = opencode_configuration("stall", 16);
+    let limit = Duration::from_secs(1);
+    config.execution_timeout = Some(limit);
+    let clock = manual_clock(&mut config);
+    let binding = OpencodeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
     let mut opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -914,7 +924,9 @@ async fn opencode_execution_deadline_retains_runtime_cause_and_correlation() {
         next(&mut opened).await,
         ExecutionUpdate::Message(MessageChunk::text("running"))
     );
-    assert_eq!(running.await.unwrap(), Err(AgentError::Deadline));
+    // The agent is running the prompt: its bound passes.
+    clock.advance(limit);
+    assert_eq!(promptly(running).await.unwrap(), Err(AgentError::Deadline));
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

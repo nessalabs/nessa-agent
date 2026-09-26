@@ -57,6 +57,10 @@ struct RunningWorker {
     events: EventReceiver,
     task: tokio::task::JoinHandle<()>,
     recovery: Arc<ProcessCleanup>,
+    /// Its deadlines' clock: the tests let a stop's grace pass whenever the
+    /// worker waits on one, since none of them is about when.
+    clock: Arc<ManualClock>,
+    grace: Duration,
 }
 async fn start_worker(audit: Arc<PanicAudit>, fail_cleanup: bool) -> RunningWorker {
     let (worker, startup) = spawn_worker(
@@ -78,7 +82,9 @@ fn spawn_worker<P: AcpProfile>(
     RunningWorker,
     oneshot::Receiver<Result<ExecutionSessionId, AgentError>>,
 ) {
-    let (root, config, capabilities) = profile_setup();
+    let (root, mut config, capabilities) = profile_setup();
+    let clock = manual_clock(&mut config);
+    let grace = config.shutdown_grace;
     let mut command = tokio::process::Command::new(config.executable.executable());
     command
         .args(&config.arguments)
@@ -121,6 +127,8 @@ fn spawn_worker<P: AcpProfile>(
             events: stream,
             task,
             recovery,
+            clock,
+            grace,
         },
         startup,
     )
@@ -176,15 +184,25 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                 .send_replace(Some(SessionCloseRequest::Explicit(
                     ActionContext::new("owner", "test", "close").unwrap(),
                 )));
-            let reply = timeout(Duration::from_secs(5), result)
-                .await
-                .unwrap()
-                .unwrap();
+            let reply = timeout(
+                Duration::from_secs(5),
+                worker
+                    .clock
+                    .passing(|wait| wait.limit() == worker.grace, result),
+            )
+            .await
+            .unwrap()
+            .unwrap();
             assert!(reply.into_result().is_err());
-            timeout(Duration::from_secs(5), worker.task)
-                .await
-                .unwrap()
-                .expect("worker panic must be supervised");
+            timeout(
+                Duration::from_secs(5),
+                worker
+                    .clock
+                    .passing(|wait| wait.limit() == worker.grace, worker.task),
+            )
+            .await
+            .unwrap()
+            .expect("worker panic must be supervised");
             let completed = worker.completion.borrow().clone().unwrap();
             assert_eq!(
                 completed.cleanup.audit(),
@@ -310,10 +328,15 @@ async fn finish_audit_panic_preserves_known_provider_outcome_and_answer_receipt(
         .await
         .unwrap();
     answer.await.unwrap().unwrap();
-    let reply = timeout(Duration::from_secs(5), result)
-        .await
-        .unwrap()
-        .unwrap();
+    let reply = timeout(
+        Duration::from_secs(5),
+        worker
+            .clock
+            .passing(|wait| wait.limit() == worker.grace, result),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let ProviderExecutionReply::Finished(report) = reply else {
         panic!("dispatched result must remain owned")
     };
@@ -409,11 +432,16 @@ async fn worker_phase_panics_preserve_scope_and_startup_or_execution_receipt() {
             },
         );
         if startup_failure {
-            assert!(timeout(Duration::from_secs(5), startup)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_err());
+            assert!(timeout(
+                Duration::from_secs(5),
+                worker
+                    .clock
+                    .passing(|wait| wait.limit() == worker.grace, startup)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
         } else {
             startup.await.unwrap().unwrap();
             let (reply, result) = oneshot::channel();
@@ -433,17 +461,27 @@ async fn worker_phase_panics_preserve_scope_and_startup_or_execution_receipt() {
                 ))
                 .await
                 .unwrap();
-            let reply = timeout(Duration::from_secs(5), result)
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(matches!(reply, ProviderExecutionReply::Finished(_)));
-            assert!(reply.into_result().is_err());
-        }
-        timeout(Duration::from_secs(5), worker.task)
+            let reply = timeout(
+                Duration::from_secs(5),
+                worker
+                    .clock
+                    .passing(|wait| wait.limit() == worker.grace, result),
+            )
             .await
             .unwrap()
             .unwrap();
+            assert!(matches!(reply, ProviderExecutionReply::Finished(_)));
+            assert!(reply.into_result().is_err());
+        }
+        timeout(
+            Duration::from_secs(5),
+            worker
+                .clock
+                .passing(|wait| wait.limit() == worker.grace, worker.task),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert!(!worker
             .completion
             .borrow()

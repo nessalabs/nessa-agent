@@ -68,9 +68,11 @@ if mode == "startup-stall":
     sys.exit(0)
 if mode in ("slow-launch", "slow-launch-session-stall"):
     # Stands in for the operating system scanning a freshly written runtime on
-    # its first execution: nothing is read or written until this passes, so the
-    # delay lands entirely before the child answers anything.
-    time.sleep(5)
+    # its first execution: nothing is read or written until the test, having
+    # moved its clock through the launch, creates `launched`, so the delay
+    # lands entirely before the child answers anything.
+    while not (root / "launched").exists():
+        time.sleep(0.01)
 if mode == "ignore-stop":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     def reap(_signal, _frame):

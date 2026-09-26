@@ -2,10 +2,11 @@ use crate::application::agent_execution::{
     agents::AgentError,
     providers::{ProviderOperationResult, SteeringOutcome},
 };
+use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::json_rpc;
 use serde_json::Value;
 use std::time::Duration;
-use tokio::{sync::oneshot, time::Instant};
+use tokio::sync::oneshot;
 
 /// Bound extension acknowledgements even when the execution itself has no timeout.
 ///
@@ -23,7 +24,7 @@ pub(in crate::infrastructure::acp) const RESPONSE_TIMEOUT: Duration = Duration::
 pub(super) struct PendingSteering {
     pub id: i64,
     pub reply: oneshot::Sender<ProviderOperationResult<SteeringOutcome>>,
-    pub deadline: Instant,
+    pub deadline: ClockInstant,
 }
 pub(super) fn outcome(value: Value) -> Result<SteeringOutcome, AgentError> {
     match value.get("outcome").and_then(Value::as_str) {

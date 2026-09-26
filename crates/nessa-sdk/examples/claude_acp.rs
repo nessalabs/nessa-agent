@@ -20,10 +20,10 @@ use nessa_sdk::domain::agent_execution::prompts::{
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
-use nessa_sdk::infrastructure::acp::sessions::{AcpConfig, RuntimeClock};
 use nessa_sdk::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 use nessa_sdk::infrastructure::model_metadata_json::load_catalog;
 use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::{acp::sessions::AcpConfig, clock::RuntimeClock};
 use nessa_sdk::Agent;
 use std::{
     collections::BTreeMap, error::Error, fs::File, path::PathBuf, sync::Arc, time::Duration,
@@ -192,7 +192,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             max_frame_bytes: 1024 * 1024,
             max_incoming_frame_bytes: 1024 * 1024,
             images: None,
-            clock: Arc::new(RuntimeClock),
+            clock: Arc::new(RuntimeClock::new()),
         },
         &model,
         limits,

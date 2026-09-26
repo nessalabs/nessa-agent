@@ -1,7 +1,8 @@
 use super::support::*;
+use crate::infrastructure::clock::{Clock, ClockInstant};
 use serde_json::Value;
 use std::fs::read_to_string;
-use tokio::{sync::oneshot, time::Instant};
+use tokio::sync::oneshot;
 
 #[tokio::test]
 async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() {
@@ -298,7 +299,9 @@ async fn terminal_delivery_failure_is_reported_by_both_prompt_and_event_reader()
 struct WriteDeadlineAudit {
     reject_closure: bool,
     records: RecordingAudit,
-    closure: Mutex<Option<oneshot::Sender<Instant>>>,
+    /// When, on the binding's clock, the context's closure was recorded.
+    closure: Mutex<Option<oneshot::Sender<ClockInstant>>>,
+    clock: Arc<ManualClock>,
 }
 impl ExecutionAudit for WriteDeadlineAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -306,7 +309,7 @@ impl ExecutionAudit for WriteDeadlineAudit {
             let closure = matches!(record, ExecutionAuditRecord::SessionClosed(_));
             if closure {
                 if let Some(sender) = self.closure.lock().unwrap().take() {
-                    sender.send(Instant::now()).unwrap();
+                    sender.send(self.clock.now()).unwrap();
                 }
             }
             self.records.record(record).await?;
@@ -328,13 +331,15 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
         (Some(Duration::from_millis(20)), true),
     ] {
         let (sender, receiver) = oneshot::channel();
+        let (root, mut config, model) = test_acp_configuration("blocked-prompt-write", 16);
+        config.execution_timeout = limit;
+        let clock = manual_clock(&mut config);
         let audit = Arc::new(WriteDeadlineAudit {
             reject_closure,
             records: RecordingAudit::default(),
             closure: Mutex::new(Some(sender)),
+            clock: clock.clone(),
         });
-        let (root, mut config, model) = test_acp_configuration("blocked-prompt-write", 16);
-        config.execution_timeout = limit;
         config.max_frame_bytes = 4 * 1024 * 1024;
         let binding = ClaudeAcpProvider::new(
             config,
@@ -350,13 +355,30 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
         let mut request = prompt("blocked-write");
         request.user_message =
             UserMessage::text_only(PromptText::new("x".repeat(2 * 1024 * 1024)).unwrap());
-        tokio::time::pause();
-        let began = Instant::now();
+        let began = clock.now();
+        // Without an execution deadline the write has its own bound, which
+        // grows with the frame: one second, and one more for each whole
+        // mebibyte of this two-mebibyte prompt.
+        let expected = limit.unwrap_or(Duration::from_secs(3));
         let session = opened.session.clone();
         let running = tokio::spawn(async move { session.execute(request).await.into_result() });
-        let closure_time = receiver.await.unwrap();
-        tokio::time::resume();
-        let result = running.await.unwrap();
+        // The blocked write waits for exactly that bound, and the clock goes
+        // there and no further before the closure is recorded.
+        timeout(
+            Duration::from_secs(10),
+            clock.run_out(|wait| wait.deadline == began + expected),
+        )
+        .await
+        .expect("the write waited for another bound");
+        let closure_time = timeout(Duration::from_secs(10), receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        // Stopping the agent, whose pipe is still full, spends its grace.
+        let result = timeout(Duration::from_secs(10), clock.passing(a_grace, running))
+            .await
+            .unwrap()
+            .unwrap();
         let expected_result = if reject_closure {
             Err(ordered_failures(&[
                 AgentError::Deadline,
@@ -366,16 +388,7 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
             Err(AgentError::Deadline)
         };
         assert_eq!(result, expected_result);
-        let elapsed = closure_time - began;
-        // Without an execution deadline the write has its own bound, which
-        // grows with the frame: one second, and one more for each whole
-        // mebibyte of this two-mebibyte prompt.
-        let expected = limit.unwrap_or(Duration::from_secs(3));
-        // Tokio's timer wheel rounds expiry to its next millisecond tick.
-        assert!(
-            elapsed >= expected && elapsed <= expected + Duration::from_millis(1),
-            "{elapsed:?}"
-        );
+        assert_eq!(closure_time, began + expected);
         assert_gone(&root, "pid");
         let records = audit.records.closures.lock().unwrap();
         assert_eq!(records.len(), 1);

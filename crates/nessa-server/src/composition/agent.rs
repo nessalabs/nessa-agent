@@ -827,8 +827,7 @@ mod build {
             common::value_objects::TokenLimits,
         },
         infrastructure::{
-            acp::sessions::{AcpConfig, RuntimeClock},
-            codex_acp::sessions::CodexAcpProvider,
+            acp::sessions::AcpConfig, clock::RuntimeClock, codex_acp::sessions::CodexAcpProvider,
             opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
@@ -938,7 +937,7 @@ mod build {
             max_frame_bytes: MAX_FRAME_BYTES,
             max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
             images,
-            clock: Arc::new(RuntimeClock),
+            clock: Arc::new(RuntimeClock::new()),
         }
     }
 

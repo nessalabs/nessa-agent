@@ -1,5 +1,6 @@
 use super::{envelope::MAX_JSON_ITEMS, parse_within, protocol, Envelope};
 use crate::application::agent_execution::agents::AgentError;
+use crate::infrastructure::clock::{Clock, ClockInstant};
 use event_stream::ingestion::{
     CrLfPolicy, DecodeBudget, DecodeState, FinalLinePolicy, IncrementalDecoder, NewlineFramer,
     NewlineFramerConfig,
@@ -10,10 +11,7 @@ use std::time::Duration;
 use std::{io, os::fd::AsRawFd};
 #[cfg(windows)]
 use std::{io, os::windows::io::AsRawHandle, ptr};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    time::Instant,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(windows)]
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
@@ -263,17 +261,20 @@ pub(crate) fn large_frame_allowance(frame_bytes: usize) -> Duration {
     WRITE_PER_MIB.saturating_mul(mebibytes)
 }
 
-/// Write a frame already encoded and validated by `encode`, preserving its bytes.
+/// Write a frame already encoded and validated by `encode`, preserving its
+/// bytes, within `allowance` from now on `clock` and never past
+/// `operation_deadline`.
 pub(crate) async fn send_encoded<W: AsyncWrite + Unpin>(
+    clock: &dyn Clock,
     output: &mut W,
     bytes: &[u8],
-    deadline: Duration,
-    operation_deadline: Option<Instant>,
+    allowance: Duration,
+    operation_deadline: Option<ClockInstant>,
 ) -> Result<(), AgentError> {
-    let write_deadline = Instant::now() + deadline;
+    let write_deadline = clock.now() + allowance;
     let deadline = operation_deadline.map_or(write_deadline, |limit| limit.min(write_deadline));
     tokio::select! { biased;
-        _ = tokio::time::sleep_until(deadline) => Err(AgentError::Deadline),
+        () = clock.sleep_until(deadline) => Err(AgentError::Deadline),
         result = output.write_all(bytes) => result.map_err(|_| AgentError::Transport("stdin write failed".into())),
     }
 }

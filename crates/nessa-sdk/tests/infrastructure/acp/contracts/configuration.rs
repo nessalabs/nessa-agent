@@ -288,6 +288,7 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
     let (root, mut config, model) = test_acp_configuration("startup-stall", 16);
     config.launch_timeout = Duration::from_secs(30);
     config.startup_timeout = Duration::from_secs(30);
+    let clock = manual_clock(&mut config);
     let binding = ClaudeAcpProvider::new(
         config,
         &model,
@@ -301,12 +302,9 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
             .await
     });
     wait_for_file(&root, "pid").await;
-    // Start the clock assertion only after Python has published its PID. The
-    // deadline itself remains the worker's configured deadline; OS launch and
-    // process reaping run on real time, never on Tokio's automatically advanced clock.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(31)).await;
-    tokio::time::resume();
+    // Move the clock only once Python has published its PID: the deadline is
+    // the worker's configured one, and nothing but this test moves its clock.
+    clock.advance(Duration::from_secs(31));
     let result = timeout(Duration::from_secs(5), opening)
         .await
         .unwrap()
@@ -334,6 +332,7 @@ async fn the_launch_budget_and_the_protocol_budget_are_spent_separately() {
     let (root, mut config, model) = test_acp_configuration("slow-launch-session-stall", 16);
     config.launch_timeout = Duration::from_secs(600);
     config.startup_timeout = Duration::from_secs(3);
+    let clock = manual_clock(&mut config);
     let binding = ClaudeAcpProvider::new(
         config,
         &model,
@@ -346,11 +345,13 @@ async fn the_launch_budget_and_the_protocol_budget_are_spent_separately() {
             .open(ProviderOpenRequest::without_startup_control(None))
             .await
     });
+    // The launch takes longer than the whole protocol budget.
+    wait_for_file(&root, "pid").await;
+    clock.advance(Duration::from_secs(5));
+    std::fs::write(root.path().join("launched"), "").unwrap();
     wait_for_file(&root, "new-session-wait").await;
-    tokio::time::pause();
     // Past the protocol budget but nowhere near the launch budget.
-    tokio::time::advance(Duration::from_secs(4)).await;
-    tokio::time::resume();
+    clock.advance(Duration::from_secs(4));
     let error = timeout(Duration::from_secs(5), opening)
         .await
         .unwrap()
@@ -376,10 +377,10 @@ async fn a_launch_slower_than_the_protocol_budget_still_starts() {
     let _process_slot = process_test_slot().await;
     let (root, mut config, model) = test_acp_configuration("slow-launch", 16);
     config.launch_timeout = Duration::from_secs(30);
-    // Smaller than the child's own launch delay, and still ample for two real
-    // round trips on a loaded machine. Charging the launch against this budget
-    // is exactly the reported failure.
+    // Smaller than the child's launch, which is all the clock moves: charging
+    // the launch against this budget is exactly the reported failure.
     config.startup_timeout = Duration::from_secs(3);
+    let clock = manual_clock(&mut config);
     let binding = ClaudeAcpProvider::new(
         config,
         &model,
@@ -387,13 +388,20 @@ async fn a_launch_slower_than_the_protocol_budget_still_starts() {
         Arc::new(RecordingAudit::default()),
     )
     .unwrap();
-    let opened = timeout(
-        Duration::from_secs(20),
-        binding.open(ProviderOpenRequest::without_startup_control(None)),
-    )
+    let launching = async {
+        wait_for_file(&root, "pid").await;
+        clock.advance(Duration::from_secs(5));
+        std::fs::write(root.path().join("launched"), "").unwrap();
+    };
+    let (opened, ()) = timeout(Duration::from_secs(20), async {
+        tokio::join!(
+            binding.open(ProviderOpenRequest::without_startup_control(None)),
+            launching
+        )
+    })
     .await
-    .unwrap()
-    .expect("a slow launch is not a protocol failure");
+    .unwrap();
+    let opened = opened.expect("a slow launch is not a protocol failure");
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
@@ -460,6 +468,7 @@ async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
         let (root, mut config, model) = test_acp_configuration(mode, 16);
         config.launch_timeout = Duration::from_secs(30);
         config.startup_timeout = Duration::from_secs(30);
+        let clock = manual_clock(&mut config);
         let restore = restored.then(|| ExecutionSessionId::new("restored-context").unwrap());
         if let Some(id) = &restore {
             std::fs::write(
@@ -480,12 +489,9 @@ async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
                 .open(ProviderOpenRequest::without_startup_control(restore))
                 .await
         });
-        // Advance only after the child has reached the stalling step, so the
-        // simulated deadline cannot overtake real process launch.
+        // Move the clock only once the child has reached the stalling step.
         wait_for_file(&root, marker).await;
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(31)).await;
-        tokio::time::resume();
+        clock.advance(Duration::from_secs(31));
         let error = timeout(Duration::from_secs(5), opening)
             .await
             .unwrap()
@@ -596,7 +602,13 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
             stall,
             ..Default::default()
         });
-        let (root, binding) = test_acp_binding_with_audit("wrong-mode", 16, audit);
+        let (root, mut config, model) = test_acp_configuration("wrong-mode", 16);
+        // A stalled audit is bounded by the grace, which passes here.
+        let clock = manual_clock(&mut config);
+        let grace = grace_of(&config);
+        let binding =
+            ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit)
+                .unwrap();
         let storage = Arc::new(InMemoryStorage::new());
         let id = SessionId::new("startup-audit").unwrap();
         let manager = SessionManager::open(Some(id.clone()), storage.clone())
@@ -604,7 +616,7 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
             .unwrap();
         let error = timeout(
             Duration::from_secs(3),
-            attached_agent(Arc::new(binding), manager),
+            clock.passing(grace, attached_agent(Arc::new(binding), manager)),
         )
         .await
         .unwrap()
@@ -631,6 +643,7 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
     let (root, mut config, model) = test_acp_configuration("configuration-stall", 16);
     config.launch_timeout = Duration::from_secs(30);
     config.startup_timeout = Duration::from_secs(30);
+    let clock = manual_clock(&mut config);
     let binding = ClaudeAcpProvider::new(
         config,
         &model,
@@ -644,9 +657,7 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
             .await
     });
     wait_for_file(&root, "configuration-wait").await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(31)).await;
-    tokio::time::resume();
+    clock.advance(Duration::from_secs(31));
     let error = timeout(Duration::from_secs(5), opening)
         .await
         .unwrap()
@@ -786,7 +797,9 @@ async fn close_during_configuration_retains_provider_closure_audit_failure() {
             } else {
                 "configuration-stall"
             };
-            let (root, config, model) = test_acp_configuration(mode, 16);
+            let (root, mut config, model) = test_acp_configuration(mode, 16);
+            // A record that never answers is bounded by the grace, which passes.
+            let clock = manual_clock(&mut config);
             let binding = ClaudeAcpProvider::new(
                 config,
                 &model,
@@ -816,7 +829,10 @@ async fn close_during_configuration_retains_provider_closure_audit_failure() {
                 operation_error: Box::new(AgentError::Closed),
                 cleanup_error: Box::new(AgentError::AuditFailure),
             };
-            assert_eq!(agent.close(close_action()).await, Err(expected.clone()));
+            assert_eq!(
+                promptly(clock.passing(a_grace, agent.close(close_action()))).await,
+                Err(expected.clone())
+            );
             assert!(opening.wait().await.is_err());
             assert!(agent
                 .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))

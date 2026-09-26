@@ -13,6 +13,7 @@ pub(super) use crate::domain::common::value_objects::TokenLimits;
 pub(super) use crate::domain::model_metadata::entities::ModelMetadata;
 pub(super) use crate::infrastructure::acp::sessions::AcpConfig;
 pub(super) use crate::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
+pub(super) use crate::infrastructure::clock::manual::{ManualClock, Wait};
 pub(super) use crate::infrastructure::codex_acp::sessions::CodexAcpProvider;
 pub(super) use crate::infrastructure::opencode_acp::sessions::OpencodeAcpProvider;
 pub(super) use std::{
@@ -116,6 +117,25 @@ impl ExecutionAudit for RecordingAudit {
         })
     }
 }
+/// A clock on `config` that moves only when the test moves it.
+pub(super) fn manual_clock(config: &mut AcpConfig) -> Arc<ManualClock> {
+    let clock = Arc::new(ManualClock::default());
+    config.clock = clock.clone();
+    clock
+}
+/// `operation`, which must finish without waiting for a deadline the test has
+/// not reached. The real-time bound only turns such a wait into a failure.
+pub(super) async fn promptly<T>(operation: impl std::future::Future<Output = T>) -> T {
+    timeout(Duration::from_secs(10), operation)
+        .await
+        .expect("it waited for a deadline the clock never reached")
+}
+/// Whether `wait` was given `config`'s `shutdown_grace`: a stop's grace, or
+/// an audit record's bound.
+pub(super) fn grace_of(config: &AcpConfig) -> impl Fn(&Wait) -> bool {
+    let grace = config.shutdown_grace;
+    move |wait| wait.limit() == grace
+}
 pub(super) fn close_action() -> ActionContext {
     ActionContext::new("fixture-host", "fixture-tests", "close-session").unwrap()
 }
@@ -131,6 +151,28 @@ pub(super) fn test_acp_binding_with_audit(
     )
 }
 
+/// The fixture's `shutdown_grace`: short, since the grace is real time
+/// unless a test puts its binding on a [`ManualClock`].
+pub(super) const SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
+/// Whether `wait` was given [`SHUTDOWN_GRACE`]: a stop's grace, or an audit
+/// record's bound.
+pub(super) fn a_grace(wait: &Wait) -> bool {
+    wait.limit() == SHUTDOWN_GRACE
+}
+/// [`test_acp_binding_with_audit`] on a clock the test moves, with
+/// `execution_timeout` as its execution bound.
+pub(super) fn test_acp_binding_on_clock(
+    mode: &str,
+    audit: Arc<RecordingAudit>,
+    execution_timeout: Option<Duration>,
+) -> (TempDir, ClaudeAcpProvider, Arc<ManualClock>) {
+    let (root, mut config, model) = test_acp_configuration(mode, 16);
+    config.execution_timeout = execution_timeout;
+    let clock = manual_clock(&mut config);
+    let binding =
+        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
+    (root, binding, clock)
+}
 pub(super) fn test_acp_configuration(
     mode: &str,
     capacity: usize,
@@ -172,14 +214,16 @@ pub(super) fn test_acp_configuration(
         permissions: PermissionOfferPolicy::once_only(),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
-        execution_timeout: Some(Duration::from_millis(700)),
-        shutdown_grace: Duration::from_millis(100),
+        // Unbounded unless a test bounds it, on a clock it moves: a real
+        // bound here is one a slow machine reaches before the test's close.
+        execution_timeout: None,
+        shutdown_grace: SHUTDOWN_GRACE,
         kill_timeout: Duration::from_secs(2),
         event_capacity: capacity,
         max_frame_bytes: 8192,
         max_incoming_frame_bytes: 8192,
         images: None,
-        clock: Arc::new(crate::infrastructure::acp::sessions::RuntimeClock),
+        clock: Arc::new(crate::infrastructure::clock::RuntimeClock::new()),
     };
     (root, config, model)
 }

@@ -408,7 +408,8 @@ async fn pending_reviews_retain_their_execution_end_cause_in_the_audit() {
         ),
     ] {
         let audit = Arc::new(RecordingAudit::default());
-        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        let limit = Duration::from_secs(1);
+        let (root, binding, clock) = test_acp_binding_on_clock(mode, audit.clone(), Some(limit));
         let mut opened = binding
             .open(ProviderOpenRequest::without_startup_control(None))
             .await
@@ -418,7 +419,14 @@ async fn pending_reviews_retain_their_execution_end_cause_in_the_audit() {
         let ExecutionUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
             panic!("expected permission")
         };
-        let result = active.await.unwrap();
+        if matches!(
+            reason.view(),
+            PermissionCancellationReasonView::DeadlineExceeded
+        ) {
+            // The review is pending when the execution's bound passes.
+            clock.advance(limit);
+        }
+        let result = promptly(active).await.unwrap();
         match reason.view() {
             PermissionCancellationReasonView::DeadlineExceeded => {
                 assert_eq!(result, Err(AgentError::Deadline))
@@ -614,7 +622,7 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
         stall: true,
         ..Default::default()
     });
-    let (root, binding) = test_acp_binding_with_audit("permission-stop", 16, audit);
+    let (root, binding, clock) = test_acp_binding_on_clock("permission-stop", audit, None);
     let mut opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -625,16 +633,15 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
         next(&mut opened).await,
         ExecutionUpdate::PermissionRequested { .. }
     ));
+    // Each stalled audit record is bounded by the grace, which passes.
+    let closing = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()));
     assert_eq!(
-        timeout(
-            Duration::from_secs(2),
-            opened
-                .session
-                .shutdown(SessionCloseRequest::Explicit(close_action()))
-        )
-        .await
-        .unwrap()
-        .into_result(),
+        timeout(Duration::from_secs(10), clock.passing(a_grace, closing))
+            .await
+            .unwrap()
+            .into_result(),
         Err(rejected_audits(3))
     );
     assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
