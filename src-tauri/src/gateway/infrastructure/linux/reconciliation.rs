@@ -1058,7 +1058,10 @@ impl GatewayHost for SystemdGateway {
         } else if recovery.has_effect_plan() {
             // Every plan settled and was observed. A step's observation
             // records only that step's artifact, so it is not comparable with
-            // a fresh whole-target observation; close on the durable one.
+            // a fresh whole-target observation; close on the durable one. The
+            // fresh artifacts must still be exact: foreign bytes keep the
+            // lifecycle unresolved for diagnosis.
+            broad_artifact_present()?;
             let observation = recovery.latest_observation().cloned().ok_or_else(|| {
                 GatewayError::Registration(
                     "The unresolved systemd plan has no durable observation".into(),
@@ -2293,7 +2296,9 @@ fn classify_unit_state(
         return SystemdUnitState::Absent;
     };
     match (snapshot.active_state.as_str(), snapshot.sub_state.as_str()) {
-        ("inactive", "dead") if snapshot.main_process_id == 0 => SystemdUnitState::Inactive,
+        ("inactive", "dead") if snapshot.main_process_id == 0 && !snapshot.pending_job => {
+            SystemdUnitState::Inactive
+        }
         ("activating", _) => SystemdUnitState::Activating,
         ("active", "running") if has_running_process(snapshot) && incarnation.is_some() => {
             SystemdUnitState::Active
@@ -3324,6 +3329,7 @@ mod tests {
             drop_in_paths: vec![],
             active_state: "active".into(),
             sub_state: "running".into(),
+            pending_job: false,
             invocation: Some(SystemdInvocationId::new(vec![7; 16]).unwrap()),
             main_process_id: 99,
             service_type: "simple".into(),
@@ -5014,7 +5020,7 @@ mod tests {
     fn every_other_installed_unit_without_an_endpoint_is_preserved() {
         let installed = Installed::new();
         let manager = installed.manager(None);
-        let changes: [(&str, SnapshotChange); 8] = [
+        let changes: [(&str, SnapshotChange); 9] = [
             ("running", |snapshot| *snapshot = running(snapshot.clone())),
             ("failed", |snapshot| {
                 snapshot.active_state = "failed".into();
@@ -5026,6 +5032,9 @@ mod tests {
             }),
             ("inactive with a process", |snapshot| {
                 snapshot.main_process_id = 99
+            }),
+            ("inactive with a queued job", |snapshot| {
+                snapshot.pending_job = true
             }),
             ("drop-in", |snapshot| {
                 snapshot.drop_in_paths = vec!["/home/me/.config/systemd/user/x.d/y.conf".into()]
@@ -5102,6 +5111,9 @@ mod tests {
             &installed.unit
         )
         .is_err());
+        let mut queued = installed.snapshot.clone();
+        queued.pending_job = true;
+        assert!(require_no_process(&installed.manager(Some(queued)), &installed.unit).is_err());
     }
 
     #[test]
@@ -5462,6 +5474,13 @@ mod tests {
                 &RecordingJournal::default()
             )
             .is_err());
+        fs::write(&installed.paths.unit_file, b"foreign bytes").unwrap();
+        let journal = RecordingJournal::default();
+        assert!(installed
+            .fixed_gateway(Some(installed.snapshot.clone()))
+            .recover(&installed.recovery(true, Some(durable)), &journal)
+            .is_err());
+        assert!(journal.outcomes.lock().unwrap().is_empty());
     }
 
     struct AdvertisingLater {
