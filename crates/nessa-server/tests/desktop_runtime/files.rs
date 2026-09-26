@@ -54,6 +54,7 @@ async fn retirement_acknowledges_correlated_durable_evidence_even_without_agents
         request.clone(),
         RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap(),
         None,
+        &PresentData,
         &files,
     )
     .await;
@@ -126,12 +127,90 @@ async fn audit_failure_never_acknowledges_retirement() {
         .unwrap(),
         RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap(),
         None,
+        &PresentData,
         &RejectingAudit,
     )
     .await;
     assert!(!result.retired);
     assert!(result.cleanup_error.is_none());
     assert_eq!(result.audit_error.as_deref(), Some("audit refused"));
+}
+
+/// ADR 221: a retirement that did not happen says why, by a published name.
+/// Only a request for this very runtime may say its data is missing.
+#[tokio::test]
+async fn a_refused_retirement_names_why_and_the_file_carries_it() {
+    struct MissingData;
+    impl crate::desktop_runtime::application::ConversationData for MissingData {
+        fn missing(&self) -> bool {
+            true
+        }
+    }
+    let request = |instance: &str| {
+        RetirementRequest::new(
+            Uuid::new_v4().to_string(),
+            "b".repeat(64),
+            instance.into(),
+            "c".repeat(64),
+            "d".repeat(64),
+        )
+        .unwrap()
+    };
+    let running =
+        || RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap();
+    let other = "0e0c3f5c-33a8-4a55-9a52-5d1f6c1b0b7e";
+
+    for (request, data, expected) in [
+        (
+            request(INSTANCE),
+            &PresentData as &dyn crate::desktop_runtime::application::ConversationData,
+            RetirementRefusal::NotConfirmed,
+        ),
+        (
+            request(INSTANCE),
+            &MissingData,
+            RetirementRefusal::DataMissing,
+        ),
+        (
+            request(other),
+            &MissingData,
+            RetirementRefusal::NotConfirmed,
+        ),
+    ] {
+        let result = retire(request, running(), None, data, &RejectingAudit).await;
+        assert!(!result.retired);
+        assert_eq!(result.refusal, Some(expected));
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
+    let refused = retire(
+        request(INSTANCE),
+        running(),
+        None,
+        &MissingData,
+        &RejectingAudit,
+    )
+    .await;
+    files.result(&refused).unwrap();
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(files.directory.join("result.json")).unwrap())
+            .unwrap();
+    assert_eq!(written["retired"], false);
+    assert_eq!(written["refusal"], "data_missing");
+    // The writer reads back what it wrote, refusal included.
+    assert!(files.evidence().is_ok());
+
+    let retired = retire(request(INSTANCE), running(), None, &MissingData, &files).await;
+    assert!(retired.retired);
+    assert_eq!(retired.refusal, None);
+
+    let mut contradictory = refused.clone();
+    contradictory.refusal = None;
+    assert!(files.result(&contradictory).is_err());
+    let mut contradictory = retired.clone();
+    contradictory.refusal = Some(RetirementRefusal::NotConfirmed);
+    assert!(files.result(&contradictory).is_err());
 }
 
 struct TestClock;
@@ -187,7 +266,14 @@ async fn wrong_instance_or_generation_cannot_close_admission() {
         .unwrap();
     let other = Uuid::new_v4().to_string();
     for identity in [running(&other, "a", "c"), running(INSTANCE, "a", "e")] {
-        let result = retire(request(INSTANCE), identity, Some(&service), &files).await;
+        let result = retire(
+            request(INSTANCE),
+            identity,
+            Some(&service),
+            &PresentData,
+            &files,
+        )
+        .await;
         assert!(!result.retired);
         assert!(result.retirement_request_id().is_none());
         assert!(service.retirement_cause().is_none());
@@ -214,6 +300,7 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
         original_request.clone(),
         running(INSTANCE, "a", "c"),
         None,
+        &PresentData,
         &files,
     )
     .await;
@@ -237,6 +324,7 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
         request(&restarted_instance),
         restarted.clone(),
         Some(&service),
+        &PresentData,
         &files,
     )
     .await;
@@ -263,7 +351,14 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
             .unwrap();
         replacement_service.shutdown().await.unwrap();
     }
-    let wrong = retire(request(INSTANCE), restarted, Some(&service), &files).await;
+    let wrong = retire(
+        request(INSTANCE),
+        restarted,
+        Some(&service),
+        &PresentData,
+        &files,
+    )
+    .await;
     assert!(!wrong.retired);
     assert!(files.result(&wrong).is_err());
     assert_eq!(
@@ -345,6 +440,7 @@ fn result_writer_rejects_admitted_failure_without_a_failure_reason() {
         retired: false,
         cleanup_error: None,
         audit_error: None,
+        refusal: Some(RetirementRefusal::NotConfirmed),
     };
     assert!(files.result(&result).is_err());
 }
@@ -367,6 +463,7 @@ fn result_writer_validates_the_complete_retirement_tuple() {
         retirement_cause,
         cleanup_error,
         audit_error,
+        refusal: (!retired).then_some(RetirementRefusal::NotConfirmed),
     };
 
     let admitted = request(INSTANCE);
@@ -483,6 +580,7 @@ async fn stalled_audit_refuses_acknowledgement_and_a_later_request_can_progress(
         request.clone(),
         running(INSTANCE, "a", "c"),
         None,
+        &PresentData,
         &StalledAudit,
     )
     .await;
@@ -494,7 +592,14 @@ async fn stalled_audit_refuses_acknowledgement_and_a_later_request_can_progress(
     );
     let root = tempfile::tempdir().unwrap();
     let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
-    let retry = retire(request, running(INSTANCE, "a", "c"), None, &files).await;
+    let retry = retire(
+        request,
+        running(INSTANCE, "a", "c"),
+        None,
+        &PresentData,
+        &files,
+    )
+    .await;
     assert!(retry.retired);
 }
 
@@ -516,7 +621,14 @@ async fn another_lifecycle_cause_cannot_be_relabelled_as_successful_upgrade() {
     let root = tempfile::tempdir().unwrap();
     let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
     let runtime = running(INSTANCE, "a", "c");
-    let result = retire(request(INSTANCE), runtime.clone(), Some(&service), &files).await;
+    let result = retire(
+        request(INSTANCE),
+        runtime.clone(),
+        Some(&service),
+        &PresentData,
+        &files,
+    )
+    .await;
     assert!(!result.retired);
     assert_eq!(
         service.retirement_cause().unwrap().surface_id(),
@@ -568,6 +680,7 @@ async fn wrong_generation_rejection_can_be_read_after_restart_and_does_not_poiso
         request(INSTANCE),
         running(INSTANCE, "a", "d"),
         Some(&service),
+        &PresentData,
         &files,
     )
     .await;
@@ -593,6 +706,7 @@ async fn wrong_generation_rejection_can_be_read_after_restart_and_does_not_poiso
         admitted.clone(),
         running(INSTANCE, "a", "d"),
         Some(&service),
+        &PresentData,
         &restarted_reader,
     )
     .await;
@@ -620,6 +734,7 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         original.clone(),
         running(INSTANCE, "a", "c"),
         Some(&service),
+        &PresentData,
         &RejectingAudit,
     )
     .await;
@@ -651,6 +766,7 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         wrong_instance,
         running(INSTANCE, "a", "c"),
         Some(&service),
+        &PresentData,
         &files,
     )
     .await;
@@ -669,6 +785,7 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         request(INSTANCE),
         running(INSTANCE, "a", "c"),
         Some(&service),
+        &PresentData,
         &files,
     )
     .await;
@@ -696,6 +813,7 @@ async fn cleanup_failure_restores_admission_fence_with_original_correlation() {
         original.clone(),
         running(INSTANCE, "a", "c"),
         Some(&service),
+        &PresentData,
         &files,
     )
     .await;
@@ -723,4 +841,12 @@ async fn cleanup_failure_restores_admission_fence_with_original_correlation() {
         restarted_service.retirement_cause().unwrap().request_id(),
         original.id()
     );
+}
+
+/// The conversation store is where it was opened.
+struct PresentData;
+impl crate::desktop_runtime::application::ConversationData for PresentData {
+    fn missing(&self) -> bool {
+        false
+    }
 }

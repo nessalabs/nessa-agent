@@ -3,7 +3,7 @@ use crate::conversation::application::ConversationError;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
-    infrastructure::RetirementFiles,
+    infrastructure::{ConversationDirectory, RetirementFiles},
 };
 use crate::env::Environment;
 use crate::server::entrypoint::http;
@@ -248,6 +248,14 @@ impl CompositionRoot {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(identity) = desktop_identity {
             let files = retirement_files.expect("desktop files initialized before admission");
+            let conversation_data =
+                ConversationDirectory::new(super::local_auth::conversation_root(
+                    config
+                        .auth_directory
+                        .as_ref()
+                        .and_then(|path| path.parent())
+                        .ok_or_else(|| RunError::Agent("missing desktop namespace".into()))?,
+                ));
             let service = conversations.clone();
             let mut requests = signal(SignalKind::user_defined2()).map_err(RunError::Serve)?;
             tokio::spawn(async move {
@@ -259,8 +267,14 @@ impl CompositionRoot {
                             continue;
                         }
                     };
-                    let result =
-                        retire(request, identity.clone(), service.as_deref(), &files).await;
+                    let result = retire(
+                        request,
+                        identity.clone(),
+                        service.as_deref(),
+                        &conversation_data,
+                        &files,
+                    )
+                    .await;
                     if let Err(error) = files.result(&result) {
                         tracing::error!(%error, "could not acknowledge desktop retirement");
                     }

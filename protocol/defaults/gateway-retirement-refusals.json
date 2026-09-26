@@ -1,0 +1,4 @@
+{
+  "note": "Why a running gateway would not retire when a newer Nessa asked it to, said in the one way that survives the process boundary (ADR 221). The gateway writes one of these names as `refusal` in `gateway-upgrade/result.json` whenever `retired` is false, and the desktop host decides what to do from the name alone, never from the free-form `cleanupError` beside it. `data_missing`: the gateway's own conversation data is no longer where it was opened, so the evidence a refusal protects is already gone and the host may stop the gateway itself, recording that it did. `not_confirmed`: anything else that could not be confirmed; the host fails the attempt and Try again asks again. A result with no `refusal` comes from a gateway that predates this file and is read as `not_confirmed`. A new name needs its row in ADR 221 first.",
+  "refusals": ["data_missing", "not_confirmed"]
+}

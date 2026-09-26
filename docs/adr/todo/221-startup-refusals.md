@@ -51,9 +51,11 @@ No command that needs `HostDependencies` can be reached from that page.
 
 ### 2. One narrow repair: shared read on a private file
 
-`nessa-local-storage` gains `repair_shared_read`. It tightens a file or
-directory to owner-only when all of these hold, checked on the open descriptor
-(`O_NOFOLLOW`, then `fstat`, then `fchmod`):
+`nessa-local-storage` gains `find_shared_read`. It opens the object without
+following a final symlink and checks it with `fstat`; a repairable one comes
+back held open, and `SharedReadCandidate::tighten` changes that same descriptor
+with `fchmod`, so nothing can be swapped in between the check, the record, and
+the change:
 
 | Found | Action |
 | --- | --- |
@@ -69,9 +71,11 @@ confidentiality and never widens who is trusted. A "written by Nessa only" rule
 would need a signature or recorded identity that any process running as the
 person could forge.
 
-The settings adapter, shared by `settings.json` and `shortcuts.json`, applies
-the repair to the config directory and then the file, only after the read was
-refused as unsafe, and reads once more. Each repair is written to
+The settings adapter, shared by `settings.json` and `shortcuts.json`, repairs
+the config directory before each read when it is shared, and repairs the file
+only after its read was refused as unsafe, then reads once more. Reading never
+depended on the directory, so a directory that cannot be repaired is left as it
+was and the read goes ahead as before. Each repair is written to
 `<config root>/local-storage-repairs/` before and after the change: target,
 mode before and after, cause `shared_read`, initiator `desktop_host`. If the
 intent record cannot be written, nothing is changed and the read stays refused.
@@ -104,7 +108,9 @@ and onboarding show *"Nessa couldn't start."* with **Try again**. No failure
 reason is inferred from the message's text.
 
 The panel subscribes to the startup projection the way onboarding does, through
-one shared monitor, and shows it in the composer notices. The conversation
+one shared monitor, and shows it in the composer's connection notice, in place
+of the session's own until startup is ready. A session that gave up while the
+gateway was starting is retried once when startup becomes ready. The conversation
 list's empty state no longer says "gateway".
 
 ### 4. The old gateway says why it will not retire
@@ -125,6 +131,16 @@ with the gateway's refusal as the cause.
 The history's fact order gains one path. When a managed gateway was running,
 the first fact is either `RetirementAcknowledged` or
 `RetirementRefusedDataMissing`, and `OldServiceUnloaded` follows either one.
+
+On Linux the host reads `refusal` and, for now, treats every refusal as
+`not_confirmed`, as it did before this record. Acting on `data_missing` there
+means changing the systemd retirement and its restart recovery, which is
+tracked as its own follow-up rather than done here without a Linux build to
+prove it.
+
+The gateway that refused on 2026-09-26 predates `refusal`, so a host with this
+change still reads it as `not_confirmed`. The names clear the refusal for every
+gateway built from this change onward.
 
 A gateway whose data is missing at retirement reports it. Nothing else changes
 about a running gateway: it does not stop itself or report itself unhealthy,

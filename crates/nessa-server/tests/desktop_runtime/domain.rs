@@ -101,3 +101,40 @@ fn evidence_cause_agrees_with_admission_and_confirmed_upgrade_authority() {
             .is_none()
     );
 }
+
+/// The names this gateway writes are the published ones, the file the desktop
+/// host reads too (ADR 221).
+#[test]
+fn refusal_names_are_the_published_ones() {
+    let published: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/defaults/gateway-retirement-refusals.json"
+    ))
+    .unwrap();
+    let published: Vec<&str> = published["refusals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        [
+            RetirementRefusal::DataMissing,
+            RetirementRefusal::NotConfirmed
+        ]
+        .map(RetirementRefusal::as_str)
+        .to_vec(),
+        published
+    );
+    assert_eq!(
+        RetirementRefusal::of(true, true),
+        RetirementRefusal::DataMissing
+    );
+    assert_eq!(
+        RetirementRefusal::of(true, false),
+        RetirementRefusal::NotConfirmed
+    );
+    assert_eq!(
+        RetirementRefusal::of(false, true),
+        RetirementRefusal::NotConfirmed
+    );
+}

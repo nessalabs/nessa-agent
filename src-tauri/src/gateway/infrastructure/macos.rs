@@ -9,8 +9,8 @@ use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
     LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
     LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationCause,
-    ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
-    ServiceConfiguration,
+    ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget,
+    RetirementRefusal, SearchPath, ServiceConfiguration,
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory};
 use serde::Deserialize;
@@ -618,6 +618,37 @@ fn matches_reconciled_gateway(
     )
 }
 
+/// What a retirement's answer leaves the host to do (ADR 221): the plan that
+/// unloads the old service, once the history holds why it may, or the failure
+/// that ends the attempt with the old service preserved.
+///
+/// A refusal because the gateway's own data is gone is the one refusal the
+/// host acts on: the evidence it protects is gone too. The journal then holds
+/// the refusal as the failed retirement step, this fact, and the unload plan.
+fn unload_plan_after_retirement(
+    progress: &dyn GatewayReconciliationProgress,
+    service: &str,
+    retired: Result<(), control::RetirementFailure>,
+) -> Result<&'static str, RegisterFailure> {
+    match retired {
+        Ok(()) => {
+            progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
+            Ok("unload-stale-service")
+        }
+        Err(control::RetirementFailure::Refused {
+            refusal: RetirementRefusal::DataMissing,
+            message,
+        }) => {
+            eprintln!(
+                "[nessa] Stopping gateway {service} itself: its conversation data is gone, so it cannot retire ({message})"
+            );
+            progress.history_observed(ReconciliationHistoryFact::RetirementRefusedDataMissing);
+            Ok("unload-unretirable-service")
+        }
+        Err(failure) => Err(RegisterFailure::Physical(failure.to_string())),
+    }
+}
+
 #[cfg(test)]
 fn retire_then_unload(
     progress: &dyn GatewayReconciliationProgress,
@@ -762,6 +793,21 @@ fn run_planned_effect<T>(
     run: impl FnOnce() -> Result<T, String>,
     observe: impl FnOnce() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
 ) -> Result<T, RegisterFailure> {
+    run_planned_effect_answering(progress, plan_id, effect, run, observe)?
+        .map_err(RegisterFailure::Physical)
+}
+
+/// [`run_planned_effect`] for a caller that decides from how the effect
+/// failed. The journal records the failure's text exactly as it does there;
+/// the typed failure is handed back instead of being flattened. The outer
+/// error is the journal's own.
+fn run_planned_effect_answering<T, E: Display>(
+    progress: &dyn GatewayReconciliationProgress,
+    plan_id: &str,
+    effect: LifecycleEffect,
+    run: impl FnOnce() -> Result<T, E>,
+    observe: impl FnOnce() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
+) -> Result<Result<T, E>, RegisterFailure> {
     let step = LifecyclePlanStep::new("primary".into(), effect, LifecycleEffectPredicate::Always)
         .map_err(|error| RegisterFailure::Physical(error.to_string()))?;
     progress
@@ -770,7 +816,7 @@ fn run_planned_effect<T>(
     let result = run();
     let completion = match &result {
         Ok(_) => LifecycleCommandResult::Accepted,
-        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+        Err(error) => LifecycleCommandResult::Failed(error.to_string()),
     };
     if let Err(audit) = progress.effect_completed(plan_id, step.id(), &completion) {
         return Err(audit_after_physical(audit, &result));
@@ -786,7 +832,7 @@ fn run_planned_effect<T>(
     ) {
         return Err(audit_after_physical(audit, &result));
     }
-    result.map_err(RegisterFailure::Physical)
+    Ok(result)
 }
 
 /// What a declared cleanup did: removed its artifact, or found it absent.
@@ -1519,7 +1565,7 @@ fn register(
                 .audit_identity()
                 .map_err(RegisterFailure::Audit)?,
             };
-            run_planned_effect(
+            let retired = run_planned_effect_answering(
                 progress,
                 "retire-current-runtime",
                 retirement.clone(),
@@ -1545,15 +1591,8 @@ fn register(
                     ))
                 },
             )?;
-            progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
-            unload_service(
-                progress,
-                launchctl,
-                &artifacts,
-                "unload-stale-service",
-                &service,
-                port,
-            )?;
+            let plan = unload_plan_after_retirement(progress, &service, retired)?;
+            unload_service(progress, launchctl, &artifacts, plan, &service, port)?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
         }
         ServiceState::LegacyExactService => {
@@ -2171,12 +2210,13 @@ fn finish_bootstrap(
 mod tests {
     use super::{
         artifact_presence, bootstrap_cleanup_decision, bootstrap_recovery_decision,
-        bootstrap_succeeded, cleanup_bootstrap_with, disabled_service, finish_bootstrap,
+        bootstrap_succeeded, cleanup_bootstrap_with, control, disabled_service, finish_bootstrap,
         gave_up_retry, installed_generation, matches_reconciled_gateway, prepare_data_directory,
         publish_definition, recovery_probe_port, registered_agent_path, retire_then_unload,
         run_bootstrap, run_planned_effect_with_cleanup, runtime_fingerprint, service_environment,
-        service_matches, startup, unavailable_service, unreadable_process_identity,
-        BootstrapCleanupDecision, BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
+        service_matches, startup, unavailable_service, unload_plan_after_retirement,
+        unreadable_process_identity, BootstrapCleanupDecision, BootstrapFailure,
+        BootstrapRecoveryDecision, RetirementRefusal, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
@@ -2341,6 +2381,46 @@ mod tests {
             sequence,
             kind,
         )
+    }
+
+    /// ADR 221: only a refusal naming missing data lets the host unload an old
+    /// gateway without its acknowledgement; every other answer preserves it.
+    #[test]
+    fn only_missing_data_lets_the_host_stop_a_gateway_that_would_not_retire() {
+        let answer = |retired| {
+            let progress = RecordingProgress::default();
+            let plan =
+                unload_plan_after_retirement(&progress, "gui/501/so.nessa.gateway.prod", retired);
+            let facts = progress.0.lock().unwrap().clone();
+            (plan.map_err(|_| ()), facts)
+        };
+        let refused = |refusal| control::RetirementFailure::Refused {
+            refusal,
+            message: "Gateway retirement was not acknowledged".into(),
+        };
+
+        assert_eq!(
+            answer(Ok(())),
+            (
+                Ok("unload-stale-service"),
+                vec![ReconciliationHistoryFact::RetirementAcknowledged]
+            )
+        );
+        assert_eq!(
+            answer(Err(refused(RetirementRefusal::DataMissing))),
+            (
+                Ok("unload-unretirable-service"),
+                vec![ReconciliationHistoryFact::RetirementRefusedDataMissing]
+            )
+        );
+        for preserved in [
+            refused(RetirementRefusal::NotConfirmed),
+            control::RetirementFailure::Unanswered("acknowledgement timed out".into()),
+        ] {
+            let (plan, facts) = answer(Err(preserved));
+            assert!(plan.is_err());
+            assert!(facts.is_empty());
+        }
     }
 
     #[test]
@@ -4576,7 +4656,10 @@ mod recovery_tests {
             },
         )
         .unwrap_err();
-        assert!(refused.contains("Could not find service"), "{refused}");
+        assert!(
+            refused.to_string().contains("Could not find service"),
+            "{refused}"
+        );
         assert_eq!(*launchctl.signals.lock().unwrap(), ["SIGUSR2"]);
     }
 

@@ -258,7 +258,10 @@ mod tests {
             .expect("the shell is missing StartupStep");
         let steps = &shell[at..shell[at..].find('\n').map(|end| at + end).unwrap()];
         for step in ["preparing", "replacing", "launching"] {
-            assert!(steps.contains(&format!("\"{step}\"")), "StartupStep is missing {step}");
+            assert!(
+                steps.contains(&format!("\"{step}\"")),
+                "StartupStep is missing {step}"
+            );
         }
     }
 
@@ -270,7 +273,10 @@ mod tests {
             .expect("the shell is missing HostStartup");
         let declaration = &shell[at..];
         for piece in ["state: \"ready\"", "state: \"refused\"", "details: string"] {
-            assert!(declaration.contains(piece), "HostStartup is missing {piece}");
+            assert!(
+                declaration.contains(piece),
+                "HostStartup is missing {piece}"
+            );
         }
     }
 }

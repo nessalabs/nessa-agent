@@ -231,6 +231,40 @@ impl RetirementCause {
     }
 }
 
+/// Why this gateway would not retire (ADR 221), by the names in
+/// `protocol/defaults/gateway-retirement-refusals.json`, which the desktop host
+/// reads too. The host acts on the name alone.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetirementRefusal {
+    /// This gateway's own conversation data is no longer where it was opened,
+    /// so the evidence a refusal protects is already gone.
+    DataMissing,
+    /// Anything else that could not be confirmed.
+    NotConfirmed,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+impl RetirementRefusal {
+    /// The refusal for a retirement that did not happen. Only a request for
+    /// this very runtime can say its data is missing: a request that names
+    /// another runtime is not this gateway's to answer that way.
+    pub(crate) fn of(request_is_for_this_runtime: bool, data_missing: bool) -> Self {
+        if request_is_for_this_runtime && data_missing {
+            Self::DataMissing
+        } else {
+            Self::NotConfirmed
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::DataMissing => "data_missing",
+            Self::NotConfirmed => "not_confirmed",
+        }
+    }
+}
+
 /// Validates the complete result tuple before it crosses the persistence boundary.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) fn validate_retirement_evidence(

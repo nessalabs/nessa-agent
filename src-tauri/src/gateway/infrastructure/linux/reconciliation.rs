@@ -3011,6 +3011,11 @@ struct RetirementResult {
     retirement_cause: Option<RetirementCause>,
     cleanup_error: Option<String>,
     audit_error: Option<String>,
+    /// Why not, by a published name (ADR 221). Absent from gateways that
+    /// predate the names. This adapter does not yet act on it: any refusal is a
+    /// failed retirement here, as it was before.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 fn retirement_artifact_present(
@@ -3147,7 +3152,8 @@ fn retirement_acknowledged(
         })
         && result.retired
         && result.cleanup_error.is_none()
-        && result.audit_error.is_none();
+        && result.audit_error.is_none()
+        && result.refusal.is_none();
     if !agrees {
         return Err(
             "Gateway retirement acknowledgement disagrees with the planned identities".into(),
@@ -4404,8 +4410,22 @@ mod tests {
             },
             "cleanupError": null,
             "auditError": null,
+            // Written by every gateway since ADR 221; a retired result names no
+            // refusal, and one that does is not an acknowledgement.
+            "refusal": null,
         }))
         .unwrap();
+        let mut contradictory: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        contradictory["refusal"] = serde_json::json!("not_confirmed");
+        atomic_write(
+            &directory,
+            Path::new("result.json"),
+            &serde_json::to_vec(&contradictory).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            retirement_artifact_present(&data, request_id, &prior, &target, Some(&prior)).is_err()
+        );
         atomic_write(&directory, Path::new("result.json"), &result).unwrap();
 
         assert!(

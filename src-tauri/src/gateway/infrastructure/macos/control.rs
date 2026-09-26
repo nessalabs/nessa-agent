@@ -2,6 +2,7 @@
 use super::startup::{
     diagnose, log_tail, parse_last_exit, recorded_failure, LastExit, RecordedFailure,
 };
+use crate::gateway::domain::value_objects::RetirementRefusal;
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -321,6 +322,10 @@ struct RetirementResult {
     cleanup_error: Option<String>,
     #[serde(deserialize_with = "required_nullable_error")]
     audit_error: Option<String>,
+    /// Why not, by a published name (ADR 221). Absent from gateways that
+    /// predate the names, which read as not confirmed.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -453,6 +458,7 @@ fn parse_retirement_evidence(bytes: &[u8]) -> Result<Option<RetirementEvidence>,
                 || result.cleanup_error.is_some()
                 || result.audit_error.is_some())
         || (!result.retired && result.cleanup_error.is_none() && result.audit_error.is_none())
+        || (result.retired && result.refusal.is_some())
     {
         return Err(
             "Invalid retirement fence identity or acknowledgement; service preserved".into(),
@@ -498,7 +504,7 @@ fn acknowledge(
     instance: &str,
     running_generation: &str,
     target_generation: &str,
-) -> Result<bool, String> {
+) -> Result<bool, RetirementFailure> {
     let Ok(result) = serde_json::from_slice::<RetirementResult>(bytes) else {
         return Ok(false);
     };
@@ -532,14 +538,18 @@ fn acknowledge(
         || (result.retired
             && (result.retirement_request_id.is_none()
                 || !valid_confirmed_cause(result.retirement_cause.as_ref())))
+        || (result.retired && result.refusal.is_some())
     {
         return Ok(false);
     }
     if !result.retired || result.cleanup_error.is_some() || result.audit_error.is_some() {
-        return Err(format!(
-            "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
-            result.retired, result.cleanup_error, result.audit_error
-        ));
+        return Err(RetirementFailure::Refused {
+            refusal: RetirementRefusal::named(result.refusal.as_deref()),
+            message: format!(
+                "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
+                result.retired, result.cleanup_error, result.audit_error
+            ),
+        });
     }
     Ok(true)
 }
@@ -565,7 +575,7 @@ fn read_acknowledgement(
     instance: &str,
     running_generation: &str,
     target_generation: &str,
-) -> Result<bool, String> {
+) -> Result<bool, RetirementFailure> {
     match nessa_local_storage::open(&directory.join("result.json"), OpenMode::ReadNonblocking) {
         Ok(file) => {
             let mut bytes = Vec::new();
@@ -596,7 +606,35 @@ fn read_acknowledgement(
             Ok(true)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(error.to_string().into()),
+    }
+}
+/// Why a retirement request did not end in a retired gateway.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum RetirementFailure {
+    /// The gateway answered this very request, and refused it (ADR 221).
+    Refused {
+        refusal: RetirementRefusal,
+        message: String,
+    },
+    /// No answer to act on: the request, the signal, or the wait failed.
+    Unanswered(String),
+}
+impl std::fmt::Display for RetirementFailure {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused { message, .. } | Self::Unanswered(message) => output.write_str(message),
+        }
+    }
+}
+impl From<String> for RetirementFailure {
+    fn from(message: String) -> Self {
+        Self::Unanswered(message)
+    }
+}
+impl From<&str> for RetirementFailure {
+    fn from(message: &str) -> Self {
+        Self::Unanswered(message.to_owned())
     }
 }
 /// The running gateway asked to retire, and the runtime replacing it.
@@ -613,7 +651,7 @@ pub(super) fn retire(
     launchctl: &dyn super::Launchctl,
     data: &Path,
     retirement: Retirement<'_>,
-) -> Result<(), String> {
+) -> Result<(), RetirementFailure> {
     let Retirement {
         service,
         target,
@@ -651,7 +689,7 @@ pub(super) fn retire(
         super::LifecycleCommandResult::Rejected(message)
         | super::LifecycleCommandResult::Failed(message)
         | super::LifecycleCommandResult::Indeterminate(message) => {
-            return Err(format!("launchctl kill SIGUSR2 {service}: {message}"))
+            return Err(format!("launchctl kill SIGUSR2 {service}: {message}").into())
         }
     }
     let deadline = Instant::now() + Duration::from_secs(75);

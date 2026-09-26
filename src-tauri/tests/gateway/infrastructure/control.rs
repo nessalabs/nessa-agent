@@ -1521,3 +1521,55 @@ fn a_command_past_its_deadline_is_ended_and_fails() {
     assert!(answered.status.success());
     assert_eq!(answered.stdout, b"done\n");
 }
+
+/// ADR 221: a refusal reaches the host typed, by its published name, and a
+/// result that says both "retired" and why not is no acknowledgement at all.
+#[test]
+fn a_refused_retirement_is_typed_by_its_published_name() {
+    use crate::gateway::domain::value_objects::RetirementRefusal;
+    let answer = |result: Value| {
+        acknowledge(
+            result.to_string().as_bytes(),
+            "fresh",
+            "new",
+            "old",
+            INSTANCE,
+            RUNNING_GENERATION,
+            TARGET_GENERATION,
+        )
+    };
+    let refused = |refusal: Option<&str>| {
+        let mut result = successful_result();
+        result["retired"] = json!(false);
+        result["retirementCause"] =
+            json!({"principalId":"gateway","surfaceId":"gateway_upgrade","requestId":INSTANCE});
+        result["cleanupError"] = json!("conversation service: Retirement([..AuditFailure..])");
+        if let Some(refusal) = refusal {
+            result["refusal"] = json!(refusal);
+        }
+        result
+    };
+
+    for (name, expected) in [
+        (Some("data_missing"), RetirementRefusal::DataMissing),
+        (Some("not_confirmed"), RetirementRefusal::NotConfirmed),
+        // A gateway that predates refusal names, like the one in #221.
+        (None, RetirementRefusal::NotConfirmed),
+        (Some("something_newer"), RetirementRefusal::NotConfirmed),
+    ] {
+        match answer(refused(name)) {
+            Err(super::RetirementFailure::Refused { refusal, message }) => {
+                assert_eq!(refusal, expected, "{name:?}");
+                assert!(message.contains("not acknowledged"), "{message}");
+            }
+            other => panic!("{name:?}: {other:?}"),
+        }
+    }
+
+    let mut contradictory = successful_result();
+    contradictory["refusal"] = json!("data_missing");
+    assert_eq!(answer(contradictory), Ok(false));
+    let mut current = successful_result();
+    current["refusal"] = Value::Null;
+    assert_eq!(answer(current), Ok(true));
+}

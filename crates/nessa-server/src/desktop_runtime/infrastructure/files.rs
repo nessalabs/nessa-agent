@@ -1,8 +1,8 @@
 use crate::desktop_runtime::{
     application::{RetirementAudit, RetirementRecord, RetirementResult},
     domain::{
-        validate_retirement_evidence, RetirementCause, RetirementFence, RetirementRequest,
-        RunningRuntime,
+        validate_retirement_evidence, RetirementCause, RetirementFence, RetirementRefusal,
+        RetirementRequest, RunningRuntime,
     },
 };
 use nessa_auth::application::ports::Clock;
@@ -47,6 +47,10 @@ struct RecordedResult {
     cleanup_error: Option<String>,
     #[serde(deserialize_with = "required_nullable_error")]
     audit_error: Option<String>,
+    /// Absent from results a gateway wrote before refusals had names.
+    #[serde(default)]
+    #[allow(dead_code, reason = "read back for its shape; the host acts on it")]
+    refusal: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -159,6 +163,11 @@ impl RetirementFiles {
     }
 
     pub(crate) fn result(&self, result: &RetirementResult) -> Result<(), String> {
+        if result.retired == result.refusal.is_some() {
+            return Err(
+                "a refusal must accompany exactly the retirements that did not happen".into(),
+            );
+        }
         let cause = result
             .retirement_cause
             .as_ref()
@@ -204,7 +213,8 @@ impl RetirementFiles {
             &json!({
                 "requestId": result.request.id(), "targetFingerprint": result.request.target().as_str(),
                 "runningFingerprint": result.running.fingerprint().as_str(), "runningInstance": result.running.instance().as_str(), "requestedInstance": result.request.running_instance().as_str(), "runningGeneration": result.running.generation().as_str(), "requestedRunningGeneration": result.request.running_generation().as_str(), "targetGeneration": result.request.target_generation().as_str(), "retirementCause": retirement_cause.map(|cause| json!({"principalId":cause.principal_id(),"surfaceId":cause.surface_id(),"requestId":cause.request_id()})), "retirementRequestId": retirement_cause.map(RetirementCause::request_id), "retired": result.retired,
-                "cleanupError": result.cleanup_error, "auditError": result.audit_error
+                "cleanupError": result.cleanup_error, "auditError": result.audit_error,
+                "refusal": result.refusal.map(RetirementRefusal::as_str)
             }),
         )
     }

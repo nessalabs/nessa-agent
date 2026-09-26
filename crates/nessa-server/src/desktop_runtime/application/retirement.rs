@@ -1,6 +1,8 @@
 use crate::{
     conversation::application::ConversationService,
-    desktop_runtime::domain::{RetirementFence, RetirementRequest, RunningRuntime},
+    desktop_runtime::domain::{
+        RetirementFence, RetirementRefusal, RetirementRequest, RunningRuntime,
+    },
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use std::{future::Future, pin::Pin, time::Duration};
@@ -20,6 +22,8 @@ pub(crate) struct RetirementResult {
     // This is the complete cleanup operation diagnostic, not proof of physical state.
     pub cleanup_error: Option<String>,
     pub audit_error: Option<String>,
+    /// Why not, whenever `retired` is false; what the desktop host acts on.
+    pub refusal: Option<RetirementRefusal>,
 }
 impl RetirementResult {
     #[cfg(test)]
@@ -28,6 +32,11 @@ impl RetirementResult {
             .as_ref()
             .map(ActionContext::request_id)
     }
+}
+/// Whether this gateway's own conversation data is still where it was opened.
+/// Asked only when a retirement did not happen, to say why (ADR 221).
+pub(crate) trait ConversationData: Send + Sync {
+    fn missing(&self) -> bool;
 }
 pub(crate) trait RetirementAudit: Send + Sync {
     fn record(
@@ -39,6 +48,7 @@ pub(crate) async fn retire(
     request: RetirementRequest,
     running: RunningRuntime,
     conversations: Option<&ConversationService>,
+    data: &dyn ConversationData,
     audit: &dyn RetirementAudit,
 ) -> RetirementResult {
     let mut cleanup_error = if !running.accepts(&request) {
@@ -87,13 +97,17 @@ pub(crate) async fn retire(
     .await
     .unwrap_or_else(|_| Err("retirement audit acknowledgement deadline elapsed".into()))
     .err();
+    let retired = cleanup_error.is_none() && audit_error.is_none();
+    let refusal =
+        (!retired).then(|| RetirementRefusal::of(running.accepts(&request), data.missing()));
     RetirementResult {
         request,
         retirement_cause,
         running,
-        retired: cleanup_error.is_none() && audit_error.is_none(),
+        retired,
         cleanup_error,
         audit_error,
+        refusal,
     }
 }
 

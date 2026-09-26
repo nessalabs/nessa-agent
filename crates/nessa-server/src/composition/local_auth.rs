@@ -53,7 +53,7 @@ use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStora
 use std::collections::HashSet;
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -285,6 +285,12 @@ fn conversations(
     ))
 }
 
+/// Where a namespace keeps its conversations. Read by composition and by the
+/// retirement that reports whether they are still there.
+pub(crate) fn conversation_root(namespace: &Path) -> PathBuf {
+    namespace.join("conversations")
+}
+
 #[cfg(unix)]
 fn conversations(
     agents: &AgentsConfig,
@@ -293,10 +299,11 @@ fn conversations(
     managed_opencode: bool,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
-    let root = directory
-        .parent()
-        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
-        .join("conversations");
+    let root = conversation_root(
+        directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?,
+    );
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);

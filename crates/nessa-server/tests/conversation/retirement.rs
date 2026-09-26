@@ -120,6 +120,7 @@ async fn failed_audit_does_not_prevent_cleanup_and_both_failures_are_returned() 
         request.clone(),
         RunningRuntime::new("a".repeat(64), INSTANCE.into(), 123, "c".repeat(64)).unwrap(),
         Some(&service),
+        &PresentData,
         &Refuse,
     )
     .await;
@@ -303,4 +304,12 @@ async fn stalled_opening_owner_cannot_prevent_another_owner_cleanup_or_later_ret
         service.retirement_cause().unwrap().request_id(),
         "opening-upgrade"
     );
+}
+
+/// The conversation store is where it was opened.
+struct PresentData;
+impl crate::desktop_runtime::application::ConversationData for PresentData {
+    fn missing(&self) -> bool {
+        false
+    }
 }

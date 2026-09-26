@@ -3,3 +3,7 @@
 mod files;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) use files::RetirementFiles;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+mod conversation_data;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) use conversation_data::ConversationDirectory;

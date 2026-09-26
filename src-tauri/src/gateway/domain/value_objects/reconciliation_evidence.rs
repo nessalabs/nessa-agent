@@ -404,6 +404,16 @@ pub enum ReconciliationHistoryFact {
         )
     )]
     RetirementAcknowledged,
+    /// The running gateway refused to retire because its own data is gone
+    /// (ADR 221), so the host stops it without an acknowledged retirement.
+    #[cfg_attr(
+        all(not(target_os = "macos"), not(test)),
+        allow(
+            dead_code,
+            reason = "only the launchd adapter stops a gateway that cannot retire"
+        )
+    )]
+    RetirementRefusedDataMissing,
     OldServiceUnloaded,
     #[cfg_attr(
         all(not(any(target_os = "macos", target_os = "linux")), not(test)),
@@ -829,7 +839,11 @@ fn accepts_next(
     let previous = trusted.last().copied();
     matches!(
         (previous, next),
-        (None, ReconciliationHistoryFact::RetirementAcknowledged) if had_managed_incarnation
+        (
+            None,
+            ReconciliationHistoryFact::RetirementAcknowledged
+                | ReconciliationHistoryFact::RetirementRefusedDataMissing
+        ) if had_managed_incarnation
     ) || matches!(
         (previous, next),
         (None, ReconciliationHistoryFact::OldServiceUnloaded) if !had_managed_incarnation
@@ -839,7 +853,10 @@ fn accepts_next(
     ) || matches!(
         (previous, next),
         (
-            Some(ReconciliationHistoryFact::RetirementAcknowledged),
+            Some(
+                ReconciliationHistoryFact::RetirementAcknowledged
+                    | ReconciliationHistoryFact::RetirementRefusedDataMissing
+            ),
             ReconciliationHistoryFact::OldServiceUnloaded
         ) | (
             Some(ReconciliationHistoryFact::OldServiceUnloaded),
@@ -1024,6 +1041,43 @@ mod tests {
         );
         let attempt = ReconciliationAttemptRecord::new(correlation(2), request).expect("attempt");
         ReconciliationIntentRecord::new(attempt, target, before).expect("intent")
+    }
+
+    /// ADR 221: a replaced gateway is unloaded after its acknowledged
+    /// retirement, or after it refused because its own data is gone, and only
+    /// when a managed gateway was running to refuse.
+    #[test]
+    fn an_unretirable_gateway_is_unloaded_only_after_its_refusal() {
+        let running = incarnation(target("service", 'a'), 1, 42);
+        for first in [
+            ReconciliationHistoryFact::RetirementAcknowledged,
+            ReconciliationHistoryFact::RetirementRefusedDataMissing,
+        ] {
+            assert!(matches!(
+                ReconciliationHistory::assess(
+                    Some(&running),
+                    &[first, ReconciliationHistoryFact::OldServiceUnloaded]
+                ),
+                ReconciliationHistoryAssessment::Accepted(_)
+            ));
+        }
+        assert!(matches!(
+            ReconciliationHistory::assess(
+                None,
+                &[ReconciliationHistoryFact::RetirementRefusedDataMissing]
+            ),
+            ReconciliationHistoryAssessment::Rejected { .. }
+        ));
+        assert!(matches!(
+            ReconciliationHistory::assess(
+                Some(&running),
+                &[
+                    ReconciliationHistoryFact::RetirementRefusedDataMissing,
+                    ReconciliationHistoryFact::ServiceDefinitionPublished
+                ]
+            ),
+            ReconciliationHistoryAssessment::Rejected { .. }
+        ));
     }
 
     fn replacement_history() -> Vec<ReconciliationHistoryFact> {
