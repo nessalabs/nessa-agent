@@ -58,17 +58,25 @@ pub enum RunError {
 }
 
 impl RunError {
-    /// A gateway-scope store that did not open. What the file holds is a
+    /// A gateway-scope store that did not open. What the file holds —
+    /// another version, not a database, a damaged page — is a
     /// [`RunError::Dataset`]; anything that can clear — a directory, I/O, a
     /// lock — stays `Agent`, which is retried. Conversations are composed
     /// only on Unix, so this is too.
     #[cfg(unix)]
     pub(crate) fn opening(dataset: Dataset, path: &Path, cause: OpenError) -> Self {
         match cause {
-            OpenError::Version { .. } | OpenError::Unreadable(_) => {
+            OpenError::Version { .. } | OpenError::Unreadable(_) | OpenError::Damaged(_) => {
                 Self::Dataset(DatasetRefusal::new(dataset, path, cause))
             }
-            cause => Self::Agent(format!("{dataset} at {}: {cause}", path.display())),
+            // Listed, not caught by `_`, so a new way to fail does not
+            // compile until someone says whether it can clear.
+            OpenError::Directory(_)
+            | OpenError::File(_)
+            | OpenError::Database(_)
+            | OpenError::UnversionedSchema => {
+                Self::Agent(format!("{dataset} at {}: {cause}", path.display()))
+            }
         }
     }
 
@@ -342,6 +350,13 @@ mod tests {
             std::io::Write::write_all(&mut file, &[7; 4096]).unwrap();
         });
         assert_refused_for_good(&error);
+        // A current file with a damaged page is the same verdict; the opener's
+        // own test builds one (`a_current_file_with_a_damaged_page_is_refused_and_left_as_it_was`).
+        assert_refused_for_good(&RunError::opening(
+            Dataset::ConversationMetadata,
+            Path::new("metadata.sqlite3"),
+            OpenError::Damaged("*** in database main ***".into()),
+        ));
     }
 
     #[cfg(unix)]

@@ -88,7 +88,7 @@ migration code exists before then.
 | G1 | No file, or an empty one | Created at the current version (see below) | `nessa-local-database`: `an_empty_file_is_given_the_schema_at_its_version_and_reopened_as_it_is` |
 | G2 | The current version | Opened | same, and every store test that reopens |
 | G3 | Any other version, including tables with none | `datasetRefused`, not retried, recorded. File untouched. | `a_metadata_database_at_another_version_refuses_the_gateway_for_good` |
-| G4 | Not a database, or corrupt | `datasetRefused`, not retried, recorded. File untouched. | `a_file_that_is_not_a_database_refuses_the_gateway_for_good` |
+| G4 | Not a database, or at the current version with a page SQLite's `quick_check` finds damaged | `datasetRefused`, not retried, recorded. File untouched. | `a_file_that_is_not_a_database_refuses_the_gateway_for_good`; `nessa-local-database`: `a_current_file_with_a_damaged_page_is_refused_and_left_as_it_was` |
 | G5 | Directory missing or not private, file not private, I/O failure, busy | Today's reason (`agent`), retried | `a_metadata_directory_that_cannot_be_used_is_still_retried` |
 
 An existing empty metadata file is given the schema, not refused. A first open
@@ -156,6 +156,11 @@ choices:
 
 - A store this build cannot read stops the gateway once, says which store and
   why, and is not retried.
+- Opening the metadata database reads every page once (`quick_check`), so
+  damage is refused at start rather than on the first question that reaches it.
+  That cost grows with the file, and it is the thing to watch at start. Damage
+  that happens after open still fails only the calls that meet it
+  (`conversation_storage_unavailable`).
 - A cache never costs the gateway.
 - After alpha, every shape change carries a migration and a checked-in fixture
   of the version it migrates from.

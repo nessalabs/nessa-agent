@@ -21,7 +21,9 @@ and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
   definition runs. An empty file is given the schema in one transaction; a file
   at that version is opened; any other version, or tables without a version, are
   refused as `OpenError::Version` and left untouched. A file that is not a
-  database, or is damaged, is `OpenError::Unreadable`. Both describe the file,
+  database is `OpenError::Unreadable`, and a file at the schema's version that
+  SQLite's `quick_check` finds damaged is `OpenError::Damaged`. That check reads
+  every page once, at open. Both describe the file,
   not the moment, so a caller can refuse them for good
   ([ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md)). There are no
   in-place migrations during alpha.
