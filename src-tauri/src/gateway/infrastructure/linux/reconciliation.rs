@@ -4503,6 +4503,8 @@ mod tests {
         fn new() -> Self {
             let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
+            // Registration requires the account's data ancestry to be private.
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
             let runtime = root.join("source-runtime");
             std::fs::DirBuilder::new()
                 .mode(0o700)
