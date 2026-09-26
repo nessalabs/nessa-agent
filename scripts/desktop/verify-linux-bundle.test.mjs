@@ -10,11 +10,13 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
+import { runtimeFingerprint } from "./runtime-fingerprint.mjs"
 import {
   REQUIRED_DEB_PACKAGES,
   buildSelection,
   builtPackage,
   packageBuiltIn,
+  verifyDeb,
   dependencyClauses,
   missingDependencies,
 } from "./verify-linux-bundle.mjs"
@@ -160,4 +162,62 @@ test("the verifier checks only what a build told it it made", () => {
       () => buildSelection({ NESSA_BUILD_BUNDLES: bundles, NESSA_BUILD_STARTED: "1" }),
       /verifies the \.deb alone/,
     )
+})
+
+/** A stand-in for `dpkg-deb`: answers `--field` with `depends`, and
+ * `--extract` with a runtime tree whose manifest does or does not match. */
+function fakeDpkgDeb({ depends, matching = true, calls = [] }) {
+  return (command, args) => {
+    calls.push([command, ...args])
+    if (args[0] === "--field") return `${depends}\n`
+    const runtime = join(args[2], "usr/lib/Nessa/runtime")
+    mkdirSync(runtime, { recursive: true })
+    writeFileSync(join(runtime, "nessa"), "gateway")
+    writeFileSync(join(runtime, "manifest.json"), "{}")
+    const fingerprint = matching ? runtimeFingerprint(runtime) : "0".repeat(64)
+    writeFileSync(join(runtime, "manifest.json"), JSON.stringify({ fingerprint }))
+    return ""
+  }
+}
+
+test("a .deb is verified through dpkg-deb: its declarations, then its runtime", () => {
+  const depends = "libayatana-appindicator3-1, libwebkit2gtk-4.1-0, libgtk-3-0"
+  const calls = []
+  verifyDeb("/out/Nessa_0.1.0_amd64.deb", {
+    productName: "Nessa",
+    run: fakeDpkgDeb({ depends, calls }),
+  })
+  assert.deepEqual(
+    calls.map(([command, flag]) => [command, flag]),
+    [
+      ["dpkg-deb", "--field"],
+      ["dpkg-deb", "--extract"],
+    ],
+  )
+  assert.throws(
+    () =>
+      verifyDeb("/out/Nessa_0.1.0_amd64.deb", {
+        productName: "Nessa",
+        run: fakeDpkgDeb({ depends: "libgtk-3-0" }),
+      }),
+    /does not declare libwebkit2gtk-4.1-0, libayatana-appindicator3-1/,
+  )
+  assert.throws(
+    () =>
+      verifyDeb("/out/Nessa_0.1.0_amd64.deb", {
+        productName: "Nessa",
+        run: fakeDpkgDeb({ depends, matching: false }),
+      }),
+    /does not match its manifest/,
+  )
+  assert.throws(
+    () =>
+      verifyDeb("/out/Nessa_0.1.0_amd64.deb", {
+        productName: "Nessa",
+        run() {
+          throw Object.assign(new Error("spawnSync dpkg-deb ENOENT"), { code: "ENOENT" })
+        },
+      }),
+    /needs dpkg-deb, which this host does not have/,
+  )
 })

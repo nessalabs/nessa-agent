@@ -25,9 +25,9 @@
  * never offered a `.deb`.
  *
  * No AppImage is released. Its bundler (linuxdeploy) rewrites every ELF file
- * under `usr/lib`, the runtime's executables included, so the runtime no
- * longer matches its fingerprint and the Claude agent's self-contained binary
- * can be damaged, so a Linux build makes the .deb alone.
+ * under `usr/lib`, the runtime's executables included: the runtime no longer
+ * matches its fingerprint and the Claude agent's self-contained binary can be
+ * damaged. A Linux build makes the .deb alone.
  *
  * `stage` runs on each build runner and renames that target's output to the
  * name it will be published under. `manifest` runs once afterwards, over every
@@ -323,8 +323,8 @@ function stage(root, args, config) {
       throw new Error(
         `The build produced no ${asset.built}.\n` +
           `A missing .sig means the bundler had no TAURI_SIGNING_PRIVATE_KEY and signed\n` +
-          `nothing; a missing archive, disk image or .deb means --bundles did\n` +
-          `not ask for it.`,
+          `nothing; a missing archive or disk image means the macOS row's bundles did\n` +
+          `not ask for it, and a missing .deb means the Linux build made none.`,
       )
     copyFileSync(resolve(root, asset.built), resolve(into, asset.published))
     console.error(`  ${asset.built} -> ${asset.published}`)

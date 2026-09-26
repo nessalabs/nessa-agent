@@ -100,15 +100,32 @@ function withScratch(action) {
   }
 }
 
-function verifyDeb(path, { productName }) {
-  const field = dpkgDeb(["--field", path, "Depends"], { encoding: "utf8" })
+function dpkgDeb(run, args, options) {
+  try {
+    return run("dpkg-deb", args, options)
+  } catch (error) {
+    if (error.code === "ENOENT")
+      throw new Error(
+        "Verifying a .deb needs dpkg-deb, which this host does not have. " +
+          "Build it on Debian or Ubuntu.",
+        { cause: error },
+      )
+    throw error
+  }
+}
+
+/** Check one `.deb`: it declares what the app needs to run, and the runtime
+ * inside it matches its fingerprint. `run` is `dpkg-deb`'s runner, a stand-in
+ * in tests. */
+export function verifyDeb(path, { productName, run = execFileSync }) {
+  const field = dpkgDeb(run, ["--field", path, "Depends"], { encoding: "utf8" })
   const missing = missingDependencies(field, REQUIRED_DEB_PACKAGES)
   if (missing.length > 0)
     throw new Error(
       `${path} does not declare ${missing.join(", ")} (Depends: ${field.trim()})`,
     )
   withScratch((scratch) => {
-    dpkgDeb(["--extract", path, scratch], { stdio: "inherit" })
+    dpkgDeb(run, ["--extract", path, scratch], { stdio: "inherit" })
     verifyRuntimeFingerprint(join(scratch, "usr/lib", productName, "runtime"))
   })
   console.error(`  verified ${path}`)
