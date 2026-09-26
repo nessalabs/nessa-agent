@@ -185,7 +185,7 @@ fn validate_private_tree(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn tree_fingerprint(directory: &Path) -> Result<String, String> {
+pub(super) fn tree_fingerprint(directory: &Path) -> Result<String, String> {
     let root = directory
         .canonicalize()
         .map_err(|error| error.to_string())?;
@@ -1209,7 +1209,10 @@ fn prepare_owned_directory_transaction(
     if missing.is_empty() {
         let metadata = directory.metadata().map_err(|error| error.to_string())?;
         if metadata.uid() != effective_uid || metadata.permissions().mode() & 0o777 != 0o700 {
-            return Err("Gateway directory is not private to the effective account".into());
+            return Err(format!(
+                "Gateway directory is not private to the effective account: {}",
+                path.display()
+            ));
         }
         directory.sync_all().map_err(|error| error.to_string())?;
         return Ok(None);
@@ -1734,7 +1737,10 @@ fn open_owned_directory_chain_inner(path: &Path, create: bool) -> Result<(File, 
     }
     let metadata = directory.metadata().map_err(|error| error.to_string())?;
     if metadata.uid() != effective_uid || metadata.permissions().mode() & 0o777 != 0o700 {
-        return Err("Gateway directory is not private to the effective account".into());
+        return Err(format!(
+            "Gateway directory is not private to the effective account: {}",
+            path.display()
+        ));
     }
     directory.sync_all().map_err(|error| error.to_string())?;
     Ok((directory, final_created))
