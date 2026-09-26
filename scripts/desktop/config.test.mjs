@@ -306,6 +306,33 @@ test("a Linux build makes exactly what a Linux release builds", () => {
   }
 })
 
+test("the build's own options go to Tauri, before the runner's arguments", () => {
+  for (const [platform, target] of [
+    ["linux", "x86_64-unknown-linux-gnu"],
+    ["darwin", "aarch64-apple-darwin"],
+  ]) {
+    const calls = []
+    runDesktopBuild({
+      args: ["--target", target, "--", "--features", "x"],
+      environment: {},
+      platform,
+      spawn(command, args, options) {
+        calls.push({ command, args, options })
+        return { status: 0 }
+      },
+    })
+    const args = calls[0].args
+    const runner = args.indexOf("--")
+    assert.deepEqual(args.slice(runner), ["--", "--features", "x"], platform)
+    assert.ok(
+      args.indexOf("--config") < runner,
+      `${platform}: --config reached the runner`,
+    )
+    if (platform === "linux")
+      assert.ok(args.indexOf("--bundles") < runner, "--bundles reached the runner")
+  }
+})
+
 test("arguments after -- are the runner's and choose no bundles", () => {
   assert.equal(choosesBundles(["--", "-b", "--bundles"]), false)
   assert.equal(choosesBundles(["-v", "--", "-b"]), false)

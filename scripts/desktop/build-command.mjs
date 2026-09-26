@@ -98,16 +98,21 @@ export function runDesktopBuild({ args, environment, platform, spawn, now = Date
     requested: requestedStage,
   })
   const buildEnvironment = desktopStageEnvironment(environment, stage)
-  const command = ["exec", "tauri", "build", ...withoutOption(args, "--stage")]
-  if (bundles && !parsed.bundles) command.push("--bundles", bundles)
+  // Tauri's own options go before any `--`: what follows it is the runner's.
+  const forwarded = withoutOption(args, "--stage")
+  const runnerStart = forwarded.indexOf("--")
+  const tauriArgs = runnerStart === -1 ? forwarded : forwarded.slice(0, runnerStart)
+  const runnerArgs = runnerStart === -1 ? [] : forwarded.slice(runnerStart)
+  if (bundles && !parsed.bundles) tauriArgs.push("--bundles", bundles)
   if (platform === "darwin" || platform === "linux") {
     const bundle = { resources: { "runtime/": "runtime/" } }
     if (platform === "darwin") {
       const identity = environment.APPLE_SIGNING_IDENTITY?.trim() || "-"
       bundle.macOS = { signingIdentity: identity }
     }
-    command.push("--config", JSON.stringify({ bundle }))
+    tauriArgs.push("--config", JSON.stringify({ bundle }))
   }
+  const command = ["exec", "tauri", "build", ...tauriArgs, ...runnerArgs]
 
   const pnpm = platform === "win32" ? "pnpm.cmd" : "pnpm"
   const started = now()
