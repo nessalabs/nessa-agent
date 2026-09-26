@@ -918,8 +918,9 @@ Admission, recovery, and the inactive-unit cases are described in
 [the Linux plan](../todo/desktop-linux-windows-plan.md#4-linux).
 
 The unit runs while its user is signed in: systemd starts it at login and stops
-it with the user's manager after a full logout. Keeping it running while logged
-out needs linger, which Nessa does not enable
+it with the user's manager after a full logout. Registration does not need
+linger. Keeping the gateway running while logged out does, and Nessa does not
+enable it
 ([#217](https://github.com/nessalabs/nessa-agent/issues/217) tracks offering it).
 
 Updates install the same kind of package the app was installed as: a `.deb`

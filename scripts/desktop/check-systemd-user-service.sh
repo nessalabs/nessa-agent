@@ -30,8 +30,8 @@ fi
 
 # The hosted runner's existing manager supplies only a delegated cgroup. The
 # nested manager and its bus remain isolated under the temporary runtime root.
-# The production prerequisite still checks linger separately; CI never changes
-# the runner account's linger setting.
+# Registration does not need linger, and CI never changes the runner account's
+# linger setting.
 XDG_RUNTIME_DIR="$runner_runtime" systemd-run --user --pipe --wait --collect --quiet \
   --unit="$transient_unit" \
   -p Delegate=yes -p Type=exec -d \

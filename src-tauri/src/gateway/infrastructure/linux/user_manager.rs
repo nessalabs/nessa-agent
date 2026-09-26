@@ -468,43 +468,6 @@ impl Drop for JobHandle {
     }
 }
 
-pub(super) fn verify_linger(expected_uid: u32) -> Result<(), String> {
-    let connection = ConnectionBuilder::system()
-        .map_err(|error| error.to_string())?
-        .method_timeout(DBUS_METHOD_TIMEOUT)
-        .build()
-        .map_err(|error| error.to_string())?;
-    let manager = Proxy::new(
-        &connection,
-        "org.freedesktop.login1",
-        "/org/freedesktop/login1",
-        "org.freedesktop.login1.Manager",
-    )
-    .map_err(|error| error.to_string())?;
-    let path: OwnedObjectPath = manager
-        .call("GetUser", &(expected_uid,))
-        .map_err(|error| error.to_string())?;
-    let user = Proxy::new(
-        &connection,
-        "org.freedesktop.login1",
-        path.as_str(),
-        "org.freedesktop.login1.User",
-    )
-    .map_err(|error| error.to_string())?;
-    let uid: u32 = user
-        .get_property("UID")
-        .map_err(|error| error.to_string())?;
-    let linger: bool = user
-        .get_property("Linger")
-        .map_err(|error| error.to_string())?;
-    if uid != expected_uid {
-        return Err("The logind user record has another UID".into());
-    }
-    linger
-        .then_some(())
-        .ok_or_else(|| "Linger is disabled for this account".into())
-}
-
 fn manager_identity(connection: &Connection) -> Result<SystemdManagerIdentity, String> {
     let bus = Proxy::new(
         connection,

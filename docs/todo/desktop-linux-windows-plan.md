@@ -149,16 +149,17 @@ an AppImage (#216). It does not yet prove an installed logout/login lifecycle.
 
 What remains to validate and ship:
 
-- Keep the normal user unit scoped to the signed-in user's manager. Lingering is
-  an explicit installation policy, not something the app enables silently:
-  `loginctl enable-linger` keeps that user's manager alive from boot and after
-  logout and is protected by the `org.freedesktop.login1.set-user-linger`
-  privilege. The installer/setup flow must establish and report this policy
-  through an authorized operation, or return an explicit unsupported/privilege
-  refusal; the app must not enable it silently or claim logged-out operation
-  without it. Offering it at setup is
-  [#217](https://github.com/nessalabs/nessa-agent/issues/217); until then the
-  gateway runs while its user is signed in.
+- Keep the normal user unit scoped to the signed-in user's manager. It runs
+  while that user is signed in: the manager starts it at every login and stops
+  it at a full logout, and recovery treats a manager replaced that way as a
+  fact. Registration does not require linger (#219 removed that prerequisite).
+  Lingering is an explicit installation policy, not something the app enables
+  silently: `loginctl enable-linger` keeps that user's manager alive from boot
+  and after logout and is protected by the
+  `org.freedesktop.login1.set-user-linger` privilege. Offering it at setup, with
+  an explicit report of what logind confirms, is
+  [#217](https://github.com/nessalabs/nessa-agent/issues/217); the app must not
+  enable it silently or claim logged-out operation without it.
 - Use `$XDG_DATA_HOME` for installed runtime files and `$XDG_STATE_HOME` for
   host lifecycle state. `$XDG_RUNTIME_DIR` is only for sockets, locks, and other
   disposable session objects; the XDG specification requires it to disappear
@@ -249,10 +250,8 @@ is refused; remove it by hand (`systemctl --user disable --now <unit>` and
 delete its unit file) before registering again.
 
 Done when: fresh Ubuntu machine, install the `.deb`, open the app, chat works,
-quit, reopen, log out and back in, and chat still works. The native acceptance
-case authorizes linger explicitly and proves that setup reports the account-wide
-policy it changed; refusal to establish it is visible rather than a silent
-reduction of scope.
+quit, reopen, log out and back in, and chat still works, with linger off.
+Running while logged out is accepted separately under #217.
 
 ## 5. Windows
 
@@ -452,7 +451,7 @@ desktop host can replace a gateway safely.
 - [x] Shared: Linux bundle verification
 - [ ] Shared: Windows bundle verification
 - [ ] Shared: gate Unix-only code in the gateway adapter
-- [x] Linux: `Systemd` adapter with XDG persistent/session paths; installed authorized linger acceptance remains #188
+- [x] Linux: `Systemd` adapter with XDG persistent/session paths; installed logout/login acceptance remains #188
 - [x] Linux: `.deb` and AppImage packaging with WebKitGTK deps
 - [ ] Linux: end-to-end install / start / quit / reopen / logout test
 - [x] Windows: record the service model decision
