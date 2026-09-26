@@ -697,9 +697,10 @@ that evidence forces a stale-service retry and, with one exception, never
 authorizes bootout. A result that did not retire names why, as `refusal` from
 `protocol/defaults/gateway-retirement-refusals.json`. The exception is
 `data_missing`: every agent was confirmed stopped and only the record of it
-failed, because the gateway's conversation data is gone. On macOS the host then
-unloads the old service itself under its own plan, `unload-unretirable-service`
-(ADR 221). A pending
+failed, because the gateway's conversation data is gone. The host then stops the
+old service itself: launchd unloads it under its own plan,
+`unload-unretirable-service`, and systemd stops the unit with its ordinary stop
+step (ADR 221). A pending
 request for the live instance/generation also forces retry if result publication
 failed; stale requests for other instances or generations do not. Successful
 results retain the original validated lifecycle principal, cause, and correlation as durable retirement fences;

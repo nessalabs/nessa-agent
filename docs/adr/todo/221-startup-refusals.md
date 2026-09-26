@@ -130,7 +130,7 @@ list's empty state no longer says "gateway".
 
 | `refusal` | The gateway sets it when | The host does |
 | --- | --- | --- |
-| `data_missing` | every agent's stop was confirmed and only its record failed (`AuditFailure` alone, for every owner), and its conversation directory no longer exists | Stops the old service itself (plan `unload-unretirable-service`), after the history records `RetirementRefusedDataMissing`, then continues |
+| `data_missing` | every agent's stop was confirmed and only its record failed (`AuditFailure` alone, for every owner), and its conversation directory no longer exists | Stops the old service itself after the history records `RetirementRefusedDataMissing`, then continues |
 | `not_confirmed` | anything else: a stop that did not finish or was not confirmed, an admission that could not drain, or the retirement audit failing | Fails the attempt; **Try again** asks again |
 | absent | the gateway predates this field | Same as `not_confirmed` |
 
@@ -148,11 +148,14 @@ The history's fact order gains one path. When a managed gateway was running,
 the first fact is either `RetirementAcknowledged` or
 `RetirementRefusedDataMissing`, and `OldServiceUnloaded` follows either one.
 
-On Linux the host reads `refusal` and, for now, treats every refusal as
-`not_confirmed`, as it did before this record. Acting on `data_missing` there
-means changing the systemd retirement and its restart recovery, which is
-tracked as its own follow-up rather than done here without a Linux build to
-prove it.
+Both adapters ask the same shared rule what an answer allows
+(`gateway::infrastructure::retirement::stop_allowed_after`), so launchd and
+systemd cannot disagree about it. On macOS the stop is the unload plan
+`unload-unretirable-service`; on Linux it is the ordinary `stop-systemd-unit`
+step, and the failed `request-systemd-retirement` step's text names the refusal.
+On both, a refusal is a durable answer rather than an unreadable result, so a
+host attempt interrupted after one is closed by restart recovery instead of
+being left unresolved.
 
 The gateway that refused on 2026-09-26 predates `refusal`, so a host with this
 change still reads it as `not_confirmed`. The names clear the refusal for every

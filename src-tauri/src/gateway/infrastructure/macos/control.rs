@@ -3,6 +3,7 @@ use super::startup::{
     diagnose, log_tail, parse_last_exit, recorded_failure, LastExit, RecordedFailure,
 };
 use crate::gateway::domain::value_objects::RetirementRefusal;
+pub(super) use crate::gateway::infrastructure::retirement::RetirementFailure;
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -650,40 +651,6 @@ fn read_acknowledgement(
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.to_string().into()),
-    }
-}
-/// Why a retirement request did not end in a retired gateway.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum RetirementFailure {
-    /// The gateway answered this very request, and refused it (ADR 221).
-    Refused {
-        refusal: RetirementRefusal,
-        message: String,
-    },
-    /// No answer to act on: the request, the signal, or the wait failed.
-    Unanswered(String),
-}
-impl std::fmt::Display for RetirementFailure {
-    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The refusal's name is part of the text the journal records for the
-        // failed retirement step, so the durable record says why, not only the
-        // plan the host chose next.
-        match self {
-            Self::Refused { refusal, message } => {
-                write!(output, "{message} (refusal: {})", refusal.name())
-            }
-            Self::Unanswered(message) => output.write_str(message),
-        }
-    }
-}
-impl From<String> for RetirementFailure {
-    fn from(message: String) -> Self {
-        Self::Unanswered(message)
-    }
-}
-impl From<&str> for RetirementFailure {
-    fn from(message: &str) -> Self {
-        Self::Unanswered(message.to_owned())
     }
 }
 /// The running gateway asked to retire, and the runtime replacing it.

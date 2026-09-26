@@ -23,9 +23,9 @@ pub use reconciliation_evidence::{
     ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
     ReconciliationTarget,
 };
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod retirement_refusal;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub use retirement_refusal::RetirementRefusal;
 mod search_path;
 pub use search_path::{SearchPath, SearchPathError};

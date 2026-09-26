@@ -9,8 +9,8 @@ use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
     LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
     LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationCause,
-    ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget,
-    RetirementRefusal, SearchPath, ServiceConfiguration,
+    ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
+    ServiceConfiguration,
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory};
 use serde::Deserialize;
@@ -32,6 +32,7 @@ mod generation;
 mod pruning;
 mod staging;
 mod startup;
+use super::retirement::{stop_allowed_after, StopAllowedBy};
 use control::{
     bounded_output, classify, forward_recovery, health, launchctl, legacy_listener_pid,
     lock_namespace, read_pending_retirement, read_retirement_evidence, retire, service_status,
@@ -623,33 +624,17 @@ fn matches_reconciled_gateway(
     )
 }
 
-/// What a retirement's answer leaves the host to do (ADR 221): the plan that
-/// unloads the old service, once the history holds why it may, or the failure
-/// that ends the attempt with the old service preserved.
-///
-/// A refusal because the gateway's own data is gone is the one refusal the
-/// host acts on: the evidence it protects is gone too. The journal then holds
-/// the refusal as the failed retirement step, this fact, and the unload plan.
+/// The unload plan a retirement's answer leads to (ADR 221), once the shared
+/// rule has recorded why the stop is allowed; otherwise the failure that ends
+/// the attempt with the old service preserved.
 fn unload_plan_after_retirement(
     progress: &dyn GatewayReconciliationProgress,
     service: &str,
     retired: Result<(), control::RetirementFailure>,
 ) -> Result<&'static str, RegisterFailure> {
-    match retired {
-        Ok(()) => {
-            progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
-            Ok("unload-stale-service")
-        }
-        Err(control::RetirementFailure::Refused {
-            refusal: RetirementRefusal::DataMissing,
-            message,
-        }) => {
-            eprintln!(
-                "[nessa] Stopping gateway {service} itself: its conversation data is gone, so it cannot retire ({message})"
-            );
-            progress.history_observed(ReconciliationHistoryFact::RetirementRefusedDataMissing);
-            Ok("unload-unretirable-service")
-        }
+    match stop_allowed_after(progress, service, retired) {
+        Ok(StopAllowedBy::Retirement) => Ok("unload-stale-service"),
+        Ok(StopAllowedBy::RefusalDataMissing) => Ok("unload-unretirable-service"),
         Err(failure) => Err(RegisterFailure::Physical(failure.to_string())),
     }
 }
@@ -2230,12 +2215,13 @@ mod tests {
         recovery_probe_port, registered_agent_path, run_bootstrap, run_planned_effect_with_cleanup,
         runtime_fingerprint, service_environment, service_matches, startup, unavailable_service,
         unload_plan_after_retirement, unreadable_process_identity, BootstrapCleanupDecision,
-        BootstrapFailure, BootstrapRecoveryDecision, RetirementRefusal, SearchPath,
+        BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
         ReconciledGateway, ReconciliationHistoryFact,
     };
+    use crate::gateway::domain::value_objects::RetirementRefusal;
     use crate::gateway::domain::value_objects::{
         AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
         LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,

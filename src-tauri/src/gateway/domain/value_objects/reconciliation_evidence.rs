@@ -407,10 +407,10 @@ pub enum ReconciliationHistoryFact {
     /// The running gateway refused to retire because its own data is gone
     /// (ADR 221), so the host stops it without an acknowledged retirement.
     #[cfg_attr(
-        all(not(target_os = "macos"), not(test)),
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
         allow(
             dead_code,
-            reason = "only the launchd adapter stops a gateway that cannot retire"
+            reason = "native reconciliation is supported only on macOS and Linux"
         )
     )]
     RetirementRefusedDataMissing,
