@@ -319,6 +319,10 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
             webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
+      - name: Prove the Windows Task Scheduler gateway model
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/desktop/check-windows-task-scheduler.ps1
       - name: Exercise the disposable systemd user-manager lifecycle
         if: runner.os == 'Linux'
         run: bash scripts/desktop/check-systemd-user-service.sh

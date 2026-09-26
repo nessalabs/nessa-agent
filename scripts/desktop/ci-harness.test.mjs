@@ -80,6 +80,45 @@ test("the existing Linux matrix leg uniquely owns real runtime assembly", () => 
   assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
 })
 
+test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
+  const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
+  const proof = "./scripts/desktop/check-windows-task-scheduler.ps1"
+  assert.equal(workflow.split(proof).length - 1, 1)
+  assert.match(
+    workflow,
+    /name: Prove the Windows Task Scheduler gateway model\s+if: runner\.os == 'Windows'\s+shell: powershell\s+run: \.\/scripts\/desktop\/check-windows-task-scheduler\.ps1/,
+  )
+  assert.doesNotMatch(
+    readFileSync(".github/workflows/release.yml", "utf8"),
+    /check-windows-task-scheduler/,
+  )
+})
+
+test("the Windows scheduler proof binds identity and cleanup to one exact owned task", () => {
+  const script = readFileSync("scripts/desktop/check-windows-task-scheduler.ps1", "utf8")
+  assert.match(script, /CreateDirectoryW/)
+  assert.match(script, /SECURITY_ATTRIBUTES/)
+  assert.match(script, /FILE_FLAG_OPEN_REPARSE_POINT/)
+  assert.match(script, /DirectoryIdentity\(\$runRootHandle\)/)
+  assert.match(script, /run-root path identity changed; the path was preserved/)
+  assert.doesNotMatch(script, /Directory\]::CreateDirectory|Directory\.CreateDirectory/)
+  assert.match(script, /RegisterTaskDefinition\(\$taskName, \$definition, 2 -bor 16,/)
+  assert.match(script, /MultipleInstances = 2/)
+  assert.equal(script.match(/\$ownedTask\.Run\(\$null\)/g)?.length, 2)
+  assert.match(script, /ActionPid', 'EnginePid'/)
+  assert.match(script, /PlannedActionId', 'CurrentAction'/)
+  assert.match(script, /ReadTokenFacts\(\[uint32\]\$actionPid\)/)
+  assert.match(script, /AceSids = \[string\]::Join/)
+  assert.match(script, /ObjectAceCount/)
+  assert.match(script, /confirmed-created-contradictory/)
+  assert.match(script, /observed-matching-after-\$Acknowledgement-reply/)
+  assert.match(script, /\$ownedTask\.Stop\(0\)/)
+  assert.match(script, /exact owned task instance collection to become empty/)
+  assert.doesNotMatch(script, /Stop-Process|\.Kill\(|TerminateProcess/)
+  assert.match(script, /primary failure:/)
+  assert.match(script, /cleanup failure:/)
+})
+
 test("the disposable user manager proves the same session bus and cleans its exact runtime", () => {
   const script = readFileSync("scripts/desktop/check-systemd-user-service.sh", "utf8")
   assert.match(script, /systemctl --user show-environment/)
