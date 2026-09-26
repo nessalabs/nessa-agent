@@ -459,6 +459,9 @@ impl ProviderSessionEraser for NotSupportedEraser {
     fn erase(&self, _: ExecutionSessionId) -> ConversationFuture<'_, ProviderSessionErasure> {
         Box::pin(async { Ok(ProviderSessionErasure::NotSupported) })
     }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 /// The one configured agent, registered as offering no delete of its own
 /// record: what these fixtures delete needs an agent that can be asked.

@@ -115,14 +115,13 @@ pub trait ProviderSessionDeleter: Send + Sync {
         Box::pin(async {})
     }
 
-    /// Whether a deletion this binding started, and whose caller stopped
-    /// waiting, still has a process to stop. Unlike [`Self::settled`] this is
-    /// never bounded: it stays true after `settled` gave up waiting, until the
-    /// process is actually stopped. The ACP bindings answer from the same count
-    /// `settled` waits on
-    /// (`an_outstanding_deletion_is_reported_until_its_process_stops`). The
-    /// default has nothing outstanding.
-    fn cleanup_outstanding(&self) -> bool {
-        false
-    }
+    /// Whether a deletion this binding started may still hold a process or
+    /// what its launch made: from before it is launched until its release is
+    /// confirmed, including by a retrying cleanup owner. Unlike
+    /// [`Self::settled`] this is never bounded: it stays true after `settled`
+    /// gave up waiting. The ACP bindings answer from the same count `settled`
+    /// waits on (`an_outstanding_deletion_is_reported_until_its_process_stops`).
+    /// There is no default: a binding that launches nothing to delete answers
+    /// `false` itself, and one that forgets cannot claim it by omission.
+    fn cleanup_outstanding(&self) -> bool;
 }

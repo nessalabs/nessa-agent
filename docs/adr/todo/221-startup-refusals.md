@@ -137,8 +137,10 @@ list's empty state no longer says "gateway".
 | `not_confirmed` | anything else: a stop that did not finish or was not confirmed, an admission that could not drain, or the retirement audit failing | Fails the attempt; **Try again** asks again |
 | absent | the gateway predates this field | Same as `not_confirmed` |
 
-`data_missing` is safe to act on because nothing the gateway started is still
-running. That is read from the SDK's own cleanup fact, never from which error a
+`data_missing` is safe to act on because no agent or provider process the
+gateway started is still running. The short sign-in probes (a bounded,
+read-only `security` or `codex login status` call that exits on its own) are
+not counted. That is read from the SDK's own cleanup fact, never from which error a
 failed stop returned: an error's variant is a diagnostic, and a provider may call
 an unconfirmed cleanup an `AuditFailure` while a released one can still fail. A
 missing directory alone is not enough; a stop that did not release its resources
@@ -146,7 +148,10 @@ keeps the refusal `not_confirmed` whatever the disk says. Every source of doubt
 counts as "may still hold": the SDK arms its cleanup fact only once an open
 returns, so an open in flight is read from the gateway's own supervision of it,
 and the startup warm-ups, which own agents outside any conversation, answer for
-themselves. The rule leans one way on purpose: a wrong `not_confirmed` leaves
+themselves. A deletion is counted from before it is launched until whichever
+cleanup owner holds what it launched confirms release, and every eraser must
+answer `cleanup_outstanding` itself: the method has no default, so a binding
+cannot claim "nothing outstanding" by omission. The rule leans one way on purpose: a wrong `not_confirmed` leaves
 the person with **Try again**; a wrong `data_missing` could stop a process that
 is still running. A managed runtime whose executable-use release fails keeps its
 agent unconfirmed, so a gateway whose whole data root is gone may still answer

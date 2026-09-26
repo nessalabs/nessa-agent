@@ -88,6 +88,9 @@ impl ProviderSessionEraser for AgentStore {
             .unwrap_or(Ok(ProviderSessionErasure::Deleted));
         Box::pin(async move { answer })
     }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 
 /// `TestClock`'s one reading.
@@ -2093,6 +2096,9 @@ impl ProviderSessionEraser for Fixed {
         let answer = self.0;
         Box::pin(async move { Ok(answer) })
     }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 
 /// What the registry's decision comes to for `agent`: its eraser's answer, or
@@ -2683,6 +2689,9 @@ impl ProviderSessionEraser for ForgetfulStore {
         };
         Box::pin(async move { answer })
     }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 
 #[tokio::test]
@@ -2745,6 +2754,9 @@ impl ProviderSessionEraser for Silent {
     fn erase(&self, _: ExecutionSessionId) -> ConversationFuture<'_, ProviderSessionErasure> {
         self.asked.fetch_add(1, Ordering::SeqCst);
         Box::pin(std::future::pending())
+    }
+    fn cleanup_outstanding(&self) -> bool {
+        false
     }
 }
 
@@ -3368,6 +3380,9 @@ impl ProviderSessionEraser for Gated {
             Ok(ProviderSessionErasure::Deleted)
         })
     }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 
 #[tokio::test]
@@ -3524,6 +3539,9 @@ impl ProviderSessionEraser for SlowToSettle {
             }
         })
     }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
 }
 
 #[tokio::test]
@@ -3613,6 +3631,9 @@ async fn a_person_s_delete_is_never_queued_behind_a_background_try() {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 answer
             })
+        }
+        fn cleanup_outstanding(&self) -> bool {
+            false
         }
     }
     let service = over_with(
@@ -4013,6 +4034,9 @@ impl ProviderSessionEraser for PanicsWhenCutOff {
             }
             Ok(ProviderSessionErasure::Deleted)
         })
+    }
+    fn cleanup_outstanding(&self) -> bool {
+        false
     }
 }
 

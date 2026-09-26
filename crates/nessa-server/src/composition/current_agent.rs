@@ -409,14 +409,14 @@ impl ConversationAgentSource for CurrentAgentResolver {
 /// binding it launched is kept until it has settled.
 pub(super) struct CurrentOpenCodeEraser {
     resolver: Arc<CurrentAgentResolver>,
-    launched: std::sync::Mutex<Vec<Arc<dyn ProviderSessionEraser>>>,
+    launched: crate::conversation::infrastructure::LaunchedDeletions<dyn ProviderSessionEraser>,
 }
 
 impl CurrentOpenCodeEraser {
     pub(super) fn new(resolver: Arc<CurrentAgentResolver>) -> Self {
         Self {
             resolver,
-            launched: std::sync::Mutex::new(Vec::new()),
+            launched: crate::conversation::infrastructure::LaunchedDeletions::default(),
         }
     }
 }
@@ -441,42 +441,15 @@ impl ProviderSessionEraser for CurrentOpenCodeEraser {
             .await
             .map_err(|_| ConversationError::Unavailable)??
             .ok_or(ConversationError::AgentNotConfigured)?;
-            self.launched
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(eraser.clone());
+            self.launched.push(eraser.clone());
             eraser.erase(session).await
         })
     }
     fn settled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            let launched = std::mem::take(
-                &mut *self
-                    .launched
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
-            let mut still_outstanding = Vec::new();
-            for eraser in launched {
-                eraser.settled().await;
-                // Past its bound a deletion may still be stopping; it stays
-                // here so `cleanup_outstanding` keeps saying so.
-                if eraser.cleanup_outstanding() {
-                    still_outstanding.push(eraser);
-                }
-            }
-            self.launched
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .extend(still_outstanding);
-        })
+        Box::pin(self.launched.settled())
     }
     fn cleanup_outstanding(&self) -> bool {
-        self.launched
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .any(|eraser| eraser.cleanup_outstanding())
+        self.launched.cleanup_outstanding()
     }
 }
 

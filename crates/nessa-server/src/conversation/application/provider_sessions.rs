@@ -25,12 +25,11 @@ pub trait ProviderSessionEraser: Send + Sync {
     fn settled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
-    /// Whether an ask this eraser started, and whose caller stopped waiting,
-    /// still has a process to stop, past [`Self::settled`]'s bound too. The
-    /// default has nothing outstanding.
-    fn cleanup_outstanding(&self) -> bool {
-        false
-    }
+    /// Whether an ask this eraser started may still hold a process or what its
+    /// launch made, past [`Self::settled`]'s bound too. No default: an eraser
+    /// that launches nothing answers `false` itself, so none can claim it by
+    /// omission (ADR 221).
+    fn cleanup_outstanding(&self) -> bool;
 }
 
 /// Every agent's [`ProviderSessionEraser`], keyed by agent: the one authority

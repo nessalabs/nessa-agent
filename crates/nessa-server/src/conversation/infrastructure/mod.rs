@@ -22,7 +22,7 @@ mod store;
 pub use store::LocalConversationStore;
 
 mod provider_sessions;
-pub use provider_sessions::BindingSessionEraser;
+pub use provider_sessions::{BindingSessionEraser, DeletionOwner, LaunchedDeletions};
 
 mod creation_audit;
 pub use creation_audit::DurableConversationCreationAudit;
