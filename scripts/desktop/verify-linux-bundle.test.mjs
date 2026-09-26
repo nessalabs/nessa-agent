@@ -12,6 +12,7 @@ import { join } from "node:path"
 import test from "node:test"
 import {
   REQUIRED_DEB_PACKAGES,
+  buildSelection,
   builtPackage,
   packageBuiltIn,
   uncheckedBundles,
@@ -173,4 +174,23 @@ test("the package is found in the bundle's own directory for the pattern", () =>
   } finally {
     rmSync(bundle, { recursive: true, force: true })
   }
+})
+
+test("the verifier checks only what a build told it it made", () => {
+  assert.deepEqual(
+    buildSelection({ NESSA_BUILD_BUNDLES: "deb", NESSA_BUILD_STARTED: "1790000000000" }),
+    { bundles: ["deb"], started: 1_790_000_000_000 },
+  )
+  // Run on its own, it refuses rather than guessing either.
+  for (const environment of [
+    {},
+    { NESSA_BUILD_BUNDLES: "deb" },
+    { NESSA_BUILD_STARTED: "1790000000000" },
+  ])
+    assert.throws(() => buildSelection(environment), /Run through `pnpm app:build`/)
+  // The owner holds its rule whoever asked first.
+  assert.throws(
+    () => buildSelection({ NESSA_BUILD_BUNDLES: "deb,rpm", NESSA_BUILD_STARTED: "1" }),
+    /No Linux check verifies the rpm bundle/,
+  )
 })

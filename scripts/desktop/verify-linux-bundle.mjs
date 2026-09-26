@@ -120,6 +120,22 @@ export function uncheckedBundles(bundles) {
   return bundles.split(",").filter((bundle) => !CHECKED_BUNDLES.includes(bundle))
 }
 
+/** What the build that ran this made, and when it began.
+ *
+ * Only as part of a build: `pnpm app:build` says both, and which package is
+ * this build's is decided by when it was written (`builtPackage`), whatever
+ * its version. A bundle no check here opens is refused, whoever asked. */
+export function buildSelection(environment) {
+  const selected = environment.NESSA_BUILD_BUNDLES
+  const started = environment.NESSA_BUILD_STARTED
+  if (!selected || !started)
+    throw new Error("Run through `pnpm app:build`, which says what it built and when.")
+  const unchecked = uncheckedBundles(selected)
+  if (unchecked.length > 0)
+    throw new Error(`No Linux check verifies the ${unchecked.join(", ")} bundle`)
+  return { bundles: selected.split(","), started: Number(started) }
+}
+
 function withScratch(action) {
   const scratch = mkdtempSync(join(tmpdir(), "nessa-bundle-"))
   try {
@@ -161,6 +177,7 @@ function verifyAppImage(path, { productName }) {
 }
 
 function main() {
+  const { bundles, started } = buildSelection(process.env)
   const root = resolve(import.meta.dirname, "../..")
   const metadata = JSON.parse(
     execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
@@ -173,13 +190,6 @@ function main() {
     ? resolve(metadata.target_directory, target, "release/bundle")
     : resolve(metadata.target_directory, "release/bundle")
   const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json")))
-  // Only as part of a build: `pnpm app:build` says which bundles it made and
-  // when it began, and which package is this build's is decided by when it
-  // was written (`builtPackage`), whatever its version.
-  const selected = process.env.NESSA_BUILD_BUNDLES
-  const started = process.env.NESSA_BUILD_STARTED
-  if (!selected || !started)
-    throw new Error("Run through `pnpm app:build`, which says what it built and when.")
   const patterns = linuxBundles(
     config.productName,
     "*",
@@ -187,11 +197,8 @@ function main() {
   )
   const product = { productName: config.productName }
   const verify = { deb: verifyDeb, appimage: verifyAppImage }
-  const unchecked = uncheckedBundles(selected)
-  if (unchecked.length > 0)
-    throw new Error(`No Linux check verifies the ${unchecked.join(", ")} bundle`)
-  for (const kind of selected.split(","))
-    verify[kind](packageBuiltIn(bundle, patterns[kind], Number(started)), product)
+  for (const kind of bundles)
+    verify[kind](packageBuiltIn(bundle, patterns[kind], started), product)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()
