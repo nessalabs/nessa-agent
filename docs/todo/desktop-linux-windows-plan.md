@@ -39,7 +39,7 @@ The remaining delivery pieces and the prepared runtime boundary are:
 | Piece | What it does | Where |
 | --- | --- | --- |
 | Gateway host adapter | Installs, starts, checks, and retires the background service | `src-tauri/src/gateway/infrastructure/macos/`, `src-tauri/src/gateway/infrastructure/linux/` |
-| Runtime staging | Downloads verified Node, builds the CLI tools, and packs them into local macOS and Linux builds | `scripts/desktop/prepare-runtime.mjs`, `scripts/desktop/prepare-node.mjs`, and the platform composers |
+| Runtime staging | Downloads verified Node, builds the CLI tools, and packs them into macOS and Linux builds | `scripts/desktop/prepare-runtime.mjs`, `scripts/desktop/prepare-node.mjs`, and the platform composers |
 | Release plumbing | Builds, signs, and publishes the app and the update feed | `scripts/desktop/release-assets.mjs`, `.github/workflows/release.yml` |
 | Bundle check | Proves the built app carries its verified runtime (and, on macOS, is signed) | `scripts/desktop/verify-macos-bundle.mjs`, `scripts/desktop/verify-linux-bundle.mjs` |
 
@@ -96,8 +96,8 @@ Do these once. Linux uses them first, Windows reuses them.
    publication coordinates cooperating preparation processes; it does not defend
    a returned cache path from a same-user process that can rewrite the cache.
    macOS signs the
-   executables; native Linux x86_64 probes them and includes the tree in local
-   bundles. Windows remains disabled.
+   executables; native Linux x86_64 probes them and includes the tree in its
+   `.deb` and AppImage. Windows remains disabled.
 2. **Updater manifest for more targets (Linux complete).** `RELEASE_TARGETS`
    includes `x86_64-unknown-linux-gnu`, published under one key per package
    format (`linux-x86_64-deb`, `linux-x86_64-appimage`), because the updater
@@ -427,8 +427,9 @@ gantt
     Installer and end-to-end test            :w3, after w2, 2
 ```
 
-Linux runtime staging, its systemd adapter, packaging, and release are
-complete. Installed logout/login acceptance remains open (#188). Windows still requires this
+Linux runtime staging, its systemd adapter, packaging, and the release row
+are implemented; no published release has carried Linux yet. Installed
+logout/login acceptance remains open (#188). Windows still requires this
 native model proof and a signing setup before adapter code is useful.
 
 ## 7. Existing cross-platform coverage

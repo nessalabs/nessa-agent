@@ -9,7 +9,7 @@
  * updater's `.sig` files are checked when a release is staged.
  */
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -20,10 +20,11 @@ import {
 } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
 
-/** The WebKitGTK the app is linked against (wry's `webkit2gtk-4.1`). The
- * bundler adds it to every `.deb`; it is checked because a package without
- * it installs and then cannot open a window. */
-const WEBKIT_PACKAGE = "libwebkit2gtk-4.1-0"
+/** What an installed `.deb` cannot run without, stated here rather than read
+ * from the config under test: the WebKitGTK the app links (wry's
+ * `webkit2gtk-4.1`), without which it cannot open a window, and the indicator
+ * library the tray loads with `dlopen`, without which it cannot make a tray. */
+export const REQUIRED_DEB_PACKAGES = ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
 
 /** The package names a `Depends` field requires, alternatives included.
  *
@@ -54,9 +55,30 @@ export function missingDependencies(field, required) {
  * with `dlopen`, so nothing that follows ELF dependencies finds it; the
  * AppImage has to carry it explicitly. */
 export function carriesIndicatorLibrary(directory) {
-  return readdirSync(directory, { recursive: true }).some((path) =>
-    /(^|\/)lib(ayatana-)?appindicator3\.so/.test(path),
-  )
+  return readdirSync(directory, { recursive: true }).some((path) => {
+    if (!/(^|\/)lib(ayatana-)?appindicator3\.so/.test(path)) return false
+    // Followed through links: a dangling one or an empty file loads nothing.
+    try {
+      const target = statSync(join(directory, path))
+      return target.isFile() && target.size > 0
+    } catch {
+      return false
+    }
+  })
+}
+
+function dpkgDeb(args, options) {
+  try {
+    return execFileSync("dpkg-deb", args, options)
+  } catch (error) {
+    if (error.code === "ENOENT")
+      throw new Error(
+        "Verifying a .deb needs dpkg-deb, which this host does not have. " +
+          "Build with --bundles appimage, or on Debian or Ubuntu.",
+        { cause: error },
+      )
+    throw error
+  }
 }
 
 function withScratch(action) {
@@ -68,17 +90,15 @@ function withScratch(action) {
   }
 }
 
-function verifyDeb(path, { productName, depends }) {
-  const field = execFileSync("dpkg-deb", ["--field", path, "Depends"], {
-    encoding: "utf8",
-  })
-  const missing = missingDependencies(field, [WEBKIT_PACKAGE, ...depends])
+function verifyDeb(path, { productName }) {
+  const field = dpkgDeb(["--field", path, "Depends"], { encoding: "utf8" })
+  const missing = missingDependencies(field, REQUIRED_DEB_PACKAGES)
   if (missing.length > 0)
     throw new Error(
       `${path} does not declare ${missing.join(", ")} (Depends: ${field.trim()})`,
     )
   withScratch((scratch) => {
-    execFileSync("dpkg-deb", ["--extract", path, scratch], { stdio: "inherit" })
+    dpkgDeb(["--extract", path, scratch], { stdio: "inherit" })
     verifyRuntimeFingerprint(join(scratch, "usr/lib", productName, "runtime"))
   })
   console.error(`  verified ${path}`)
@@ -88,7 +108,11 @@ function verifyAppImage(path, { productName }) {
   withScratch((scratch) => {
     // `--appimage-extract` is the AppImage runtime's own: it needs no FUSE,
     // which a CI container rarely has, and it proves the file is one.
-    execFileSync(path, ["--appimage-extract"], { cwd: scratch, stdio: "ignore" })
+    // Its listing of every extracted file is noise; its errors are the reason.
+    execFileSync(path, ["--appimage-extract"], {
+      cwd: scratch,
+      stdio: ["ignore", "ignore", "inherit"],
+    })
     const root = join(scratch, "squashfs-root")
     verifyRuntimeFingerprint(join(root, "usr/lib", productName, "runtime"))
     if (!carriesIndicatorLibrary(root))
@@ -116,10 +140,7 @@ function main() {
     linuxBundleArchitecture(target, process.arch),
   )
   const selected = process.env.NESSA_BUILD_BUNDLES
-  const product = {
-    productName: config.productName,
-    depends: config.bundle.linux?.deb?.depends ?? [],
-  }
+  const product = { productName: config.productName }
   if (includesBundle(selected, config.bundle.targets, "deb"))
     verifyDeb(resolve(bundle, packages.deb), product)
   if (includesBundle(selected, config.bundle.targets, "appimage"))

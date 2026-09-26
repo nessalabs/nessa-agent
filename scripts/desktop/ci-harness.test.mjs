@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import test from "node:test"
-import { RELEASE_TARGETS } from "./release-assets.mjs"
+import { RELEASE_TARGETS, releaseBundles } from "./release-assets.mjs"
 
 test("local-auth integration harness is locked to its declared tools", () => {
   const manifest = JSON.parse(
@@ -92,10 +92,19 @@ test("the existing Linux matrix leg uniquely owns direct runtime assembly", () =
 
 test("every Linux build installs the one list of host build dependencies", () => {
   const install = "bash scripts/desktop/install-linux-build-deps.sh"
-  for (const name of ["local-auth.yml", "release.yml"]) {
+  for (const name of readdirSync(".github/workflows").filter((file) =>
+    /\.ya?ml$/.test(file),
+  )) {
     const workflow = readFileSync(`.github/workflows/${name}`, "utf8")
-    assert.equal(workflow.split(install).length - 1, 1, `${name} installs its own list`)
-    assert.doesNotMatch(workflow, /apt-get install/, `${name} installs its own list`)
+    // A development package installed by hand is a second list of what the
+    // host builds against.
+    assert.doesNotMatch(
+      workflow,
+      /apt-get install[^\n]*-dev\b/,
+      `${name} installs its own list`,
+    )
+    if (/pnpm app:build|check-desktop\.mjs|desktop:smoke/.test(workflow))
+      assert.ok(workflow.includes(install), `${name} builds the host without the list`)
   }
 })
 
@@ -365,7 +374,7 @@ test("a release builds every release target and only the bundles it publishes", 
   for (const [, target, bundles] of rows)
     assert.equal(
       bundles,
-      target.endsWith("-apple-darwin") ? "app,dmg" : "deb,appimage",
+      releaseBundles(target),
       `${target} builds bundles its release does not publish`,
     )
 })

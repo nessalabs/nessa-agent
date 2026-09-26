@@ -52,16 +52,17 @@ import {
 import { option } from "./cli.mjs"
 import { releaseManifest, updaterTarget } from "./updater-manifest.mjs"
 
-/** Each target a release builds, as the updater's platform and Node's arch.
+/** Each target a release builds: the updater's platform, Node's arch, and the
+ * `--bundles` its build row passes — the bundles `stagedAssets` publishes.
  *
  * A total table rather than a parse of the triple: a target is released only
  * when it is written here, and `universal-apple-darwin` is not, because we
  * cannot build it and a key for a bundle that does not exist is worse than an
  * error. */
 const TARGET_PLATFORMS = {
-  "aarch64-apple-darwin": { platform: "darwin", arch: "arm64" },
-  "x86_64-apple-darwin": { platform: "darwin", arch: "x64" },
-  "x86_64-unknown-linux-gnu": { platform: "linux", arch: "x64" },
+  "aarch64-apple-darwin": { platform: "darwin", arch: "arm64", bundles: "app,dmg" },
+  "x86_64-apple-darwin": { platform: "darwin", arch: "x64", bundles: "app,dmg" },
+  "x86_64-unknown-linux-gnu": { platform: "linux", arch: "x64", bundles: "deb,appimage" },
 }
 
 /** The targets a release builds, in the order a manifest lists them. */
@@ -80,6 +81,11 @@ function targetPlatform(target) {
 export function releaseTarget(target) {
   const { platform, arch } = targetPlatform(target)
   return updaterTarget(platform, arch)
+}
+
+/** The `--bundles` a release build of this target passes: what it publishes. */
+export function releaseBundles(target) {
+  return targetPlatform(target).bundles
 }
 
 /** Where `tauri build --target <triple>` leaves this target's bundles. */
@@ -309,7 +315,8 @@ function stage(root, args, config) {
       throw new Error(
         `The build produced no ${asset.built}.\n` +
           `A missing .sig means the bundler had no TAURI_SIGNING_PRIVATE_KEY and signed\n` +
-          `nothing; a missing archive or disk image means --bundles did not ask for it.`,
+          `nothing; a missing archive, disk image, .deb or AppImage means --bundles did\n` +
+          `not ask for it.`,
       )
     copyFileSync(resolve(root, asset.built), resolve(into, asset.published))
     console.error(`  ${asset.built} -> ${asset.published}`)

@@ -196,8 +196,9 @@ jobs:
             bundles: deb,appimage
     runs-on: ${{ matrix.runner }}
     env:
-      # Produces the .app.tar.gz and its .sig alongside the bundle. Without it
-      # the bundle is built and signs nothing, and staging refuses it.
+      # Produces each update artifact's .sig beside it — the .app.tar.gz, the
+      # .deb, the AppImage. Without it the bundle is built and signs nothing,
+      # and staging refuses it.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       # Every Apple secret is carried under a SECRET_ name that no tool reads,

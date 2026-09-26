@@ -898,6 +898,23 @@ namespaces still apply). Custom user-supplied MCP servers are not packaged.
 
 `pnpm app:build --bundles dmg` prepares the complete runtime, builds the disk
 image, and verifies the final packaged runtime before returning success.
+The preparation script verifies the official Node archive against its release
+checksum and installs the ACP harness from its lockfile. Packaging currently targets
+native macOS architecture and requires macOS 13.5 or newer at runtime.
+Preparation recreates the runtime directory, then fingerprints every prepared
+file, including the model catalog and installed ACP JavaScript dependencies.
+The digest includes relative paths, executable permissions, and internal symlink
+targets; it excludes timestamps, installation location, and the generated root
+manifest. This identifies the prepared runtime inputs, not a code-signing trust
+decision. External or broken runtime symlinks fail packaging.
+Packaged web content uses a production CSP: scripts load only from the app,
+native IPC and the numeric-loopback gateway are explicit connection targets,
+and blob/data/HTTPS images needed by previews remain available. Development disables
+the packaged CSP for Vite HMR; that development-only behavior is not shipped as a
+production allowance.
+To remove the background service, boot it out with
+`launchctl bootout gui/$(id -u)/so.nessa.gateway.prod` and remove its plist from
+`~/Library/LaunchAgents`. Do not delete user data to uninstall the service.
 
 ## Installed Linux runtime
 
@@ -928,20 +945,11 @@ install is updated through `pkexec dpkg -i`, which asks for an administrator's
 password, and an AppImage replaces its own file. `pnpm app:build --bundles
 deb,appimage` builds both and verifies the runtime inside each before
 returning success.
-The preparation script verifies the official Node archive against its release
-checksum and installs the ACP harness from its lockfile. Packaging currently targets
-native macOS architecture and requires macOS 13.5 or newer at runtime.
-Preparation recreates the runtime directory, then fingerprints every prepared
-file, including the model catalog and installed ACP JavaScript dependencies.
-The digest includes relative paths, executable permissions, and internal symlink
-targets; it excludes timestamps, installation location, and the generated root
-manifest. This identifies the prepared runtime inputs, not a code-signing trust
-decision. External or broken runtime symlinks fail packaging.
-Packaged web content uses a production CSP: scripts load only from the app,
-native IPC and the numeric-loopback gateway are explicit connection targets,
-and blob/data/HTTPS images needed by previews remain available. Development disables
-the packaged CSP for Vite HMR; that development-only behavior is not shipped as a
-production allowance.
-To remove the background service, boot it out with
-`launchctl bootout gui/$(id -u)/so.nessa.gateway.prod` and remove its plist from
-`~/Library/LaunchAgents`. Do not delete user data to uninstall the service.
+
+To remove the background service after uninstalling the package, stop and
+disable it with `systemctl --user disable --now nessa-gateway-prod.service`,
+delete `~/.config/systemd/user/nessa-gateway-prod.service`, and run
+`systemctl --user daemon-reload`. Removing the package does neither: the unit
+runs from its staged copy under `~/.local/share/nessa/gateway-runtimes/`, which
+can be deleted once the unit is stopped. Do not delete user data to uninstall
+the service.

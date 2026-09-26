@@ -7,6 +7,8 @@
  * app reports no update rather than an error.
  */
 
+import { linuxBundles } from "./bundle-architecture.mjs"
+
 /** The `{os}-{arch}` key `tauri-plugin-updater` looks up in `platforms`.
  *
  * The plugin's own `updater_os`/`updater_arch` decide this, and they do not
@@ -112,12 +114,10 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
  * which this harness does not serve.
  */
 export function defaultArtifacts(platform, version, targetDirectory = "target") {
+  const { appimage } = linuxBundles("Nessa", version, "amd64")
   const artifacts = {
     darwin: ["macos/Nessa.app.tar.gz"],
-    linux: [
-      `appimage/Nessa_${version}_amd64.AppImage`,
-      `appimage/Nessa_${version}_amd64.AppImage.tar.gz`,
-    ],
+    linux: [appimage, `${appimage}.tar.gz`],
     win32: [`nsis/Nessa_${version}_x64-setup.exe`],
   }[platform]
   if (!artifacts)

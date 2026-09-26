@@ -42,6 +42,13 @@ function withoutOption(args, longName) {
   return forwarded
 }
 
+/** The check each platform's built bundle must pass. A platform without one
+ * (Windows) returns once the build succeeds. */
+const BUNDLE_VERIFIERS = {
+  darwin: "scripts/desktop/verify-macos-bundle.mjs",
+  linux: "scripts/desktop/verify-linux-bundle.mjs",
+}
+
 /** Parse the Tauri arguments that select the artifact verified after a build. */
 export function parseBuildArguments(args) {
   return {
@@ -74,7 +81,7 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   const build = spawn(pnpm, command, { env: buildEnvironment, stdio: "inherit" })
   if (build.error) throw build.error
   if (build.status !== 0) return build.status ?? 1
-  if (platform !== "darwin" && platform !== "linux") return 0
+  if (!Object.hasOwn(BUNDLE_VERIFIERS, platform)) return 0
 
   const verificationEnvironment = { ...buildEnvironment }
   delete verificationEnvironment.NESSA_BUILD_TARGET
@@ -94,11 +101,7 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
     if (staple.status !== 0) return staple.status ?? 1
   }
 
-  const verifier = {
-    darwin: "scripts/desktop/verify-macos-bundle.mjs",
-    linux: "scripts/desktop/verify-linux-bundle.mjs",
-  }[platform]
-  const verify = spawn("node", [verifier], {
+  const verify = spawn("node", [BUNDLE_VERIFIERS[platform]], {
     env: verificationEnvironment,
     stdio: "inherit",
   })
