@@ -231,7 +231,8 @@ async fn exchange<P: AcpProfile>(
     let init = connection
         .request(
             "initialize",
-            initialize_params(),
+            // Deleting a session asks nothing of anybody.
+            initialize_params(false),
             config.clock.now() + config.launch_timeout,
         )
         .await?;

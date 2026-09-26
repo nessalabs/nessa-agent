@@ -1321,6 +1321,14 @@
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
           "description": "Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said."
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/ConversationQuestion"
+          },
+          "description": "Questions the agent is waiting on, oldest first."
         }
       },
       "required": [
@@ -1334,7 +1342,8 @@
         "lifecycle",
         "truncated",
         "queueComplete",
-        "title"
+        "title",
+        "questions"
       ]
     },
     "ConversationCreateParams": {
@@ -1948,6 +1957,230 @@
         "conversation_erasure_incomplete"
       ],
       "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator."
+    },
+    "ConversationAnswerOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One answer a question offers: the value recorded, and the label read.",
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Exact value recorded when this option is chosen."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Text shown to whoever answers."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Secondary text, where the agent supplied any."
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "ConversationAsked": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question, and what may be answered to it.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Key the answer is correlated back under."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "What is being asked."
+        },
+        "header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Short label for the question, where the agent supplied one."
+        },
+        "multiSelect": {
+          "type": "boolean",
+          "description": "Whether several options may be chosen rather than one."
+        },
+        "freeText": {
+          "type": "boolean",
+          "description": "Whether an answer in the answerer's own words is accepted."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether an answer must choose at least one of this question's options; own words alone do not satisfy it. Declining the whole ask is still possible."
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/ConversationAnswerOption"
+          },
+          "description": "What may be chosen, in the order the agent offered it."
+        }
+      },
+      "required": [
+        "key",
+        "prompt",
+        "multiSelect",
+        "freeText",
+        "required",
+        "options"
+      ]
+    },
+    "ConversationQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Identity the answer names."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "The agent's own framing of why it is asking."
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ConversationAsked"
+          },
+          "description": "What is being asked, in the order the agent asked it."
+        }
+      },
+      "required": [
+        "executionId",
+        "questionId",
+        "message",
+        "questions"
+      ]
+    },
+    "ConversationQuestionChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What was chosen for one question. Both parts may be absent, which is how a question is skipped.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The question this answers."
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "x-utf8MaxBytes": 1024
+          },
+          "description": "Option values chosen, which the question must have offered."
+        },
+        "ownWords": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Words of the answerer's own, only where the question invited them."
+        }
+      },
+      "required": [
+        "key",
+        "values"
+      ]
+    },
+    "ConversationAnswerQuestionParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Answer one question the agent asked, or decline to answer it.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The ask being answered."
+        },
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ConversationQuestionChoice"
+          },
+          "description": "What was chosen. Null declines the question, which is an answer the agent is told."
+        }
+      },
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "questionId"
+      ]
     }
   }
 }

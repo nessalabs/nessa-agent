@@ -7,6 +7,7 @@ const failureNotice =
   "The agent provider reported an error: OpenCode's free tier can only be used from within OpenCode. The turn could not complete all required work."
 
 const providerFailure = (revision: string): ConversationView => ({
+  questions: [],
   conversationId: "server",
   title: null,
   revision,

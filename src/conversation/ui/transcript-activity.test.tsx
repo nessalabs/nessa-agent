@@ -67,6 +67,7 @@ function workingConversation(id: string): Conversation {
       },
     ],
     remote: {
+      questions: [],
       running: true,
       permissions: [
         {
@@ -178,6 +179,7 @@ function terminalConversation(
       },
     ],
     remote: {
+      questions: [],
       running: false,
       permissions: [],
       tools,
@@ -214,6 +216,7 @@ function queuedConversation(): Conversation {
       },
     ],
     remote: {
+      questions: [],
       running: false,
       permissions: [],
       tools: [],

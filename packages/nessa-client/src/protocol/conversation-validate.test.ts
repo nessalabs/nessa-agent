@@ -48,6 +48,7 @@ function view() {
       },
     ],
     permissions: [],
+    questions: [],
     tools: [
       {
         executionId: "running",

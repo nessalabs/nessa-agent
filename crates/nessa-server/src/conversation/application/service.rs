@@ -35,7 +35,7 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCancellationRequest, PermissionSelectionState,
+        PermissionCancellationRequest, PermissionSelectionState, QuestionAnswer,
     },
     providers::{AgentProvider, OperationCapabilities},
     sessions::{
@@ -49,6 +49,7 @@ use nessa_sdk::domain::agent_execution::{
         PermissionOptionId,
     },
     prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
+    questions::{QuestionChoice, QuestionId},
     sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
@@ -539,6 +540,21 @@ pub struct ConversationDependencies {
     pub deletion_budgets: ConversationDeletionBudgets,
     pub clock: Arc<dyn Clock>,
 }
+/// What a host chose for one of the agent's questions.
+///
+/// Named rather than a tuple because each part means something different to
+/// the agent: which question this answers, what was chosen from what it
+/// offered, and any words the answerer typed instead.
+#[derive(Clone, Debug)]
+pub struct QuestionChoiceInput {
+    /// The question this answers.
+    pub key: String,
+    /// Option values chosen, which that question must have offered.
+    pub values: Vec<String>,
+    /// Words of the answerer's own, only where the question invited them.
+    pub own_words: Option<String>,
+}
+
 impl ConversationService {
     /// Own every configured agent, and the one a caller gets by default.
     pub fn new(
@@ -1650,6 +1666,53 @@ impl ConversationService {
                 .await
                 .settled(execution.as_str(), snapshot.as_ref());
             Ok(result == QueueRemoval::Removed)
+        })
+        .await
+    }
+    /// Answer one question the agent asked, or decline it.
+    ///
+    /// `choices` of `None` declines: the agent is told, and carries on. Nothing
+    /// is authorised here — a question is not a review — so there is no
+    /// selection state to report back, only whether the answer was written.
+    pub async fn answer_question(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution: String,
+        question: String,
+        choices: Option<Vec<QuestionChoiceInput>>,
+    ) -> Result<(), ConversationError> {
+        let service = self.clone();
+        supervised(async move {
+            let _admission = service.admit().await?;
+            // Kept, not merely checked: who answered is the one fact an audit of
+            // an explicit answer exists to record.
+            let actor = caller.actor()?;
+            let execution_id =
+                ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
+            let question_id =
+                QuestionId::new(&question).map_err(|_| ConversationError::InvalidInput)?;
+            let choices = choices
+                .map(|choices| {
+                    choices
+                        .into_iter()
+                        .map(|choice| {
+                            QuestionChoice::new(choice.key, choice.values, choice.own_words)
+                                .map_err(|_| ConversationError::InvalidInput)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?;
+            let live = service.resolve(&id, &caller).await?;
+            live.agent
+                .answer_question(QuestionAnswer {
+                    actor,
+                    execution_id,
+                    id: question_id,
+                    choices,
+                })
+                .await
+                .map_err(|_| ConversationError::Unavailable)
         })
         .await
     }

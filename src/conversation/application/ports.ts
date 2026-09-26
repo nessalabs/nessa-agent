@@ -89,6 +89,13 @@ export interface ConversationEffects {
     permissionId: string,
     optionId: string,
   ): Promise<void>
+  /** Answer one question the agent asked; null choices decline it. */
+  answerQuestion(
+    conversationId: string,
+    executionId: string,
+    questionId: string,
+    choices: readonly { key: string; values: string[]; ownWords?: string }[] | null,
+  ): Promise<void>
   cancel(conversationId: string, executionId: string, permissionId: string): Promise<void>
   close(conversationId: string): Promise<void>
 }

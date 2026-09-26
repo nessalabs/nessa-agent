@@ -544,6 +544,8 @@ export interface ConversationView {
   runtime?: ConversationRuntime
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
+  /** Questions the agent is waiting on, oldest first. */
+  questions: ConversationQuestion[]
 }
 /** Idempotently create or reopen one named conversation. */
 export interface ConversationCreateParams {
@@ -771,6 +773,65 @@ export const ConversationErrorCode = {
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
+/** One answer a question offers: the value recorded, and the label read. */
+export interface ConversationAnswerOption {
+  /** Exact value recorded when this option is chosen. */
+  value: string
+  /** Text shown to whoever answers. */
+  label: string
+  /** Secondary text, where the agent supplied any. */
+  description?: string | null
+}
+/** One question, and what may be answered to it. */
+export interface ConversationAsked {
+  /** Key the answer is correlated back under. */
+  key: string
+  /** What is being asked. */
+  prompt: string
+  /** Short label for the question, where the agent supplied one. */
+  header?: string | null
+  /** Whether several options may be chosen rather than one. */
+  multiSelect: boolean
+  /** Whether an answer in the answerer's own words is accepted. */
+  freeText: boolean
+  /** Whether an answer must choose at least one of this question's options; own words alone do not satisfy it. Declining the whole ask is still possible. */
+  required: boolean
+  /** What may be chosen, in the order the agent offered it. */
+  options: ConversationAnswerOption[]
+}
+/** A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back. */
+export interface ConversationQuestion {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Identity the answer names. */
+  questionId: string
+  /** The agent's own framing of why it is asking. */
+  message: string
+  /** What is being asked, in the order the agent asked it. */
+  questions: ConversationAsked[]
+}
+/** What was chosen for one question. Both parts may be absent, which is how a question is skipped. */
+export interface ConversationQuestionChoice {
+  /** The question this answers. */
+  key: string
+  /** Option values chosen, which the question must have offered. */
+  values: string[]
+  /** Words of the answerer's own, only where the question invited them. */
+  ownWords?: string | null
+}
+/** Answer one question the agent asked, or decline to answer it. */
+export interface ConversationAnswerQuestionParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** The ask being answered. */
+  questionId: string
+  /** What was chosen. Null declines the question, which is an answer the agent is told. */
+  choices?: ConversationQuestionChoice[] | null
+}
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxImageBytes: 5242880,
@@ -801,6 +862,7 @@ export const ProductMethod = {
   ConversationSteer: "conversation.steer",
   ConversationRemove: "conversation.remove",
   ConversationAnswer: "conversation.answer",
+  ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
   ConversationArchive: "conversation.archive",

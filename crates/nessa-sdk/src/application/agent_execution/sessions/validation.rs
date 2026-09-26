@@ -144,6 +144,8 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         let mut reviews = HashMap::new();
         let mut review_ids = HashSet::new();
         let mut declines = HashMap::new();
+        let mut asked_ids = HashSet::new();
+        let mut open_questions = HashSet::new();
         for event in &invocation.events {
             match event.update() {
                 ExecutionUpdate::Tool(tool) => {
@@ -221,6 +223,25 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                                 "declined review identity is repeated or changes its decision",
                             ))
                         }
+                    }
+                }
+                // An ask's history is checked here rather than trusted: every
+                // ask has its own identity, a close follows the ask it closes,
+                // and nothing closes twice. Fields that each look valid do not
+                // make a sequence that could have happened.
+                ExecutionUpdate::QuestionAsked { id, .. } => {
+                    validate_observation_id(id.as_str()).map_err(corrupt)?;
+                    if !asked_ids.insert(id) {
+                        return Err(corrupt(
+                            "question identity is repeated within an invocation",
+                        ));
+                    }
+                    open_questions.insert(id);
+                }
+                ExecutionUpdate::QuestionClosed { id } => {
+                    validate_observation_id(id.as_str()).map_err(corrupt)?;
+                    if !open_questions.remove(id) {
+                        return Err(corrupt("question closure has no preceding open question"));
                     }
                 }
                 _ => {}

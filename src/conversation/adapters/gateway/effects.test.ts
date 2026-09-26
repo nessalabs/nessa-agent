@@ -36,6 +36,7 @@ import { BUSY_RETRY_DELAYS_MS, gatewayEffects } from "./effects"
 
 function gatewayView(): ConversationView {
   return {
+    questions: [],
     conversationId: "server",
     title: null,
     revision: "capabilities",

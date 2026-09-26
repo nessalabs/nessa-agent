@@ -1,8 +1,9 @@
-use super::ApprovalAttribution;
+use super::{ActionContext, ApprovalAttribution};
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     permissions::{PermissionId, PermissionOptionId},
+    questions::{QuestionChoice, QuestionId},
 };
 use std::{fmt, future::Future, pin::Pin};
 
@@ -68,4 +69,22 @@ pub struct PermissionAnswer {
     pub id: PermissionId,
     /// Exact offered option identity; arbitrary or previously resolved choices fail.
     pub option_id: PermissionOptionId,
+}
+
+/// What a host answers one of the agent's own questions with.
+///
+/// The choices are checked against the ask they name when the session resolves
+/// them, not here: this carries a host's intent, and what the agent asked for
+/// is the session's to know.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionAnswer {
+    /// Host-verified caller who answered. Carried to the audit record, because
+    /// an explicit answer without its initiator is not evidence of anything.
+    pub actor: ActionContext,
+    /// Execution that owns the ask; a stale execution must not answer a later one.
+    pub execution_id: ExecutionId,
+    /// The ask being answered.
+    pub id: QuestionId,
+    /// What was chosen, or `None` to answer nothing at all.
+    pub choices: Option<Vec<QuestionChoice>>,
 }

@@ -17,7 +17,7 @@ use crate::application::agent_execution::executions::{
 
 use crate::application::agent_execution::permissions::{
     PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
-    PermissionSelectionState,
+    PermissionSelectionState, QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
     CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCauseSource,
@@ -66,6 +66,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         profile,
         audit,
         permission_sequence: Arc::new(AtomicU64::new(0)),
+        question_sequence: Arc::new(AtomicU64::new(0)),
     };
     let (mut generation, initial_events) = factory.start(restore)?;
     let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
@@ -135,6 +136,10 @@ struct WorkerFactory<P> {
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
     permission_sequence: Arc<AtomicU64>,
+    /// Question identities, minted here for the same reason review identities
+    /// are: they outlive any one provider request, including across restarts
+    /// of the worker that holds them.
+    question_sequence: Arc<AtomicU64>,
 }
 impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(
@@ -207,6 +212,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
             self.audit.clone(),
             restore,
             self.permission_sequence.clone(),
+            self.question_sequence.clone(),
             self.operation_capabilities.clone(),
             recovery.clone(),
         ));
@@ -730,6 +736,33 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             })
         })
     }
+    fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            {
+                let generation = self.generation.lock().await;
+                if generation.stopped() {
+                    return Err(ProviderOperationFailure::new(
+                        AgentError::Closed,
+                        ProviderSessionState::CleanupRequired,
+                    ));
+                }
+                enqueue(
+                    &generation.commands,
+                    Command::AnswerQuestion(answer, sender),
+                )
+                .map_err(|error| {
+                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                })?;
+            }
+            receiver.await.unwrap_or_else(|_| {
+                Err(ProviderOperationFailure::new(
+                    AgentError::Closed,
+                    ProviderSessionState::CleanupRequired,
+                ))
+            })
+        })
+    }
     fn answer_permission(
         &self,
         answer: PermissionAnswer,
@@ -954,6 +987,8 @@ pub(crate) enum Command {
         PermissionCancellationRequest,
         oneshot::Sender<ProviderOperationResult<PermissionCancellation>>,
     ),
+    /// An answer to one question the agent asked.
+    AnswerQuestion(QuestionAnswer, oneshot::Sender<ProviderOperationResult<()>>),
     Answer(
         PermissionAnswer,
         oneshot::Sender<ProviderOperationResult<PermissionResolution>>,

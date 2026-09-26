@@ -6,7 +6,7 @@ use nessa_sdk::application::agent_execution::{
     },
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
-        ReviewDeclineRecord,
+        QuestionRefusalRecord, ReviewDeclineRecord,
     },
 };
 use nessa_sdk::domain::agent_execution::{
@@ -18,6 +18,7 @@ use nessa_sdk::domain::agent_execution::{
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
         ReviewDeclineReason,
     },
+    questions::{QuestionCancellation, QuestionRefusalReason, QuestionResponse},
     sessions::AttachmentCause,
 };
 use serde_json::{json, Value};
@@ -115,6 +116,45 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
+        ExecutionAuditRecord::QuestionRefused(record) => refused(record),
+        ExecutionAuditRecord::QuestionAnswered(record) => {
+            json!({
+                "kind":"question_answered",
+                "sessionId":record.session_id().as_str(),
+                "executionId":record.execution_id().as_str(),
+                "questionId":record.question_id().as_str(),
+                "response":match record.response() {
+                    QuestionResponse::Declined => json!({"kind":"declined"}),
+                    QuestionResponse::Answered(answer) => json!({
+                        "kind":"answered",
+                        "choices":answer.choices().iter().map(|choice| json!({
+                            "key":choice.key(),
+                            "values":choice.values().collect::<Vec<_>>(),
+                            "ownWords":choice.own_words(),
+                        })).collect::<Vec<_>>(),
+                    }),
+                    QuestionResponse::Cancelled(cause) => json!({
+                        "kind":"cancelled",
+                        "cause":match cause {
+                            QuestionCancellation::ProviderWithdrawal => "provider_withdrawal",
+                            QuestionCancellation::ExecutionFinished => "execution_finished",
+                            QuestionCancellation::SessionEnded => "session_ended",
+                        },
+                    }),
+                },
+                "delivery":delivery(record.delivery()),
+                // The initiator is whoever actually ended the ask. An answer or
+                // a decline names its verified caller; a cancellation had none,
+                // and is labelled by what caused it rather than given one.
+                "origin":match (record.actor(), record.response()) {
+                    (Some(caller), _) => json!({"kind":"client","actor":actor(caller)}),
+                    (None, QuestionResponse::Cancelled(QuestionCancellation::ProviderWithdrawal)) => {
+                        json!({"kind":"provider"})
+                    }
+                    (None, _) => json!({"kind":"runtime"}),
+                },
+            })
+        }
     }
 }
 fn attachment_stage(stage: AttachmentAuditStage) -> &'static str {
@@ -186,6 +226,25 @@ fn submission_mode(mode: SubmissionMode) -> &'static str {
         SubmissionMode::BoundarySteering => "boundary_steering",
         SubmissionMode::Steering => "steering",
     }
+}
+/// An ask the binding refused before anybody was asked.
+///
+/// No question identity, because the ask never became one, and no actor,
+/// because nobody chose it: the binding did, which `origin` says.
+fn refused(record: &QuestionRefusalRecord) -> Value {
+    json!({
+        "kind":"question_refused",
+        "sessionId":record.session_id().as_str(),
+        "executionId":record.execution_id().as_str(),
+        "reason":match record.reason() {
+            QuestionRefusalReason::TooManyOpen => "too_many_open",
+            QuestionRefusalReason::Unsupported => "unsupported",
+            QuestionRefusalReason::UnreadableQuestion => "unreadable_question",
+            QuestionRefusalReason::SessionEnding => "session_ending",
+        },
+        "delivery":delivery(record.delivery()),
+        "origin":{"kind":"runtime"},
+    })
 }
 /// A review the binding refused before anyone was offered it.
 ///

@@ -965,3 +965,526 @@ async fn a_declared_name_is_recorded_as_a_claim_and_does_not_decide_the_refusal(
         .await;
     wait_until_gone(&root, "pid").await;
 }
+
+/// An agent asks, a host answers, and the agent hears exactly what was chosen.
+///
+/// The whole path in one test, because every part of it only means something
+/// with the others: what arrives is a schema, what is shown is a question, and
+/// what goes back is the content that schema asked for.
+#[tokio::test]
+async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("question", 16, audit.clone());
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+
+    let ExecutionUpdate::QuestionAsked { id, question } = next(&mut opened).await else {
+        panic!("expected the agent's question");
+    };
+    assert_eq!(question.message(), "Which environment should I deploy to?");
+    assert_eq!(
+        question.questions().len(),
+        1,
+        "the companion is not a question"
+    );
+    let asked = &question.questions()[0];
+    assert_eq!(asked.key(), "question_0");
+    assert_eq!(asked.header(), Some("Environment"));
+    assert_eq!(asked.shape(), AnswerShape::One);
+    assert!(asked.free_text(), "its companion offers words of their own");
+    assert_eq!(asked.options()[0].value(), "staging");
+    assert_eq!(asked.options()[0].description(), Some("Safe to break"));
+
+    // An answer that chooses what the question did not offer never leaves here.
+    let refused = opened
+        .session
+        .answer_question(QuestionAnswer {
+            actor: answerer(),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id: id.clone(),
+            choices: Some(vec![QuestionChoice::new(
+                "question_0",
+                vec!["elsewhere".into()],
+                None,
+            )
+            .unwrap()]),
+        })
+        .await;
+    let refused = refused.map_err(ProviderOperationFailure::into_error);
+    assert!(
+        matches!(refused, Err(AgentError::InvalidInput(_))),
+        "{refused:?}"
+    );
+
+    opened
+        .session
+        .answer_question(QuestionAnswer {
+            actor: answerer(),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id: id.clone(),
+            choices: Some(vec![QuestionChoice::new(
+                "question_0",
+                vec!["staging".into()],
+                Some("and only the eu region".into()),
+            )
+            .unwrap()]),
+        })
+        .await
+        .unwrap();
+
+    // The ask stops waiting as its own observation, so a surface that did not
+    // answer still sees it close.
+    let ExecutionUpdate::QuestionClosed { id: closed } = next(&mut opened).await else {
+        panic!("expected the question to close");
+    };
+    assert_eq!(closed, id);
+
+    let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
+        panic!("expected the turn to continue");
+    };
+    assert_eq!(chunk.as_str(), "answered and carried on");
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // What the agent received is the content its own schema asked for.
+    wait_for_file(&root, "question-answer").await;
+    let answered: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("question-answer")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(answered["action"], "accept");
+    assert_eq!(answered["content"]["question_0"], "staging");
+    assert_eq!(
+        answered["content"]["question_0_custom"],
+        "and only the eu region"
+    );
+
+    // Both halves of the evidence, in order.
+    let answers = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert_eq!(answers[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(answers[1].delivery(), &PermissionAnswerDelivery::Written);
+    for record in &answers {
+        assert_eq!(record.execution_id().as_str(), "write");
+        assert_eq!(record.question_id(), &id);
+        // Who answered is kept, not merely checked on the way in: an explicit
+        // answer's audit without its initiator is not evidence of anything.
+        assert_eq!(record.actor(), Some(&answerer()));
+        let QuestionResponse::Answered(accepted) = record.response() else {
+            panic!("the question was answered, not declined");
+        };
+        assert_eq!(accepted.choices()[0].key(), "question_0");
+    }
+
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+}
+
+/// The verified caller these tests answer as.
+fn answerer() -> ActionContext {
+    ActionContext::new("reviewer", "nessa.panel", "answer-question").unwrap()
+}
+
+/// The provider's recorded answers, each with its request id exactly as sent.
+fn provider_answers(root: &TempDir) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(root.path().join("answers"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// Answer one open ask with `value`, as the verified caller.
+async fn answer_with(opened: &OpenedProviderSession, id: &QuestionId, value: &str) {
+    opened
+        .session
+        .answer_question(QuestionAnswer {
+            actor: answerer(),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id: id.clone(),
+            choices: Some(vec![QuestionChoice::new(
+                "question_0",
+                vec![value.into()],
+                None,
+            )
+            .unwrap()]),
+        })
+        .await
+        .unwrap();
+}
+
+/// Two requests whose ids share their text are still two asks.
+///
+/// The review reproduced `1` and `"1"` colliding: identity was minted from the
+/// provider's id as text, so the second ask replaced the first and answering
+/// the one on screen wrote to the wrong request. Identity is now minted here.
+#[tokio::test]
+async fn two_asks_whose_ids_share_their_text_are_answered_separately() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("asks-collide", 16);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+
+    let ExecutionUpdate::QuestionAsked { id: first, .. } = next(&mut opened).await else {
+        panic!("expected the first ask");
+    };
+    let ExecutionUpdate::QuestionAsked { id: second, .. } = next(&mut opened).await else {
+        panic!("expected the second ask");
+    };
+    assert_ne!(first, second, "two requests are two asks");
+
+    answer_with(&opened, &first, "staging").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::QuestionClosed { .. }
+    ));
+    answer_with(&opened, &second, "production").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::QuestionClosed { .. }
+    ));
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // Each provider request received the answer meant for it: number `1` got
+    // the first, string `"1"` the second.
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    let answered = |id: serde_json::Value| {
+        answers
+            .iter()
+            .find(|answer| answer["id"] == id)
+            .unwrap_or_else(|| panic!("no answer for {id}"))["result"]["content"]["question_0"]
+            .clone()
+    };
+    assert_eq!(answered(serde_json::json!(1)), "staging");
+    assert_eq!(answered(serde_json::json!("1")), "production");
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// A question the provider takes back ends with its evidence, and cannot then
+/// be answered into a request nobody is waiting on.
+#[tokio::test]
+async fn a_withdrawn_ask_closes_is_recorded_and_can_no_longer_be_answered() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("ask-withdrawn", 16, audit.clone());
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+
+    let ExecutionUpdate::QuestionAsked { id, .. } = next(&mut opened).await else {
+        panic!("expected the ask");
+    };
+    let ExecutionUpdate::QuestionClosed { id: closed } = next(&mut opened).await else {
+        panic!("a withdrawn ask must close as its own observation");
+    };
+    assert_eq!(closed, id);
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // The provider was told, so it is not left waiting.
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["id"], "ask");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+
+    // The ending is recorded with its cause, and with no initiator invented.
+    let records = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        records[0].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::ProviderWithdrawal)
+    );
+    assert_eq!(records[0].actor(), None);
+    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Written);
+
+    // Nothing is waiting any more, so an answer is refused rather than sent.
+    let late = opened
+        .session
+        .answer_question(QuestionAnswer {
+            actor: answerer(),
+            execution_id: ExecutionId::new("write").unwrap(),
+            id,
+            choices: None,
+        })
+        .await
+        .map_err(ProviderOperationFailure::into_error);
+    assert!(matches!(late, Err(AgentError::InvalidInput(_))), "{late:?}");
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// No more asks are admitted than a surface can show.
+///
+/// The review found a ninth ask stranded: the binding admitted it, the view
+/// could not show it, and nothing could ever answer it. The excess is now
+/// answered at once, so the agent is not left waiting on it.
+#[tokio::test]
+async fn asks_beyond_what_a_surface_can_show_are_answered_rather_than_stranded() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("asks-overflow", 32, audit.clone());
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+
+    let mut asked = 0;
+    loop {
+        match next(&mut opened).await {
+            ExecutionUpdate::QuestionAsked { .. } => asked += 1,
+            ExecutionUpdate::Message(chunk) if chunk.as_str() == "done asking" => break,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(asked, MAX_OPEN_QUESTIONS);
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let overflow = provider_answers(&root)
+        .into_iter()
+        .find(|answer| answer["id"] == "a8")
+        .expect("the ninth ask was answered");
+    assert_eq!(overflow["result"]["action"], "cancel");
+    // A refusal the agent acts on is a decision, so it is on record — decided,
+    // then written — and says which limit it ran into.
+    assert_refused(&audit, QuestionRefusalReason::TooManyOpen);
+    // The eight it did admit were still open when the turn finished. The turn
+    // ended and the session did not, and each record says exactly that.
+    let ended = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(ended.len(), MAX_OPEN_QUESTIONS, "{ended:?}");
+    for record in &ended {
+        assert_eq!(
+            record.response(),
+            &QuestionResponse::Cancelled(QuestionCancellation::ExecutionFinished)
+        );
+        assert_eq!(record.actor(), None);
+    }
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// The one refusal an ask can meet, decided and then written, both on record.
+fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
+    let records = audit.refused_questions.lock().unwrap().clone();
+    assert_eq!(records.len(), 2, "{records:?}");
+    for record in &records {
+        assert_eq!(record.reason(), reason);
+        assert_eq!(record.execution_id().as_str(), "write");
+    }
+    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+}
+
+/// An ask nobody here can answer is refused on the record, and the turn goes on.
+#[tokio::test]
+async fn an_ask_that_cannot_be_put_to_anybody_is_refused_on_the_record() {
+    let _process_slot = process_test_slot().await;
+    for (mode, reason) in [
+        ("ask-unsupported", QuestionRefusalReason::Unsupported),
+        ("ask-unreadable", QuestionRefusalReason::UnreadableQuestion),
+    ] {
+        let audit = Arc::new(RecordingAudit::default());
+        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let active = start(&opened, "write").await;
+        assert!(matches!(
+            next(&mut opened).await,
+            ExecutionUpdate::Message(chunk) if chunk.as_str() == "done asking"
+        ));
+        assert_eq!(
+            timeout(Duration::from_secs(3), active)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(ExecutionOutcome::Completed),
+            "{mode}"
+        );
+        let answers = provider_answers(&root);
+        assert_eq!(answers.len(), 1, "{mode}: {answers:?}");
+        assert_eq!(answers[0]["result"]["action"], "cancel");
+        assert_refused(&audit, reason);
+        // Refused, not asked: there is no ask to have answered or ended.
+        assert!(audit.answered_questions.lock().unwrap().is_empty());
+        let _ = opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await;
+    }
+}
+
+/// A refusal the audit will not take still reaches the agent, exactly once.
+///
+/// The agent is waiting, so the refusal is sent whether or not it could be
+/// recorded; each refused record is then reported rather than swallowed, and
+/// the request is not answered a second time by the dispatcher on the way out.
+#[tokio::test]
+async fn a_refused_ask_the_audit_will_not_take_is_answered_once_and_reported() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..RecordingAudit::default()
+    });
+    let (root, binding) = test_acp_binding_with_audit("ask-unsupported", 16, audit);
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    assert_eq!(
+        timeout(Duration::from_secs(5), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        // Each record the sink refused is its own fact: the refusal's decision
+        // and its write, then the turn's own lifecycle records.
+        Err(rejected_audits(4))
+    );
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "answered exactly once: {answers:?}");
+    assert_eq!(answers[0]["id"], "u");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+    assert_eq!(
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result(),
+        Err(rejected_audits(4))
+    );
+    wait_until_gone(&root, "pid").await;
+}
+
+/// An ask arriving while the session is being stopped is refused on the record.
+///
+/// Nobody could answer it, so it is refused as one the session was ending for,
+/// while the ask that was already open ends as the session's own — two
+/// different facts, recorded as two.
+#[tokio::test]
+async fn an_ask_arriving_while_the_session_ends_is_refused_on_the_record() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("ask-after-cancel", 16, audit.clone());
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::QuestionAsked { .. }
+    ));
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    let _ = timeout(Duration::from_secs(5), active).await.unwrap();
+    wait_until_gone(&root, "pid").await;
+
+    let refused = audit.refused_questions.lock().unwrap().clone();
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    for record in &refused {
+        assert_eq!(record.reason(), QuestionRefusalReason::SessionEnding);
+    }
+    assert_eq!(refused[0].delivery(), &PermissionAnswerDelivery::Selected);
+    let ended = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(
+        ended[0].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
+    );
+    let mut ids: Vec<_> = provider_answers(&root)
+        .into_iter()
+        .map(|answer| answer["id"].as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["first", "late"], "each request answered once");
+}
+
+/// A second ask under an identity still open is a protocol fault, not a refusal.
+///
+/// Answering it would answer the first, which is still being offered. So the
+/// session fails as it does for a review's duplicate, and its teardown ends the
+/// first ask with its evidence — told once, closed, and recorded.
+#[tokio::test]
+async fn an_ask_reusing_an_open_asks_identity_fails_the_session_and_ends_the_first() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("asks-duplicate", 16, audit.clone());
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let active = start(&opened, "write").await;
+    let ExecutionUpdate::QuestionAsked { id, .. } = next(&mut opened).await else {
+        panic!("expected the first ask");
+    };
+    let ExecutionUpdate::QuestionClosed { id: closed } = next(&mut opened).await else {
+        panic!("the first ask closes when the session ends");
+    };
+    assert_eq!(closed, id);
+    assert!(timeout(Duration::from_secs(3), active)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "one request, answered once: {answers:?}");
+    assert_eq!(answers[0]["id"], "d");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+    let ended = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(
+        ended[0].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
+    );
+    assert!(audit.refused_questions.lock().unwrap().is_empty());
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}

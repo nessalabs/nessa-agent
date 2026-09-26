@@ -83,7 +83,8 @@ pub use provider_sessions::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, RequestedAgent, SubmissionMode, MAX_LISTED_CONVERSATIONS,
+    ConversationService, DeletionsLeft, QuestionChoiceInput, RequestedAgent, SubmissionMode,
+    MAX_LISTED_CONVERSATIONS,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,

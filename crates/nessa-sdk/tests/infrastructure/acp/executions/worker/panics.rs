@@ -115,6 +115,7 @@ fn spawn_worker<P: AcpProfile>(
         audit,
         None,
         Arc::new(AtomicU64::new(0)),
+        Arc::new(AtomicU64::new(0)),
         operations,
         recovery.clone(),
     ));
@@ -270,6 +271,12 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         }
                         ExecutionAuditRecord::ReviewDeclined(_) => {
                             panic!("explicit close did not refuse a review")
+                        }
+                        ExecutionAuditRecord::QuestionAnswered(_) => {
+                            panic!("explicit close did not answer a question")
+                        }
+                        ExecutionAuditRecord::QuestionRefused(_) => {
+                            panic!("explicit close did not refuse a question")
                         }
                     }
                 }

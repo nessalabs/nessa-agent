@@ -21,6 +21,7 @@ function view(ids: string[]): ConversationView {
     queueComplete: true,
     messages: [],
     permissions: [],
+    questions: [],
     tools: [],
     pending: ids.map((executionId) => ({
       executionId,

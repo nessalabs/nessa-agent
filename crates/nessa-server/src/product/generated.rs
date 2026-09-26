@@ -593,6 +593,7 @@ pub struct ConversationView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
     pub title: Option<String>,
+    pub questions: Vec<ConversationQuestion>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -831,4 +832,50 @@ impl ConversationErrorCode {
             Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
         }
     }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAnswerOption {
+    pub value: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAsked {
+    pub key: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    pub multi_select: bool,
+    pub free_text: bool,
+    pub required: bool,
+    pub options: Vec<ConversationAnswerOption>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationQuestion {
+    pub execution_id: String,
+    pub question_id: String,
+    pub message: String,
+    pub questions: Vec<ConversationAsked>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationQuestionChoice {
+    pub key: String,
+    pub values: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_words: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAnswerQuestionParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_id: String,
+    pub question_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<ConversationQuestionChoice>>,
 }

@@ -42,6 +42,7 @@ function view(
   revision: string,
 ): ConversationView {
   return {
+    questions: [],
     conversationId,
     title: null,
     revision,

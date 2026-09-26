@@ -307,6 +307,14 @@ impl ProviderSessionBackend for PanickingCleanupBackend {
     fn execute(&self, _input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async { ProviderExecutionReply::Rejected(AgentError::Closed) })
     }
+    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("this fixture asks nothing".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     fn answer_permission(
         &self,
         _answer: PermissionAnswer,
