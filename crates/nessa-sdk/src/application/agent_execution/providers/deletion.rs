@@ -122,6 +122,8 @@ pub trait ProviderSessionDeleter: Send + Sync {
     /// gave up waiting. The ACP bindings answer from the same count `settled`
     /// waits on (`an_outstanding_deletion_is_reported_until_its_process_stops`).
     /// There is no default: a binding that launches nothing to delete answers
-    /// `false` itself, and one that forgets cannot claim it by omission.
+    /// `false` itself, and one that forgets cannot claim it by omission. It may
+    /// be asked at any time from any thread, including while `settled` runs,
+    /// and must not wait.
     fn cleanup_outstanding(&self) -> bool;
 }

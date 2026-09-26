@@ -22,7 +22,8 @@ mod store;
 pub use store::LocalConversationStore;
 
 mod provider_sessions;
-pub use provider_sessions::{BindingSessionEraser, DeletionOwner, LaunchedDeletions};
+pub use provider_sessions::BindingSessionEraser;
+pub(crate) use provider_sessions::LaunchedDeletions;
 
 mod creation_audit;
 pub use creation_audit::DurableConversationCreationAudit;

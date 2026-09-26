@@ -297,16 +297,18 @@ impl DeletionCleanups {
     /// Whether a deletion this binding started is still admitting, launching,
     /// asking, or releasing what its launch made, including when a retrying
     /// cleanup owner holds it. Still true after [`Self::settled`] gave up
-    /// waiting on one.
+    /// waiting on one. A deletion whose task panicked before its cleanup could
+    /// say what it held stays counted for good: its release can no longer be
+    /// confirmed, so the safe answer is that it may still hold something.
     pub(crate) fn outstanding(&self) -> bool {
         self.0.outstanding.load(Ordering::SeqCst) > 0
     }
 
-    /// Until no deletion this binding started still has a process to stop,
-    /// or for at most the time stopping one takes with `config`'s budgets —
-    /// `shutdown_grace` + 4 × `kill_timeout` — after which what is still
-    /// outstanding has already been handed to the cleanup supervisor or is
-    /// still asking its agent.
+    /// Until nothing this binding started for a deletion is outstanding, or for
+    /// at most the time stopping one takes with `config`'s budgets —
+    /// `shutdown_grace` + 4 × `kill_timeout`. A cleanup the supervisor is still
+    /// retrying stays outstanding, so it holds this wait to its bound;
+    /// [`Self::outstanding`] still says so afterwards.
     pub(crate) async fn settled(&self, config: &AcpConfig) {
         let budget = config.shutdown_grace + config.kill_timeout * 4;
         let _ = timeout(budget, async {
