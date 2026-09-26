@@ -1910,8 +1910,7 @@ mod tests {
                 systemd_target(),
                 systemd_manager(1),
                 systemd_unit(),
-                crate::gateway::domain::value_objects::SystemdInvocationId::new(vec![7; 16])
-                    .unwrap(),
+                super::super::systemd::SystemdInvocationId::new(vec![7; 16]).unwrap(),
                 10,
                 true,
             )
