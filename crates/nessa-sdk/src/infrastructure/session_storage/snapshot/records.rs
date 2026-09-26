@@ -21,6 +21,7 @@ use crate::domain::{
             ReviewDeclineReason, ReviewDeclineStage,
         },
         prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
+        questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
         sessions::ExecutionSessionId,
     },
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -176,6 +177,33 @@ pub(super) enum Update {
         input: Input,
         options: Vec<Choice>,
     },
+    QuestionAsked {
+        id: String,
+        message: String,
+        questions: Vec<Asked>,
+    },
+    QuestionClosed {
+        id: String,
+    },
+}
+/// One saved question: what was asked, and what could be chosen.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Asked {
+    pub(super) key: String,
+    pub(super) prompt: String,
+    pub(super) header: Option<String>,
+    pub(super) many: bool,
+    pub(super) free_text: bool,
+    pub(super) options: Vec<AskedOption>,
+}
+/// One saved answer a question offered.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AskedOption {
+    pub(super) value: String,
+    pub(super) label: String,
+    pub(super) description: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 pub(super) enum DeclineReason {
@@ -270,6 +298,33 @@ impl From<ExecutionEvent> for Event {
                     tool: Tool::observation(&tool_id, &observation),
                     input: (&input).into(),
                     options: permissions::choices(&options),
+                },
+                ExecutionUpdate::QuestionClosed { id } => Update::QuestionClosed {
+                    id: id.as_str().into(),
+                },
+                ExecutionUpdate::QuestionAsked { id, question } => Update::QuestionAsked {
+                    id: id.as_str().into(),
+                    message: question.message().into(),
+                    questions: question
+                        .questions()
+                        .iter()
+                        .map(|asked| Asked {
+                            key: asked.key().into(),
+                            prompt: asked.prompt().into(),
+                            header: asked.header().map(str::to_owned),
+                            many: asked.shape() == AnswerShape::Many,
+                            free_text: asked.free_text(),
+                            options: asked
+                                .options()
+                                .iter()
+                                .map(|option| AskedOption {
+                                    value: option.value().into(),
+                                    label: option.label().into(),
+                                    description: option.description().map(str::to_owned),
+                                })
+                                .collect(),
+                        })
+                        .collect(),
                 },
             },
         }
@@ -393,6 +448,49 @@ impl Event {
                     observation,
                     input: input.into(),
                     options: permissions::decode_choices(options)?,
+                }
+            }
+            Update::QuestionClosed { id } => {
+                validate_observation_id(&id).map_err(corrupt)?;
+                ExecutionUpdate::QuestionClosed {
+                    id: QuestionId::new(id).map_err(corrupt)?,
+                }
+            }
+            Update::QuestionAsked {
+                id,
+                message,
+                questions,
+            } => {
+                validate_observation_id(&id).map_err(corrupt)?;
+                let questions = questions
+                    .into_iter()
+                    .map(|asked| {
+                        let options = asked
+                            .options
+                            .into_iter()
+                            .map(|option| {
+                                AnswerOption::new(option.value, option.label, option.description)
+                                    .map_err(corrupt)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Question::new(
+                            asked.key,
+                            asked.prompt,
+                            asked.header,
+                            if asked.many {
+                                AnswerShape::Many
+                            } else {
+                                AnswerShape::One
+                            },
+                            options,
+                            asked.free_text,
+                        )
+                        .map_err(corrupt)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                ExecutionUpdate::QuestionAsked {
+                    id: QuestionId::new(id).map_err(corrupt)?,
+                    question: AgentQuestion::new(message, questions).map_err(corrupt)?,
                 }
             }
         };

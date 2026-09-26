@@ -158,6 +158,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           truncated: false,
           pending: [],
           permissions: [],
+          questions: [],
           tools: [],
           capabilities: {
             queue: true,

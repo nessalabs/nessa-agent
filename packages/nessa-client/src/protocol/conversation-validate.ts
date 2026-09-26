@@ -121,6 +121,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "messages",
     "pending",
     "permissions",
+    "questions",
     "tools",
     "capabilities",
     "lifecycle",
@@ -264,6 +265,49 @@ export function conversationView(value: unknown, expected: string): Conversation
         messageFiles.get(executionId) !== pendingFiles)
     )
       throw new Error("Pending execution contradicts its queued message")
+  }
+  // A question is not a review: nothing is authorised, and what comes back is
+  // the agent's own input. It is checked as strictly all the same, because the
+  // panel renders whatever survives this.
+  const questionIds = new Set<string>()
+  for (const question of items(item, "questions", 8)) {
+    exact(question, ["executionId", "questionId", "message", "questions"])
+    for (const key of ["executionId", "questionId"]) identity(question, key)
+    const questionKey = JSON.stringify([question.executionId, question.questionId])
+    if (questionIds.has(questionKey))
+      throw new Error("Conversation response repeats a question")
+    questionIds.add(questionKey)
+    const status = messageStatuses.get(question.executionId as string)
+    if (status !== undefined && status !== "running")
+      throw new Error("Question execution is not running")
+    if (status === undefined && !item.truncated)
+      throw new Error("Question execution is missing its message")
+    text(question, "message", 1024)
+    const asked = items(question, "questions", 16)
+    if (!asked.length) throw new Error("Question response asks nothing")
+    const keys = new Set<string>()
+    for (const one of asked) {
+      exact(one, ["key", "prompt", "header", "multiSelect", "freeText", "options"])
+      const key = identity(one, "key")
+      if (keys.has(key)) throw new Error("Question repeats a key")
+      keys.add(key)
+      text(one, "prompt", 1024)
+      if (one.header !== undefined && one.header !== null) text(one, "header", 1024)
+      flag(one, "multiSelect")
+      flag(one, "freeText")
+      const options = items(one, "options", 32)
+      if (!options.length) throw new Error("Question offers no answers")
+      const values = new Set<string>()
+      for (const option of options) {
+        exact(option, ["value", "label", "description"])
+        const value = text(option, "value", 1024)
+        if (values.has(value)) throw new Error("Question repeats an answer")
+        values.add(value)
+        text(option, "label", 1024)
+        if (option.description !== undefined && option.description !== null)
+          text(option, "description", 1024)
+      }
+    }
   }
   const permissionIds = new Set<string>()
   for (const permission of items(item, "permissions", 64)) {

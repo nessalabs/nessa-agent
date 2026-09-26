@@ -13,6 +13,7 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, MessageChunk},
     permissions::{PermissionId, PermissionOptions, PermissionRequest, ReviewDeclineObservation},
+    questions::{AgentQuestion, QuestionId},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservation},
 };
 
@@ -77,6 +78,18 @@ impl ExecutionEvent {
                 Ok(())
             }
             ExecutionUpdate::ReviewDeclined(_) => Ok(()),
+            // An ask is bounded by its own construction — every text and both
+            // collections — so what is left to check is the identity beside it.
+            ExecutionUpdate::QuestionClosed { id } => validate_observation_id(id.as_str()),
+            ExecutionUpdate::QuestionAsked { id, question } => {
+                validate_observation_id(id.as_str())?;
+                ExecutionController::validate_tool_payload(
+                    question
+                        .payload_bytes()
+                        .saturating_add(self.execution_id.as_str().len())
+                        .saturating_add(id.as_str().len()),
+                )
+            }
         }
     }
 
@@ -131,6 +144,10 @@ impl ExecutionEvent {
                 .as_str()
                 .len()
                 .saturating_add(observation.decline().declared().map_or(0, str::len)),
+            ExecutionUpdate::QuestionAsked { id, question } => {
+                id.as_str().len().saturating_add(question.payload_bytes())
+            }
+            ExecutionUpdate::QuestionClosed { id } => id.as_str().len(),
         };
         size_of::<Self>()
             .saturating_add(self.execution_id().as_str().len())
@@ -194,5 +211,24 @@ pub enum ExecutionUpdate {
         input: ToolReviewInput,
         /// Validated choices offered for this request; no authority is granted by display.
         options: PermissionOptions,
+    },
+    /// A question the agent put to a person, waiting on an answer.
+    ///
+    /// Not a review: nothing is being authorised, and an answer is the agent's
+    /// own input rather than permission to act.
+    QuestionAsked {
+        /// Ask identity, scoped to this execution, that an answer names.
+        id: QuestionId,
+        /// What was asked and what will be accepted as an answer.
+        question: AgentQuestion,
+    },
+    /// An ask that is no longer waiting, because it was answered or withdrawn.
+    ///
+    /// Carried as an observation rather than left to whoever answered, so a
+    /// surface that was not the one answering — or one reading the session back
+    /// afterwards — sees the question stop being open.
+    QuestionClosed {
+        /// The ask that is no longer waiting.
+        id: QuestionId,
     },
 }

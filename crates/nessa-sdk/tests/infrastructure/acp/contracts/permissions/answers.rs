@@ -104,6 +104,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::ReviewDeclined(record) => {
                 panic!("an offered review must not be refused unoffered: {record:?}")
             }
+            ExecutionAuditRecord::QuestionAnswered(record) => {
+                panic!("a review is not a question: {record:?}")
+            }
         })
         .collect()
 }

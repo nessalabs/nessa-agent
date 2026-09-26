@@ -19,6 +19,7 @@ use nessa_sdk::domain::agent_execution::{
         ReviewDeclineReason,
     },
     sessions::AttachmentCause,
+    questions::QuestionResponse,
 };
 use serde_json::{json, Value};
 
@@ -115,6 +116,27 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
+        ExecutionAuditRecord::QuestionAnswered(record) => {
+            json!({
+                "kind":"question_answered",
+                "sessionId":record.session_id().as_str(),
+                "executionId":record.execution_id().as_str(),
+                "questionId":record.question_id().as_str(),
+                "response":match record.response() {
+                    QuestionResponse::Declined => json!({"kind":"declined"}),
+                    QuestionResponse::Answered(answer) => json!({
+                        "kind":"answered",
+                        "choices":answer.choices().iter().map(|choice| json!({
+                            "key":choice.key(),
+                            "values":choice.values().collect::<Vec<_>>(),
+                            "ownWords":choice.own_words(),
+                        })).collect::<Vec<_>>(),
+                    }),
+                },
+                "delivery":delivery(record.delivery()),
+                "origin":{"kind":"client"},
+            })
+        }
     }
 }
 fn attachment_stage(stage: AttachmentAuditStage) -> &'static str {

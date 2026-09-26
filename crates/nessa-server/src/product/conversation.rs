@@ -2,10 +2,10 @@
 //! The socket has already checked current access and the conversation action grant.
 use super::{
     generated::{
-        ConversationAnswerParams, ConversationArchiveParams, ConversationCancelParams,
-        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
-        ConversationDeleteParams, ConversationErrorCode, ConversationListParams,
-        ConversationListResult, ConversationMutationResult,
+        ConversationAnswerParams, ConversationAnswerQuestionParams, ConversationArchiveParams,
+        ConversationCancelParams, ConversationCloseParams, ConversationCreateParams,
+        ConversationCreateResult, ConversationDeleteParams, ConversationErrorCode,
+        ConversationListParams, ConversationListResult, ConversationMutationResult,
         ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
         ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
         ConversationSendParams, ConversationSummary,
@@ -18,7 +18,8 @@ use crate::{
     conversation::{
         application::{
             ConversationCaller, ConversationError, ConversationList, DeletionFailures,
-            RequestedAgent, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+            QuestionChoiceInput, RequestedAgent, SubmissionMode, SubmittedFile, SubmittedImage,
+            SubmittedMessage,
         },
         domain::ConversationId,
     },
@@ -164,6 +165,34 @@ pub(super) async fn dispatch(
                     &ConversationMutationResult {
                         request_id: params.request_id,
                         applied,
+                    },
+                ))
+            }
+            "conversation.answerQuestion" => {
+                let params = params!(ConversationAnswerQuestionParams);
+                service
+                    .answer_question(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        params.execution_id,
+                        params.question_id,
+                        params.choices.map(|choices| {
+                            choices
+                                .into_iter()
+                                .map(|choice| QuestionChoiceInput {
+                                    key: choice.key,
+                                    values: choice.values,
+                                    own_words: choice.own_words,
+                                })
+                                .collect()
+                        }),
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied: true,
                     },
                 ))
             }

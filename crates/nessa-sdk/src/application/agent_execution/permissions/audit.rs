@@ -5,6 +5,7 @@ use super::PermissionResolution;
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
+use crate::domain::agent_execution::questions::{QuestionId, QuestionResponse};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 
 /// Observed delivery stage of an already selected permission answer.
@@ -122,6 +123,58 @@ impl ReviewDeclineRecord {
     /// Which tool was refused, where it could be named, and why.
     pub fn decline(&self) -> &ReviewDecline {
         &self.decline
+    }
+    /// Local decision or observed write result; never provider acknowledgement.
+    pub fn delivery(&self) -> &PermissionAnswerDelivery {
+        &self.delivery
+    }
+}
+
+/// Immutable evidence that an agent's question was answered.
+///
+/// Not a permission answer: nothing was authorised, and declining is an answer
+/// rather than a refusal. It keeps the same two facts apart for the same
+/// reason — what was decided here, and what the wire did with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionAnswerRecord {
+    session_id: ExecutionSessionId,
+    execution_id: ExecutionId,
+    question_id: QuestionId,
+    response: QuestionResponse,
+    delivery: PermissionAnswerDelivery,
+}
+impl QuestionAnswerRecord {
+    /// Record that `response` was given to `question_id` within `session_id`.
+    pub fn new(
+        session_id: ExecutionSessionId,
+        execution_id: ExecutionId,
+        question_id: QuestionId,
+        response: QuestionResponse,
+        delivery: PermissionAnswerDelivery,
+    ) -> Self {
+        Self {
+            session_id,
+            execution_id,
+            question_id,
+            response,
+            delivery,
+        }
+    }
+    /// Provider session whose agent asked.
+    pub fn session_id(&self) -> &ExecutionSessionId {
+        &self.session_id
+    }
+    /// Execution the agent was running when it asked.
+    pub fn execution_id(&self) -> &ExecutionId {
+        &self.execution_id
+    }
+    /// The ask this answers.
+    pub fn question_id(&self) -> &QuestionId {
+        &self.question_id
+    }
+    /// What was answered, validated against what was asked.
+    pub fn response(&self) -> &QuestionResponse {
+        &self.response
     }
     /// Local decision or observed write result; never provider acknowledgement.
     pub fn delivery(&self) -> &PermissionAnswerDelivery {

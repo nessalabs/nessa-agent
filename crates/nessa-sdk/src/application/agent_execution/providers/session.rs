@@ -11,6 +11,7 @@ use crate::application::agent_execution::{
     permissions::{
         CancellationOrigin, PermissionAnswer, PermissionCancellation,
         PermissionCancellationRequest, PermissionResolution, PermissionSelectionState,
+        QuestionAnswer,
     },
 };
 use crate::domain::{
@@ -143,6 +144,17 @@ impl ProviderSession {
     /// delivery path; reports correlation, policy, audit, and transport failures.
     /// Rejects returned evidence that disagrees with any submitted identity, choice,
     /// or attribution. This check cannot undo effects already performed by an adapter.
+    /// Answer one question the agent asked, through the backend that holds it.
+    ///
+    /// There is no returned evidence to check: an answer is content the agent
+    /// asked for, not a decision it reports back, so what this confirms is that
+    /// the answer was written.
+    pub(crate) fn answer_question(
+        &self,
+        answer: QuestionAnswer,
+    ) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move { self.backend.answer_question(answer).await })
+    }
     pub(crate) fn answer_permission(
         &self,
         answer: PermissionAnswer,

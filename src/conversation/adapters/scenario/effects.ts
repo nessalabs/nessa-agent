@@ -79,6 +79,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           messages: [],
           pending: [],
           permissions: [],
+          questions: [],
           tools: [],
           // The echo scenario stands in for an agent that takes images, so the
           // attach-and-send path can be driven with no gateway.
@@ -211,6 +212,14 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     },
     async remove() {},
     async answer() {},
+    async answerQuestion(id, _executionId, questionId) {
+      // The scripted gateway has no agent waiting, so answering only closes the
+      // question the way a real one would.
+      const view = get(id)
+      view.questions = view.questions.filter(
+        (question) => question.questionId !== questionId,
+      )
+    },
     async cancel() {},
     async close(id) {
       const view = get(id)
