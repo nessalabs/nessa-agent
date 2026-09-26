@@ -1329,7 +1329,10 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         Elevated = $secondPidFacts.Elevated; ElevationType = $secondPidFacts.ElevationType; IntegritySid = $secondPidFacts.IntegritySid
     }
     $null = Invoke-RunAttemptObservation -Observation $secondRunObservation -Instances $secondInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstInstance.InstanceGuid) -ExpectedPid ([int]$firstInstance.EnginePID) -Accepted $evidence -Snapshot $secondSnapshot -CompleteAcceptance -Final
-    if ($secondReturned.InstanceGuid -ne $firstInstance.InstanceGuid) { throw 'second Run did not return the original IgnoreNew instance' }
+    # Under IgnoreNew, Run's return is not the live instance (run 36227766725);
+    # the enumerated singleton above is the authority, and this is evidence only.
+    $secondReturnedGuid = if ($null -eq $secondReturned) { '(none)' } else { [string]$secondReturned.InstanceGuid }
+    Write-Host "IgnoreNew second Run returned instance GUID $secondReturnedGuid; the one enumerated instance stayed $($firstInstance.InstanceGuid) with PID $($firstInstance.EnginePID)"
     if ([NessaWindowsProofNative]::ProcessHasExited($secondProcess)) { throw 'retained action process exited before proof completion' }
     Write-Host "Windows Task Scheduler model proved exact action PID $actionPid for $taskPath in the $CallerContext caller context"
 }

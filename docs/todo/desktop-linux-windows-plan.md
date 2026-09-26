@@ -260,6 +260,13 @@ model is the script's default, `StandardUser`, which refuses an elevated
 caller; proving it needs a non-elevated standard user's interactive desktop
 session and remains open in #205.
 
+Native readback facts the adapter must follow, observed on the hosted leg:
+Task Scheduler reads a SID-registered `UserId` back as an account name (bare
+for the principal, machine-qualified for the trigger), so identity is compared
+by the SID that name resolves to; and under `IgnoreNew` a second `Run` does not
+return the live instance, so instance identity comes from enumerating running
+instances, never from `Run`'s return.
+
 Use a Task Scheduler 2.0 task registered through the COM API. Register it for
 the current user's SID with `TASK_LOGON_INTERACTIVE_TOKEN`, `LeastPrivilege`,
 and an exact-user logon trigger. This stores no password and can be registered
