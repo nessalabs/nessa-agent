@@ -129,6 +129,10 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(script, /OpenProcessForObservation\(\[uint32\]\$instance\.EnginePID\)/)
   assert.match(
     script,
+    /OpenProcess\(PROCESS_QUERY_LIMITED_INFORMATION \| SYNCHRONIZE, false, processId\)/,
+  )
+  assert.match(
+    script,
     /\$caller = \[NessaWindowsProofNative\]::ReadCurrentProcessTokenFacts\(\)/,
   )
   assert.match(

@@ -37,6 +37,8 @@ public static class NessaWindowsProofNative
 {
     private const uint TOKEN_QUERY = 0x0008;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    // WaitForSingleObject, which is how exit is observed, needs this right too.
+    private const uint SYNCHRONIZE = 0x00100000;
     private const int TokenUser = 1;
     private const int TokenElevationType = 18;
     private const int TokenElevation = 20;
@@ -256,7 +258,7 @@ public static class NessaWindowsProofNative
 
     public static SafeProcessHandle OpenProcessForObservation(uint processId)
     {
-        var process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        var process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, false, processId);
         if (process.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         uint openedId = GetProcessId(process);
         if (openedId == 0)
