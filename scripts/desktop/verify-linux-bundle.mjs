@@ -11,7 +11,7 @@
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { basename, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   includesBundle,
@@ -56,7 +56,9 @@ export function missingDependencies(field, required) {
  * AppImage has to carry it explicitly. */
 export function carriesIndicatorLibrary(directory) {
   return readdirSync(directory, { recursive: true }).some((path) => {
-    if (!/(^|\/)lib(ayatana-)?appindicator3\.so/.test(path)) return false
+    // By file name: a recursive listing separates with the host's own
+    // separator, which is not `/` everywhere this is tested.
+    if (!/^lib(ayatana-)?appindicator3\.so/.test(basename(path))) return false
     // Followed through links: a dangling one or an empty file loads nothing.
     try {
       const target = statSync(join(directory, path))
