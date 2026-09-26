@@ -5,6 +5,7 @@ use super::{
 };
 use nessa_sdk::{
     application::agent_execution::{
+        agents::AgentError,
         executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
         permissions::ActionContext,
         providers::ProviderIdentity,
@@ -500,4 +501,52 @@ fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
     let view = projection.read();
     assert_eq!(view.questions.len(), 1);
     assert_eq!(view.questions[0].execution_id, "second");
+}
+
+/// Every question the view offers belongs to a message that is still running.
+///
+/// The client enforces exactly this, and refuses the whole view otherwise; the
+/// projection has to agree with it rather than hope the two never meet.
+fn offers_only_running_asks(projection: &mut Projection) -> usize {
+    let view = projection.read();
+    for question in &view.questions {
+        let message = view
+            .messages
+            .iter()
+            .find(|message| message.execution_id == question.execution_id)
+            .expect("an ask belongs to a message");
+        assert_eq!(message.status, ConversationMessageStatus::Running);
+    }
+    view.questions.len()
+}
+
+#[test]
+fn an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart() {
+    // The gateway stopped with an ask open, so the ask was saved and its
+    // closure was not. Restored, the message is unresolved; offering the ask
+    // beside it made the client refuse the view on every restart.
+    let snapshot = review_snapshot(vec![asked("execution", "1")]);
+    let mut restored = Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+        },
+        Some(&snapshot),
+    );
+    assert_eq!(offers_only_running_asks(&mut restored), 0);
+}
+
+#[test]
+fn an_ask_left_open_by_a_failed_execution_is_not_offered_once_it_settles() {
+    let mut projection = projection();
+    projection.event(&asked("execution", "1"));
+    assert_eq!(offers_only_running_asks(&mut projection), 1);
+    let mut snapshot = review_snapshot(vec![asked("execution", "1")]);
+    snapshot.invocations[0].result = Some(Err(AgentError::Closed));
+    projection.settled("execution", Some(&snapshot));
+    assert_eq!(offers_only_running_asks(&mut projection), 0);
 }

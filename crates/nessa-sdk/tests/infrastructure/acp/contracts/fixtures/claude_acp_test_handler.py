@@ -272,7 +272,7 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
-        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow"):
+        elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate"):
             def ask(ask_id):
                 send({"id": ask_id, "method": "elicitation/create", "params": {
                     "sessionId": session, "mode": "form", "message": "Which environment?",
@@ -287,6 +287,16 @@ for line in sys.stdin:
             elif mode == "ask-withdrawn":
                 ask("ask")
                 send({"method": "$/cancel_request", "params": {"requestId": "ask"}})
+            elif mode == "ask-unsupported":
+                # A page to visit is not a question anybody here can answer.
+                send({"id": "u", "method": "elicitation/create", "params": {
+                    "sessionId": session, "mode": "url", "message": "Sign in",
+                    "url": "https://example.invalid/sign-in", "elicitationId": "e"}})
+            elif mode == "asks-duplicate":
+                # A second request under an id that is still open: outside
+                # JSON-RPC, and answering it would answer the first.
+                ask("d")
+                ask("d")
             else:
                 # One more than a surface can show at once.
                 for index in range(9):
@@ -411,7 +421,7 @@ for line in sys.stdin:
             pending = None
     elif mode == "permission-pair" and msg.get("id") in ("first-review", "second-review"):
         record(msg["id"] + "-outcome", json.dumps(msg["result"]["outcome"]))
-    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow") and "result" in msg:
+    elif mode in ("asks-collide", "ask-withdrawn", "asks-overflow", "ask-unsupported", "asks-duplicate") and "result" in msg:
         # Every answer, in the order it arrived, with its id exactly as sent —
         # `1` and `"1"` are different requests and must stay different here.
         seen = root / "answers"
@@ -422,6 +432,7 @@ for line in sys.stdin:
             (mode == "asks-collide" and answered == 2)
             or (mode == "ask-withdrawn")
             or (mode == "asks-overflow" and msg["id"] == "a8")
+            or (mode == "ask-unsupported")
         )
         if finished and pending is not None:
             text("done asking")

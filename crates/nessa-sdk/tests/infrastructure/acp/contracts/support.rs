@@ -31,6 +31,7 @@ pub(super) struct RecordingAudit {
     pub(super) reorders: Mutex<Vec<QueueOrderRecord>>,
     pub(super) declines: Mutex<Vec<ReviewDeclineRecord>>,
     pub(super) answered_questions: Mutex<Vec<QuestionAnswerRecord>>,
+    pub(super) refused_questions: Mutex<Vec<QuestionRefusalRecord>>,
     pub(super) reject: bool,
     pub(super) stall: bool,
 }
@@ -62,6 +63,9 @@ impl ExecutionAudit for RecordingAudit {
                 }
                 ExecutionAuditRecord::QuestionAnswered(record) => {
                     self.answered_questions.lock().unwrap().push(record)
+                }
+                ExecutionAuditRecord::QuestionRefused(record) => {
+                    self.refused_questions.lock().unwrap().push(record)
                 }
             }
             Ok(())

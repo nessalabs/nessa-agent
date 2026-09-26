@@ -1152,7 +1152,8 @@ async fn a_withdrawn_ask_closes_is_recorded_and_can_no_longer_be_answered() {
 #[tokio::test]
 async fn asks_beyond_what_a_surface_can_show_are_answered_rather_than_stranded() {
     let _process_slot = process_test_slot().await;
-    let (root, binding) = test_acp_binding("asks-overflow", 32);
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("asks-overflow", 32, audit.clone());
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
 
@@ -1177,6 +1178,104 @@ async fn asks_beyond_what_a_surface_can_show_are_answered_rather_than_stranded()
         .find(|answer| answer["id"] == "a8")
         .expect("the ninth ask was answered");
     assert_eq!(overflow["result"]["action"], "cancel");
+    // A refusal the agent acts on is a decision, so it is on record — decided,
+    // then written — and says which limit it ran into.
+    assert_refused(&audit, QuestionRefusalReason::TooManyOpen);
+    // The eight it did admit were still open when the turn finished. The turn
+    // ended and the session did not, and each record says exactly that.
+    let ended = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(ended.len(), MAX_OPEN_QUESTIONS, "{ended:?}");
+    for record in &ended {
+        assert_eq!(
+            record.response(),
+            &QuestionResponse::Cancelled(QuestionCancellation::ExecutionFinished)
+        );
+        assert_eq!(record.actor(), None);
+    }
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// The one refusal an ask can meet, decided and then written, both on record.
+fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
+    let records = audit.refused_questions.lock().unwrap().clone();
+    assert_eq!(records.len(), 2, "{records:?}");
+    for record in &records {
+        assert_eq!(record.reason(), reason);
+        assert_eq!(record.execution_id().as_str(), "write");
+    }
+    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+}
+
+/// An ask nobody here can answer is refused on the record, and the turn goes on.
+#[tokio::test]
+async fn an_ask_that_cannot_be_put_to_anybody_is_refused_on_the_record() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("ask-unsupported", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(chunk) if chunk.as_str() == "done asking"
+    ));
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+    assert_refused(&audit, QuestionRefusalReason::Unsupported);
+    // Refused, not asked: there is no ask to have answered or ended.
+    assert!(audit.answered_questions.lock().unwrap().is_empty());
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}
+
+/// A second ask under an identity still open is a protocol fault, not a refusal.
+///
+/// Answering it would answer the first, which is still being offered. So the
+/// session fails as it does for a review's duplicate, and its teardown ends the
+/// first ask with its evidence — told once, closed, and recorded.
+#[tokio::test]
+async fn an_ask_reusing_an_open_asks_identity_fails_the_session_and_ends_the_first() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("asks-duplicate", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    let ExecutionUpdate::QuestionAsked { id, .. } = next(&mut opened).await else {
+        panic!("expected the first ask");
+    };
+    let ExecutionUpdate::QuestionClosed { id: closed } = next(&mut opened).await else {
+        panic!("the first ask closes when the session ends");
+    };
+    assert_eq!(closed, id);
+    assert!(timeout(Duration::from_secs(3), active)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    let answers = provider_answers(&root);
+    assert_eq!(answers.len(), 1, "one request, answered once: {answers:?}");
+    assert_eq!(answers[0]["id"], "d");
+    assert_eq!(answers[0]["result"]["action"], "cancel");
+    let ended = audit.answered_questions.lock().unwrap().clone();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(
+        ended[0].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
+    );
+    assert!(audit.refused_questions.lock().unwrap().is_empty());
     let _ = opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

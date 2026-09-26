@@ -577,3 +577,81 @@ async fn an_ask_ends_with_evidence_when_a_pending_review_cannot_be_cancelled() {
         &PermissionAnswerDelivery::Failed(AgentError::Closed)
     );
 }
+
+/// An answer whose decision cannot be recorded leaves its ask to the teardown.
+///
+/// Review found the ask released before the decision was audited: when the
+/// sink refused, nothing was sent, and the teardown that followed found no ask
+/// to end — no closure, no record, and an agent never told.
+#[tokio::test]
+async fn an_ask_whose_answer_could_not_be_recorded_is_still_ended_with_evidence() {
+    let (mut worker, mut execution, mut events) = blocked_worker("").await;
+    let audit = Arc::new(Audit::default());
+    worker.audit = audit.clone();
+    worker
+        .question(
+            &mut execution,
+            RpcId::Number(79),
+            ask_params("question_0"),
+            None,
+        )
+        .await
+        .unwrap();
+    let asked = timeout(Duration::from_secs(1), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let ExecutionUpdate::QuestionAsked { id, .. } = asked.update().clone() else {
+        panic!("expected the ask");
+    };
+    audit.reject.store(true, Ordering::SeqCst);
+    let (reply, replied) = oneshot::channel();
+    let answered = worker
+        .answer_question(
+            &execution,
+            QuestionAnswer {
+                actor: ActionContext::new("person", "panel", "answer").unwrap(),
+                execution_id: ExecutionId::new("active").unwrap(),
+                id: id.clone(),
+                choices: None,
+            },
+            reply,
+        )
+        .await;
+    assert_eq!(answered, Err(AgentError::AuditFailure));
+    assert!(replied.await.unwrap().is_err());
+    assert_eq!(
+        worker.questions.len(),
+        1,
+        "an unrecorded answer ends nothing"
+    );
+
+    audit.reject.store(false, Ordering::SeqCst);
+    tokio::time::pause();
+    assert_eq!(worker.send_cancellation("context").await, Ok(()));
+    tokio::time::resume();
+    let closed = timeout(Duration::from_secs(1), events.recv())
+        .await
+        .expect("the ask closes")
+        .unwrap();
+    assert!(
+        matches!(closed.update(), ExecutionUpdate::QuestionClosed { id: closed } if closed == &id)
+    );
+    let records = audit.records.lock().unwrap();
+    let ended: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::QuestionAnswered(value) => Some(value),
+            _ => None,
+        })
+        .collect();
+    // The refused decision was offered to the sink, and the ending after it
+    // is recorded with its own cause and no initiator invented.
+    assert_eq!(ended.len(), 2, "{records:?}");
+    assert_eq!(ended[0].response(), &QuestionResponse::Declined);
+    assert_eq!(
+        ended[1].response(),
+        &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
+    );
+    assert_eq!(ended[1].actor(), None);
+}

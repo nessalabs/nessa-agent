@@ -143,12 +143,15 @@ impl AcceptedAnswer {
 /// Why an ask stopped waiting when nobody answered it.
 ///
 /// An ask that ends unanswered still ended for a reason, and the reason is the
-/// difference between a provider taking its question back and a session going
-/// away underneath it.
+/// difference between a provider taking its question back, the turn that asked
+/// being over, and a session going away underneath it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuestionCancellation {
     /// The provider withdrew the question it was waiting on.
     ProviderWithdrawal,
+    /// The execution that asked finished while the ask was open. The session
+    /// goes on; this turn is simply no longer waiting on the answer.
+    ExecutionFinished,
     /// The session holding the ask was closed or failed.
     SessionEnded,
 }

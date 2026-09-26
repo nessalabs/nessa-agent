@@ -3,7 +3,8 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionController, QueueOrderRecord, SessionClosureRecord},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
-        PermissionAnswerDelivery, PermissionAnswerRecord, ReviewDeclineRecord,
+        PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord,
+        QuestionRefusalRecord, ReviewDeclineRecord,
     },
     tools::ToolReviewInput,
 };
@@ -17,6 +18,7 @@ use nessa_sdk::domain::agent_execution::{
         PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
         PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineReason,
     },
+    questions::{QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse},
     tools::{ToolCallId, ToolCallUpdate},
 };
 use std::fs;
@@ -287,4 +289,71 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
         .as_str()
         .unwrap()
         .contains("stdin write failed"));
+}
+
+#[test]
+fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
+    for (reason, code) in [
+        (QuestionRefusalReason::TooManyOpen, "too_many_open"),
+        (QuestionRefusalReason::Unsupported, "unsupported"),
+        (
+            QuestionRefusalReason::UnreadableQuestion,
+            "unreadable_question",
+        ),
+        (QuestionRefusalReason::SessionEnding, "session_ending"),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QuestionRefused(
+            QuestionRefusalRecord::new(
+                ExecutionSessionId::new("session").unwrap(),
+                ExecutionId::new("run").unwrap(),
+                reason,
+                PermissionAnswerDelivery::Written,
+            ),
+        ));
+        assert_eq!(value["kind"], "question_refused");
+        assert_eq!(value["sessionId"], "session");
+        assert_eq!(value["executionId"], "run");
+        assert_eq!(value["reason"], code);
+        assert_eq!(value["delivery"]["stage"], "written");
+        assert_eq!(value["origin"]["kind"], "runtime");
+        // Refused before it became an ask, and chosen by nobody.
+        assert!(value.get("questionId").is_none());
+        assert!(value.get("actor").is_none());
+    }
+}
+
+#[test]
+fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
+    for (cause, code, origin) in [
+        (
+            QuestionCancellation::ProviderWithdrawal,
+            "provider_withdrawal",
+            "provider",
+        ),
+        (
+            QuestionCancellation::ExecutionFinished,
+            "execution_finished",
+            "runtime",
+        ),
+        (
+            QuestionCancellation::SessionEnded,
+            "session_ended",
+            "runtime",
+        ),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
+            QuestionAnswerRecord::new(
+                ExecutionSessionId::new("session").unwrap(),
+                ExecutionId::new("run").unwrap(),
+                QuestionId::new("1").unwrap(),
+                QuestionResponse::Cancelled(cause),
+                None,
+                PermissionAnswerDelivery::Written,
+            ),
+        ));
+        assert_eq!(value["kind"], "question_answered");
+        assert_eq!(value["response"]["kind"], "cancelled");
+        assert_eq!(value["response"]["cause"], code);
+        assert_eq!(value["origin"]["kind"], origin);
+    }
 }

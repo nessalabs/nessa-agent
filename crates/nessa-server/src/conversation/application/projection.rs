@@ -659,6 +659,16 @@ impl Projection {
                 .permissions
                 .retain(|permission| permission.execution_id != id);
         }
+        // Only a running execution is waiting on anybody. An ask whose closure
+        // never reached storage — the gateway stopped while it was open — would
+        // otherwise come back beside a settled or unresolved message, and the
+        // client refuses a view that offers one: the conversation would fail to
+        // load on every restart. The status is the authority, so it decides.
+        if self.view.messages[index].status != ConversationMessageStatus::Running {
+            self.view
+                .questions
+                .retain(|question| question.execution_id != id);
+        }
         self.view.pending.retain(|value| value.execution_id != id);
     }
     pub fn settled_all(&mut self, snapshot: Option<&SessionSnapshot>) {

@@ -27,7 +27,8 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::permissions::{
     CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
     PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
-    PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, ReviewDeclineRecord,
+    PermissionSelectionState, QuestionAnswer, QuestionAnswerRecord, QuestionRefusalRecord,
+    ReviewDeclineRecord,
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -45,8 +46,8 @@ use crate::domain::agent_execution::permissions::{
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
-    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionResponse,
-    MAX_OPEN_QUESTIONS,
+    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason,
+    QuestionResponse, MAX_OPEN_QUESTIONS,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -148,21 +149,22 @@ struct Worker<P> {
     agent_accepts_images: bool,
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
-    /// The review this worker answered without registering one — a refusal.
-    ///
-    /// The dispatcher answers any request whose handler failed and which it
-    /// cannot find among the pending reviews, so that a provider is never left
-    /// waiting on a question nobody will answer. A refusal is exactly that
-    /// shape — answered, never registered — so without this it would be
-    /// answered twice, and answering one request twice is its own protocol
-    /// fault.
-    ///
     /// Questions the agent is waiting on, by the identity an answer names.
     ///
     /// Held beside the wire request because answering one means writing a
     /// response to it, and beside what was asked because an answer is only an
     /// answer if it chooses what that question offered.
     questions: HashMap<QuestionId, OpenQuestion>,
+    /// The review or ask this worker answered without registering one — a
+    /// refusal.
+    ///
+    /// The dispatcher answers any request whose handler failed and which it
+    /// cannot find among the pending reviews or open asks, so that a provider
+    /// is never left waiting on a request nobody will answer. A refusal is
+    /// exactly that shape — answered, never registered — so without this it
+    /// would be answered twice, and answering one request twice is its own
+    /// protocol fault.
+    ///
     /// One request at a time is all this has to remember, because the
     /// dispatcher takes it as soon as that request's handler returns. A
     /// provider that reuses one identifier for two requests is already outside
@@ -551,7 +553,9 @@ impl<P: AcpProfile> Worker<P> {
         let sent = tokio::time::timeout_at(deadline, self.cancel_wire_requests()).await;
         // Outside the grace, not under it: a deadline ends what the provider is
         // told, never what is recorded about the asks it was told about.
-        let closed = self.close_ended_questions().await;
+        let closed = self
+            .close_ended_questions(QuestionCancellation::SessionEnded)
+            .await;
         match sent {
             Err(_) => return closed,
             Ok(Err(AgentError::Deadline)) if Instant::now() >= deadline => return closed,
@@ -1417,7 +1421,11 @@ impl<P: AcpProfile> Worker<P> {
                     let result = self
                         .question(execution, id.clone(), params, response_deadline)
                         .await;
-                    if result.is_err() && !self.questions.values().any(|open| open.wire_id == id) {
+                    let answered = self.declined.take().is_some_and(|wire_id| wire_id == id);
+                    if result.is_err()
+                        && !answered
+                        && !self.questions.values().any(|open| open.wire_id == id)
+                    {
                         let _ = self
                             .send_before(question_wire::cancelled(&id), response_deadline)
                             .await;
@@ -1550,7 +1558,10 @@ impl<P: AcpProfile> Worker<P> {
             let previous_deadline = self.shutdown_deadline;
             let deadline = self.begin_shutdown_grace();
             let sent = tokio::time::timeout_at(deadline, self.cancel_wire_requests()).await;
-            let closed = self.close_ended_questions().await;
+            // The turn ended and the session did not, so that is the cause.
+            let closed = self
+                .close_ended_questions(QuestionCancellation::ExecutionFinished)
+                .await;
             match sent {
                 Ok(result) => result.and(closed)?,
                 Err(_) => {
@@ -1868,6 +1879,65 @@ impl<P: AcpProfile> Worker<P> {
             }
         }
     }
+    /// Refuse one ask before anybody is asked, and leave the evidence of why.
+    ///
+    /// Mirrors a refused review: the decision is recorded before the wire sees
+    /// it, the refusal is sent whether or not that record could be made — an
+    /// agent left waiting is worse than an unrecorded refusal, which is
+    /// reported — and the write is recorded after. The dispatcher is told the
+    /// request is answered, so an audit failure returned from here is not
+    /// answered a second time.
+    async fn refuse_question(
+        &mut self,
+        execution: &ExecutionController,
+        wire_id: RpcId,
+        reason: QuestionRefusalReason,
+        response_deadline: Option<Instant>,
+    ) -> Result<(), AgentError> {
+        let session_id = execution.id().clone();
+        let execution_id = self
+            .active
+            .as_ref()
+            .expect("a refusal is correlated with the running execution")
+            .execution_id
+            .clone();
+        tracing::warn!(
+            session_id = %session_id.as_str(),
+            execution_id = %execution_id.as_str(),
+            ?reason,
+            "agent question refused; the agent is told and the execution continues"
+        );
+        let record = |delivery| {
+            ExecutionAuditRecord::QuestionRefused(QuestionRefusalRecord::new(
+                session_id.clone(),
+                execution_id.clone(),
+                reason,
+                delivery,
+            ))
+        };
+        let decided = self
+            .record_audit(record(PermissionAnswerDelivery::Selected))
+            .await;
+        self.declined = Some(wire_id.clone());
+        let delivery = self
+            .send_before(question_wire::cancelled(&wire_id), response_deadline)
+            .await;
+        let observed = match &delivery {
+            Ok(()) => PermissionAnswerDelivery::Written,
+            Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+        };
+        let written = self.record_audit(record(observed)).await;
+        match (decided.and(written), delivery) {
+            (Ok(()), delivery) => delivery,
+            (Err(audit), Ok(())) => Err(audit),
+            (Err(_), Err(delivery_error)) => {
+                Err(AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                    delivery_error: Box::new(delivery_error),
+                    cleanup_error: None,
+                })
+            }
+        }
+    }
     /// Take one question the agent is asking, and show it to whoever can answer.
     ///
     /// The ask is held here until it is answered: the agent is waiting on this
@@ -1881,21 +1951,43 @@ impl<P: AcpProfile> Worker<P> {
         response_deadline: Option<Instant>,
     ) -> Result<(), AgentError> {
         self.check_session(execution, &params)?;
-        // Nothing to ask if this is over, or if there is no execution to
-        // correlate the ask with. The agent is told so rather than left waiting.
-        if self.closing || self.active.is_none() {
+        // With no execution there is nothing to correlate a refusal with, so
+        // the agent is told and nothing is recorded — as a refused review is.
+        if self.active.is_none() {
             return self
                 .send_before(question_wire::cancelled(&wire_id), response_deadline)
+                .await;
+        }
+        // A second request under an identity that is still open is outside
+        // JSON-RPC. Answering it would answer the first, which is still being
+        // offered, so it is refused as a review's duplicate is: as a protocol
+        // fault, whose teardown ends the first ask with its evidence.
+        if self.questions.values().any(|open| open.wire_id == wire_id) {
+            return Err(json_rpc::protocol("question reuses an open request's ID"));
+        }
+        // Each refusal below is a decision with an effect — the agent abandons
+        // the tool call that asked — so each is recorded, not only sent.
+        if self.closing {
+            return self
+                .refuse_question(
+                    execution,
+                    wire_id,
+                    QuestionRefusalReason::SessionEnding,
+                    response_deadline,
+                )
                 .await;
         }
         // Bounded where the view that shows them is bounded: an ask nobody can
         // see is an ask nobody can answer, so admitting more than the surface
         // holds would strand the extras rather than queue them.
-        if self.questions.len() >= MAX_OPEN_QUESTIONS
-            || self.questions.values().any(|open| open.wire_id == wire_id)
-        {
+        if self.questions.len() >= MAX_OPEN_QUESTIONS {
             return self
-                .send_before(question_wire::cancelled(&wire_id), response_deadline)
+                .refuse_question(
+                    execution,
+                    wire_id,
+                    QuestionRefusalReason::TooManyOpen,
+                    response_deadline,
+                )
                 .await;
         }
         let question = match question_wire::question(&params) {
@@ -1903,10 +1995,14 @@ impl<P: AcpProfile> Worker<P> {
             // A question this binding cannot put to anybody is answered rather
             // than left hanging, and the execution goes on — the same rule a
             // refused review follows.
-            Err(_) => {
+            Err(error) => {
+                let reason = match error {
+                    AgentError::Unsupported(_) => QuestionRefusalReason::Unsupported,
+                    _ => QuestionRefusalReason::UnreadableQuestion,
+                };
                 return self
-                    .send_before(question_wire::cancelled(&wire_id), response_deadline)
-                    .await
+                    .refuse_question(execution, wire_id, reason, response_deadline)
+                    .await;
             }
         };
         // Minted here rather than taken from the provider's request id. That id
@@ -1993,7 +2089,6 @@ impl<P: AcpProfile> Worker<P> {
             },
             None => QuestionResponse::Declined,
         };
-        self.questions.remove(&answer.id);
 
         let session_id = execution.id().clone();
         let record = |delivery| {
@@ -2017,8 +2112,14 @@ impl<P: AcpProfile> Worker<P> {
                 error.clone(),
                 ProviderSessionState::CleanupRequired,
             )));
+            // Still open: nothing was sent, so the teardown this failure starts
+            // is what tells the agent, closes the ask and records why. Taken
+            // out before the audit, it was ended by nobody.
             return Err(error);
         }
+        // Released only once the decision is on record, as a review's wire
+        // identity is: from here on this path owns its ending.
+        self.questions.remove(&answer.id);
         let written = match &response {
             QuestionResponse::Answered(accepted) => {
                 question_wire::accepted(&wire_id, &asked, accepted)
@@ -2187,14 +2288,17 @@ impl<P: AcpProfile> Worker<P> {
         failure.map_or(Ok(()), Err)
     }
 
-    /// Close every ask the session is ending, and record that it ended.
+    /// Close every open ask for `cause`, and record that it ended.
     ///
     /// A question nobody will answer is ended for the same reason a pending
     /// review is: the agent is waiting on it. Run after the deadline-bound
     /// sends, never under them, so a deadline cannot drop an ask's evidence
     /// with it. An ask whose cancellation was never sent — the deadline came
     /// first — is recorded as not delivered, because it was not.
-    async fn close_ended_questions(&mut self) -> Result<(), AgentError> {
+    async fn close_ended_questions(
+        &mut self,
+        cause: QuestionCancellation,
+    ) -> Result<(), AgentError> {
         let questions = std::mem::take(&mut self.questions);
         let mut failure = None;
         for (id, mut open) in questions {
@@ -2202,10 +2306,7 @@ impl<P: AcpProfile> Worker<P> {
                 .cancel_delivery
                 .take()
                 .unwrap_or(Err(AgentError::Deadline));
-            if let Err(error) = self
-                .close_question(id, open, QuestionCancellation::SessionEnded, delivery)
-                .await
-            {
+            if let Err(error) = self.close_question(id, open, cause, delivery).await {
                 failure.get_or_insert(error);
             }
         }

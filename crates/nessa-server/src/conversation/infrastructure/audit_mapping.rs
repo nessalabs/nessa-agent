@@ -3,7 +3,7 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionAuditRecord, QueueOrderCause},
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
-        ReviewDeclineRecord,
+        QuestionRefusalRecord, ReviewDeclineRecord,
     },
 };
 use nessa_sdk::domain::agent_execution::{
@@ -13,7 +13,7 @@ use nessa_sdk::domain::agent_execution::{
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
         ReviewDeclineReason,
     },
-    questions::{QuestionCancellation, QuestionResponse},
+    questions::{QuestionCancellation, QuestionRefusalReason, QuestionResponse},
 };
 use serde_json::{json, Value};
 
@@ -58,6 +58,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
+        ExecutionAuditRecord::QuestionRefused(record) => refused(record),
         ExecutionAuditRecord::QuestionAnswered(record) => {
             json!({
                 "kind":"question_answered",
@@ -78,6 +79,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                         "kind":"cancelled",
                         "cause":match cause {
                             QuestionCancellation::ProviderWithdrawal => "provider_withdrawal",
+                            QuestionCancellation::ExecutionFinished => "execution_finished",
                             QuestionCancellation::SessionEnded => "session_ended",
                         },
                     }),
@@ -96,6 +98,25 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             })
         }
     }
+}
+/// An ask the binding refused before anybody was asked.
+///
+/// No question identity, because the ask never became one, and no actor,
+/// because nobody chose it: the binding did, which `origin` says.
+fn refused(record: &QuestionRefusalRecord) -> Value {
+    json!({
+        "kind":"question_refused",
+        "sessionId":record.session_id().as_str(),
+        "executionId":record.execution_id().as_str(),
+        "reason":match record.reason() {
+            QuestionRefusalReason::TooManyOpen => "too_many_open",
+            QuestionRefusalReason::Unsupported => "unsupported",
+            QuestionRefusalReason::UnreadableQuestion => "unreadable_question",
+            QuestionRefusalReason::SessionEnding => "session_ending",
+        },
+        "delivery":delivery(record.delivery()),
+        "origin":{"kind":"runtime"},
+    })
 }
 /// A review the binding refused before anyone was offered it.
 ///
