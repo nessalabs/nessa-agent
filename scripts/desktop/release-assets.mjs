@@ -1,29 +1,36 @@
 /**
- * What a release publishes, named once, and how two runners' builds become one
- * `latest.json`.
+ * What a release publishes, named once, and how several runners' builds become
+ * one `latest.json`.
  *
- * Apple Silicon and Intel cannot be built together — `prepare-macos.mjs` refuses
- * a target triple that is not the host's and downloads Node for `process.arch`,
- * so a universal binary is not available to us. Two runners build separately and
- * produce identically named files: both bundlers write `Nessa.app.tar.gz`. A
- * GitHub release has one flat namespace, so uploading both as they are would
- * silently leave one architecture pointing at the other's bytes — which fails
- * far away, as a rejected signature on a user's machine.
+ * Every target builds on its own runner. Apple Silicon and Intel cannot be
+ * built together — `prepare-macos.mjs` refuses a target triple that is not the
+ * host's and downloads Node for `process.arch`, so a universal binary is not
+ * available to us — and Linux builds on Linux. Both macOS bundlers write the
+ * identical name `Nessa.app.tar.gz`. A GitHub release has one flat namespace,
+ * so uploading both as they are would silently leave one architecture pointing
+ * at the other's bytes — which fails far away, as a rejected signature on a
+ * user's machine.
  *
- *   macos-latest ─▶ aarch64 bundle ─┐  stage (rename)   ┌─▶ Nessa_0.1.0_darwin-aarch64.app.tar.gz
- *                                   ├──────────────────▶┤
- *   macos-13     ─▶ x86_64 bundle  ─┘                   └─▶ Nessa_0.1.0_darwin-x86_64.app.tar.gz
- *                                                              │
- *                                          manifest ◀──────────┘  (+ its .sig)
- *                                              │
- *                                        latest.json  ── one file, both keys
+ *   macos-latest   ─▶ aarch64 bundle ─┐                 ┌─▶ Nessa_0.1.0_darwin-aarch64.app.tar.gz
+ *   macos-15-intel ─▶ x86_64 bundle  ─┼─ stage (rename) ─┼─▶ Nessa_0.1.0_darwin-x86_64.app.tar.gz
+ *   ubuntu-22.04   ─▶ .deb, AppImage ─┘                 └─▶ Nessa_0.1.0_amd64.deb, Nessa_0.1.0_amd64.AppImage
+ *                                                                │
+ *                                            manifest ◀──────────┘  (+ each .sig)
+ *                                                │
+ *                                          latest.json  ── one file, every key
  *
- * `stage` runs on each build runner and renames that architecture's output to
- * the name it will be published under. `manifest` runs once afterwards, over
- * both staged sets, and writes the `latest.json` the updater endpoint serves.
- * It refuses to write one that is missing an architecture: a manifest with one
- * key is not a smaller release, it is a release the other half of the installed
- * base can never update from, and it fails silently as "no update available".
+ * Linux publishes two update artifacts for one architecture, because the
+ * plugin updates each install in its own format: a `.deb` install is replaced
+ * by `dpkg`, an AppImage by writing the new file over itself. It looks for
+ * `{os}-{arch}-{installer}` before `{os}-{arch}`, so each format has its own
+ * key and neither is offered the other's bytes.
+ *
+ * `stage` runs on each build runner and renames that target's output to the
+ * name it will be published under. `manifest` runs once afterwards, over every
+ * staged set, and writes the `latest.json` the updater endpoint serves. It
+ * refuses to write one that is missing a key: a manifest without one is not a
+ * smaller release, it is a release part of the installed base can never update
+ * from, and it fails silently as "no update available".
  *
  * The manifest shape itself is not defined here. `updater-manifest.mjs` owns
  * it, is used by the local harness too, and stays the only place that knows
@@ -35,39 +42,82 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { basename, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { bundleArchitecture } from "./bundle-architecture.mjs"
+import {
+  bundleArchitecture,
+  linuxBundleArchitecture,
+  linuxBundles,
+} from "./bundle-architecture.mjs"
 import { option } from "./cli.mjs"
 import { releaseManifest, updaterTarget } from "./updater-manifest.mjs"
 
-/** The architectures a release builds, in the order a manifest lists them. */
-export const RELEASE_TARGETS = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
-
-/** The `{os}-{arch}` manifest key for a macOS target triple.
+/** Each target a release builds, as the updater's platform and Node's arch.
  *
- * Routed through the same `updaterTarget` the harness uses rather than spelled
- * out again, so there is one answer to what the plugin calls an architecture.
- * `universal-apple-darwin` is rejected rather than mapped: we cannot build it,
- * and a key for a bundle that does not exist is worse than an error here. */
-export function releaseTarget(target) {
-  const architecture = {
-    aarch64: "arm64",
-    x64: "x64",
-  }[bundleArchitecture(target, undefined)]
-  if (!architecture)
-    throw new Error(`No single-architecture macOS release is built for ${target}`)
-  return updaterTarget("darwin", architecture)
+ * A total table rather than a parse of the triple: a target is released only
+ * when it is written here, and `universal-apple-darwin` is not, because we
+ * cannot build it and a key for a bundle that does not exist is worse than an
+ * error. */
+const TARGET_PLATFORMS = {
+  "aarch64-apple-darwin": { platform: "darwin", arch: "arm64" },
+  "x86_64-apple-darwin": { platform: "darwin", arch: "x64" },
+  "x86_64-unknown-linux-gnu": { platform: "linux", arch: "x64" },
 }
 
-/** Where `tauri build --target <triple>` leaves this architecture's bundles. */
+/** The targets a release builds, in the order a manifest lists them. */
+export const RELEASE_TARGETS = Object.keys(TARGET_PLATFORMS)
+
+function targetPlatform(target) {
+  if (!Object.hasOwn(TARGET_PLATFORMS, target))
+    throw new Error(`No release is built for ${target}`)
+  return TARGET_PLATFORMS[target]
+}
+
+/** The `{os}-{arch}` manifest key for a target triple.
+ *
+ * Routed through the same `updaterTarget` the harness uses rather than spelled
+ * out again, so there is one answer to what the plugin calls an architecture. */
+export function releaseTarget(target) {
+  const { platform, arch } = targetPlatform(target)
+  return updaterTarget(platform, arch)
+}
+
+/** Where `tauri build --target <triple>` leaves this target's bundles. */
 export function bundleDirectory(target) {
   return `target/${target}/release/bundle`
 }
 
-/** The update artifact's published name: one per architecture, never colliding. */
-export function updaterAssetName(productName, version, target) {
-  return `${productName}_${version}_${releaseTarget(target)}.app.tar.gz`
+/** What an update installs on this target: each artifact with its manifest key.
+ *
+ * The Linux suffixes are the plugin's own installer names (`Installer::name`
+ * in `tauri-plugin-updater`), which it appends to `{os}-{arch}` for the bundle
+ * type the running app was packaged as. */
+export function updaterArtifacts(productName, version, target) {
+  const bundle = bundleDirectory(target)
+  const key = releaseTarget(target)
+  if (targetPlatform(target).platform === "darwin")
+    return [
+      {
+        key,
+        built: `${bundle}/macos/${productName}.app.tar.gz`,
+        published: `${productName}_${version}_${key}.app.tar.gz`,
+      },
+    ]
+  // The bundler already names Linux packages per version and architecture, so
+  // they are published under the names it wrote.
+  const packages = linuxBundles(productName, version, linuxBundleArchitecture(target))
+  return [
+    {
+      key: `${key}-deb`,
+      built: `${bundle}/${packages.deb}`,
+      published: basename(packages.deb),
+    },
+    {
+      key: `${key}-appimage`,
+      built: `${bundle}/${packages.appimage}`,
+      published: basename(packages.appimage),
+    },
+  ]
 }
 
 /** The disk image's published name.
@@ -78,23 +128,25 @@ export function diskImageAssetName(productName, version, target) {
   return `${productName}_${version}_${bundleArchitecture(target, undefined)}.dmg`
 }
 
-/** Every file one architecture's build contributes, as built and as published.
+/** Every file one target's build contributes, as built and as published.
  *
  * The signature is `createUpdaterArtifacts` writing `<artifact>.sig` beside the
- * archive, signed with `TAURI_SIGNING_PRIVATE_KEY`. It is published too: the
+ * artifact, signed with `TAURI_SIGNING_PRIVATE_KEY`. It is published too: the
  * manifest carries the same bytes, and having the file on the release is what
- * lets anyone check a download by hand. */
+ * lets anyone check a download by hand. On Linux the update artifacts are also
+ * what a person downloads; on macOS the disk image is. */
 export function stagedAssets(productName, version, target) {
-  const bundle = bundleDirectory(target)
-  const updater = updaterAssetName(productName, version, target)
+  const updates = updaterArtifacts(productName, version, target).flatMap(
+    ({ built, published }) => [
+      { built, published },
+      { built: `${built}.sig`, published: `${published}.sig` },
+    ],
+  )
+  if (targetPlatform(target).platform !== "darwin") return updates
   const image = diskImageAssetName(productName, version, target)
   return [
-    { built: `${bundle}/macos/${productName}.app.tar.gz`, published: updater },
-    {
-      built: `${bundle}/macos/${productName}.app.tar.gz.sig`,
-      published: `${updater}.sig`,
-    },
-    { built: `${bundle}/dmg/${image}`, published: image },
+    ...updates,
+    { built: `${bundleDirectory(target)}/dmg/${image}`, published: image },
   ]
 }
 
@@ -167,11 +219,11 @@ export function signatureBlock(text, source) {
   return encoded
 }
 
-/** The `platforms` map of a release, one entry per architecture built.
+/** The `platforms` map of a release, one entry per update artifact built.
  *
- * `targets` is what the release requires, not what happened to arrive. An
- * architecture whose build failed is absent from `signatures` and throws here,
- * which is the behaviour we want: half a release is not a release. */
+ * `targets` is what the release requires, not what happened to arrive. A
+ * target whose build failed is absent from `signatures` and throws here, which
+ * is the behaviour we want: half a release is not a release. */
 export function releasePlatforms({
   productName,
   version,
@@ -181,18 +233,18 @@ export function releasePlatforms({
   signatures,
 }) {
   return Object.fromEntries(
-    targets.map((target) => {
-      const key = releaseTarget(target)
-      const signature = signatures[key]
-      if (!signature)
-        throw new Error(
-          `No signature for ${key}. Every architecture in a release must be in its ` +
-            `manifest: one that is missing cannot update, and reports itself as ` +
-            `already up to date.`,
-        )
-      const name = updaterAssetName(productName, version, target)
-      return [key, { signature, url: releaseAssetUrl(repository, tag, name) }]
-    }),
+    targets.flatMap((target) =>
+      updaterArtifacts(productName, version, target).map(({ key, published }) => {
+        const signature = Object.hasOwn(signatures, key) ? signatures[key] : undefined
+        if (!signature)
+          throw new Error(
+            `No signature for ${key}. Every platform and package format in a release ` +
+              `must be in its manifest: one that is missing cannot update, and reports ` +
+              `itself as already up to date.`,
+          )
+        return [key, { signature, url: releaseAssetUrl(repository, tag, published) }]
+      }),
+    ),
   )
 }
 
@@ -246,7 +298,7 @@ function main() {
   }
 }
 
-/** Copy one architecture's build output under the names it is published with. */
+/** Copy one target's build output under the names it is published with. */
 function stage(root, args, config) {
   const target = option(args, "target", undefined)
   if (!target) throw new Error("--target is required")
@@ -264,7 +316,7 @@ function stage(root, args, config) {
   }
 }
 
-/** Read both architectures' staged signatures and write the release manifest. */
+/** Read every target's staged signatures and write the release manifest. */
 function manifest(root, args, config) {
   const directory = resolve(root, option(args, "directory", "release-assets"))
   const tag = option(args, "tag", process.env.GITHUB_REF_NAME)
@@ -272,31 +324,34 @@ function manifest(root, args, config) {
   if (!tag) throw new Error("--tag is required")
   if (!repository) throw new Error("--repository is required")
   const targets = option(args, "targets", RELEASE_TARGETS.join(",")).split(",")
-  // An architecture whose build failed leaves no signature here. Read it as
-  // absent rather than as an error about a path, so the refusal that follows is
-  // the one that explains what publishing without it would do.
+  // A target whose build failed leaves no signature here. Read it as absent
+  // rather than as an error about a path, so the refusal that follows is the
+  // one that explains what publishing without it would do.
   const signatures = Object.fromEntries(
-    targets.flatMap((target) => {
-      const name = `${updaterAssetName(config.productName, config.version, target)}.sig`
-      let text
-      try {
-        text = readFileSync(resolve(directory, name), "utf8")
-      } catch {
-        return []
-      }
-      // The signature is checked; so is the thing it signs being here at all.
-      // A manifest naming a URL for an asset that was never uploaded publishes
-      // cleanly and fails on a person's machine as a download error — invisible
-      // from here afterwards, which is the reason this step checks rather than
-      // trusting that staging already did.
-      const artifact = updaterAssetName(config.productName, config.version, target)
-      if (!existsSync(resolve(directory, artifact)))
-        throw new Error(
-          `${artifact} is not in the release assets, but ${name} is. ` +
-            `Publishing this manifest would offer an update that cannot be downloaded.`,
-        )
-      return [[releaseTarget(target), signatureBlock(text, name)]]
-    }),
+    targets.flatMap((target) =>
+      updaterArtifacts(config.productName, config.version, target).flatMap(
+        ({ key, published }) => {
+          const name = `${published}.sig`
+          let text
+          try {
+            text = readFileSync(resolve(directory, name), "utf8")
+          } catch {
+            return []
+          }
+          // The signature is checked; so is the thing it signs being here at
+          // all. A manifest naming a URL for an asset that was never uploaded
+          // publishes cleanly and fails on a person's machine as a download
+          // error — invisible from here afterwards, which is the reason this
+          // step checks rather than trusting that staging already did.
+          if (!existsSync(resolve(directory, published)))
+            throw new Error(
+              `${published} is not in the release assets, but ${name} is. ` +
+                `Publishing this manifest would offer an update that cannot be downloaded.`,
+            )
+          return [[key, signatureBlock(text, name)]]
+        },
+      ),
+    ),
   )
   const body = releaseUpdaterManifest({
     productName: config.productName,

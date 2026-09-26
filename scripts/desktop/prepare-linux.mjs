@@ -1,4 +1,4 @@
-// Build the inert Linux runtime resource. GatewayHost and release publication remain disabled.
+// Build the Linux runtime resource the systemd gateway adapter stages and runs.
 import { execFileSync, spawnSync } from "node:child_process"
 import { resolve, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -43,7 +43,7 @@ export function verifyLinuxRuntimeExecutables({ executables, out, probe = spawnS
     throw new Error(`runtime/${executables.mcp} did not answer its argument probe`)
 }
 
-/** Assemble the Linux x86_64 preparation foundation without enabling GatewayHost. */
+/** Assemble the Linux x86_64 runtime resource. */
 export function prepareLinuxRuntime({
   arch = process.arch,
   platform = process.platform,

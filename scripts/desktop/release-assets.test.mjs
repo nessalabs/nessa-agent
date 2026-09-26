@@ -11,7 +11,7 @@ import {
   releaseUpdaterManifest,
   signatureBlock,
   stagedAssets,
-  updaterAssetName,
+  updaterArtifacts,
 } from "./release-assets.mjs"
 
 const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
@@ -38,40 +38,69 @@ function signature(comment) {
   ).toString("base64")
 }
 
-test("a release builds each macOS architecture on its own, and no universal", () => {
-  // `prepare-macos.mjs` refuses a target triple that is not the host's, so
-  // these two are separate runners and `universal-apple-darwin` is not an
+/** A signature for every update artifact of `targets`, each its own. */
+function signaturesFor(targets) {
+  return Object.fromEntries(
+    targets.flatMap((target) =>
+      updaterArtifacts("Nessa", "0.1.0", target).map(({ key }) => [key, signature(key)]),
+    ),
+  )
+}
+
+test("a release builds each architecture on its own, and no universal", () => {
+  // `prepare-macos.mjs` refuses a target triple that is not the host's, so the
+  // macOS targets are separate runners and `universal-apple-darwin` is not an
   // option. A manifest key for a bundle nobody can build is worse than an error.
-  assert.deepEqual(RELEASE_TARGETS, ["aarch64-apple-darwin", "x86_64-apple-darwin"])
+  assert.deepEqual(RELEASE_TARGETS, [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+  ])
   assert.equal(releaseTarget("aarch64-apple-darwin"), "darwin-aarch64")
   assert.equal(releaseTarget("x86_64-apple-darwin"), "darwin-x86_64")
-  assert.throws(() => releaseTarget("universal-apple-darwin"), /No single-architecture/)
-  assert.throws(() => releaseTarget("powerpc-apple-darwin"), /Unsupported/)
+  assert.equal(releaseTarget("x86_64-unknown-linux-gnu"), "linux-x86_64")
+  assert.throws(() => releaseTarget("universal-apple-darwin"), /No release is built/)
+  assert.throws(() => releaseTarget("aarch64-unknown-linux-gnu"), /No release is built/)
+  // A name inherited by every object is not a target either.
+  assert.throws(() => releaseTarget("toString"), /No release is built/)
 })
 
-test("both architectures publish under distinct names", () => {
-  // The bundler writes `Nessa.app.tar.gz` on both runners. A GitHub release has
-  // one flat namespace: published as built, the second upload would replace the
-  // first and one architecture would download the other's bytes, failing as a
-  // rejected signature on a user's machine rather than here.
-  const names = RELEASE_TARGETS.map((target) =>
-    updaterAssetName("Nessa", "0.1.0", target),
+test("every update artifact publishes under its own name and key", () => {
+  // The bundler writes `Nessa.app.tar.gz` on both macOS runners. A GitHub
+  // release has one flat namespace: published as built, the second upload
+  // would replace the first and one architecture would download the other's
+  // bytes, failing as a rejected signature on a user's machine rather than here.
+  const artifacts = RELEASE_TARGETS.flatMap((target) =>
+    updaterArtifacts("Nessa", "0.1.0", target),
   )
-  assert.deepEqual(names, [
-    "Nessa_0.1.0_darwin-aarch64.app.tar.gz",
-    "Nessa_0.1.0_darwin-x86_64.app.tar.gz",
-  ])
-  assert.equal(new Set(names).size, names.length)
   assert.deepEqual(
-    RELEASE_TARGETS.map((target) => diskImageAssetName("Nessa", "0.1.0", target)),
+    artifacts.map(({ key, published }) => [key, published]),
+    [
+      ["darwin-aarch64", "Nessa_0.1.0_darwin-aarch64.app.tar.gz"],
+      ["darwin-x86_64", "Nessa_0.1.0_darwin-x86_64.app.tar.gz"],
+      // The plugin looks for `{os}-{arch}-{installer}` first, so a .deb install
+      // is offered the .deb and an AppImage the AppImage.
+      ["linux-x86_64-deb", "Nessa_0.1.0_amd64.deb"],
+      ["linux-x86_64-appimage", "Nessa_0.1.0_amd64.AppImage"],
+    ],
+  )
+  assert.equal(new Set(artifacts.map(({ key }) => key)).size, artifacts.length)
+  const published = RELEASE_TARGETS.flatMap((target) =>
+    stagedAssets("Nessa", "0.1.0", target).map((asset) => asset.published),
+  )
+  assert.equal(new Set(published).size, published.length)
+  assert.deepEqual(
+    ["aarch64-apple-darwin", "x86_64-apple-darwin"].map((target) =>
+      diskImageAssetName("Nessa", "0.1.0", target),
+    ),
     ["Nessa_0.1.0_aarch64.dmg", "Nessa_0.1.0_x64.dmg"],
   )
 })
 
 test("staging reads the paths a targeted build actually writes", () => {
-  // `--target` puts the bundle under the triple, which is what `verify-bundle`
-  // reads `NESSA_BUILD_TARGET` for, and the disk image name is the bundler's
-  // own — `bundle-architecture.mjs` is the single source for that spelling.
+  // `--target` puts the bundle under the triple, which is what the bundle
+  // verifiers read `NESSA_BUILD_TARGET` for, and the package names are the
+  // bundler's own — `bundle-architecture.mjs` is the single source for them.
   assert.equal(
     bundleDirectory("aarch64-apple-darwin"),
     "target/aarch64-apple-darwin/release/bundle",
@@ -90,6 +119,24 @@ test("staging reads the paths a targeted build actually writes", () => {
       published: "Nessa_0.1.0_x64.dmg",
     },
   ])
+  // On Linux the packages are both what an update installs and what a person
+  // downloads, so there is nothing else to stage.
+  const linux = "target/x86_64-unknown-linux-gnu/release/bundle"
+  assert.deepEqual(stagedAssets("Nessa", "0.1.0", "x86_64-unknown-linux-gnu"), [
+    { built: `${linux}/deb/Nessa_0.1.0_amd64.deb`, published: "Nessa_0.1.0_amd64.deb" },
+    {
+      built: `${linux}/deb/Nessa_0.1.0_amd64.deb.sig`,
+      published: "Nessa_0.1.0_amd64.deb.sig",
+    },
+    {
+      built: `${linux}/appimage/Nessa_0.1.0_amd64.AppImage`,
+      published: "Nessa_0.1.0_amd64.AppImage",
+    },
+    {
+      built: `${linux}/appimage/Nessa_0.1.0_amd64.AppImage.sig`,
+      published: "Nessa_0.1.0_amd64.AppImage.sig",
+    },
+  ])
 })
 
 test("artifact URLs point at the release the tag creates", () => {
@@ -103,50 +150,63 @@ test("artifact URLs point at the release the tag creates", () => {
   )
 })
 
-test("one manifest describes both architectures", () => {
+test("one manifest describes every architecture and package format", () => {
   const manifest = releaseUpdaterManifest({
     productName: "Nessa",
     version: "0.1.0",
     tag: "v0.1.0",
     repository: "nessalabs/nessa-agent",
     targets: RELEASE_TARGETS,
-    signatures: {
-      "darwin-aarch64": signature("apple silicon"),
-      "darwin-x86_64": signature("intel"),
-    },
+    signatures: signaturesFor(RELEASE_TARGETS),
     notes: "Nessa 0.1.0",
     published: "2026-09-18T12:00:00.000Z",
   })
-  assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64", "darwin-x86_64"])
+  assert.deepEqual(Object.keys(manifest.platforms), [
+    "darwin-aarch64",
+    "darwin-x86_64",
+    "linux-x86_64-deb",
+    "linux-x86_64-appimage",
+  ])
   assert.equal(manifest.version, "0.1.0")
   assert.equal(new Date(manifest.pub_date).toISOString(), manifest.pub_date)
   assert.equal(
     manifest.platforms["darwin-x86_64"].url,
     "https://github.com/nessalabs/nessa-agent/releases/download/v0.1.0/Nessa_0.1.0_darwin-x86_64.app.tar.gz",
   )
-  // Each key must carry its own architecture's signature. Crossed entries
-  // verify nowhere and are indistinguishable from a corrupt download.
-  assert.notEqual(
-    manifest.platforms["darwin-aarch64"].signature,
-    manifest.platforms["darwin-x86_64"].signature,
+  assert.equal(
+    manifest.platforms["linux-x86_64-deb"].url,
+    "https://github.com/nessalabs/nessa-agent/releases/download/v0.1.0/Nessa_0.1.0_amd64.deb",
   )
+  // Each key must carry its own artifact's signature. Crossed entries verify
+  // nowhere and are indistinguishable from a corrupt download.
+  for (const [key, entry] of Object.entries(manifest.platforms))
+    assert.equal(entry.signature, signature(key))
 })
 
-test("a missing architecture stops the manifest rather than shrinking it", () => {
+test("a missing architecture or format stops the manifest rather than shrinking it", () => {
   // The failure this exists for: one runner's build fails, the release is
-  // assembled from what arrived, and everyone on the missing architecture is
-  // told they are up to date forever.
+  // assembled from what arrived, and everyone on the missing platform is told
+  // they are up to date forever.
+  const release = {
+    productName: "Nessa",
+    version: "0.1.0",
+    tag: "v0.1.0",
+    repository: "nessalabs/nessa-agent",
+    targets: RELEASE_TARGETS,
+  }
+  const withoutIntel = signaturesFor(RELEASE_TARGETS)
+  delete withoutIntel["darwin-x86_64"]
   assert.throws(
-    () =>
-      releasePlatforms({
-        productName: "Nessa",
-        version: "0.1.0",
-        tag: "v0.1.0",
-        repository: "nessalabs/nessa-agent",
-        targets: RELEASE_TARGETS,
-        signatures: { "darwin-aarch64": signature("apple silicon") },
-      }),
+    () => releasePlatforms({ ...release, signatures: withoutIntel }),
     /No signature for darwin-x86_64/,
+  )
+  // One Linux format is not the Linux release: AppImage installs would be told
+  // they are current while .deb installs update.
+  const withoutAppImage = signaturesFor(RELEASE_TARGETS)
+  delete withoutAppImage["linux-x86_64-appimage"]
+  assert.throws(
+    () => releasePlatforms({ ...release, signatures: withoutAppImage }),
+    /No signature for linux-x86_64-appimage/,
   )
 })
 
@@ -224,9 +284,18 @@ test("a signature this release process actually produces is accepted", () => {
 test("published names follow the shipped product and version", () => {
   // Read from the config the app itself reports, so a release cannot name its
   // assets one version while the bundle inside them reports another.
-  assert.equal(
-    updaterAssetName(config.productName, config.version, "aarch64-apple-darwin"),
-    `Nessa_${config.version}_darwin-aarch64.app.tar.gz`,
+  assert.deepEqual(
+    RELEASE_TARGETS.flatMap((target) =>
+      updaterArtifacts(config.productName, config.version, target).map(
+        ({ published }) => published,
+      ),
+    ),
+    [
+      `Nessa_${config.version}_darwin-aarch64.app.tar.gz`,
+      `Nessa_${config.version}_darwin-x86_64.app.tar.gz`,
+      `Nessa_${config.version}_amd64.deb`,
+      `Nessa_${config.version}_amd64.AppImage`,
+    ],
   )
   assert.equal(config.bundle.createUpdaterArtifacts, true)
 })

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
-import { bundleArchitecture, includesDiskImage } from "./bundle-architecture.mjs"
+import {
+  bundleArchitecture,
+  includesBundle,
+  linuxBundleArchitecture,
+  linuxBundles,
+} from "./bundle-architecture.mjs"
 import { parseBuildArguments, runDesktopBuild } from "./build-command.mjs"
 
 const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
@@ -68,12 +73,28 @@ test("native bundle verification selects Intel, Apple Silicon, and universal ima
   assert.throws(() => bundleArchitecture("powerpc-apple-darwin", "x64"), /Unsupported/)
 })
 
-test("disk image verification follows explicit bundles or the authoritative default", () => {
+test("Linux package verification reads the names the bundler writes", () => {
+  assert.equal(linuxBundleArchitecture("x86_64-unknown-linux-gnu", "arm64"), "amd64")
+  assert.equal(linuxBundleArchitecture(undefined, "x64"), "amd64")
+  assert.throws(
+    () => linuxBundleArchitecture("aarch64-unknown-linux-gnu", "x64"),
+    /Unsupported/,
+  )
+  assert.throws(() => linuxBundleArchitecture(undefined, "arm64"), /Unsupported/)
+  assert.deepEqual(linuxBundles("Nessa", "0.1.0", "amd64"), {
+    deb: "deb/Nessa_0.1.0_amd64.deb",
+    appimage: "appimage/Nessa_0.1.0_amd64.AppImage",
+  })
+})
+
+test("bundle verification follows explicit bundles or the authoritative default", () => {
   assert.equal(config.bundle.targets, "all")
-  assert.equal(includesDiskImage(undefined, config.bundle.targets), true)
-  assert.equal(includesDiskImage("app", config.bundle.targets), false)
-  assert.equal(includesDiskImage("app,dmg", config.bundle.targets), true)
-  assert.equal(includesDiskImage("all", ["app"]), true)
+  assert.equal(includesBundle(undefined, config.bundle.targets, "dmg"), true)
+  assert.equal(includesBundle("app", config.bundle.targets, "dmg"), false)
+  assert.equal(includesBundle("app,dmg", config.bundle.targets, "dmg"), true)
+  assert.equal(includesBundle("all", ["app"], "dmg"), true)
+  assert.equal(includesBundle("deb,appimage", config.bundle.targets, "appimage"), true)
+  assert.equal(includesBundle("deb", config.bundle.targets, "appimage"), false)
 })
 
 test("the public desktop build command verifies the final bundle", () => {
@@ -194,7 +215,7 @@ test("equal-form build arguments reach final verification unchanged", () => {
   // leaving the image itself without a ticket for the verification to find.
   assert.equal(calls.length, 3)
   assert.deepEqual(calls[1].args, ["scripts/desktop/notarize-disk-image.mjs"])
-  assert.deepEqual(calls[2].args, ["scripts/desktop/verify-bundle.mjs"])
+  assert.deepEqual(calls[2].args, ["scripts/desktop/verify-macos-bundle.mjs"])
   for (const call of calls.slice(1)) {
     assert.equal(call.options.env.NESSA_BUILD_TARGET, "aarch64-apple-darwin")
     assert.equal(call.options.env.NESSA_BUILD_BUNDLES, "app,dmg")
@@ -217,9 +238,27 @@ test("a failed staple stops the build before verification", () => {
   })
   assert.equal(status, 1)
   assert.ok(
-    !calls.some((call) => call.includes("verify-bundle")),
+    !calls.some((call) => call.includes("verify-macos-bundle")),
     "the bundle was verified although its disk image had no ticket",
   )
+})
+
+test("a Linux build verifies its packages and staples nothing", () => {
+  const calls = []
+  const status = runDesktopBuild({
+    args: ["--target", "x86_64-unknown-linux-gnu", "--bundles", "deb,appimage"],
+    environment: {},
+    platform: "linux",
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(status, 0)
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[1].args, ["scripts/desktop/verify-linux-bundle.mjs"])
+  assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, "x86_64-unknown-linux-gnu")
+  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "deb,appimage")
 })
 
 test("verification does not inherit artifact selectors without matching arguments", () => {
@@ -259,7 +298,7 @@ test("runtime preparation assembles supported POSIX resources without enabling W
       platform: "linux",
       loadLinuxRuntime: async () => () => loaded.push("linux"),
     }),
-    { managedGateway: false },
+    { managedGateway: true },
   )
   assert.deepEqual(
     await prepareDesktopRuntime({

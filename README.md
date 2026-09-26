@@ -145,7 +145,7 @@ pins `stable`, so `just dev` and `cargo test` pick it without an extra env var.
 Build packages on Debian/Ubuntu:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
+bash scripts/desktop/install-linux-build-deps.sh
 ```
 
 Then `just dev`. The Linux recipe refuses to start the desktop app if those

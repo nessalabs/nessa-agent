@@ -107,8 +107,9 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
  * `true` leaves the AppImage as it is, and `"v1Compatible"` also archives it.
  * The plugin installs either — it extracts the AppImage when the bytes are gzip
  * and writes them straight out when they are not — so the harness looks for
- * both rather than deciding which setting the build was made under. This
- * repository ships macOS only, so neither is exercised by a release here.
+ * both rather than deciding which setting the build was made under. A release
+ * publishes the AppImage as it is (`release-assets.mjs`), beside the `.deb`,
+ * which this harness does not serve.
  */
 export function defaultArtifacts(platform, version, targetDirectory = "target") {
   const artifacts = {

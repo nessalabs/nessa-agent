@@ -143,7 +143,7 @@ dev:
     fi
     if ! pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
       echo "Linux native deps missing. On Debian/Ubuntu:"
-      echo "  sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot"
+      echo "  bash scripts/desktop/install-linux-build-deps.sh"
       exit 1
     fi
     if [[ -z "${WEBKIT_DISABLE_DMABUF_RENDERER:-}" && ! -e /dev/dri/card0 && ! -e /dev/dri/renderD128 ]]; then

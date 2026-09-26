@@ -74,25 +74,31 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   const build = spawn(pnpm, command, { env: buildEnvironment, stdio: "inherit" })
   if (build.error) throw build.error
   if (build.status !== 0) return build.status ?? 1
-  if (platform !== "darwin") return 0
+  if (platform !== "darwin" && platform !== "linux") return 0
 
   const verificationEnvironment = { ...buildEnvironment }
   delete verificationEnvironment.NESSA_BUILD_TARGET
   delete verificationEnvironment.NESSA_BUILD_BUNDLES
   if (target) verificationEnvironment.NESSA_BUILD_TARGET = target
   if (bundles) verificationEnvironment.NESSA_BUILD_BUNDLES = bundles
-  // Between the build and the verification, because the bundler notarizes the
-  // app and then builds the disk image around it: the image itself has no
-  // ticket, and it is the artifact a person downloads. Does nothing when the
-  // build did not notarize, or produced no disk image.
-  const staple = spawn("node", ["scripts/desktop/notarize-disk-image.mjs"], {
-    env: verificationEnvironment,
-    stdio: "inherit",
-  })
-  if (staple.error) throw staple.error
-  if (staple.status !== 0) return staple.status ?? 1
+  if (platform === "darwin") {
+    // Between the build and the verification, because the bundler notarizes
+    // the app and then builds the disk image around it: the image itself has
+    // no ticket, and it is the artifact a person downloads. Does nothing when
+    // the build did not notarize, or produced no disk image.
+    const staple = spawn("node", ["scripts/desktop/notarize-disk-image.mjs"], {
+      env: verificationEnvironment,
+      stdio: "inherit",
+    })
+    if (staple.error) throw staple.error
+    if (staple.status !== 0) return staple.status ?? 1
+  }
 
-  const verify = spawn("node", ["scripts/desktop/verify-bundle.mjs"], {
+  const verifier = {
+    darwin: "scripts/desktop/verify-macos-bundle.mjs",
+    linux: "scripts/desktop/verify-linux-bundle.mjs",
+  }[platform]
+  const verify = spawn("node", [verifier], {
     env: verificationEnvironment,
     stdio: "inherit",
   })

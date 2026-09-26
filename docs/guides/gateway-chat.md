@@ -898,6 +898,35 @@ namespaces still apply). Custom user-supplied MCP servers are not packaged.
 
 `pnpm app:build --bundles dmg` prepares the complete runtime, builds the disk
 image, and verifies the final packaged runtime before returning success.
+
+## Installed Linux runtime
+
+Releases ship x86_64 Linux as a `.deb` (Debian, and Ubuntu 22.04 or later) and
+an AppImage. Both carry the same runtime as the macOS bundle, under
+`usr/lib/Nessa/runtime`. The `.deb` declares WebKitGTK and the tray's
+`libayatana-appindicator3-1`; the AppImage carries its libraries, but not glibc,
+so it needs one at least as new as Ubuntu 22.04's.
+
+Staging works as on macOS, with XDG locations in place of `Application Support`:
+the runtime is copied to
+`$XDG_DATA_HOME/nessa/gateway-runtimes/<unit>/<fingerprint>/` (by default
+`~/.local/share`), so the service never runs from the package or from an
+AppImage's temporary mount. The gateway is the systemd **user** unit
+`nessa-gateway-prod.service` in `$XDG_CONFIG_HOME/systemd/user`, enabled for
+`default.target`, and its lifecycle journal lives under `$XDG_STATE_HOME/nessa`.
+Admission, recovery, and the inactive-unit cases are described in
+[the Linux plan](../todo/desktop-linux-windows-plan.md#4-linux).
+
+The unit runs while its user is signed in: systemd starts it at login and stops
+it with the user's manager after a full logout. Keeping it running while logged
+out needs linger, which Nessa does not enable
+([#217](https://github.com/nessalabs/nessa-agent/issues/217) tracks offering it).
+
+Updates install the same kind of package the app was installed as: a `.deb`
+install is updated through `pkexec dpkg -i`, which asks for an administrator's
+password, and an AppImage replaces its own file. `pnpm app:build --bundles
+deb,appimage` builds both and verifies the runtime inside each before
+returning success.
 The preparation script verifies the official Node archive against its release
 checksum and installs the ACP harness from its lockfile. Packaging currently targets
 native macOS architecture and requires macOS 13.5 or newer at runtime.

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import test from "node:test"
+import { RELEASE_TARGETS } from "./release-assets.mjs"
 
 test("local-auth integration harness is locked to its declared tools", () => {
   const manifest = JSON.parse(
@@ -68,16 +69,34 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   assert.match(workflow, /npm ci --ignore-scripts/)
 })
 
-test("the existing Linux matrix leg uniquely owns real runtime assembly", () => {
+test("the existing Linux matrix leg uniquely owns direct runtime assembly", () => {
   const workflow = readFileSync(".github/workflows/local-auth.yml", "utf8")
   assert.equal(workflow.match(/run: node scripts\/desktop\/prepare\.mjs/g)?.length, 1)
   assert.match(
     workflow,
     /name: Assemble the Linux desktop runtime\s+if: runner\.os == 'Linux'\s+run: node scripts\/desktop\/prepare\.mjs/,
   )
+  // The release assembles the runtime only inside the bundle build, through
+  // the config's beforeBuildCommand, so what it verifies is what it packaged.
   const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8")
-  assert.doesNotMatch(releaseWorkflow, /target: x86_64-unknown-linux-gnu/)
-  assert.doesNotMatch(releaseWorkflow, /updater-target: linux-/)
+  assert.doesNotMatch(releaseWorkflow, /scripts\/desktop\/prepare\.mjs/)
+  assert.match(
+    releaseWorkflow,
+    /target: x86_64-unknown-linux-gnu\s+updater-target: linux-x86_64\s+bundles: deb,appimage/,
+  )
+  assert.match(
+    releaseWorkflow,
+    /run: pnpm app:build --target \$\{\{ matrix\.target \}\} --bundles \$\{\{ matrix\.bundles \}\}/,
+  )
+})
+
+test("every Linux build installs the one list of host build dependencies", () => {
+  const install = "bash scripts/desktop/install-linux-build-deps.sh"
+  for (const name of ["local-auth.yml", "release.yml"]) {
+    const workflow = readFileSync(`.github/workflows/${name}`, "utf8")
+    assert.equal(workflow.split(install).length - 1, 1, `${name} installs its own list`)
+    assert.doesNotMatch(workflow, /apt-get install/, `${name} installs its own list`)
+  }
 })
 
 test("the existing Windows matrix leg uniquely owns the Task Scheduler model proof", () => {
@@ -324,18 +343,31 @@ test("nothing in a release is built or published before the key pairing gate", (
   assert.match(workflow, /needs: \[version, build\]/)
 })
 
-test("a release builds both macOS architectures and only macOS bundles", () => {
+test("a release builds every release target and only the bundles it publishes", () => {
   const workflow = readFileSync(".github/workflows/release.yml", "utf8")
-  // Separate runners, because prepare-macos.mjs cannot cross-compile and there
-  // is no universal build. Both must reach the same manifest.
-  for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin"])
-    assert.ok(workflow.includes(`target: ${target}`), `no release build for ${target}`)
-  // The shipped config says "all" and stays that way for local builds; a release
-  // narrows it, because a .deb or an NSIS installer would launch and then be
-  // unable to run an agent at all.
+  // One matrix row per target the manifest requires: a target built nowhere is
+  // a manifest that can never be written, and a row for a target the manifest
+  // does not know is a build whose output is thrown away. Separate runners,
+  // because neither prepare script cross-compiles and there is no universal
+  // build.
+  const rows = [
+    ...workflow.matchAll(/target: (\S+)\s+updater-target: \S+\s+bundles: (\S+)/g),
+  ]
+  assert.deepEqual(
+    rows.map(([, target]) => target),
+    RELEASE_TARGETS,
+  )
+  // The shipped config says "all" and stays that way for local builds; a
+  // release narrows it to what an update installs and a person downloads, so
+  // it cannot publish an installer for a platform with no gateway host.
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
   assert.equal(config.bundle.targets, "all")
-  assert.match(workflow, /--bundles app,dmg/)
+  for (const [, target, bundles] of rows)
+    assert.equal(
+      bundles,
+      target.endsWith("-apple-darwin") ? "app,dmg" : "deb,appimage",
+      `${target} builds bundles its release does not publish`,
+    )
 })
 
 test("a release is staged as a draft, never published by the workflow", () => {

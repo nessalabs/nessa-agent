@@ -1,11 +1,12 @@
-# Build, sign and stage a macOS release, then leave it as a draft for a person.
+# Build, sign and stage a macOS and Linux release, then leave it as a draft for
+# a person.
 #
 # Signing and notarization depend on the secrets being there. With APPLE_CERTIFICATE
 # and the App Store Connect key set, the CLI signs with a Developer ID identity,
 # submits the bundle to Apple and staples the ticket. With them absent it signs
 # ad-hoc (a "-" identity), and Gatekeeper then refuses the artifact on any machine
 # but the one that built it. Which of the two happened is not left to be guessed:
-# scripts/desktop/verify-bundle.mjs reads the built bundle and says so.
+# scripts/desktop/verify-macos-bundle.mjs reads the built bundle and says so.
 #
 # What v0.1.0 proved, in the order it failed: the tag resolves to a commit, the
 # versions agree, the updater key is the pair of the one in tauri.conf.json, the
@@ -18,23 +19,24 @@
 # agent actually running out of a downloaded bundle.
 #
 #   tag v* ──▶ version ──▶ updater-key ──┬─▶ build (macos-latest,    aarch64) ─┐
-#                                        └─▶ build (macos-15-intel, x86_64) ──┤
+#                                        ├─▶ build (macos-15-intel, x86_64) ──┤
+#                                        └─▶ build (ubuntu-22.04,   x86_64) ──┤
 #                                                                             ▼
 #                                                              release (draft)
 #                                                                latest.json
 #
 # Arrows are `needs`: nothing to the right starts until everything to its left
-# passed. The two builds converge because one `latest.json` has to describe both
-# architectures — `releases/latest/download/latest.json` is a single file, and an
-# architecture missing from it reports itself as up to date forever.
+# passed. The builds converge because one `latest.json` has to describe every
+# platform — `releases/latest/download/latest.json` is a single file, and a
+# platform missing from it reports itself as up to date forever.
 #
-# macOS only. The bundled gateway that actually runs an agent is macOS-only
-# (src-tauri/src/gateway/infrastructure/unsupported.rs) and Linux packaging is
-# an open TODO (docs/todo/linux-desktop-packaging.md). The shipped config's
+# macOS and x86_64 Linux: the platforms whose gateway host runs an agent
+# (launchd and a systemd user unit). Windows has no gateway host yet
+# (src-tauri/src/gateway/infrastructure/unsupported.rs). The shipped config's
 # bundle.targets stays "all" — scripts/desktop/config.test.mjs asserts it, and
 # it is what a contributor's local build should keep doing. This workflow narrows
-# it per build instead, with --bundles app,dmg, so a release cannot publish a
-# .deb or an NSIS installer that launches and then cannot run anything.
+# it per build instead, with each row's `bundles`, so a release publishes only
+# the packages an update can install and a person can run.
 name: Release
 run-name: Release ${{ inputs.tag || github.ref_name }}
 on:
@@ -175,6 +177,7 @@ jobs:
           - runner: macos-latest
             target: aarch64-apple-darwin
             updater-target: darwin-aarch64
+            bundles: app,dmg
           # The Intel runner, not an Intel-emulating one. `macos-13` is retired;
           # `macos-15-intel` is the current x86_64 image, and `macos-latest` is
           # Apple Silicon. If either ever changes architecture underneath us the
@@ -182,6 +185,15 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             updater-target: darwin-x86_64
+            bundles: app,dmg
+          # The oldest supported Ubuntu, not the newest: the app and the runtime
+          # binaries link the glibc they are built against, and a package built
+          # on 24.04 refuses to start on 22.04. The AppImage carries its
+          # libraries but not glibc, so the same holds for it.
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            updater-target: linux-x86_64
+            bundles: deb,appimage
     runs-on: ${{ matrix.runner }}
     env:
       # Produces the .app.tar.gz and its .sig alongside the bundle. Without it
@@ -237,6 +249,7 @@ jobs:
       # removed after the build whatever the build did: a private key left on a
       # runner outlives the job's usefulness.
       - name: Choose what this build signs with
+        if: runner.os == 'macOS'
         run: node scripts/desktop/apple-credentials.mjs
       # The bundler imports the certificate when it signs the *app*, which is
       # after `beforeBuildCommand` has assembled and signed the runtime tree.
@@ -245,23 +258,30 @@ jobs:
       # Apple's notary service rejected v0.1.0 for exactly that, three errors
       # per binary. Dormant when there is no certificate to import.
       - name: Import the Developer ID certificate
+        if: runner.os == 'macOS'
         run: node scripts/desktop/import-certificate.mjs
+      # The same list `local-auth` compiles and tests the host against. Linux
+      # has no code signing; the updater signature is TAURI_SIGNING_PRIVATE_KEY,
+      # as on macOS.
+      - name: Install the desktop host's Linux build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/desktop/install-linux-build-deps.sh
       # --target is passed although it is always the runner's own architecture,
-      # and that is the point: scripts/desktop/prepare-macos.mjs refuses a triple
-      # that is not the host's, so if a runner image ever changes architecture
-      # under us this fails loudly instead of publishing a bundle labelled with
-      # the wrong one. It is also why there is no universal build — that script
-      # cannot produce one.
+      # and that is the point: prepare-macos.mjs and prepare-linux.mjs refuse a
+      # triple that is not the host's, so if a runner image ever changes
+      # architecture under us this fails loudly instead of publishing a bundle
+      # labelled with the wrong one. It is also why there is no universal build —
+      # that script cannot produce one.
       #
-      # --bundles app,dmg narrows the config's "all" to the two macOS outputs a
-      # release has any use for: `app`, which is what createUpdaterArtifacts
-      # archives into the .app.tar.gz an update installs, and `dmg`, which is
-      # what a person downloads. It also keeps .deb/NSIS out of a release they
-      # would be unrunnable in.
+      # --bundles narrows the config's "all" to the outputs a release has any
+      # use for. On macOS: `app`, which createUpdaterArtifacts archives into the
+      # .app.tar.gz an update installs, and `dmg`, which is what a person
+      # downloads. On Linux: the .deb and the AppImage, each both what a person
+      # downloads and what an update of that kind of install installs.
       - name: Build, sign and verify the bundle
-        run: pnpm app:build --target ${{ matrix.target }} --bundles app,dmg
+        run: pnpm app:build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
       - name: Remove the App Store Connect key and the signing keychain
-        if: always()
+        if: always() && runner.os == 'macOS'
         run: |
           rm -f "$APPLE_API_KEY_FILE"
           # Unset unless the import step ran and had something to import. The
@@ -269,8 +289,8 @@ jobs:
           if [ -n "${NESSA_SIGNING_KEYCHAIN:-}" ]; then
             security delete-keychain "$NESSA_SIGNING_KEYCHAIN" || true
           fi
-      # Both runners' bundlers write the identical name Nessa.app.tar.gz. A
-      # release has one flat asset namespace, so they are renamed to the names
+      # Both macOS runners' bundlers write the identical name Nessa.app.tar.gz.
+      # A release has one flat asset namespace, so they are renamed to the names
       # the manifest will point at before they leave the runner.
       - name: Stage the published assets
         run: node scripts/desktop/release-assets.mjs stage --target ${{ matrix.target }} --into release-staging
@@ -294,12 +314,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      # Both architectures land in one directory. `needs: build` already means
-      # neither is missing; the manifest step checks again anyway, because the
+      # Every platform lands in one directory. `needs: build` already means
+      # none is missing; the manifest step checks again anyway, because the
       # thing it is preventing is invisible after the fact.
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-darwin-*
+          pattern: release-*
           path: release-assets
           merge-multiple: true
       - name: Write the updater manifest
@@ -330,14 +350,17 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes.md <<'END'
-          Nessa for macOS, Apple Silicon and Intel.
+          Nessa for macOS (Apple Silicon and Intel) and x86_64 Linux (.deb for
+          Debian and Ubuntu 22.04 or later, AppImage elsewhere).
 
-          Whether these artifacts are notarized is decided by the repository's
-          secrets, so it is stated by the build rather than promised here: the
-          "Choose what this build signs with" step in each build's log says
-          which of the two happened, and `verify-bundle.mjs` checks the ticket
-          is stapled when it was. A bundle that is only signed ad-hoc is one
-          Gatekeeper refuses on any machine but the one that built it.
+          Whether the macOS artifacts are notarized is decided by the
+          repository's secrets, so it is stated by the build rather than
+          promised here: the "Choose what this build signs with" step in each
+          macOS build's log says which of the two happened, and
+          `verify-macos-bundle.mjs` checks the ticket is stapled when it was. A
+          bundle that is only signed ad-hoc is one Gatekeeper refuses on any
+          machine but the one that built it. Linux packages are not code-signed;
+          like every update, they are checked against the updater key.
 
           `latest.json` is the updater manifest. It only reaches installed apps
           once this release is published and is the newest non-prerelease.
@@ -388,4 +411,6 @@ jobs:
             echo "  ad-hoc bundle is refused by Gatekeeper everywhere but its own runner."
             echo "- Open the disk image on a clean machine and check the app launches."
             echo "- Check an agent actually runs, not only that the window appears."
+            echo "- On Ubuntu, install the .deb, chat, quit, reopen, log out and back in,"
+            echo "  and chat again."
           } >> "$GITHUB_STEP_SUMMARY"

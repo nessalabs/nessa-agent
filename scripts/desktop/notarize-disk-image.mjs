@@ -13,7 +13,7 @@
  *                                                          │
  *   this file ────────────────────────────────────────────▶├─▶ .dmg notarized
  *                                                          │   + stapled
- *   verify-bundle.mjs ─────────────────────────────────────┴─▶ both validated
+ *   verify-macos-bundle.mjs ───────────────────────────────┴─▶ both validated
  *
  * Submitting a second time is not a waste: a ticket is issued for the artifact
  * submitted, and the disk image is a different artifact from the app inside it.
@@ -26,7 +26,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { bundleArchitecture, includesDiskImage } from "./bundle-architecture.mjs"
+import { bundleArchitecture, includesBundle } from "./bundle-architecture.mjs"
 
 /**
  * The `notarytool submit` arguments for a disk image.
@@ -73,7 +73,7 @@ export function submissionArguments(diskImage, { keyPath, keyId, issuer }) {
 export function diskImageToNotarize({ environment, root, architecture }) {
   if (!environment.APPLE_API_KEY?.trim()) return undefined
   const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json")))
-  if (!includesDiskImage(environment.NESSA_BUILD_BUNDLES, config.bundle.targets))
+  if (!includesBundle(environment.NESSA_BUILD_BUNDLES, config.bundle.targets, "dmg"))
     return undefined
   const target = environment.NESSA_BUILD_TARGET
   const metadata = JSON.parse(
