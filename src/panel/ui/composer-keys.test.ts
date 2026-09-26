@@ -155,6 +155,10 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
+// The eight renders are the regression itself: #107 leaked one retained
+// subtree per render, so fewer renders would test less. Mounting the real
+// panel that many times takes 0.6–3 s, and up to 6.3 s in a loaded full run,
+// past vitest's 5 s default; this test's own timeout covers that.
 it("keeps one queue chip in its conversation across repeated renders and tab switches", async () => {
   queue("c0", 2, "r1")
 
@@ -185,4 +189,4 @@ it("keeps one queue chip in its conversation across repeated renders and tab swi
   })
   expect(chips()).toHaveLength(1)
   expect(chips()[0]?.textContent).toBe("Queued 2")
-})
+}, 20_000)
