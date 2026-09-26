@@ -466,12 +466,16 @@ function Invoke-RunAttemptObservation {
         [int] $ExpectedPid = 0,
         $Accepted = $null,
         $Snapshot = $null,
+        [switch] $CompleteAcceptance,
         [switch] $Final
     )
     $null = Update-RunAttemptObservation -Observation $Observation -Instances $Instances -ExpectedPath $ExpectedPath -ExpectedActionId $ExpectedActionId -ExpectedGuid $ExpectedGuid -ExpectedPid $ExpectedPid
     if ($Final) {
         if ($Instances.Count -ne 1) { $Observation.Rejections.Add('final observation was not a singleton') }
         elseif ($null -eq $Accepted -or $null -eq $Snapshot) { $Observation.Rejections.Add('final observation omitted the complete accepted process vector') }
+        elseif ($CompleteAcceptance -and -not (Test-CompleteAgreement -Evidence $Accepted)) {
+            $Observation.Rejections.Add('final observation started from incomplete accepted evidence')
+        }
         elseif (-not (Test-StabilizedRunSnapshot -Accepted $Accepted -Snapshot $Snapshot)) {
             $Observation.Rejections.Add('final observation contradicted the complete accepted process vector')
         }
@@ -595,6 +599,12 @@ function Assert-LifecycleStateProbes {
     try { $null = Invoke-RunAttemptObservation -Observation $finalObservation -Instances @($contradictoryFinal) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42 -Final }
     catch { }
     if ($finalObservation.Rejections.Count -eq 0) { throw 'matching poll followed by a contradictory final snapshot was accepted' }
+    $omittedVectorObservation = New-RunAttemptObservation
+    try { $null = Invoke-RunAttemptObservation -Observation $omittedVectorObservation -Instances @($matchingInstance) -ExpectedPath '\planned\task' -ExpectedActionId 'planned-action' -ExpectedGuid 'planned-guid' -ExpectedPid 42 -Final }
+    catch { }
+    if ($omittedVectorObservation.Rejections -notcontains 'final observation omitted the complete accepted process vector') {
+        throw 'matching final observation omitted its complete process vector without rejection'
+    }
     $finalCleanupProbe = [pscustomobject]@{ StopCalls = 0 }
     $finalSettlement = Invoke-StopSettlement -StopEffect { $finalCleanupProbe.StopCalls++ } -ProcessesSettled { $true } -InstancesSettled { $true }
     if ($finalCleanupProbe.StopCalls -ne 1 -or $finalSettlement.Failures.Count -ne 0) { throw 'contradictory final snapshot did not stop and settle its exact owned task' }
@@ -1030,7 +1040,9 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         return $instances.Count -eq 1 -and [System.IO.File]::Exists($evidencePath)
     }
     $firstInstances = @(Get-TaskInstances -Task $ownedTask)
-    if ($firstInstances.Count -ne 1) { throw "first run exposed $($firstInstances.Count) instances" }
+    if ($firstInstances.Count -ne 1) {
+        $null = Invoke-RunAttemptObservation -Observation $firstRunObservation -Instances $firstInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstReturned.InstanceGuid) -Final
+    }
     $firstInstance = $firstInstances[0]
     $record = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
     $actionPid = [int]$record.pid
@@ -1062,7 +1074,13 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         AceFlags = [string]::Join('|', @($descriptorFacts.Aces | ForEach-Object { $_.Flags } | Sort-Object))
         ObjectAceCount = @($descriptorFacts.Aces | Where-Object { $_.IsObject }).Count; AceCount = $descriptorFacts.Aces.Count
     }
-    if (-not (Test-CompleteAgreement -Evidence $evidence)) { throw 'first running instance did not satisfy the complete identity, token, and ACL vector' }
+    $firstSnapshot = [pscustomobject]@{
+        InstanceCount = $evidence.InstanceCount; Path = $evidence.RunningTaskPath; CurrentAction = $evidence.CurrentAction
+        InstanceGuid = $evidence.InstanceGuid; EnginePid = $evidence.EnginePid; RunningState = $evidence.RunningState
+        ProcessExited = $evidence.EngineProcessExited; CreationTime = $evidence.PidBoundCreationTime; Sid = $evidence.PidBoundSid
+        Elevated = $evidence.PidBoundElevated; ElevationType = $evidence.PidBoundElevationType; IntegritySid = $evidence.PidBoundIntegritySid
+    }
+    $null = Invoke-RunAttemptObservation -Observation $firstRunObservation -Instances $firstInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstReturned.InstanceGuid) -Accepted $evidence -Snapshot $firstSnapshot -CompleteAcceptance -Final
     if ($firstReturned.InstanceGuid -ne $firstInstance.InstanceGuid) { throw 'Run return and enumerated singleton disagree on instance GUID' }
     Assert-NegativeEvidenceProbes -Accepted $evidence
 
@@ -1088,7 +1106,7 @@ while ($true) { Start-Sleep -Milliseconds 100 }
         ProcessExited = $secondProcessExited; CreationTime = $secondPidFacts.CreationTime; Sid = $secondPidFacts.Sid
         Elevated = $secondPidFacts.Elevated; ElevationType = $secondPidFacts.ElevationType; IntegritySid = $secondPidFacts.IntegritySid
     }
-    $null = Invoke-RunAttemptObservation -Observation $secondRunObservation -Instances $secondInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstInstance.InstanceGuid) -ExpectedPid ([int]$firstInstance.EnginePID) -Accepted $evidence -Snapshot $secondSnapshot -Final
+    $null = Invoke-RunAttemptObservation -Observation $secondRunObservation -Instances $secondInstances -ExpectedPath $taskPath -ExpectedActionId $actionId -ExpectedGuid ([string]$firstInstance.InstanceGuid) -ExpectedPid ([int]$firstInstance.EnginePID) -Accepted $evidence -Snapshot $secondSnapshot -CompleteAcceptance -Final
     if ($secondReturned.InstanceGuid -ne $firstInstance.InstanceGuid) { throw 'second Run did not return the original IgnoreNew instance' }
     if ([NessaWindowsProofNative]::ProcessHasExited($secondProcess)) { throw 'retained action process exited before proof completion' }
     Write-Host "Windows Task Scheduler model proved exact action PID $actionPid for $taskPath"

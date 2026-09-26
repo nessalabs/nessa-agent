@@ -154,6 +154,10 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   )
   assert.match(
     script,
+    /Invoke-RunAttemptObservation -Observation \$firstRunObservation -Instances \$firstInstances[^\r\n]+-Snapshot \$firstSnapshot -CompleteAcceptance -Final/,
+  )
+  assert.match(
+    script,
     /Invoke-RunAttemptObservation -Observation \$secondRunObservation -Instances \$instances/,
   )
   assert.match(
@@ -163,6 +167,10 @@ test("the Windows scheduler proof binds identity and cleanup to one exact owned 
   assert.match(script, /first run 2 to 1/)
   assert.match(script, /second run contradiction to match/)
   assert.match(script, /matching poll followed by a contradictory final snapshot/)
+  assert.match(
+    script,
+    /matching final observation omitted its complete process vector without rejection/,
+  )
   assert.match(script, /retained action process exited before proof completion/)
   assert.match(script, /Invoke-StopSettlement/)
   assert.match(script, /Invoke-DeleteSettlement/)
