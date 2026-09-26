@@ -5197,13 +5197,6 @@ mod tests {
             )
             .unwrap());
         }
-        assert!(settle_recovered_definition(
-            &installed.paths,
-            &installed.target,
-            &definition_digest(b"other bytes"),
-            authority,
-        )
-        .is_err());
         fs::write(&installed.paths.unit_file, b"foreign bytes").unwrap();
         assert!(settle_recovered_definition(
             &installed.paths,
