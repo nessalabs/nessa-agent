@@ -116,22 +116,15 @@ export function updaterArtifacts(productName, version, target) {
     ]
   // The bundler already names Linux packages per version and architecture, so
   // each is published under the name it wrote. Derived from the row's bundles,
-  // so the table is the one place that says what a Linux release builds; a
-  // bundle with no update format here (an AppImage) cannot be listed.
+  // so the table is the one place that says what a Linux release builds.
   const packages = linuxBundles(productName, version, linuxBundleArchitecture(target))
-  const releasable = { deb: packages.deb }
   return releaseBundles(target)
     .split(",")
-    .map((bundle) => {
-      if (!Object.hasOwn(releasable, bundle))
-        throw new Error(`A Linux release cannot publish the ${bundle} bundle`)
-      const built = releasable[bundle]
-      return {
-        key: `${key}-${bundle}`,
-        built: `${directory}/${built}`,
-        published: basename(built),
-      }
-    })
+    .map((bundle) => ({
+      key: `${key}-${bundle}`,
+      built: `${directory}/${packages[bundle]}`,
+      published: basename(packages[bundle]),
+    }))
 }
 
 /** The disk image's published name.
