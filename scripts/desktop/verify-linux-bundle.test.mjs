@@ -1,11 +1,19 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import {
   REQUIRED_DEB_PACKAGES,
   builtPackage,
+  packageBuiltIn,
   carriesIndicatorLibrary,
   dependencyClauses,
   missingDependencies,
@@ -127,4 +135,24 @@ test("the package checked is the one this build wrote, whatever its version", ()
       ),
     /found Nessa_0.1.0_amd64.deb, Nessa_0.0.1_amd64.deb/,
   )
+})
+
+test("the package is found in the bundle's own directory for the pattern", () => {
+  const bundle = mkdtempSync(join(tmpdir(), "nessa-built-"))
+  try {
+    mkdirSync(join(bundle, "deb/Nessa_0.1.0_amd64"), { recursive: true })
+    const old = join(bundle, "deb/Nessa_0.1.0_amd64.deb")
+    writeFileSync(old, "old")
+    utimesSync(old, new Date(1_000_000_000_000), new Date(1_000_000_000_000))
+    writeFileSync(join(bundle, "deb/Nessa_0.0.1_amd64.deb"), "new")
+    writeFileSync(join(bundle, "deb/Nessa_0.0.1_amd64.deb.sig"), "sig")
+    // Not a candidate, so never examined: a dangling link cannot fail the check.
+    symlinkSync("absent", join(bundle, "deb/unrelated"))
+    assert.equal(
+      packageBuiltIn(bundle, "deb/Nessa_*_amd64.deb", 1_500_000_000_000),
+      join(bundle, "deb/Nessa_0.0.1_amd64.deb"),
+    )
+  } finally {
+    rmSync(bundle, { recursive: true, force: true })
+  }
 })

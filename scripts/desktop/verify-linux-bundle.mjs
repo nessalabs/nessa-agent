@@ -104,13 +104,15 @@ export function builtPackage(entries, { prefix, suffix, startedAt }) {
   return built[0].name
 }
 
-function packageBuiltIn(bundle, pattern, startedAt) {
+/** The package this build wrote under `bundle`, for a `linuxBundles` pattern
+ * whose version is `*`. Only names that could be the package are examined, so
+ * an unrelated entry that vanishes mid-listing cannot fail the check. */
+export function packageBuiltIn(bundle, pattern, startedAt) {
   const directory = resolve(bundle, dirname(pattern))
   const [prefix, suffix] = basename(pattern).split("*")
-  const entries = readdirSync(directory).map((name) => ({
-    name,
-    modified: statSync(join(directory, name)).mtimeMs,
-  }))
+  const entries = readdirSync(directory)
+    .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
+    .map((name) => ({ name, modified: statSync(join(directory, name)).mtimeMs }))
   return join(directory, builtPackage(entries, { prefix, suffix, startedAt }))
 }
 
@@ -176,6 +178,10 @@ function main() {
     linuxBundleArchitecture(target, process.arch),
   )
   const startedAt = Number(process.env.NESSA_BUILD_STARTED ?? 0)
+  if (!Number.isFinite(startedAt))
+    throw new Error(
+      `NESSA_BUILD_STARTED is not a time: ${process.env.NESSA_BUILD_STARTED}`,
+    )
   const selected = process.env.NESSA_BUILD_BUNDLES
   const product = { productName: config.productName }
   if (includesBundle(selected, config.bundle.targets, "deb"))
