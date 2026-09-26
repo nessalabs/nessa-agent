@@ -1,5 +1,7 @@
 //! Private local storage shared by native adapters. No authentication policy lives here.
-//! Existing unsafe files are rejected, never silently repaired.
+//! Existing unsafe files are rejected, never silently repaired. The one exception
+//! is [`find_shared_read`]: an object only its owner can write, but others can
+//! read, may be tightened by a caller that records the change first (ADR 221).
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
@@ -7,6 +9,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 mod retained_directory;
+mod shared_read;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -28,6 +31,7 @@ pub use retained_directory::{
     PrivateFileIdentity, PrivateFileType, PrivatePublicationFailure, PrivatePublicationStage,
     PublishedPrivateFile,
 };
+pub use shared_read::{find_shared_read, SharedReadCandidate, SharedReadKind};
 // One owner: a temporary file is published by the type that reserved it, so
 // that nothing can publish a name it did not create privately first.
 pub(crate) use platform::publish_new;
@@ -729,6 +733,76 @@ mod tests {
         assert!(remove_file_beneath(&root, Path::new("../outside/keep")).is_err());
         assert!(remove_file_beneath(&root, Path::new("")).is_err());
         assert!(treasure.exists());
+    }
+
+    /// ADR 221's repair table, one row at a time: only an object its owner
+    /// alone can write is ever tightened, and only when the caller asks.
+    #[cfg(unix)]
+    #[test]
+    fn only_shared_read_on_an_owned_object_is_repairable() {
+        let root = tempfile::tempdir().unwrap();
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let file = |name: &str, mode: u32| {
+            let path = root.path().join(name);
+            std::fs::write(&path, b"{}").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+
+        for mode in [0o644, 0o640, 0o604] {
+            let path = file(&format!("shared-{mode:o}"), mode);
+            let candidate = find_shared_read(&path, SharedReadKind::File)
+                .unwrap()
+                .expect("owner-only writes are repairable");
+            assert_eq!(
+                (candidate.mode_before(), candidate.mode_after()),
+                (mode, 0o600)
+            );
+            assert_eq!(mode_of(&path), mode, "finding changes nothing");
+            candidate.tighten().unwrap();
+            assert_eq!(mode_of(&path), 0o600);
+            open(&path, OpenMode::Read).unwrap();
+        }
+
+        let private = file("private", 0o600);
+        assert!(find_shared_read(&private, SharedReadKind::File)
+            .unwrap()
+            .is_none());
+
+        for mode in [0o664, 0o646, 0o666, 0o620] {
+            let path = file(&format!("writable-{mode:o}"), mode);
+            assert!(is_unsafe_file(
+                &find_shared_read(&path, SharedReadKind::File).unwrap_err()
+            ));
+            assert_eq!(mode_of(&path), mode);
+        }
+
+        let target = file("target", 0o644);
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(find_shared_read(&link, SharedReadKind::File).is_err());
+        let second_name = root.path().join("second-name");
+        std::fs::hard_link(&target, &second_name).unwrap();
+        assert!(find_shared_read(&target, SharedReadKind::File).is_err());
+        assert_eq!(mode_of(&target), 0o644);
+
+        let directory = root.path().join("shared-directory");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(find_shared_read(&directory, SharedReadKind::File).is_err());
+        let candidate = find_shared_read(&directory, SharedReadKind::Directory)
+            .unwrap()
+            .expect("an owner-only-writable directory is repairable");
+        candidate.tighten().unwrap();
+        assert_eq!(mode_of(&directory), 0o700);
+        verify_directory(&directory).unwrap();
+
+        let writable_directory = root.path().join("writable-directory");
+        std::fs::create_dir(&writable_directory).unwrap();
+        std::fs::set_permissions(&writable_directory, std::fs::Permissions::from_mode(0o775))
+            .unwrap();
+        assert!(find_shared_read(&writable_directory, SharedReadKind::Directory).is_err());
+        assert!(find_shared_read(&private, SharedReadKind::Directory).is_err());
     }
 
     #[cfg(unix)]

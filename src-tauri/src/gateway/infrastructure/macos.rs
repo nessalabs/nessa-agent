@@ -3,7 +3,7 @@ use crate::gateway::application::{
     GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
     GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
     GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-    ReconciliationHistoryFact,
+    ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
@@ -24,8 +24,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::Arc,
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 mod control;
@@ -33,10 +32,12 @@ mod generation;
 mod pruning;
 mod staging;
 mod startup;
+use super::retirement::{stop_allowed_after, StopAllowedBy};
 use control::{
-    classify, forward_recovery, health, launchctl, legacy_listener_pid, lock_namespace,
-    read_pending_retirement, read_retirement_evidence, retire, service_status, wait_fingerprint,
-    Health, InstallFailure, ManagedRuntime, Registration, ServiceState, ServiceStatus,
+    bounded_output, classify, forward_recovery, health, launchctl, legacy_listener_pid,
+    lock_namespace, read_pending_retirement, read_retirement_evidence, retire, service_status,
+    wait_fingerprint, Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    ServiceStatus, LAUNCHCTL_DEADLINE,
 };
 use generation::service_generation;
 use pruning::{prune_runtime, removable_runtime_names, retained_runtimes, RetainedRuntimes};
@@ -72,10 +73,20 @@ impl Launchctl for NativeLaunchctl {
         health(port)
     }
     fn bootstrap(&self, domain: &str, plist: &Path) -> std::io::Result<Output> {
-        Command::new("/bin/launchctl")
-            .args(["bootstrap", domain])
-            .arg(plist)
-            .output()
+        bounded_output(
+            Command::new("/bin/launchctl")
+                .args(["bootstrap", domain])
+                .arg(plist)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+            LAUNCHCTL_DEADLINE,
+        )
+        .map_err(|error| match error {
+            control::BoundedOutputError::Deadline(_) => {
+                std::io::Error::new(ErrorKind::TimedOut, error.to_string())
+            }
+            control::BoundedOutputError::Run(error) => std::io::Error::other(error),
+        })
     }
     fn bootout(&self, service: &str) -> Result<(), String> {
         launchctl(&["bootout", service])
@@ -613,17 +624,19 @@ fn matches_reconciled_gateway(
     )
 }
 
-#[cfg(test)]
-fn retire_then_unload(
+/// The unload plan a retirement's answer leads to (ADR 221), once the shared
+/// rule has recorded why the stop is allowed; otherwise the failure that ends
+/// the attempt with the old service preserved.
+fn unload_plan_after_retirement(
     progress: &dyn GatewayReconciliationProgress,
-    retire: impl FnOnce() -> Result<(), String>,
-    unload: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    retire()?;
-    progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
-    unload()?;
-    progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
-    Ok(())
+    service: &str,
+    retired: Result<(), control::RetirementFailure>,
+) -> Result<&'static str, RegisterFailure> {
+    match stop_allowed_after(progress, service, retired) {
+        Ok(StopAllowedBy::Retirement) => Ok("unload-stale-service"),
+        Ok(StopAllowedBy::RefusalDataMissing) => Ok("unload-unretirable-service"),
+        Err(failure) => Err(RegisterFailure::Physical(failure.to_string())),
+    }
 }
 
 fn publish_definition(
@@ -757,6 +770,21 @@ fn run_planned_effect<T>(
     run: impl FnOnce() -> Result<T, String>,
     observe: impl FnOnce() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
 ) -> Result<T, RegisterFailure> {
+    run_planned_effect_answering(progress, plan_id, effect, run, observe)?
+        .map_err(RegisterFailure::Physical)
+}
+
+/// [`run_planned_effect`] for a caller that decides from how the effect
+/// failed. The journal records the failure's text exactly as it does there;
+/// the typed failure is handed back instead of being flattened. The outer
+/// error is the journal's own.
+fn run_planned_effect_answering<T, E: Display>(
+    progress: &dyn GatewayReconciliationProgress,
+    plan_id: &str,
+    effect: LifecycleEffect,
+    run: impl FnOnce() -> Result<T, E>,
+    observe: impl FnOnce() -> Result<(Option<ReconciliationIncarnation>, bool), String>,
+) -> Result<Result<T, E>, RegisterFailure> {
     let step = LifecyclePlanStep::new("primary".into(), effect, LifecycleEffectPredicate::Always)
         .map_err(|error| RegisterFailure::Physical(error.to_string()))?;
     progress
@@ -765,7 +793,7 @@ fn run_planned_effect<T>(
     let result = run();
     let completion = match &result {
         Ok(_) => LifecycleCommandResult::Accepted,
-        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+        Err(error) => LifecycleCommandResult::Failed(error.to_string()),
     };
     if let Err(audit) = progress.effect_completed(plan_id, step.id(), &completion) {
         return Err(audit_after_physical(audit, &result));
@@ -781,7 +809,7 @@ fn run_planned_effect<T>(
     ) {
         return Err(audit_after_physical(audit, &result));
     }
-    result.map_err(RegisterFailure::Physical)
+    Ok(result)
 }
 
 /// What a declared cleanup did: removed its artifact, or found it absent.
@@ -1188,12 +1216,15 @@ fn bootstrap_service(
         )
         .map_err(RegisterFailure::Audit)?;
     let bootstrap = run_bootstrap(progress, || launchctl.bootstrap(domain, &artifacts.plist))
-        .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
+        .map_err(|error| {
+            if error.kind() == ErrorKind::TimedOut {
+                BootstrapFailure::Unfinished(error.to_string())
+            } else {
+                BootstrapFailure::CouldNotRun(error.to_string())
+            }
+        })
         .and_then(bootstrap_result);
-    let bootstrap_completion = match &bootstrap {
-        Ok(()) => LifecycleCommandResult::Accepted,
-        Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
-    };
+    let bootstrap_completion = bootstrap_completion(&bootstrap);
     if let Err(audit) = progress.effect_completed(
         "bootstrap-service",
         bootstrap_step.id(),
@@ -1493,6 +1524,7 @@ fn register(
             return Ok(gateway);
         }
         ServiceState::ManagedStale(running) => {
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             let old_definition = read_definition(&path)?;
             let old_data = old_definition
@@ -1513,7 +1545,7 @@ fn register(
                 .audit_identity()
                 .map_err(RegisterFailure::Audit)?,
             };
-            run_planned_effect(
+            let retired = run_planned_effect_answering(
                 progress,
                 "retire-current-runtime",
                 retirement.clone(),
@@ -1539,21 +1571,15 @@ fn register(
                     ))
                 },
             )?;
-            progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
-            unload_service(
-                progress,
-                launchctl,
-                &artifacts,
-                "unload-stale-service",
-                &service,
-                port,
-            )?;
+            let plan = unload_plan_after_retirement(progress, &service, retired)?;
+            unload_service(progress, launchctl, &artifacts, plan, &service, port)?;
             progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
         }
         ServiceState::LegacyExactService => {
             // This exact pre-upgrade registration has no retirement protocol.
             // SIGTERM cancels its active agents; never send it SIGUSR2.
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             unload_service(
                 progress,
@@ -1596,6 +1622,7 @@ fn register(
                     recorded.describe()
                 );
             }
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
             unload_service(
                 progress,
@@ -1665,6 +1692,7 @@ fn register(
                 ))
             },
         )?;
+        progress.step_started(StartupStep::Launching);
         bootstrap_service(
             progress,
             launchctl,
@@ -2050,13 +2078,32 @@ fn unreadable_process_identity() -> &'static str {
 #[derive(Debug, PartialEq, Eq)]
 enum BootstrapFailure {
     CouldNotRun(String),
-    Refused { status: Option<i32>, detail: String },
+    /// `launchctl bootstrap` was ended at its deadline (ADR 221). launchd may
+    /// already have accepted it, so this is not a refusal.
+    Unfinished(String),
+    Refused {
+        status: Option<i32>,
+        detail: String,
+    },
+}
+
+/// What the journal records for a bootstrap. A command ended at its deadline is
+/// indeterminate: the status observation that follows says what launchd did.
+fn bootstrap_completion(bootstrap: &Result<(), BootstrapFailure>) -> LifecycleCommandResult {
+    match bootstrap {
+        Ok(()) => LifecycleCommandResult::Accepted,
+        Err(error @ BootstrapFailure::Unfinished(_)) => {
+            LifecycleCommandResult::Indeterminate(error.to_string())
+        }
+        Err(error) => LifecycleCommandResult::Rejected(error.to_string()),
+    }
 }
 
 impl Display for BootstrapFailure {
     fn fmt(&self, out: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::CouldNotRun(error) => write!(out, "Could not run launchctl bootstrap: {error}"),
+            Self::Unfinished(error) => write!(out, "launchctl bootstrap did not finish: {error}"),
             Self::Refused { detail, .. } => write!(out, "Could not register gateway: {detail}"),
         }
     }
@@ -2092,47 +2139,6 @@ impl DisabledServiceStatus for LaunchctlDisabledServiceStatus {
         }
         disabled_service(&String::from_utf8_lossy(&output.stdout), label)
     }
-}
-
-fn bounded_output(command: &mut Command, deadline: Duration) -> Result<Output, String> {
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take().ok_or("launchctl stdout unavailable")?;
-    let stderr = child.stderr.take().ok_or("launchctl stderr unavailable")?;
-    let stdout = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let mut output = stdout;
-        output.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stderr = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let mut output = stderr;
-        output.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let until = Instant::now() + deadline;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
-        }
-        if Instant::now() >= until {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout.join();
-            let _ = stderr.join();
-            return Err("launchctl print-disabled exceeded its deadline".into());
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    Ok(Output {
-        status,
-        stdout: stdout
-            .join()
-            .map_err(|_| "launchctl stdout reader panicked")?
-            .map_err(|error| error.to_string())?,
-        stderr: stderr
-            .join()
-            .map_err(|_| "launchctl stderr reader panicked")?
-            .map_err(|error| error.to_string())?,
-    })
 }
 
 fn disabled_service(output: &str, label: &str) -> Result<bool, String> {
@@ -2202,18 +2208,20 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_presence, bootstrap_cleanup_decision, bootstrap_recovery_decision,
-        bootstrap_succeeded, cleanup_bootstrap_with, disabled_service, finish_bootstrap,
-        gave_up_retry, installed_generation, matches_reconciled_gateway, prepare_data_directory,
-        publish_definition, recovery_probe_port, registered_agent_path, retire_then_unload,
-        run_bootstrap, run_planned_effect_with_cleanup, runtime_fingerprint, service_environment,
-        service_matches, startup, unavailable_service, unreadable_process_identity,
-        BootstrapCleanupDecision, BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
+        artifact_presence, bootstrap_cleanup_decision, bootstrap_completion,
+        bootstrap_recovery_decision, bootstrap_succeeded, cleanup_bootstrap_with, control,
+        disabled_service, finish_bootstrap, gave_up_retry, installed_generation,
+        matches_reconciled_gateway, prepare_data_directory, publish_definition,
+        recovery_probe_port, registered_agent_path, run_bootstrap, run_planned_effect_with_cleanup,
+        runtime_fingerprint, service_environment, service_matches, startup, unavailable_service,
+        unload_plan_after_retirement, unreadable_process_identity, BootstrapCleanupDecision,
+        BootstrapFailure, BootstrapRecoveryDecision, SearchPath,
     };
     use crate::gateway::application::{
         GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
         ReconciledGateway, ReconciliationHistoryFact,
     };
+    use crate::gateway::domain::value_objects::RetirementRefusal;
     use crate::gateway::domain::value_objects::{
         AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
         LifecycleObservation, LifecycleObservationSource, LifecyclePlanStep, LifecycleRecordKind,
@@ -2375,18 +2383,77 @@ mod tests {
         )
     }
 
+    /// ADR 221: a bootstrap ended at its deadline may already have been
+    /// accepted by launchd, so the journal records it as indeterminate, never
+    /// as refused.
+    #[test]
+    fn a_bootstrap_ended_at_its_deadline_is_indeterminate_not_rejected() {
+        assert_eq!(
+            bootstrap_completion(&Ok(())),
+            LifecycleCommandResult::Accepted
+        );
+        assert!(matches!(
+            bootstrap_completion(&Err(BootstrapFailure::Unfinished(
+                "launchctl did not finish within 30 s".into()
+            ))),
+            LifecycleCommandResult::Indeterminate(_)
+        ));
+        for refused in [
+            BootstrapFailure::CouldNotRun("no such file".into()),
+            BootstrapFailure::Refused {
+                status: Some(5),
+                detail: "Input/output error".into(),
+            },
+        ] {
+            assert!(matches!(
+                bootstrap_completion(&Err(refused)),
+                LifecycleCommandResult::Rejected(_)
+            ));
+        }
+    }
+
+    /// ADR 221: only a refusal naming missing data lets the host unload an old
+    /// gateway without its acknowledgement; every other answer preserves it.
+    #[test]
+    fn only_missing_data_lets_the_host_stop_a_gateway_that_would_not_retire() {
+        let answer = |retired| {
+            let progress = RecordingProgress::default();
+            let plan =
+                unload_plan_after_retirement(&progress, "gui/501/so.nessa.gateway.prod", retired);
+            let facts = progress.0.lock().unwrap().clone();
+            (plan.map_err(|_| ()), facts)
+        };
+        let refused = |refusal| control::RetirementFailure::Refused {
+            refusal,
+            message: "Gateway retirement was not acknowledged".into(),
+        };
+
+        assert_eq!(
+            answer(Ok(())),
+            (
+                Ok("unload-stale-service"),
+                vec![ReconciliationHistoryFact::RetirementAcknowledged]
+            )
+        );
+        assert_eq!(
+            answer(Err(refused(RetirementRefusal::DataMissing))),
+            (
+                Ok("unload-unretirable-service"),
+                vec![ReconciliationHistoryFact::RetirementRefusedDataMissing]
+            )
+        );
+        for preserved in [
+            refused(RetirementRefusal::NotConfirmed),
+            control::RetirementFailure::Unanswered("acknowledgement timed out".into()),
+        ] {
+            let (plan, facts) = answer(Err(preserved));
+            assert!(plan.is_err());
+            assert!(facts.is_empty());
+        }
+    }
+
     #[test]
     fn production_transition_helpers_emit_only_completed_ordered_boundaries() {
-        let progress = RecordingProgress::default();
-        assert_eq!(
-            retire_then_unload(&progress, || Ok(()), || Err("bootout failed".into())),
-            Err("bootout failed".into())
-        );
-        assert_eq!(
-            *progress.0.lock().unwrap(),
-            [ReconciliationHistoryFact::RetirementAcknowledged]
-        );
-
         let progress = RecordingProgress::default();
         assert_eq!(
             publish_definition(&progress, || Ok(()), || Err("sync failed".into())),
@@ -3273,7 +3340,7 @@ mod recovery_tests {
         },
         domain::value_objects::{
             LifecycleHistory, LifecycleRecord, LifecycleRecordPayload, ReconciliationCorrelation,
-            ReconciliationEvidence, ReconciliationInitiator,
+            ReconciliationEvidence, ReconciliationInitiator, ServiceManager,
         },
     };
     use std::sync::Mutex;
@@ -3543,7 +3610,7 @@ mod recovery_tests {
                     .unwrap()
                 })
                 .collect::<Vec<_>>();
-            let history = LifecycleHistory::restore(&records).unwrap();
+            let history = LifecycleHistory::restore(ServiceManager::Launchd, &records).unwrap();
             let request = GatewayReconciliationRequest::new(
                 correlation(1),
                 ReconciliationEvidence::new(
@@ -4110,7 +4177,9 @@ mod recovery_tests {
             Self {
                 journal: DomainJournal {
                     namespace: target.service().into(),
-                    history: Mutex::new(LifecycleHistory::restore(&[record]).unwrap()),
+                    history: Mutex::new(
+                        LifecycleHistory::restore(ServiceManager::Launchd, &[record]).unwrap(),
+                    ),
                     written: Mutex::new(Vec::new()),
                 },
                 target: target.clone(),
@@ -4606,7 +4675,10 @@ mod recovery_tests {
             },
         )
         .unwrap_err();
-        assert!(refused.contains("Could not find service"), "{refused}");
+        assert!(
+            refused.to_string().contains("Could not find service"),
+            "{refused}"
+        );
         assert_eq!(*launchctl.signals.lock().unwrap(), ["SIGUSR2"]);
     }
 

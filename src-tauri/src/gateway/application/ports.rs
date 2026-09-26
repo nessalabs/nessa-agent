@@ -506,11 +506,38 @@ impl fmt::Display for GatewayError {
 }
 impl Error for GatewayError {}
 
+/// Where a managed startup is (ADR 221). The panel turns each into a plain
+/// sentence; the host's time limits inside each step are what end a step that
+/// does not finish, so the panel keeps no timers of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupStep {
+    /// Checking what is installed and running, and staging the runtime.
+    Preparing,
+    /// Asking the previous gateway to retire, then removing it.
+    #[cfg_attr(
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
+    )]
+    Replacing,
+    /// Starting the gateway and waiting until it answers.
+    #[cfg_attr(
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
+    )]
+    Launching,
+}
+
 /// The managed gateway startup fact currently owned by the desktop host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayStartupPhase {
     /// Reconciliation is underway, including a retry after stale live evidence.
-    Starting,
+    Starting(StartupStep),
     /// The expected runtime identity is currently owned by the registered service.
     Ready,
     /// Reconciliation stopped and why. A later credential load or explicit UI
@@ -532,7 +559,7 @@ impl GatewayStartup {
     pub(crate) fn starting() -> Self {
         Self {
             revision: 0,
-            phase: GatewayStartupPhase::Starting,
+            phase: GatewayStartupPhase::Starting(StartupStep::Preparing),
         }
     }
 
@@ -565,6 +592,16 @@ pub trait GatewayStartupEvents: Send + Sync {
 /// Healthy verification never calls this port. A native adapter calls it before
 /// it fences, retires, unloads, or replaces the ready process.
 pub trait GatewayReconciliationProgress: Send + Sync {
+    /// The attempt moved to `step`. A starting projection shows it; a ready
+    /// gateway that is only being verified stays ready.
+    #[cfg_attr(
+        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+        allow(
+            dead_code,
+            reason = "native reconciliation is supported only on macOS and Linux"
+        )
+    )]
+    fn step_started(&self, _step: StartupStep) {}
     #[cfg_attr(
         all(not(any(target_os = "macos", target_os = "linux")), not(test)),
         allow(

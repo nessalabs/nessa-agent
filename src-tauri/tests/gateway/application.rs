@@ -2177,7 +2177,7 @@ fn id_allocation_can_inspect_the_startup_snapshot_without_holding_lifecycle_stat
                     .startup()
                     .unwrap()
                     .phase(),
-                &GatewayStartupPhase::Starting
+                &GatewayStartupPhase::Starting(StartupStep::Preparing)
             );
             Ok(correlation(call as u64))
         }
@@ -2288,7 +2288,7 @@ fn joining_request_id_failure_does_not_replace_the_active_owner_projection() {
     assert_eq!(gateway.startup().unwrap().revision(), 0);
     assert_eq!(
         gateway.startup().unwrap().phase(),
-        &GatewayStartupPhase::Starting
+        &GatewayStartupPhase::Starting(StartupStep::Preparing)
     );
 
     release_tx.send(()).unwrap();
@@ -2450,7 +2450,7 @@ fn concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery() {
                     .startup()
                     .unwrap()
                     .phase(),
-                &GatewayStartupPhase::Starting
+                &GatewayStartupPhase::Starting(StartupStep::Preparing)
             );
             *self.entered.lock().unwrap() = true;
             self.entered_changed.notify_all();
@@ -3518,7 +3518,10 @@ fn native_restart_progress_transitions_ready_through_starting() {
     observations.sort_by_key(GatewayStartup::revision);
     assert_eq!(observations.len(), 3);
     assert_eq!(observations[0].phase(), &GatewayStartupPhase::Ready);
-    assert_eq!(observations[1].phase(), &GatewayStartupPhase::Starting);
+    assert_eq!(
+        observations[1].phase(),
+        &GatewayStartupPhase::Starting(StartupStep::Preparing)
+    );
     assert_eq!(observations[2].phase(), &GatewayStartupPhase::Ready);
     assert_eq!(
         observations
@@ -3526,6 +3529,82 @@ fn native_restart_progress_transitions_ready_through_starting() {
             .map(GatewayStartup::revision)
             .collect::<Vec<_>>(),
         [1, 2, 3]
+    );
+}
+
+/// ADR 221: a starting projection names each step the adapter reports, and a
+/// ready gateway that is only being verified is never shown as starting.
+#[test]
+fn starting_projection_names_each_reported_step_and_ready_stays_ready() {
+    struct SteppingHost(Mutex<u8>);
+
+    impl GatewayHost for SteppingHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            let mut calls = self.0.lock().unwrap();
+            *calls += 1;
+            let gateway = if *calls == 1 {
+                // A first start: replace what was there, then launch.
+                progress.step_started(StartupStep::Replacing);
+                progress.readiness_invalidated();
+                progress.step_started(StartupStep::Launching);
+                progress.step_started(StartupStep::Launching);
+                reconciled("first")
+            } else {
+                // Verifying a ready gateway: steps alone change nothing.
+                progress.step_started(StartupStep::Replacing);
+                progress.step_started(StartupStep::Launching);
+                reconciled("first")
+            };
+            admit(attempt, progress, gateway.service());
+            Ok(gateway)
+        }
+
+        fn stop_agents(
+            &self,
+            session: &GatewayStopSession,
+            journal: &dyn GatewayReconciliationJournalSession,
+            plan: &AuditDeliveryReceipt,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            complete_stop(session, journal, plan, || Ok(()))
+        }
+    }
+
+    let events = Arc::new(RecordingEvents::default());
+    let gateway = Gateway::bootstrap(
+        Arc::new(SteppingHost(Mutex::new(0))),
+        login_shell("/usr/bin"),
+        events.clone(),
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
+    tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).unwrap();
+
+    let mut observations = events.wait_for(3);
+    observations.sort_by_key(GatewayStartup::revision);
+    assert_eq!(
+        observations
+            .iter()
+            .map(|startup| (startup.revision(), startup.phase().clone()))
+            .collect::<Vec<_>>(),
+        [
+            (1, GatewayStartupPhase::Starting(StartupStep::Replacing)),
+            (2, GatewayStartupPhase::Starting(StartupStep::Launching)),
+            (3, GatewayStartupPhase::Ready),
+        ]
+    );
+    assert_eq!(
+        gateway.startup().unwrap().phase(),
+        &GatewayStartupPhase::Ready
     );
 }
 

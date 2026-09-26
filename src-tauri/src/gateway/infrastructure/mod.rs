@@ -36,6 +36,8 @@ mod macos;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod reconciliation_audit;
 mod reconciliation_ids;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod retirement;
 mod selection;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;

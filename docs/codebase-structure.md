@@ -699,7 +699,14 @@ found only by port is never stopped. Later updates exchange correlated records i
 commands, join admitted commands, close owned agents, record the transition, and
 then replace the service definition. Failed or contradictory acknowledgement
 preserves the old process. An admitted retirement cause fences admission even when cleanup or audit fails;
-that evidence forces a stale-service retry but never authorizes bootout. A pending
+that evidence forces a stale-service retry and, with one exception, never
+authorizes bootout. A result that did not retire names why, as `refusal` from
+`protocol/defaults/gateway-retirement-refusals.json`. The exception is
+`data_missing`: nothing the gateway started still holds resources, by the SDK's
+own cleanup fact, and the gateway's conversation data is gone. The host then stops the
+old service itself: launchd unloads it under its own plan,
+`unload-unretirable-service`, and systemd stops the unit with its ordinary stop
+step (ADR 221). A pending
 request for the live instance/generation also forces retry if result publication
 failed; stale requests for other instances or generations do not. Successful
 results retain the original validated lifecycle principal, cause, and correlation as durable retirement fences;

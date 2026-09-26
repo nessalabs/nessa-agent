@@ -2739,6 +2739,45 @@ impl ConversationService {
         retired
     }
 
+    /// Whether any conversation this service opened may still hold provider or
+    /// storage resources: an agent whose release the SDK has not confirmed, an
+    /// agent whose provider open is still in flight, whoever started it (the
+    /// SDK arms its cleanup fact only once an open returns), an opening that
+    /// has not settled, a failed opening that holds what it launched, or a
+    /// deletion whose process is still being stopped. A successful stop
+    /// releases its slot, so it is not counted.
+    ///
+    /// It reads the SDK's own facts, `Agent::attachment_cleanup_pending` and
+    /// `Agent::provider_open_in_flight`, never the variant of the error a stop
+    /// returned: that variant is a diagnostic and does not say whether
+    /// resources remain (ADR 221).
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
+    pub(crate) async fn owns_unreleased_resources(&self) -> bool {
+        let slots: Vec<_> = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for slot in slots {
+            let holds = match slot.value.get() {
+                None => true,
+                Some(Ok(live)) => {
+                    live.agent.attachment_cleanup_pending() || live.agent.provider_open_in_flight()
+                }
+                Some(Err(failed)) => failed.holds,
+            };
+            if holds {
+                return true;
+            }
+        }
+        // A deletion abandoned during retirement stops its own process on a
+        // task of its own, past `settled`'s bound if it must.
+        self.inner.provider_sessions.cleanup_outstanding()
+    }
+
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) fn retirement_cause(&self) -> Option<ActionContext> {
         self.inner.retirement.get().cloned()

@@ -172,6 +172,20 @@ impl Agent {
         self.inner.lifecycle.attachment_needs_cleanup()
     }
 
+    /// Whether a provider open for this agent is still running, whoever
+    /// started it: a caller's attachment or the scheduler's automatic
+    /// recovery. Such an open may already own a process that
+    /// [`Self::attachment_cleanup_pending`] does not yet report, because the
+    /// cleanup fact is armed only once the open returns.
+    ///
+    /// The two facts overlap rather than leave a gap: whatever an open keeps is
+    /// armed before this becomes false. Callers deciding whether nothing is
+    /// left running should read both. Safe to call from any task at any time;
+    /// the answer can change as soon as it is read.
+    pub fn provider_open_in_flight(&self) -> bool {
+        self.inner.lifecycle.attachment_open_in_flight()
+    }
+
     /// Authorize one attachment attempt for the current lifecycle generation.
     /// Dropping the returned token abandons only that exact authorization.
     pub fn authorize_attachment(

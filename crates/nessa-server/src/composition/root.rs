@@ -3,7 +3,7 @@ use crate::conversation::application::ConversationError;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
-    infrastructure::RetirementFiles,
+    infrastructure::{ConversationDirectory, RetirementFiles},
 };
 use crate::env::Environment;
 use crate::server::entrypoint::http;
@@ -105,6 +105,9 @@ impl CompositionRoot {
             warm_ups,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
         let conversations = product.conversations.clone();
+        // Shared with the retirement below, which asks whether any of them may
+        // still hold an agent process (ADR 221).
+        let warm_ups = Arc::new(warm_ups);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let retirement_clock = product.clock.clone();
         let desktop_identity = if let Some(bundle) = bundle {
@@ -205,7 +208,7 @@ impl CompositionRoot {
         // Only now: the runtime's first launch is slow because the operating
         // system scans it, and that wait belongs here, with the window already
         // up, rather than inside the user's first message.
-        for warm_up in &warm_ups {
+        for warm_up in warm_ups.iter() {
             warm_up.start();
         }
         // Deletions a tombstone says did not finish — interrupted by the last
@@ -248,6 +251,15 @@ impl CompositionRoot {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(identity) = desktop_identity {
             let files = retirement_files.expect("desktop files initialized before admission");
+            let background = StartupWarmUps(warm_ups.clone());
+            let conversation_data =
+                ConversationDirectory::new(super::local_auth::conversation_root(
+                    config
+                        .auth_directory
+                        .as_ref()
+                        .and_then(|path| path.parent())
+                        .ok_or_else(|| RunError::Agent("missing desktop namespace".into()))?,
+                ));
             let service = conversations.clone();
             let mut requests = signal(SignalKind::user_defined2()).map_err(RunError::Serve)?;
             tokio::spawn(async move {
@@ -259,8 +271,15 @@ impl CompositionRoot {
                             continue;
                         }
                     };
-                    let result =
-                        retire(request, identity.clone(), service.as_deref(), &files).await;
+                    let result = retire(
+                        request,
+                        identity.clone(),
+                        service.as_deref(),
+                        &conversation_data,
+                        &background,
+                        &files,
+                    )
+                    .await;
                     if let Err(error) = files.result(&result) {
                         tracing::error!(%error, "could not acknowledge desktop retirement");
                     }
@@ -388,6 +407,20 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// The startup warm-ups, as the work outside conversations a refused
+/// retirement must account for (ADR 221).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct StartupWarmUps(Arc<Vec<super::local_auth::StartupWarmUp>>);
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl crate::desktop_runtime::application::BackgroundWork for StartupWarmUps {
+    fn may_hold_resources(&self) -> bool {
+        self.0
+            .iter()
+            .any(super::local_auth::StartupWarmUp::may_hold_resources)
     }
 }
 

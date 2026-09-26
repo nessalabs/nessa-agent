@@ -55,7 +55,7 @@ struct Inner {
 
 struct PublishedTerminal {
     projection: Arc<WarmUpTerminal>,
-    _retained: Option<RetainedWarmUpOwnership>,
+    retained: Option<RetainedWarmUpOwnership>,
     diagnostic: Option<WarmUpError>,
 }
 
@@ -95,6 +95,19 @@ impl AgentWarmUp {
                 started: AtomicBool::new(false),
                 settled: watch::channel(None).0,
             }),
+        }
+    }
+
+    /// Whether this warm-up may still hold a provider process or its use: it
+    /// is running, or it settled keeping ownership it could not confirm
+    /// released (ADR 221). One that never started holds nothing.
+    pub fn may_hold_resources(&self) -> bool {
+        if !self.inner.started.load(Ordering::SeqCst) {
+            return false;
+        }
+        match &*self.inner.settled.borrow() {
+            None => true,
+            Some(terminal) => terminal.retained.is_some(),
         }
     }
 
@@ -202,7 +215,7 @@ impl AgentWarmUp {
                 audit_delivery,
                 completion_record_delivery,
             )),
-            _retained: retained,
+            retained,
             diagnostic,
         }
     }

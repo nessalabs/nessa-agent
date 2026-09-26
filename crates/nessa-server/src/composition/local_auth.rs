@@ -98,6 +98,15 @@ impl StartupWarmUp {
 
     #[cfg(not(unix))]
     pub(super) fn start(&self) {}
+
+    /// Whether this warm-up may still hold a provider process or its use.
+    #[cfg(unix)]
+    pub(super) fn may_hold_resources(&self) -> bool {
+        match self {
+            Self::Fixed(warm_up) => warm_up.may_hold_resources(),
+            Self::Current(resolver) => resolver.warm_up_may_hold_resources(),
+        }
+    }
 }
 
 /// Construct the guarded product route from a previously initialized local registry.
@@ -285,6 +294,13 @@ fn conversations(
     ))
 }
 
+/// Where a namespace keeps its conversations. Read by composition and by the
+/// retirement that reports whether they are still there.
+#[cfg(unix)]
+pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
+    namespace.join("conversations")
+}
+
 #[cfg(unix)]
 fn conversations(
     agents: &AgentsConfig,
@@ -293,10 +309,11 @@ fn conversations(
     managed_opencode: bool,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
-    let root = directory
-        .parent()
-        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
-        .join("conversations");
+    let root = conversation_root(
+        directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?,
+    );
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);

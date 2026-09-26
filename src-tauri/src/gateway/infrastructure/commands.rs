@@ -1,12 +1,12 @@
 //! Tauri entry points and event adapter for managed gateway startup.
 
 use super::super::application::{
-    GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase,
+    GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
 };
 use crate::{
     composition::HostDependencies,
     gateway::domain::value_objects::BundledSurface,
-    host::{GatewayStartup, GATEWAY_STARTUP},
+    host::{self, GatewayStartup, GATEWAY_STARTUP},
     panel,
 };
 use std::sync::Arc;
@@ -34,7 +34,14 @@ pub fn startup_events(app: &AppHandle) -> Arc<dyn GatewayStartupEvents> {
 fn payload(startup: &ApplicationStartup) -> GatewayStartup {
     let revision = startup.revision();
     match startup.phase() {
-        GatewayStartupPhase::Starting => GatewayStartup::Starting { revision },
+        GatewayStartupPhase::Starting(step) => GatewayStartup::Starting {
+            revision,
+            step: match step {
+                StartupStep::Preparing => host::StartupStep::Preparing,
+                StartupStep::Replacing => host::StartupStep::Replacing,
+                StartupStep::Launching => host::StartupStep::Launching,
+            },
+        },
         GatewayStartupPhase::Ready => GatewayStartup::Ready { revision },
         GatewayStartupPhase::Failed(error) => GatewayStartup::Failed {
             revision,
@@ -102,7 +109,10 @@ mod tests {
     fn initial_managed_startup_keeps_its_revision_at_the_seam() {
         assert_eq!(
             payload(&GatewayStartup::starting()),
-            host::GatewayStartup::Starting { revision: 0 }
+            host::GatewayStartup::Starting {
+                revision: 0,
+                step: host::StartupStep::Preparing,
+            }
         );
     }
 }

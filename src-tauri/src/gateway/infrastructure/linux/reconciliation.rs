@@ -23,17 +23,18 @@ use crate::gateway::{
         GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
         GatewayReconciliationAttempt, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationProgress, GatewayStopSession,
-        MonotonicClock, ReconciledGateway, ReconciliationHistoryFact,
+        MonotonicClock, ReconciledGateway, ReconciliationHistoryFact, StartupStep,
     },
     domain::value_objects::{
         AuditDeliveryReceipt, LifecycleCommandResult, LifecycleEffect, LifecycleEffectPredicate,
         LifecycleFailedPhase, LifecycleObservation, LifecycleObservationSource,
         LifecyclePhysicalOutcome, LifecyclePlanStep, ReconciliationCause,
-        ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
-        ServiceConfiguration, SystemdJobAttempt, SystemdJobConclusion, SystemdJobMode,
-        SystemdJobOperation, SystemdJobTerminal, SystemdManagerIdentity, SystemdRuntimeObservation,
-        SystemdUnitName, SystemdUnitState,
+        ReconciliationCleanupDecision, ReconciliationIncarnation, ReconciliationTarget,
+        RetirementRefusal, SearchPath, ServiceConfiguration, SystemdJobAttempt,
+        SystemdJobConclusion, SystemdJobMode, SystemdJobOperation, SystemdJobTerminal,
+        SystemdManagerIdentity, SystemdRuntimeObservation, SystemdUnitName, SystemdUnitState,
     },
+    infrastructure::retirement::{stop_allowed_after, RetirementFailure},
 };
 use nessa_gateway_endpoint::{
     domain::GatewayEndpointAdvertisement, infrastructure::FileEndpointDiscovery,
@@ -589,8 +590,9 @@ impl GatewayHost for SystemdGateway {
         }
 
         if let Some(prior) = before.as_ref().filter(|prior| prior.target() != &target) {
+            progress.step_started(StartupStep::Replacing);
             progress.readiness_invalidated();
-            retire_prior(
+            let retired = retire_prior(
                 progress,
                 &unit,
                 prior,
@@ -608,7 +610,11 @@ impl GatewayHost for SystemdGateway {
                     clock: self.clock.as_ref(),
                 },
             )?;
-            progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
+            // ADR 221: a retirement, or a refusal naming missing data, allows
+            // the stop below; the shared rule records which. Any other answer
+            // ends the attempt with the old unit preserved.
+            stop_allowed_after(progress, unit.as_str(), retired)
+                .map_err(|failure| GatewayError::Registration(failure.to_string()))?;
             self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)?;
             stop_unit(
                 progress,
@@ -787,6 +793,7 @@ impl GatewayHost for SystemdGateway {
 
         progress.history_observed(ReconciliationHistoryFact::BootstrapCommandRequested);
         authorize_unit_change().map_err(GatewayError::Registration)?;
+        progress.step_started(StartupStep::Launching);
         let ready_deadline = self.clock.now() + READY_TIMEOUT;
         start_unit(
             progress,
@@ -2831,7 +2838,7 @@ fn retire_prior(
     target: &ReconciliationTarget,
     authority: RetirementAuthority<'_>,
     runtime: LinuxRuntime<'_>,
-) -> Result<(), GatewayError> {
+) -> Result<Result<(), RetirementFailure>, GatewayError> {
     let request_id = random_uuid().map_err(GatewayError::Registration)?;
     let step = LifecyclePlanStep::new(
         "primary".into(),
@@ -2935,7 +2942,7 @@ fn retire_prior(
     );
     let completion = match &result {
         Ok(()) => LifecycleCommandResult::Accepted,
-        Err(error) => LifecycleCommandResult::Failed(error.clone()),
+        Err(error) => LifecycleCommandResult::Failed(error.to_string()),
     };
     let observed = observe_systemd_state(runtime.manager, unit, authority.data, runtime.context);
     let artifact_present = observed
@@ -2958,10 +2965,10 @@ fn retire_prior(
             result
                 .as_ref()
                 .err()
+                .map(ToString::to_string)
                 .into_iter()
-                .chain(observed.as_ref().err())
-                .chain(artifact_present.as_ref().err())
-                .cloned(),
+                .chain(observed.as_ref().err().cloned())
+                .chain(artifact_present.as_ref().err().cloned()),
         ));
     }
     let observed = observed.map_err(GatewayError::Registration)?;
@@ -2976,10 +2983,10 @@ fn retire_prior(
     ) {
         return Err(audit_with_physical(
             audit,
-            result.as_ref().err().into_iter().cloned(),
+            result.as_ref().err().map(ToString::to_string).into_iter(),
         ));
     }
-    result.map_err(GatewayError::Registration)
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -3008,6 +3015,10 @@ struct RetirementResult {
     retirement_cause: Option<RetirementCause>,
     cleanup_error: Option<String>,
     audit_error: Option<String>,
+    /// Why not, by a published name (ADR 221). Absent from retired results and
+    /// from gateways that predate the names, which read as not confirmed.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 fn retirement_artifact_present(
@@ -3047,12 +3058,17 @@ fn retirement_artifact_present(
     if observed != Some(prior) {
         return Err("Gateway retirement recovery lost the planned running incarnation".into());
     }
-    retirement_acknowledged(
-        &data.join("gateway-upgrade/result.json"),
-        request_id,
-        prior,
-        target,
-    )
+    // A refusal is an answer, but not an acknowledgement: the artifact a
+    // retirement leaves is present only when the gateway retired.
+    Ok(matches!(
+        retirement_answer(
+            &data.join("gateway-upgrade/result.json"),
+            request_id,
+            prior,
+            target,
+        )?,
+        RetirementAnswer::Retired
+    ))
 }
 
 #[derive(Deserialize)]
@@ -3071,7 +3087,7 @@ fn retire(
     process: Box<dyn LinuxProcess>,
     clock: &dyn MonotonicClock,
     verify_before_signal: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<(), RetirementFailure> {
     let directory = data.join("gateway-upgrade");
     nessa_local_storage::create_directory_beneath(data, Path::new("gateway-upgrade"))
         .map_err(|error| error.to_string())?;
@@ -3093,28 +3109,46 @@ fn retire(
         Err(LinuxProcessSignalError::Exited) => {
             return Err("The retiring gateway process exited before signal dispatch".into())
         }
-        Err(LinuxProcessSignalError::Failed(error)) => return Err(error),
+        Err(LinuxProcessSignalError::Failed(error)) => return Err(error.into()),
     }
     let deadline = clock.now() + Duration::from_secs(75);
     while clock.now() < deadline {
-        if retirement_acknowledged(&directory.join("result.json"), request_id, prior, target)? {
-            return Ok(());
+        match retirement_answer(&directory.join("result.json"), request_id, prior, target)? {
+            RetirementAnswer::Retired => return Ok(()),
+            RetirementAnswer::Refused { refusal, message } => {
+                return Err(RetirementFailure::Refused { refusal, message })
+            }
+            RetirementAnswer::Pending => {}
         }
         clock.wait(Duration::from_millis(100));
     }
     Err("Gateway retirement acknowledgement timed out; service was preserved".into())
 }
 
-fn retirement_acknowledged(
+/// What `result.json` says about this request (ADR 221).
+#[derive(Debug, PartialEq, Eq)]
+enum RetirementAnswer {
+    /// No answer to this request yet.
+    Pending,
+    /// The gateway retired, and the answer is durable.
+    Retired,
+    /// The gateway refused this very request, and the answer is durable.
+    Refused {
+        refusal: RetirementRefusal,
+        message: String,
+    },
+}
+
+fn retirement_answer(
     path: &Path,
     request_id: &str,
     prior: &ReconciliationIncarnation,
     target: &ReconciliationTarget,
-) -> Result<bool, String> {
+) -> Result<RetirementAnswer, String> {
     let file = match nessa_local_storage::open(path, nessa_local_storage::OpenMode::ReadNonblocking)
     {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(RetirementAnswer::Pending),
         Err(error) => return Err(error.to_string()),
     };
     let mut bytes = Vec::new();
@@ -3128,7 +3162,7 @@ fn retirement_acknowledged(
     let result: RetirementResult = serde_json::from_slice(&bytes)
         .map_err(|error| format!("Invalid gateway retirement acknowledgement: {error}"))?;
     let cause = result.retirement_cause.as_ref();
-    let agrees = result.request_id == request_id
+    let identity_agrees = result.request_id == request_id
         && result.target_fingerprint == target.runtime_fingerprint()
         && result.running_fingerprint == prior.target().runtime_fingerprint()
         && result.running_instance == prior.runtime_instance()
@@ -3141,22 +3175,32 @@ fn retirement_acknowledged(
             cause.request_id == request_id
                 && cause.principal_id == "gateway"
                 && cause.surface_id == "gateway_upgrade"
-        })
-        && result.retired
-        && result.cleanup_error.is_none()
-        && result.audit_error.is_none();
-    if !agrees {
+        });
+    let failed = result.cleanup_error.is_some() || result.audit_error.is_some();
+    let answer = if identity_agrees && result.retired && !failed && result.refusal.is_none() {
+        RetirementAnswer::Retired
+    } else if identity_agrees && !result.retired && failed {
+        RetirementAnswer::Refused {
+            refusal: RetirementRefusal::named(result.refusal.as_deref()),
+            message: format!(
+                "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
+                result.retired, result.cleanup_error, result.audit_error
+            ),
+        }
+    } else {
         return Err(
             "Gateway retirement acknowledgement disagrees with the planned identities".into(),
         );
-    }
+    };
+    // Either answer may be what lets the host stop the old unit, so it is made
+    // durable before it is acted on.
     file.sync_all().map_err(|error| error.to_string())?;
     nessa_local_storage::sync_directory(
         path.parent()
             .ok_or_else(|| "Retirement acknowledgement has no directory".to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    Ok(true)
+    Ok(answer)
 }
 
 fn atomic_write(directory: &Path, destination: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -4401,6 +4445,19 @@ mod tests {
             "auditError": null,
         }))
         .unwrap();
+        // ADR 221: a retired result names no refusal; one that does is not an
+        // acknowledgement.
+        let mut contradictory: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        contradictory["refusal"] = serde_json::json!("not_confirmed");
+        atomic_write(
+            &directory,
+            Path::new("result.json"),
+            &serde_json::to_vec(&contradictory).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            retirement_artifact_present(&data, request_id, &prior, &target, Some(&prior)).is_err()
+        );
         atomic_write(&directory, Path::new("result.json"), &result).unwrap();
 
         assert!(
@@ -4415,6 +4472,37 @@ mod tests {
         )
         .is_err());
         assert!(retirement_artifact_present(&data, request_id, &prior, &target, None).is_err());
+
+        // ADR 221: a refusal for this very request is a durable answer, not an
+        // error, and not an acknowledgement. Its name reaches the host typed;
+        // a gateway that predates the names is read as not confirmed.
+        let result_path = directory.join("result.json");
+        for (name, expected) in [
+            (Some("data_missing"), RetirementRefusal::DataMissing),
+            (None, RetirementRefusal::NotConfirmed),
+        ] {
+            let mut refused: serde_json::Value = serde_json::from_slice(&result).unwrap();
+            refused["retired"] = serde_json::json!(false);
+            refused["cleanupError"] = serde_json::json!("conversation service: Retirement(..)");
+            if let Some(name) = name {
+                refused["refusal"] = serde_json::json!(name);
+            }
+            std::fs::remove_file(&result_path).unwrap();
+            atomic_write(
+                &directory,
+                Path::new("result.json"),
+                &serde_json::to_vec(&refused).unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(
+                retirement_answer(&result_path, request_id, &prior, &target).unwrap(),
+                RetirementAnswer::Refused { refusal, .. } if refusal == expected
+            ));
+            assert!(
+                !retirement_artifact_present(&data, request_id, &prior, &target, Some(&prior))
+                    .unwrap()
+            );
+        }
     }
 
     struct FakeHeldProcess {
@@ -4475,6 +4563,76 @@ mod tests {
             );
             assert!(result.is_err());
             assert_eq!(signals.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    /// ADR 221: after the signal, a gateway's refusal of this very request
+    /// ends the wait at once as a typed refusal carrying its published name;
+    /// the host's shared rule then decides what it allows.
+    #[test]
+    fn a_refused_retirement_ends_the_wait_as_a_typed_refusal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().canonicalize().unwrap().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        let directory = data.join("gateway-upgrade");
+        nessa_local_storage::create_directory(&directory).unwrap();
+        let (unit, prior_target, _) = fixture();
+        let prior = ReconciliationIncarnation::new(
+            prior_target,
+            "550e8400-e29b-41d4-a716-446655440001".into(),
+            99,
+            7420,
+        )
+        .unwrap();
+        let target =
+            ReconciliationTarget::new(unit.as_str().into(), "c".repeat(64), "d".repeat(64))
+                .unwrap();
+        let request_id = "550e8400-e29b-41d4-a716-446655440000";
+        let refused = serde_json::to_vec(&serde_json::json!({
+            "requestId": request_id,
+            "targetFingerprint": target.runtime_fingerprint(),
+            "runningFingerprint": prior.target().runtime_fingerprint(),
+            "runningInstance": prior.runtime_instance(),
+            "requestedInstance": prior.runtime_instance(),
+            "runningGeneration": prior.target().service_generation(),
+            "requestedRunningGeneration": prior.target().service_generation(),
+            "targetGeneration": target.service_generation(),
+            "retired": false,
+            "retirementRequestId": request_id,
+            "retirementCause": {
+                "principalId": "gateway",
+                "surfaceId": "gateway_upgrade",
+                "requestId": request_id,
+            },
+            "cleanupError": "conversation service: Retirement(..)",
+            "auditError": null,
+            "refusal": "data_missing",
+        }))
+        .unwrap();
+        atomic_write(&directory, Path::new("result.json"), &refused).unwrap();
+        let signals = Arc::new(AtomicUsize::new(0));
+
+        let answer = retire(
+            &data,
+            request_id,
+            &prior,
+            &target,
+            Box::new(FakeHeldProcess {
+                process_id: prior.process_id(),
+                live: true,
+                signals: signals.clone(),
+            }),
+            &SystemMonotonicClock,
+            || Ok(()),
+        );
+
+        assert_eq!(signals.load(Ordering::SeqCst), 1);
+        match answer {
+            Err(RetirementFailure::Refused { refusal, message }) => {
+                assert_eq!(refusal, RetirementRefusal::DataMissing);
+                assert!(message.contains("not acknowledged"), "{message}");
+            }
+            other => panic!("expected a typed refusal, got {other:?}"),
         }
     }
 

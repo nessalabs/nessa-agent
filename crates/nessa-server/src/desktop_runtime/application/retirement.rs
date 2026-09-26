@@ -1,6 +1,8 @@
 use crate::{
-    conversation::application::ConversationService,
-    desktop_runtime::domain::{RetirementFence, RetirementRequest, RunningRuntime},
+    conversation::application::{ConversationError, ConversationService},
+    desktop_runtime::domain::{
+        RetirementFence, RetirementRefusal, RetirementRequest, RunningRuntime,
+    },
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use std::{future::Future, pin::Pin, time::Duration};
@@ -20,6 +22,8 @@ pub(crate) struct RetirementResult {
     // This is the complete cleanup operation diagnostic, not proof of physical state.
     pub cleanup_error: Option<String>,
     pub audit_error: Option<String>,
+    /// Why not, whenever `retired` is false; what the desktop host acts on.
+    pub refusal: Option<RetirementRefusal>,
 }
 impl RetirementResult {
     #[cfg(test)]
@@ -28,6 +32,17 @@ impl RetirementResult {
             .as_ref()
             .map(ActionContext::request_id)
     }
+}
+/// Whether this gateway's own conversation data is still where it was opened.
+/// Asked only when a retirement did not happen, to say why (ADR 221).
+pub(crate) trait ConversationData: Send + Sync {
+    fn missing(&self) -> bool;
+}
+/// Work this gateway runs outside its conversations, such as the startup
+/// warm-ups, that may hold an agent process of its own. Asked only when a
+/// retirement did not happen, to say why (ADR 221).
+pub(crate) trait BackgroundWork: Send + Sync {
+    fn may_hold_resources(&self) -> bool;
 }
 pub(crate) trait RetirementAudit: Send + Sync {
     fn record(
@@ -39,8 +54,13 @@ pub(crate) async fn retire(
     request: RetirementRequest,
     running: RunningRuntime,
     conversations: Option<&ConversationService>,
+    data: &dyn ConversationData,
+    background: &dyn BackgroundWork,
     audit: &dyn RetirementAudit,
 ) -> RetirementResult {
+    // Whether the stops failed without leaving anything running: the one
+    // failure a refusal may call `data_missing` (ADR 221).
+    let mut nothing_left_running = false;
     let mut cleanup_error = if !running.accepts(&request) {
         Some(
             "Retirement request identifies a different running instance or service generation"
@@ -48,11 +68,17 @@ pub(crate) async fn retire(
         )
     } else {
         match conversations {
-            Some(service) => service
-                .retire("gateway_upgrade", request.id())
-                .await
-                .err()
-                .map(|e| e.to_string()),
+            Some(service) => match service.retire("gateway_upgrade", request.id()).await {
+                Ok(()) => None,
+                Err(error) => {
+                    // An admission that could not drain may still be running
+                    // work; only a stop failure is asked about what remains.
+                    nothing_left_running = matches!(error, ConversationError::Retirement(_))
+                        && !service.owns_unreleased_resources().await
+                        && !background.may_hold_resources();
+                    Some(error.to_string())
+                }
+            },
             None => None,
         }
     };
@@ -62,6 +88,7 @@ pub(crate) async fn retire(
             .is_some_and(|cause| cause.surface_id() != "gateway_upgrade")
     {
         cleanup_error = Some("runtime admission was closed by a different lifecycle cause".into());
+        nothing_left_running = false;
     }
     let retirement_cause = if running.accepts(&request) {
         Some(
@@ -87,13 +114,21 @@ pub(crate) async fn retire(
     .await
     .unwrap_or_else(|_| Err("retirement audit acknowledgement deadline elapsed".into()))
     .err();
+    let retired = cleanup_error.is_none() && audit_error.is_none();
+    let refusal = (!retired).then(|| {
+        RetirementRefusal::of(
+            nothing_left_running && audit_error.is_none(),
+            data.missing(),
+        )
+    });
     RetirementResult {
         request,
         retirement_cause,
         running,
-        retired: cleanup_error.is_none() && audit_error.is_none(),
+        retired,
         cleanup_error,
         audit_error,
+        refusal,
     }
 }
 

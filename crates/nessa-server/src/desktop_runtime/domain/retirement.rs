@@ -231,6 +231,49 @@ impl RetirementCause {
     }
 }
 
+/// Why this gateway would not retire (ADR 221), by the names in
+/// `protocol/defaults/gateway-retirement-refusals.json`, which the desktop host
+/// reads too. The host acts on the name alone.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetirementRefusal {
+    /// Every agent's resources were released, but retirement could not be
+    /// completed, and this gateway's conversation data is no longer where it
+    /// was opened.
+    DataMissing,
+    /// Anything else that could not be confirmed.
+    NotConfirmed,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+impl RetirementRefusal {
+    /// The refusal for a retirement that did not happen. `DataMissing` needs
+    /// both facts: nothing this gateway started still holds resources, by the
+    /// SDK's own cleanup fact, and the data its records belong in is gone.
+    /// Then stopping this gateway leaves nothing running.
+    pub(crate) fn of(nothing_left_running: bool, data_missing: bool) -> Self {
+        if nothing_left_running && data_missing {
+            Self::DataMissing
+        } else {
+            Self::NotConfirmed
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::DataMissing => "data_missing",
+            Self::NotConfirmed => "not_confirmed",
+        }
+    }
+
+    /// The refusal a stored result names, if it is one of the published names.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        [Self::DataMissing, Self::NotConfirmed]
+            .into_iter()
+            .find(|refusal| refusal.as_str() == name)
+    }
+}
+
 /// Validates the complete result tuple before it crosses the persistence boundary.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) fn validate_retirement_evidence(

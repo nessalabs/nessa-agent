@@ -122,7 +122,7 @@ export function ConversationList({
       : history.rows !== null
         ? "No conversations yet"
         : !gatewayAvailable
-          ? "Connecting to the gateway…"
+          ? "Connecting…"
           : history.failure !== null
             ? "Conversations could not be loaded"
             : "Loading conversations…"

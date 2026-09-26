@@ -111,6 +111,10 @@ pub(crate) async fn delete_session<P: AcpProfile + Clone>(
     cleanups: &DeletionCleanups,
 ) -> Result<AcpSessionDeletion, AgentError> {
     config.validate()?;
+    // Counted from before anything is admitted or launched, and handed to
+    // whichever cleanup owner ends up holding what the launch made: the count
+    // ends only once that is confirmed released (ADR 221).
+    let outstanding = cleanups.begin();
     // The executable is held in use for this launch exactly as an opening
     // holds it, and let go only once what the launch made is confirmed gone;
     // every cleanup owner below keeps retrying after it is dropped.
@@ -119,7 +123,8 @@ pub(crate) async fn delete_session<P: AcpProfile + Clone>(
         Err(failure) => {
             let (error, owner) = failure.into_parts();
             if let Some(owner) = owner {
-                let cleanup = ProcessCleanup::retaining_failed_admission(config.clone(), owner);
+                let cleanup = ProcessCleanup::retaining_failed_admission(config.clone(), owner)
+                    .until_released(outstanding);
                 if !cleanup.retry_cleanup().await.is_confirmed() {
                     tracing::warn!("a failed executable admission is retained for cleanup");
                 }
@@ -152,6 +157,7 @@ pub(crate) async fn delete_session<P: AcpProfile + Clone>(
                 }
             };
             if let Some(cleanup) = cleanup {
+                let cleanup = cleanup.until_released(outstanding);
                 if !cleanup.retry_cleanup().await.is_confirmed() {
                     tracing::warn!("a failed launch's resources are retained for cleanup");
                 }
@@ -159,15 +165,11 @@ pub(crate) async fn delete_session<P: AcpProfile + Clone>(
             return Err(cause);
         }
     };
-    let recovery = ProcessCleanup::new(config.clone(), executable_use);
+    let recovery = ProcessCleanup::new(config.clone(), executable_use).until_released(outstanding);
     let (reply, answer) = oneshot::channel();
     let profile = profile.clone();
     let session = session.clone();
-    let outstanding = cleanups.begin();
     tokio::spawn(async move {
-        // Counted until the process is stopped and released, however this
-        // task ends: see `DeletionCleanups::settled`.
-        let _outstanding = outstanding;
         let mut reply = reply;
         let outcome = tokio::select! {
             outcome = exchange(&mut scope, &config, &profile, &session) => Some(outcome),
@@ -292,11 +294,21 @@ impl DeletionCleanups {
         self.0.outstanding.fetch_add(1, Ordering::SeqCst);
         Outstanding(self.0.clone())
     }
-    /// Until no deletion this binding started still has a process to stop,
-    /// or for at most the time stopping one takes with `config`'s budgets —
-    /// `shutdown_grace` + 4 × `kill_timeout` — after which what is still
-    /// outstanding has already been handed to the cleanup supervisor or is
-    /// still asking its agent.
+    /// Whether a deletion this binding started is still admitting, launching,
+    /// asking, or releasing what its launch made, including when a retrying
+    /// cleanup owner holds it. Still true after [`Self::settled`] gave up
+    /// waiting on one. A deletion whose task panicked before its cleanup could
+    /// say what it held stays counted for good: its release can no longer be
+    /// confirmed, so the safe answer is that it may still hold something.
+    pub(crate) fn outstanding(&self) -> bool {
+        self.0.outstanding.load(Ordering::SeqCst) > 0
+    }
+
+    /// Until nothing this binding started for a deletion is outstanding, or for
+    /// at most the time stopping one takes with `config`'s budgets —
+    /// `shutdown_grace` + 4 × `kill_timeout`. A cleanup the supervisor is still
+    /// retrying stays outstanding, so it holds this wait to its bound;
+    /// [`Self::outstanding`] still says so afterwards.
     pub(crate) async fn settled(&self, config: &AcpConfig) {
         let budget = config.shutdown_grace + config.kill_timeout * 4;
         let _ = timeout(budget, async {

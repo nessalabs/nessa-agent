@@ -3,5 +3,6 @@
 mod retirement;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) use retirement::{
-    restore_retirement, retire, RetirementAudit, RetirementRecord, RetirementResult,
+    restore_retirement, retire, BackgroundWork, ConversationData, RetirementAudit,
+    RetirementRecord, RetirementResult,
 };

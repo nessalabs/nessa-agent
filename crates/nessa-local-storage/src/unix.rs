@@ -576,6 +576,40 @@ pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// See [`crate::find_shared_read`]. The checks and the later `fchmod` use one
+/// descriptor opened without following a final symlink.
+pub(crate) fn open_shared_read(
+    path: &Path,
+    kind: SharedReadKind,
+) -> io::Result<Option<(File, u32)>> {
+    let directory = matches!(kind, SharedReadKind::Directory);
+    let object = OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 },
+        )
+        .open(path)?;
+    let metadata = object.metadata()?;
+    let mode = metadata.mode() & 0o7777;
+    let expected_kind = if directory {
+        metadata.is_dir()
+    } else {
+        metadata.is_file() && metadata.nlink() == 1
+    };
+    if !expected_kind || metadata.uid() != unsafe { libc::geteuid() } || mode & 0o022 != 0 {
+        return Err(unsafe_file());
+    }
+    if mode & 0o077 == 0 {
+        return Ok(None);
+    }
+    Ok(Some((object, mode)))
+}
+pub(crate) fn tighten(object: &File, mode: u32) -> io::Result<()> {
+    if unsafe { libc::fchmod(object.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -16,7 +16,7 @@ use super::{
     GatewayReconciliationOutcomeError, GatewayReconciliationProgress, GatewayReconciliationRequest,
     GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, GatewayStopRequest,
     GatewayStopSession, LoginShellPath, MonotonicClock, ReconciledGateway,
-    ReconciliationHistoryFact,
+    ReconciliationHistoryFact, StartupStep,
 };
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -381,10 +381,42 @@ struct ProgressState {
     latest_observation: Option<LifecycleObservation>,
     pending_observation: Option<(LifecycleObservationSource, LifecycleObservation)>,
     failed_phase: Option<LifecycleFailedPhase>,
+    /// The step the adapter last reported, shown whenever this attempt's
+    /// projection is starting.
+    step: StartupStep,
 }
 
 impl GatewayReconciliationProgress for StartupProgress {
+    fn step_started(&self, step: StartupStep) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.step = step;
+        drop(state);
+        let starting = self.lifecycle.lock().ok().and_then(|mut current| {
+            let owns_current = current
+                .running
+                .as_ref()
+                .is_some_and(|attempt| Arc::ptr_eq(attempt, &self.attempt));
+            match current.startup.phase() {
+                GatewayStartupPhase::Starting(shown) if owns_current && *shown != step => {
+                    current.startup = current.startup.next(GatewayStartupPhase::Starting(step));
+                    Some(current.startup.clone())
+                }
+                _ => None,
+            }
+        });
+        if let Some(starting) = &starting {
+            publish(&self.events, starting);
+        }
+    }
+
     fn readiness_invalidated(&self) {
+        let step = self
+            .state
+            .lock()
+            .map(|state| state.step)
+            .unwrap_or(StartupStep::Preparing);
         let starting = self.lifecycle.lock().ok().and_then(|mut current| {
             let owns_current = current
                 .running
@@ -393,7 +425,7 @@ impl GatewayReconciliationProgress for StartupProgress {
             if !owns_current || !matches!(current.startup.phase(), GatewayStartupPhase::Ready) {
                 return None;
             }
-            current.startup = current.startup.next(GatewayStartupPhase::Starting);
+            current.startup = current.startup.next(GatewayStartupPhase::Starting(step));
             Some(current.startup.clone())
         });
         if let Some(starting) = &starting {
@@ -1212,7 +1244,9 @@ fn admit_request(
         current.running = Some(receipt.clone());
         let starting =
             matches!(current.startup.phase(), GatewayStartupPhase::Failed(_)).then(|| {
-                current.startup = current.startup.next(GatewayStartupPhase::Starting);
+                current.startup = current
+                    .startup
+                    .next(GatewayStartupPhase::Starting(StartupStep::Preparing));
                 current.startup.clone()
             });
         (receipt.clone(), true, starting)
@@ -1429,6 +1463,7 @@ fn execute_attempt(
             latest_observation: None,
             pending_observation: None,
             failed_phase: None,
+            step: StartupStep::Preparing,
         })),
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| {

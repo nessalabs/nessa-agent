@@ -7,6 +7,7 @@
 //!
 //! Global summon lives in `shortcuts.json` (ADR 0004), not here.
 
+mod repair;
 pub(crate) mod storage;
 
 use std::{
@@ -145,8 +146,13 @@ impl SettingsFile {
     /// The real file, under the config root composition resolved.
     pub fn at(config_root: Option<PathBuf>) -> Self {
         Self {
+            storage: Arc::new(
+                config_root
+                    .as_deref()
+                    .map(storage::FileStorage::repairing)
+                    .unwrap_or_default(),
+            ),
             path: config_root.map(|root| root.join("settings.json")),
-            storage: Arc::new(storage::FileStorage),
         }
     }
 }

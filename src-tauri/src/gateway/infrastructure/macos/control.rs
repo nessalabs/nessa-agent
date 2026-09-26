@@ -2,6 +2,8 @@
 use super::startup::{
     diagnose, log_tail, parse_last_exit, recorded_failure, LastExit, RecordedFailure,
 };
+use crate::gateway::domain::value_objects::RetirementRefusal;
+pub(super) use crate::gateway::infrastructure::retirement::RetirementFailure;
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -10,7 +12,8 @@ use std::{
     net::TcpStream,
     os::fd::AsRawFd,
     path::Path,
-    process::Command,
+    process::{Command, Output, Stdio},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -87,10 +90,13 @@ pub(super) fn classify(
 }
 /// `print` is diagnostic output: unknown, missing or ambiguous PID syntax fails closed.
 pub(super) fn service_status(service: &str) -> Result<ServiceStatus, String> {
-    let output = Command::new("/bin/launchctl")
-        .args(["print", service])
-        .output()
-        .map_err(|error| error.to_string())?;
+    let output = bounded_output(
+        Command::new("/bin/launchctl")
+            .args(["print", service])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        LAUNCHCTL_DEADLINE,
+    )?;
     if !output.status.success() {
         return Ok(ServiceStatus {
             loaded: false,
@@ -209,10 +215,13 @@ pub(super) fn lock_namespace(data: &Path) -> Result<NamespaceLock, String> {
     }
 }
 pub(super) fn launchctl(args: &[&str]) -> Result<(), String> {
-    let output = Command::new("/bin/launchctl")
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let output = bounded_output(
+        Command::new("/bin/launchctl")
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        LAUNCHCTL_DEADLINE,
+    )?;
     if output.status.success() {
         Ok(())
     } else {
@@ -222,6 +231,95 @@ pub(super) fn launchctl(args: &[&str]) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+/// The longest any one `launchctl` call in a registration may take (ADR 221).
+/// A call past it is ended and fails the step it belongs to, so every startup
+/// step finishes, one way or the other, without the panel keeping a timer.
+pub(super) const LAUNCHCTL_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Why a bounded command gave no output.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BoundedOutputError {
+    /// It was still running at its deadline and was ended. What it had already
+    /// done is unknown.
+    Deadline(Duration),
+    /// It could not be run or waited on.
+    Run(String),
+}
+impl std::fmt::Display for BoundedOutputError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Deadline(deadline) => write!(
+                output,
+                "launchctl did not finish within {} s",
+                deadline.as_secs()
+            ),
+            Self::Run(error) => output.write_str(error),
+        }
+    }
+}
+impl From<BoundedOutputError> for String {
+    fn from(error: BoundedOutputError) -> Self {
+        error.to_string()
+    }
+}
+
+/// Run a `launchctl` command with piped output, ending it at `deadline`.
+pub(super) fn bounded_output(
+    command: &mut Command,
+    deadline: Duration,
+) -> Result<Output, BoundedOutputError> {
+    let run = |error: String| BoundedOutputError::Run(error);
+    let mut child = command.spawn().map_err(|error| run(error.to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| run("launchctl stdout unavailable".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| run("launchctl stderr unavailable".into()))?;
+    let stdout = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut output = stdout;
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut output = stderr;
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let until = Instant::now() + deadline;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(run(error.to_string()));
+            }
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout.join();
+            let _ = stderr.join();
+            return Err(BoundedOutputError::Deadline(deadline));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Output {
+        status,
+        stdout: stdout
+            .join()
+            .map_err(|_| run("launchctl stdout reader panicked".into()))?
+            .map_err(|error| run(error.to_string()))?,
+        stderr: stderr
+            .join()
+            .map_err(|_| run("launchctl stderr reader panicked".into()))?
+            .map_err(|error| run(error.to_string()))?,
+    })
 }
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let directory = path.parent().ok_or("Missing parent directory")?;
@@ -265,6 +363,10 @@ struct RetirementResult {
     cleanup_error: Option<String>,
     #[serde(deserialize_with = "required_nullable_error")]
     audit_error: Option<String>,
+    /// Why not, by a published name (ADR 221). Absent from gateways that
+    /// predate the names, which read as not confirmed.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -397,6 +499,7 @@ fn parse_retirement_evidence(bytes: &[u8]) -> Result<Option<RetirementEvidence>,
                 || result.cleanup_error.is_some()
                 || result.audit_error.is_some())
         || (!result.retired && result.cleanup_error.is_none() && result.audit_error.is_none())
+        || (result.retired && result.refusal.is_some())
     {
         return Err(
             "Invalid retirement fence identity or acknowledgement; service preserved".into(),
@@ -442,7 +545,7 @@ fn acknowledge(
     instance: &str,
     running_generation: &str,
     target_generation: &str,
-) -> Result<bool, String> {
+) -> Result<bool, RetirementFailure> {
     let Ok(result) = serde_json::from_slice::<RetirementResult>(bytes) else {
         return Ok(false);
     };
@@ -476,14 +579,18 @@ fn acknowledge(
         || (result.retired
             && (result.retirement_request_id.is_none()
                 || !valid_confirmed_cause(result.retirement_cause.as_ref())))
+        || (result.retired && result.refusal.is_some())
     {
         return Ok(false);
     }
     if !result.retired || result.cleanup_error.is_some() || result.audit_error.is_some() {
-        return Err(format!(
-            "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
-            result.retired, result.cleanup_error, result.audit_error
-        ));
+        return Err(RetirementFailure::Refused {
+            refusal: RetirementRefusal::named(result.refusal.as_deref()),
+            message: format!(
+                "Gateway retirement was not acknowledged: retired={}, cleanup={:?}, audit={:?}",
+                result.retired, result.cleanup_error, result.audit_error
+            ),
+        });
     }
     Ok(true)
 }
@@ -509,7 +616,7 @@ fn read_acknowledgement(
     instance: &str,
     running_generation: &str,
     target_generation: &str,
-) -> Result<bool, String> {
+) -> Result<bool, RetirementFailure> {
     match nessa_local_storage::open(&directory.join("result.json"), OpenMode::ReadNonblocking) {
         Ok(file) => {
             let mut bytes = Vec::new();
@@ -520,7 +627,7 @@ fn read_acknowledgement(
             if bytes.len() > 65536 {
                 return Ok(false);
             }
-            if !acknowledge(
+            let answer = acknowledge(
                 &bytes,
                 request,
                 target,
@@ -528,19 +635,22 @@ fn read_acknowledgement(
                 instance,
                 running_generation,
                 target_generation,
-            )? {
+            );
+            if matches!(answer, Ok(false)) {
                 return Ok(false);
             }
             // Reading a renamed file does not establish crash durability. Complete
-            // both persistence barriers before bootout can rely on this fence.
+            // both persistence barriers before bootout can rely on this fence,
+            // and before a refusal can be acted on (ADR 221): either one may be
+            // what lets the host unload the old service.
             file.sync_all()
                 .map_err(|error| format!("Cannot persist retirement acknowledgement: {error}"))?;
             nessa_local_storage::sync_directory(directory)
                 .map_err(|error| format!("Cannot persist retirement fence directory: {error}"))?;
-            Ok(true)
+            answer
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(error.to_string().into()),
     }
 }
 /// The running gateway asked to retire, and the runtime replacing it.
@@ -557,7 +667,7 @@ pub(super) fn retire(
     launchctl: &dyn super::Launchctl,
     data: &Path,
     retirement: Retirement<'_>,
-) -> Result<(), String> {
+) -> Result<(), RetirementFailure> {
     let Retirement {
         service,
         target,
@@ -595,7 +705,7 @@ pub(super) fn retire(
         super::LifecycleCommandResult::Rejected(message)
         | super::LifecycleCommandResult::Failed(message)
         | super::LifecycleCommandResult::Indeterminate(message) => {
-            return Err(format!("launchctl kill SIGUSR2 {service}: {message}"))
+            return Err(format!("launchctl kill SIGUSR2 {service}: {message}").into())
         }
     }
     let deadline = Instant::now() + Duration::from_secs(75);
