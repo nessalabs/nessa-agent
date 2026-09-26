@@ -2747,10 +2747,9 @@ impl ConversationService {
     /// deletion whose process is still being stopped. A successful stop
     /// releases its slot, so it is not counted.
     ///
-    /// It reads the SDK's own facts, `Agent::attachment_cleanup_pending` and
-    /// `Agent::provider_open_in_flight`, never the variant of the error a stop
-    /// returned: that variant is a diagnostic and does not say whether
-    /// resources remain (ADR 221).
+    /// It reads the SDK's own fact, `Agent::may_hold_provider_resources`,
+    /// never the variant of the error a stop returned: that variant is a
+    /// diagnostic and does not say whether resources remain (ADR 221).
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) async fn owns_unreleased_resources(&self) -> bool {
         let slots: Vec<_> = self
@@ -2764,9 +2763,7 @@ impl ConversationService {
         for slot in slots {
             let holds = match slot.value.get() {
                 None => true,
-                Some(Ok(live)) => {
-                    live.agent.attachment_cleanup_pending() || live.agent.provider_open_in_flight()
-                }
+                Some(Ok(live)) => live.agent.may_hold_provider_resources(),
                 Some(Err(failed)) => failed.holds,
             };
             if holds {

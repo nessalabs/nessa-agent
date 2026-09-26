@@ -333,8 +333,11 @@ impl AttachmentLease {
         self.opening.fetch_add(1, Ordering::SeqCst);
         OpenInFlight(&self.opening)
     }
-    pub(crate) fn open_in_flight(&self) -> bool {
-        self.opening.load(Ordering::SeqCst) > 0
+    /// Whether an open is running or armed resources are unconfirmed. The
+    /// count is read first: an open arms `pending` before releasing its count,
+    /// so reading in this order cannot miss what an open kept.
+    pub(crate) fn may_hold_resources(&self) -> bool {
+        self.opening.load(Ordering::SeqCst) > 0 || self.pending.load(Ordering::SeqCst)
     }
     pub(crate) async fn cleanup(&self) -> CleanupReport {
         let mut state = self.state.lock().await;
