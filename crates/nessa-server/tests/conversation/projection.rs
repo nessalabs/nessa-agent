@@ -692,3 +692,83 @@ fn asks_nobody_can_answer_do_not_crowd_out_one_somebody_can() {
     failed_receipts.event(&asked("live", "1"));
     assert_eq!(offers_only_running_asks(&mut failed_receipts), 1);
 }
+
+/// Twenty-four newer turns push a running turn's message out of the view. Its
+/// review or ask is still waiting, and a truncated view still offers it.
+fn evict_running_execution(projection: &mut Projection) {
+    for index in 0..24 {
+        projection.admitted(
+            &format!("queued-{index}"),
+            &said("later"),
+            ConversationPendingMode::Queued,
+        );
+    }
+    let view = projection.read();
+    assert!(view
+        .messages
+        .iter()
+        .all(|message| message.execution_id != "execution"));
+    assert!(view.truncated);
+}
+
+#[test]
+fn a_review_whose_message_was_pushed_out_survives_lag_recovery() {
+    // Absent is not the same as before a restart: this turn began here and is
+    // running. Recovery took its absence as death and dropped the review, and
+    // with another turn's review recovered beside it, dropped it silently.
+    let pending = review("{}".into());
+    let mut alone = projection();
+    alone.event(&pending);
+    evict_running_execution(&mut alone);
+    assert_eq!(alone.read().permissions.len(), 1);
+    alone.lagged();
+    alone.recover_permissions(Some(&review_snapshot(vec![pending.clone()])));
+    let view = alone.read();
+    assert_eq!(
+        view.permissions.len(),
+        1,
+        "{:?}",
+        view.permission_view_error
+    );
+    assert_eq!(view.permissions[0].execution_id, "execution");
+
+    let mut beside = projection();
+    beside.event(&pending);
+    for index in 0..23 {
+        beside.admitted(
+            &format!("queued-{index}"),
+            &said("later"),
+            ConversationPendingMode::Queued,
+        );
+    }
+    let other = ExecutionEvent::new(
+        ExecutionId::new("queued-22").unwrap(),
+        pending.update().clone(),
+    );
+    beside.event(&other);
+    beside.admitted("queued-23", &said("later"), ConversationPendingMode::Queued);
+    assert_eq!(beside.read().permissions.len(), 2);
+    beside.lagged();
+    let mut snapshot = review_snapshot(vec![pending]);
+    let mut second = snapshot.invocations[0].clone();
+    second.request.execution_id = ExecutionId::new("queued-22").unwrap();
+    second.events = vec![other];
+    snapshot.invocations.push(second);
+    beside.recover_permissions(Some(&snapshot));
+    assert_eq!(beside.read().permissions.len(), 2);
+}
+
+#[test]
+fn an_ask_lag_dropped_from_a_turn_whose_message_was_pushed_out_is_recovered() {
+    let mut projection = projection();
+    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
+        "working",
+    ))));
+    evict_running_execution(&mut projection);
+    // The ask is the event the lag dropped.
+    projection.lagged();
+    projection.recover_permissions(Some(&review_snapshot(vec![asked("execution", "1")])));
+    let view = projection.read();
+    assert_eq!(view.questions.len(), 1);
+    assert_eq!(view.questions[0].execution_id, "execution");
+}

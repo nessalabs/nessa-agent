@@ -32,6 +32,12 @@ pub(super) struct Projection {
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
+    /// Executions this process saw begin — admitted here, or observed live —
+    /// and has not seen stop running. Only these can be waiting on anybody
+    /// through this process, and a message missing from the view says nothing
+    /// either way: one from before a restart and one pushed out by newer turns
+    /// are both absent. This is what tells them apart during lag recovery.
+    live_here: HashSet<String>,
 }
 pub(super) fn clipped(value: &str, bytes: usize) -> String {
     let mut end = value.len().min(bytes);
@@ -62,6 +68,7 @@ impl Projection {
             resolved_permissions: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
+            live_here: HashSet::new(),
             view: ConversationView {
                 conversation_id: id,
                 revision: String::new(),
@@ -126,6 +133,7 @@ impl Projection {
         self.view.messages.len() - 1
     }
     pub fn admitted(&mut self, id: &str, input: &UserMessage, mode: ConversationPendingMode) {
+        self.live_here.insert(id.to_owned());
         let text = input.text_str();
         let attachments: Vec<ConversationAttachment> =
             input.images().iter().map(Into::into).collect();
@@ -287,11 +295,14 @@ impl Projection {
     /// the only person who could answer it.
     ///
     /// Returns whether the execution is waiting, so its evidence may be offered.
-    /// Only a message this view already holds as queued or running can be: a
-    /// message is never created here, and one shown unresolved is a turn from
-    /// before a restart that nothing in this process can answer for. Recreating
-    /// it would put a dead turn back on screen as running, and push a live one
-    /// out to make room.
+    /// A message present in the view decides by its status: queued or running
+    /// is waiting, anything else — unresolved above all, a turn from before a
+    /// restart that nothing here can answer for — is not. A message absent from
+    /// the view decides by where the turn began: one this process saw begin
+    /// was pushed out by newer turns and is still waiting, and is offered
+    /// without its message, as a truncated view allows; any other is not. A
+    /// message is never created here — recreating one put a dead turn back on
+    /// screen as running and pushed a live one out to make room.
     fn recovered_waiting(&mut self, execution: &str) -> bool {
         let Some(index) = self
             .view
@@ -299,7 +310,7 @@ impl Projection {
             .iter()
             .position(|message| message.execution_id == execution)
         else {
-            return false;
+            return self.live_here.contains(execution) && self.view.truncated;
         };
         match self.view.messages[index].status {
             ConversationMessageStatus::Running => true,
@@ -320,6 +331,7 @@ impl Projection {
     /// left in place, a stale entry still counted against the open limits and
     /// crowded out an ask somebody could answer.
     fn stop_waiting(&mut self, execution: &str) {
+        self.live_here.remove(execution);
         self.view
             .permissions
             .retain(|permission| permission.execution_id != execution);
@@ -482,6 +494,13 @@ impl Projection {
     /// Apply one live broadcast observation. Live updates carry no durable
     /// cursor, so the lag fence drops their text.
     pub fn event(&mut self, event: &ExecutionEvent) {
+        if !self
+            .terminal_executions
+            .contains(event.execution_id().as_str())
+        {
+            self.live_here
+                .insert(event.execution_id().as_str().to_owned());
+        }
         self.observe(event, false);
     }
     /// Apply one observation. `authoritative` marks replay of a committed record
