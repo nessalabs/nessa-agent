@@ -319,6 +319,15 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev \
             webkit2gtk-driver xvfb
       - run: node scripts/check-desktop.mjs
+      # Hosted Windows runners are administrators with UAC off, so this leg can
+      # prove the Task Scheduler identity and cleanup agreement only for an
+      # elevated caller, and declares that. The product's standard-user model
+      # (the script's default) still needs a non-elevated interactive session;
+      # #205 records that as open.
+      - name: Prove the Windows Task Scheduler gateway model
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/desktop/check-windows-task-scheduler.ps1 -CallerContext Administrator
       - name: Exercise the disposable systemd user-manager lifecycle
         if: runner.os == 'Linux'
         run: bash scripts/desktop/check-systemd-user-service.sh
