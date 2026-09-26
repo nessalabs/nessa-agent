@@ -47,11 +47,13 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const JOB_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
+const FRESH_RECOVERY: &str =
+    "Recovered the unresolved systemd lifecycle by fresh observation; no native command was replayed";
 
 pub(crate) struct SystemdGateway {
     configuration: ServiceConfiguration,
@@ -124,10 +126,12 @@ struct SystemdJobAuthority<'a> {
     paths: &'a LinuxGatewayPaths,
     runtime_context: &'a dyn LinuxRuntimeContext,
     clock: &'a dyn MonotonicClock,
+    /// When a start stops waiting for the server to advertise. Readiness
+    /// after the start shares it, so the two waits have one deadline.
+    ready_deadline: Instant,
 }
 
 struct RecoveryPhysical<'a> {
-    manager: &'a SystemdManagerIdentity,
     snapshot: Option<&'a UnitSnapshot>,
     incarnation: Option<&'a ReconciliationIncarnation>,
     target_artifact_present: bool,
@@ -480,15 +484,32 @@ impl GatewayHost for SystemdGateway {
                     )
                 })?)
             }
-            _ => None,
+            // Not loaded: an owned definition on disk is the one to replace.
+            // Foreign bytes stay, and publication refuses them.
+            (None, _) => owned_file_bytes(&paths.unit_file)
+                .map_err(pre_admission)?
+                .filter(|bytes| {
+                    owned_render(
+                        bytes,
+                        &paths,
+                        &unit,
+                        DefinitionAuthority {
+                            configuration: &self.configuration,
+                            data: &data,
+                            home: &self.home,
+                        },
+                    )
+                    .is_ok()
+                }),
         };
-        // Admission found an exact unit with no process; each effect that
-        // changes or starts it first confirms that is still so.
-        let admitted_inactive = installed.is_some() && before.is_none();
+        // With no running prior (a fresh install or an inactive unit), each
+        // effect that changes or starts the unit first confirms that nothing
+        // started it meanwhile.
+        let no_running_prior = before.is_none();
         let authorize_unit_change = || {
             self.revalidate_effect_authority(manager.as_ref(), &unit, &paths)
                 .map_err(|error| error.to_string())?;
-            if admitted_inactive {
+            if no_running_prior {
                 require_no_process(manager.as_ref(), &unit)?;
             }
             Ok(())
@@ -767,12 +788,14 @@ impl GatewayHost for SystemdGateway {
 
         progress.history_observed(ReconciliationHistoryFact::BootstrapCommandRequested);
         authorize_unit_change().map_err(GatewayError::Registration)?;
+        let ready_deadline = self.clock.now() + READY_TIMEOUT;
         start_unit(
             progress,
             &unit,
             &target,
             &data,
             &paths,
+            ready_deadline,
             LinuxRuntime {
                 manager: manager.as_ref(),
                 context: self.runtime_context.as_ref(),
@@ -788,6 +811,7 @@ impl GatewayHost for SystemdGateway {
             &target,
             &rendered,
             &data,
+            ready_deadline,
             LinuxRuntime {
                 manager: manager.as_ref(),
                 context: self.runtime_context.as_ref(),
@@ -967,19 +991,21 @@ impl GatewayHost for SystemdGateway {
             self.runtime_context.as_ref(),
         )
         .map_err(GatewayError::Registration)?;
-        let broad_artifact_present = exact_target_artifact_present(
-            &paths,
-            &unit,
-            recovery.target(),
-            observed.snapshot.as_ref(),
-            DefinitionAuthority {
-                configuration: &self.configuration,
-                data: &data,
-                home: &self.home,
-            },
-        )
-        .map_err(GatewayError::Registration)?;
-        let observation = if let Some(step) = recovery.pending_step() {
+        let broad_artifact_present = || {
+            exact_target_artifact_present(
+                &paths,
+                &unit,
+                recovery.target(),
+                observed.snapshot.as_ref(),
+                DefinitionAuthority {
+                    configuration: &self.configuration,
+                    data: &data,
+                    home: &self.home,
+                },
+            )
+            .map_err(GatewayError::Registration)
+        };
+        let (observation, message) = if let Some(step) = recovery.pending_step() {
             if step.completion().is_none() {
                 let detail = match step.step().effect() {
                     LifecycleEffect::StartSystemdUnit { .. }
@@ -1009,10 +1035,9 @@ impl GatewayHost for SystemdGateway {
                 &paths,
                 recovery.target(),
                 RecoveryPhysical {
-                    manager: manager.identity(),
                     snapshot: observed.snapshot.as_ref(),
                     incarnation: observed.incarnation.as_ref(),
-                    target_artifact_present: broad_artifact_present,
+                    target_artifact_present: broad_artifact_present()?,
                 },
                 DefinitionAuthority {
                     configuration: &self.configuration,
@@ -1029,16 +1054,20 @@ impl GatewayHost for SystemdGateway {
             )?;
             let source = step.source();
             retry(|| journal.observation(&source, &observation))?;
-            observation
+            (observation, FRESH_RECOVERY)
         } else if recovery.has_effect_plan() {
             // Every plan settled and was observed. A step's observation
             // records only that step's artifact, so it is not comparable with
             // a fresh whole-target observation; close on the durable one.
-            recovery.latest_observation().cloned().ok_or_else(|| {
+            let observation = recovery.latest_observation().cloned().ok_or_else(|| {
                 GatewayError::Registration(
                     "The unresolved systemd plan has no durable observation".into(),
                 )
-            })?
+            })?;
+            (
+                observation,
+                "Recovered settled systemd plans from their last durable observation; no native command was replayed",
+            )
         } else {
             // No plan means no effect was authorized: record what is there,
             // whatever put it there, and close without a command.
@@ -1046,16 +1075,16 @@ impl GatewayHost for SystemdGateway {
                 recovery
                     .latest_observation()
                     .map_or(1, |value| value.version().saturating_add(1)),
-                broad_artifact_present,
+                broad_artifact_present()?,
             )?;
             retry(|| journal.observation(&LifecycleObservationSource::Intent, &observation))?;
-            observation
+            (observation, FRESH_RECOVERY)
         };
         retry(|| {
             journal.physical_outcome(
                 &LifecyclePhysicalOutcome::Failed {
                     phase: LifecycleFailedPhase::Observation,
-                    message: "Recovered the unresolved systemd lifecycle by fresh observation; no native command was replayed".into(),
+                    message: message.into(),
                 },
                 Some(&observation),
                 ReconciliationCleanupDecision::RetainPrior,
@@ -1643,7 +1672,7 @@ fn recovery_artifact_present(
                 definition_transaction(&paths.unit_file, target.service_generation())?;
             if transaction.current.as_deref().is_some_and(|bytes| {
                 definition_digest(bytes) != *planned_digest
-                    && !unreplaced_definition(bytes, paths, target, authority)
+                    && !unreplaced_definition(bytes, paths, target, planned_digest, authority)
             }) {
                 return Err(
                     "Recovered definition cleanup disagrees with the admitted digest".into(),
@@ -1678,10 +1707,12 @@ fn recovery_artifact_present(
         LifecycleEffect::SettleSystemdWantsLinkTransaction { .. } => {
             wants_link_temporary_present(&paths.wants_directory, target.service_generation())
         }
-        LifecycleEffect::ReloadSystemdManager { manager, unit } => match physical.snapshot {
+        // The planned manager may have been replaced (a reboot or relogin);
+        // the fresh snapshot comes from the current verified manager, which
+        // loaded the file itself, so the reload is judged by what it declares.
+        LifecycleEffect::ReloadSystemdManager { unit, .. } => match physical.snapshot {
             Some(state)
-                if state.manager == *manager
-                    && unit.as_str() == target.service()
+                if unit.as_str() == target.service()
                     && state.id == unit.as_str()
                     && state.names == [unit.as_str()]
                     && snapshot_declares_target(state, target) =>
@@ -1691,8 +1722,7 @@ fn recovery_artifact_present(
             // Still loaded as another target with no process: the reload
             // has not taken effect.
             Some(state)
-                if state.manager == *manager
-                    && unit.as_str() == target.service()
+                if unit.as_str() == target.service()
                     && state.id == unit.as_str()
                     && state.names == [unit.as_str()]
                     && has_no_process(state) =>
@@ -1702,20 +1732,11 @@ fn recovery_artifact_present(
             None => Ok(false),
             Some(_) => Err("Recovered manager reload evidence disagrees with its plan".into()),
         },
-        LifecycleEffect::StartSystemdUnit {
-            manager,
-            unit,
-            mode,
-        }
-        | LifecycleEffect::StopSystemdUnit {
-            manager,
-            unit,
-            mode,
-        } => {
-            if manager != physical.manager
-                || unit.as_str() != target.service()
-                || *mode != SystemdJobMode::Fail
-            {
+        // A job planned in a manager since replaced settled there or not at
+        // all; what the current manager shows is the fresh fact.
+        LifecycleEffect::StartSystemdUnit { unit, mode, .. }
+        | LifecycleEffect::StopSystemdUnit { unit, mode, .. } => {
+            if unit.as_str() != target.service() || *mode != SystemdJobMode::Fail {
                 return Err("Recovered systemd job plan disagrees with current authority".into());
             }
             Ok(physical.target_artifact_present)
@@ -1820,18 +1841,19 @@ fn definition_matches_target(
     Ok(declared == *target)
 }
 
-/// Current definition bytes that are an exact owned render of a target other
-/// than `target`: a publication planned for `target` never replaced them.
+/// Current definition bytes that are an exact owned render other than the
+/// planned one: the planned publication never replaced them. The render may
+/// declare the same target when only its agent path changed.
 fn unreplaced_definition(
     bytes: &[u8],
     paths: &LinuxGatewayPaths,
     target: &ReconciliationTarget,
+    planned_digest: &str,
     authority: DefinitionAuthority<'_>,
 ) -> bool {
-    SystemdUnitName::parse(target.service().to_owned())
-        .ok()
-        .and_then(|unit| owned_render(bytes, paths, &unit, authority).ok())
-        .is_some_and(|(declared, _)| declared != *target)
+    definition_digest(bytes) != planned_digest
+        && SystemdUnitName::parse(target.service().to_owned())
+            .is_ok_and(|unit| owned_render(bytes, paths, &unit, authority).is_ok())
 }
 
 /// The target a definition declares, when the bytes are exactly what this
@@ -1880,14 +1902,14 @@ fn inactive_definition(
     let Some(bytes) = owned_file_bytes(&paths.unit_file).map_err(pre_admission)? else {
         return Ok(None);
     };
-    let Ok((_, rendered)) = owned_render(&bytes, paths, unit, authority) else {
+    if owned_render(&bytes, paths, unit, authority).is_err() {
         return Ok(None);
-    };
-    Ok(
-        installed_unit_matches(snapshot, manager, paths, unit, &rendered)
-            .map_err(|error| pre_admission(error.to_string()))?
-            .then_some(bytes),
-    )
+    }
+    // What the manager has loaded may predate the file until the reload this
+    // admission plans, so only ownership is compared, not loaded content.
+    Ok(unit_ownership_matches(snapshot, manager, paths, unit)
+        .map_err(|error| pre_admission(error.to_string()))?
+        .then_some(bytes))
 }
 
 fn require_no_process(
@@ -1903,9 +1925,13 @@ fn require_no_process(
 }
 
 fn has_no_process(snapshot: &UnitSnapshot) -> bool {
-    snapshot.active_state == "inactive"
-        && snapshot.sub_state == "dead"
-        && snapshot.main_process_id == 0
+    classify_unit_state(Some(snapshot), None) == SystemdUnitState::Inactive
+}
+
+fn has_running_process(snapshot: &UnitSnapshot) -> bool {
+    snapshot.active_state == "active"
+        && snapshot.sub_state == "running"
+        && snapshot.main_process_id != 0
 }
 
 fn settle_recovered_definition(
@@ -1921,7 +1947,7 @@ fn settle_recovered_definition(
             .as_deref()
             .is_some_and(|bytes| {
                 definition_digest(bytes) == planned_digest
-                    || unreplaced_definition(bytes, paths, target, authority)
+                    || unreplaced_definition(bytes, paths, target, planned_digest, authority)
             })
             .then_some(())
             .ok_or_else(|| {
@@ -2010,6 +2036,7 @@ fn start_unit(
     target: &ReconciliationTarget,
     data: &Path,
     paths: &LinuxGatewayPaths,
+    ready_deadline: Instant,
     runtime: LinuxRuntime<'_>,
 ) -> Result<(), GatewayError> {
     run_systemd_job(
@@ -2029,6 +2056,7 @@ fn start_unit(
             paths,
             runtime_context: runtime.context,
             clock: runtime.clock,
+            ready_deadline,
         },
     )
 }
@@ -2058,6 +2086,7 @@ fn stop_unit(
             paths,
             runtime_context: runtime.context,
             clock: runtime.clock,
+            ready_deadline: runtime.clock.now(),
         },
     )
 }
@@ -2151,15 +2180,27 @@ fn run_systemd_job(
         }
         Err(error) => (false, Err(error)),
     };
-    attempt_delivery?;
-    completion_delivery?;
-    observation_delivery?;
-    reached.then_some(()).ok_or_else(|| {
-        GatewayError::Registration(format!(
+    let unreached = (!reached).then(|| {
+        format!(
             "systemd operation for {} did not reach its requested physical state after {completion:?}",
             authority.target.service()
-        ))
-    })
+        )
+    });
+    // An audit failure keeps the physical result it did not deliver.
+    for delivery in [
+        attempt_delivery.map(|_| ()),
+        completion_delivery.map(|_| ()),
+        observation_delivery.map(|_| ()),
+    ] {
+        match delivery {
+            Err(audit @ GatewayError::Audit { .. }) => {
+                return Err(audit_with_physical(audit, unreached.into_iter()))
+            }
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+    }
+    unreached.map_or(Ok(()), |failure| Err(GatewayError::Registration(failure)))
 }
 
 /// A start job ends when systemd forks the server, before the server
@@ -2169,7 +2210,6 @@ fn run_systemd_job(
 fn observe_settled_job(
     authority: &SystemdJobAuthority<'_>,
 ) -> Result<ObservedSystemdState, GatewayError> {
-    let deadline = authority.clock.now() + READY_TIMEOUT;
     loop {
         let observed = observe_after_job(
             authority.manager,
@@ -2180,7 +2220,7 @@ fn observe_settled_job(
         if authority.operation != SystemdJobOperation::Start
             || systemd_job_reached_state(authority.operation, authority.target, &observed)
             || !start_still_settling(&observed)
-            || authority.clock.now() >= deadline
+            || authority.clock.now() >= authority.ready_deadline
         {
             return Ok(observed);
         }
@@ -2192,11 +2232,7 @@ fn start_still_settling(observed: &ObservedSystemdState) -> bool {
     match observed.unit_state {
         SystemdUnitState::Activating => true,
         // Running, but not yet advertising an endpoint.
-        SystemdUnitState::Unknown => observed.snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.active_state == "active"
-                && snapshot.sub_state == "running"
-                && snapshot.main_process_id != 0
-        }),
+        SystemdUnitState::Unknown => observed.snapshot.as_ref().is_some_and(has_running_process),
         _ => false,
     }
 }
@@ -2259,7 +2295,7 @@ fn classify_unit_state(
     match (snapshot.active_state.as_str(), snapshot.sub_state.as_str()) {
         ("inactive", "dead") if snapshot.main_process_id == 0 => SystemdUnitState::Inactive,
         ("activating", _) => SystemdUnitState::Activating,
-        ("active", "running") if snapshot.main_process_id != 0 && incarnation.is_some() => {
+        ("active", "running") if has_running_process(snapshot) && incarnation.is_some() => {
             SystemdUnitState::Active
         }
         ("deactivating", _) => SystemdUnitState::Deactivating,
@@ -2335,9 +2371,9 @@ fn wait_ready(
     target: &ReconciliationTarget,
     rendered: &RenderedUnit,
     data: &Path,
+    deadline: Instant,
     runtime: LinuxRuntime<'_>,
 ) -> Result<ReconciledGateway, GatewayError> {
-    let deadline = runtime.clock.now() + READY_TIMEOUT;
     loop {
         let health = runtime
             .context
@@ -2370,21 +2406,29 @@ fn snapshot_matches(
     unit: &SystemdUnitName,
     rendered: &RenderedUnit,
 ) -> Result<bool, GatewayError> {
-    Ok(snapshot.active_state == "active"
-        && snapshot.sub_state == "running"
+    Ok(has_running_process(snapshot)
         && snapshot.invocation.is_some()
-        && snapshot.main_process_id != 0
-        && installed_unit_matches(snapshot, manager, paths, unit, rendered)?)
+        && unit_ownership_matches(snapshot, manager, paths, unit)?
+        && snapshot.service_type == "simple"
+        && snapshot.restart == "on-failure"
+        && snapshot.restart_microseconds == 5_000_000
+        && snapshot.timeout_stop_microseconds == 30_000_000
+        && snapshot.working_directory == rendered.working_directory
+        && snapshot.environment.is_empty()
+        && snapshot.exec_start_ex.len() == 1
+        && snapshot.exec_start_ex[0].0 == "/usr/bin/env"
+        && snapshot.exec_start_ex[0].1 == rendered.arguments
+        && snapshot.exec_start_ex[0].2 == ["no-env-expand"]
+        && bytes_match(&paths.unit_file, &rendered.bytes).map_err(GatewayError::Registration)?)
 }
 
-/// The installed unit is exactly the owned definition `rendered`, whatever
-/// its process is doing.
-fn installed_unit_matches(
+/// The unit is this desktop's, loaded from its owned file with no override
+/// and enabled through its owned link, whatever it has loaded or is running.
+fn unit_ownership_matches(
     snapshot: &UnitSnapshot,
     manager: &dyn LinuxUserManager,
     paths: &LinuxGatewayPaths,
     unit: &SystemdUnitName,
-    rendered: &RenderedUnit,
 ) -> Result<bool, GatewayError> {
     manager
         .recheck_identity()
@@ -2399,19 +2443,8 @@ fn installed_unit_matches(
         && snapshot.fragment_path == expected_fragment
         && fs::canonicalize(&paths.unit_file).is_ok_and(|canonical| canonical == paths.unit_file)
         && snapshot.drop_in_paths.is_empty()
-        && snapshot.service_type == "simple"
-        && snapshot.restart == "on-failure"
-        && snapshot.restart_microseconds == 5_000_000
-        && snapshot.timeout_stop_microseconds == 30_000_000
-        && snapshot.working_directory == rendered.working_directory
-        && snapshot.environment.is_empty()
-        && snapshot.exec_start_ex.len() == 1
-        && snapshot.exec_start_ex[0].0 == "/usr/bin/env"
-        && snapshot.exec_start_ex[0].1 == rendered.arguments
-        && snapshot.exec_start_ex[0].2 == ["no-env-expand"]
         && snapshot.unit_file_state == "enabled"
         && snapshot.unit_path == manager.unit_path().map_err(GatewayError::Registration)?
-        && bytes_match(&paths.unit_file, &rendered.bytes).map_err(GatewayError::Registration)?
         && wants_link_matches(&paths.wants_link, &paths.unit_file)
             .map_err(GatewayError::Registration)?)
 }
@@ -3144,8 +3177,8 @@ mod tests {
     use super::*;
     use crate::gateway::{
         application::{
-            testing::discard_reconciliation_audit, GatewayLifecycleRecoveryStep,
-            GatewayReconciliationRequest, SystemMonotonicClock,
+            testing::discard_reconciliation_audit, GatewayReconciliationRequest,
+            SystemMonotonicClock,
         },
         domain::value_objects::{
             LifecycleRecordKind, ReconciliationCorrelation, ReconciliationEvidence,
@@ -3156,9 +3189,10 @@ mod tests {
         EndpointIdentity, GatewayEndpoint, ManagedRuntimeIdentity,
     };
     use std::{
+        os::unix::fs::DirBuilderExt,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     fn private_tempdir() -> tempfile::TempDir {
@@ -3557,6 +3591,7 @@ mod tests {
                             paths: &paths,
                             runtime_context: &context,
                             clock: &clock,
+                            ready_deadline: SystemMonotonicClock.now() + READY_TIMEOUT,
                         },
                     );
                     assert_eq!(
@@ -3641,6 +3676,7 @@ mod tests {
                 paths: &paths,
                 runtime_context: &context,
                 clock: &SystemMonotonicClock,
+                ready_deadline: SystemMonotonicClock.now() + READY_TIMEOUT,
             },
         );
         assert!(matches!(result, Err(GatewayError::Audit { .. })));
@@ -4432,13 +4468,14 @@ mod tests {
         }
     }
 
-    /// An exact owned unit installed for `target`, stopped with no process,
-    /// with its definition and wants link on disk.
+    /// An exact owned unit installed for a runtime staged beside it, stopped
+    /// with no process, with its definition and wants link on disk.
     struct Installed {
         _temporary: tempfile::TempDir,
         configuration: ServiceConfiguration,
         home: PathBuf,
         data: PathBuf,
+        runtime: PathBuf,
         paths: LinuxGatewayPaths,
         unit: SystemdUnitName,
         target: ReconciliationTarget,
@@ -4446,11 +4483,42 @@ mod tests {
         snapshot: UnitSnapshot,
     }
 
+    type SnapshotChange = fn(&mut UnitSnapshot);
+
+    fn running(mut snapshot: UnitSnapshot) -> UnitSnapshot {
+        snapshot.active_state = "active".into();
+        snapshot.sub_state = "running".into();
+        snapshot.invocation = Some(SystemdInvocationId::new(vec![7; 16]).unwrap());
+        snapshot.main_process_id = 99;
+        snapshot
+    }
+
     impl Installed {
         fn new() -> Self {
             let temporary = private_tempdir();
             let root = temporary.path().canonicalize().unwrap();
-            let (unit, target, mut snapshot) = fixture();
+            let runtime = root.join("source-runtime");
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&runtime)
+                .unwrap();
+            fs::write(runtime.join("nessa"), b"#!/bin/sh\nexit 0\n").unwrap();
+            fs::set_permissions(runtime.join("nessa"), fs::Permissions::from_mode(0o700)).unwrap();
+            let fingerprint = super::super::staging::tree_fingerprint(&runtime).unwrap();
+            fs::write(
+                runtime.join("manifest.json"),
+                format!("{{\"fingerprint\":\"{fingerprint}\"}}"),
+            )
+            .unwrap();
+            fs::set_permissions(
+                runtime.join("manifest.json"),
+                fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            let (unit, _, mut snapshot) = fixture();
+            let target =
+                ReconciliationTarget::new(unit.as_str().into(), fingerprint, "b".repeat(64))
+                    .unwrap();
             let home = root.join("home");
             let paths = LinuxGatewayPaths::new(
                 &home,
@@ -4504,6 +4572,7 @@ mod tests {
                 configuration,
                 home,
                 data,
+                runtime,
                 paths,
                 unit,
                 target,
@@ -4528,6 +4597,21 @@ mod tests {
             }
         }
 
+        fn render_for(&self, target: &ReconciliationTarget, agent_path: &str) -> Vec<u8> {
+            render(UnitDefinition {
+                unit: &self.unit,
+                runtime: &self.paths.runtime_root.join(target.runtime_fingerprint()),
+                configuration: &self.configuration,
+                working_directory: &self.data,
+                home: &self.home,
+                agent_path: &SearchPath::parse(agent_path).unwrap(),
+                fingerprint: target.runtime_fingerprint(),
+                generation: target.service_generation(),
+            })
+            .unwrap()
+            .bytes
+        }
+
         fn other_target(&self) -> (ReconciliationTarget, Vec<u8>) {
             let other = ReconciliationTarget::new(
                 self.unit.as_str().into(),
@@ -4535,27 +4619,11 @@ mod tests {
                 "d".repeat(64),
             )
             .unwrap();
-            let bytes = render(UnitDefinition {
-                unit: &self.unit,
-                runtime: &self.paths.runtime_root.join(other.runtime_fingerprint()),
-                configuration: &self.configuration,
-                working_directory: &self.data,
-                home: &self.home,
-                agent_path: &SearchPath::parse("/usr/bin").unwrap(),
-                fingerprint: other.runtime_fingerprint(),
-                generation: other.service_generation(),
-            })
-            .unwrap()
-            .bytes;
+            let bytes = self.render_for(&other, "/usr/bin");
             (other, bytes)
         }
 
-        fn recovery(
-            &self,
-            has_effect_plan: bool,
-            latest_observation: Option<LifecycleObservation>,
-            pending_step: Option<GatewayLifecycleRecoveryStep>,
-        ) -> GatewayLifecycleRecovery {
+        fn attempt(&self) -> GatewayReconciliationAttempt {
             let correlation = |serial| {
                 ReconciliationCorrelation::parse(format!("00000000-0000-4000-8000-{serial:012x}"))
                     .unwrap()
@@ -4568,72 +4636,386 @@ mod tests {
                 )
                 .unwrap(),
             );
-            let attempt = GatewayReconciliationAttempt::new(correlation(2), request).unwrap();
+            GatewayReconciliationAttempt::new(correlation(2), request).unwrap()
+        }
+
+        fn recovery(
+            &self,
+            has_effect_plan: bool,
+            latest_observation: Option<LifecycleObservation>,
+        ) -> GatewayLifecycleRecovery {
             GatewayLifecycleRecovery::new(
-                attempt,
+                self.attempt(),
                 self.target.clone(),
                 None,
                 has_effect_plan,
                 latest_observation,
-                pending_step,
+                None,
                 None,
             )
         }
 
-        fn gateway(&self, snapshot: Option<UnitSnapshot>) -> SystemdGateway {
-            let root = self.home.parent().unwrap();
-            let effective_uid = unsafe { libc::geteuid() };
+        fn gateway(
+            &self,
+            manager_factory: Arc<dyn LinuxManagerFactory>,
+            runtime_context: Arc<dyn LinuxRuntimeContext>,
+        ) -> SystemdGateway {
             SystemdGateway {
                 configuration: self.configuration.clone(),
                 home: self.home.clone(),
                 clock: Arc::new(SystemMonotonicClock),
-                manager_factory: Arc::new(FixedManagerFactory {
+                manager_factory,
+                runtime_context,
+                process_factory: Arc::new(NativeLinuxProcessFactory),
+            }
+        }
+
+        fn fixed_gateway(&self, snapshot: Option<UnitSnapshot>) -> SystemdGateway {
+            self.gateway(
+                Arc::new(FixedManagerFactory {
                     identity: self.snapshot.manager.clone(),
                     unit_path: self.snapshot.unit_path.clone(),
                     snapshot,
                     error: None,
                 }),
-                runtime_context: Arc::new(FixedRuntimeContext {
-                    effective_uid,
-                    real_uid: effective_uid,
-                    config_home: Some(root.join("config").into_os_string()),
-                    data_home: Some(root.join("data").into_os_string()),
-                    state_home: Some(root.join("state").into_os_string()),
-                    advertisement: None,
-                    endpoint_error: None,
-                }),
-                process_factory: Arc::new(NativeLinuxProcessFactory),
+                Arc::new(self.context(None)),
+            )
+        }
+
+        fn context(
+            &self,
+            advertisement: Option<GatewayEndpointAdvertisement>,
+        ) -> FixedRuntimeContext {
+            let root = self.home.parent().unwrap();
+            let effective_uid = unsafe { libc::geteuid() };
+            FixedRuntimeContext {
+                effective_uid,
+                real_uid: effective_uid,
+                config_home: Some(root.join("config").into_os_string()),
+                data_home: Some(root.join("data").into_os_string()),
+                state_home: Some(root.join("state").into_os_string()),
+                advertisement,
+                endpoint_error: None,
             }
         }
+
+        fn advertisement(&self) -> GatewayEndpointAdvertisement {
+            endpoint_for(&self.target, "550e8400-e29b-41d4-a716-446655440001", 99)
+        }
+    }
+
+    /// A user manager whose unit is the installed inactive one until a start
+    /// (or something outside Nessa) runs it.
+    struct Script {
+        identity: SystemdManagerIdentity,
+        unit_path: Vec<String>,
+        inactive: UnitSnapshot,
+        running: UnitSnapshot,
+        started: AtomicBool,
+        started_elsewhere: AtomicBool,
+        reloads: AtomicUsize,
+        starts: AtomicUsize,
+    }
+
+    impl Script {
+        fn new(installed: &Installed) -> Arc<Self> {
+            Arc::new(Self {
+                identity: installed.snapshot.manager.clone(),
+                unit_path: installed.snapshot.unit_path.clone(),
+                inactive: installed.snapshot.clone(),
+                running: running(installed.snapshot.clone()),
+                started: AtomicBool::new(false),
+                started_elsewhere: AtomicBool::new(false),
+                reloads: AtomicUsize::new(0),
+                starts: AtomicUsize::new(0),
+            })
+        }
+
+        fn is_running(&self) -> bool {
+            self.started.load(Ordering::SeqCst) || self.started_elsewhere.load(Ordering::SeqCst)
+        }
+    }
+
+    struct ScriptedFactory(Arc<Script>);
+
+    impl LinuxManagerFactory for ScriptedFactory {
+        fn verify_prerequisites(&self, _: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn connect(&self, _: u32) -> Result<Box<dyn LinuxUserManager>, String> {
+            Ok(Box::new(ScriptedManager(self.0.clone())))
+        }
+    }
+
+    struct ScriptedManager(Arc<Script>);
+
+    impl LinuxUserManager for ScriptedManager {
+        fn identity(&self) -> &SystemdManagerIdentity {
+            &self.0.identity
+        }
+        fn recheck_identity(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn unit_path(&self) -> Result<Vec<String>, String> {
+            Ok(self.0.unit_path.clone())
+        }
+        fn reload(&self) -> Result<(), String> {
+            self.0.reloads.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn unit_file_state(&self, _: &SystemdUnitName) -> Result<String, String> {
+            Ok("enabled".into())
+        }
+        fn get_unit_by_pid(&self, _: u32) -> Result<String, String> {
+            unreachable!("an inactive admission has no process to identify")
+        }
+        fn snapshot(&self, _: &SystemdUnitName) -> Result<Option<UnitSnapshot>, String> {
+            Ok(Some(if self.0.is_running() {
+                self.0.running.clone()
+            } else {
+                self.0.inactive.clone()
+            }))
+        }
+        fn enqueue(
+            &self,
+            operation: SystemdJobOperation,
+            unit: &SystemdUnitName,
+            _: &dyn MonotonicClock,
+        ) -> Result<Box<dyn LinuxSystemdJob>, String> {
+            assert_eq!(operation, SystemdJobOperation::Start);
+            self.0.starts.fetch_add(1, Ordering::SeqCst);
+            self.0.started.store(true, Ordering::SeqCst);
+            Ok(Box::new(CompletedJob {
+                attempt: SystemdJobAttempt::new(
+                    self.0.identity.clone(),
+                    operation,
+                    SystemdJobMode::Fail,
+                    unit.clone(),
+                    "/org/freedesktop/systemd1/job/7".into(),
+                    7,
+                )
+                .unwrap(),
+                terminal: Ok(JobTerminal {
+                    manager: self.0.identity.clone(),
+                    object_path: "/org/freedesktop/systemd1/job/7".into(),
+                    job_id: 7,
+                    unit: unit.clone(),
+                    result: "done".into(),
+                }),
+            }))
+        }
+    }
+
+    /// Advertises once the scripted unit runs, or always.
+    struct ScriptedContext {
+        inner: FixedRuntimeContext,
+        script: Arc<Script>,
+        always: bool,
+    }
+
+    impl LinuxRuntimeContext for ScriptedContext {
+        fn user_ids(&self) -> (u32, u32) {
+            self.inner.user_ids()
+        }
+        fn xdg_paths(&self) -> (Option<OsString>, Option<OsString>, Option<OsString>) {
+            self.inner.xdg_paths()
+        }
+        fn observe_endpoint_health(
+            &self,
+            data: &Path,
+        ) -> Result<Option<LinuxEndpointHealth>, String> {
+            if self.always || self.script.is_running() {
+                self.inner.observe_endpoint_health(data)
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    /// Records progress, and lets something outside Nessa start the unit as
+    /// soon as the intent is acknowledged.
+    struct StartedAfterIntent {
+        inner: RecordingProgress,
+        script: Arc<Script>,
+    }
+
+    impl GatewayReconciliationProgress for StartedAfterIntent {
+        fn readiness_invalidated(&self) {}
+        fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            self.script.started_elsewhere.store(true, Ordering::SeqCst);
+            self.inner.intent_admitted(intent)
+        }
+        fn history_observed(&self, fact: ReconciliationHistoryFact) {
+            self.inner.history_observed(fact)
+        }
+        fn effect_planned(
+            &self,
+            plan_id: &str,
+            primary: &LifecyclePlanStep,
+            cleanup: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.inner.effect_planned(plan_id, primary, cleanup)
+        }
+        fn effect_completed(
+            &self,
+            plan_id: &str,
+            step_id: &str,
+            result: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.inner.effect_completed(plan_id, step_id, result)
+        }
+        fn native_attempt_recorded(
+            &self,
+            plan_id: &str,
+            step_id: &str,
+            attempt: &SystemdJobAttempt,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.inner
+                .native_attempt_recorded(plan_id, step_id, attempt)
+        }
+        fn physical_observed(
+            &self,
+            source: &LifecycleObservationSource,
+            incarnation: Option<ReconciliationIncarnation>,
+            artifact: bool,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            self.inner.physical_observed(source, incarnation, artifact)
+        }
+        fn systemd_observed(
+            &self,
+            source: &LifecycleObservationSource,
+            incarnation: ReconciliationIncarnation,
+            artifact: bool,
+            native: SystemdRuntimeObservation,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            self.inner
+                .systemd_observed(source, incarnation, artifact, native)
+        }
+        fn systemd_state_observed(
+            &self,
+            source: &LifecycleObservationSource,
+            artifact: bool,
+            state: SystemdUnitState,
+        ) -> Result<LifecycleObservation, GatewayError> {
+            self.inner.systemd_state_observed(source, artifact, state)
+        }
+    }
+
+    fn register_installed(
+        installed: &Installed,
+        script: &Arc<Script>,
+        always_advertise: bool,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        let mut inner = installed.context(Some(installed.advertisement()));
+        inner.advertisement = Some(installed.advertisement());
+        installed
+            .gateway(
+                Arc::new(ScriptedFactory(script.clone())),
+                Arc::new(ScriptedContext {
+                    inner,
+                    script: script.clone(),
+                    always: always_advertise,
+                }),
+            )
+            .register(
+                &installed.runtime,
+                "prod",
+                Some(&SearchPath::parse("/usr/bin").unwrap()),
+                &installed.attempt(),
+                progress,
+            )
+    }
+
+    fn recording_progress() -> RecordingProgress {
+        RecordingProgress {
+            correlation: ReconciliationCorrelation::parse(
+                "00000000-0000-4000-8000-000000000002".into(),
+            )
+            .unwrap(),
+            sequence: AtomicUsize::new(0),
+        }
+    }
+
+    #[test]
+    fn registration_starts_an_inactive_owned_unit_again() {
+        let installed = Installed::new();
+        let script = Script::new(&installed);
+        let ready = register_installed(&installed, &script, false, &recording_progress()).unwrap();
+        assert_eq!(ready.process_id(), 99);
+        assert_eq!(script.reloads.load(Ordering::SeqCst), 1);
+        assert_eq!(script.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fs::read(&installed.paths.unit_file).unwrap(),
+            installed.bytes
+        );
+    }
+
+    #[test]
+    fn an_advertisement_beside_an_inactive_unit_is_refused_before_the_intent() {
+        let installed = Installed::new();
+        let script = Script::new(&installed);
+        let error =
+            register_installed(&installed, &script, true, &recording_progress()).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no corroborated managed endpoint"));
+        assert_eq!(script.reloads.load(Ordering::SeqCst), 0);
+        assert_eq!(script.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_unit_started_after_admission_is_refused_before_its_definition_changes() {
+        let installed = Installed::new();
+        let script = Script::new(&installed);
+        let progress = StartedAfterIntent {
+            inner: recording_progress(),
+            script: script.clone(),
+        };
+        let error = register_installed(&installed, &script, false, &progress).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("started before its admitted change"),
+            "{error}"
+        );
+        assert_eq!(script.reloads.load(Ordering::SeqCst), 0);
+        assert_eq!(script.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(&installed.paths.unit_file).unwrap(),
+            installed.bytes
+        );
     }
 
     #[test]
     fn an_exact_owned_unit_with_no_process_is_admitted_with_its_definition() {
         let installed = Installed::new();
         let manager = installed.manager(None);
-        assert_eq!(
-            inactive_definition(
-                &installed.snapshot,
-                &manager,
-                &installed.paths,
-                &installed.unit,
-                installed.authority(),
-            )
-            .unwrap(),
-            Some(installed.bytes.clone())
-        );
+        // What is loaded may predate the file until the planned reload.
+        let mut stale = installed.snapshot.clone();
+        stale.exec_start_ex[0].1.push("--other".into());
+        stale.restart = "always".into();
+        for snapshot in [installed.snapshot.clone(), stale] {
+            assert_eq!(
+                inactive_definition(
+                    &snapshot,
+                    &manager,
+                    &installed.paths,
+                    &installed.unit,
+                    installed.authority(),
+                )
+                .unwrap(),
+                Some(installed.bytes.clone())
+            );
+        }
     }
 
     #[test]
     fn every_other_installed_unit_without_an_endpoint_is_preserved() {
         let installed = Installed::new();
         let manager = installed.manager(None);
-        let changes: [(&str, fn(&mut UnitSnapshot)); 9] = [
-            ("running", |snapshot| {
-                snapshot.active_state = "active".into();
-                snapshot.sub_state = "running".into();
-                snapshot.main_process_id = 99;
-            }),
+        let changes: [(&str, SnapshotChange); 8] = [
+            ("running", |snapshot| *snapshot = running(snapshot.clone())),
             ("failed", |snapshot| {
                 snapshot.active_state = "failed".into();
                 snapshot.sub_state = "failed".into();
@@ -4651,14 +5033,11 @@ mod tests {
             ("disabled", |snapshot| {
                 snapshot.unit_file_state = "disabled".into()
             }),
-            ("loaded as another command", |snapshot| {
-                snapshot.exec_start_ex[0].1.push("--other".into())
-            }),
             ("other fragment", |snapshot| {
                 snapshot.fragment_path = "/etc/systemd/user/nessa-gateway-prod.service".into()
             }),
-            ("other restart policy", |snapshot| {
-                snapshot.restart = "always".into()
+            ("other manager", |snapshot| {
+                snapshot.manager = SystemdManagerIdentity::new(":1.99".into(), 99, 501).unwrap()
             }),
         ];
         for (name, change) in changes {
@@ -4710,7 +5089,7 @@ mod tests {
     }
 
     #[test]
-    fn an_admitted_inactive_unit_that_starts_refuses_the_next_change() {
+    fn only_an_absent_or_processless_unit_permits_a_change() {
         let installed = Installed::new();
         assert!(require_no_process(&installed.manager(None), &installed.unit).is_ok());
         assert!(require_no_process(
@@ -4718,11 +5097,11 @@ mod tests {
             &installed.unit
         )
         .is_ok());
-        let mut running = installed.snapshot.clone();
-        running.active_state = "active".into();
-        running.sub_state = "running".into();
-        running.main_process_id = 99;
-        assert!(require_no_process(&installed.manager(Some(running)), &installed.unit).is_err());
+        assert!(require_no_process(
+            &installed.manager(Some(running(installed.snapshot.clone()))),
+            &installed.unit
+        )
+        .is_err());
     }
 
     #[test]
@@ -4730,24 +5109,32 @@ mod tests {
         let installed = Installed::new();
         let (other, other_bytes) = installed.other_target();
         let authority = installed.authority();
+        let installed_digest = definition_digest(&installed.bytes);
+        let other_digest = definition_digest(&other_bytes);
         assert!(definition_matches_target(&installed.paths, &installed.target, authority).unwrap());
         assert!(!definition_matches_target(&installed.paths, &other, authority).unwrap());
         assert!(!unreplaced_definition(
             &installed.bytes,
             &installed.paths,
             &installed.target,
+            &installed_digest,
             authority
         ));
         assert!(unreplaced_definition(
             &installed.bytes,
             &installed.paths,
             &other,
+            &other_digest,
             authority
         ));
+        // Same target, another agent path: the reused generation makes the
+        // planned render declare the installed target.
+        let same_target = installed.render_for(&installed.target, "/opt/tools:/usr/bin");
         assert!(unreplaced_definition(
-            &other_bytes,
+            &installed.bytes,
             &installed.paths,
             &installed.target,
+            &definition_digest(&same_target),
             authority
         ));
         let mut foreign = installed.bytes.clone();
@@ -4756,6 +5143,7 @@ mod tests {
             &foreign,
             &installed.paths,
             &other,
+            &other_digest,
             authority
         ));
         fs::write(&installed.paths.unit_file, &foreign).unwrap();
@@ -4763,26 +5151,40 @@ mod tests {
     }
 
     #[test]
-    fn settled_definition_recovery_requires_the_admitted_digest_or_an_unreplaced_render() {
+    fn a_definition_publication_that_never_ran_has_nothing_to_settle() {
         let installed = Installed::new();
         let (other, other_bytes) = installed.other_target();
+        let same_target = installed.render_for(&installed.target, "/opt/tools:/usr/bin");
         let authority = installed.authority();
-        // Publication of `other` was planned but never ran: the installed
-        // render remains, and there is nothing to settle.
-        settle_recovered_definition(
-            &installed.paths,
-            &other,
-            &definition_digest(&other_bytes),
-            authority,
-        )
-        .unwrap();
-        settle_recovered_definition(
-            &installed.paths,
-            &installed.target,
-            &definition_digest(&installed.bytes),
-            authority,
-        )
-        .unwrap();
+        for (target, planned) in [
+            (&other, &other_bytes),
+            (&installed.target, &same_target),
+            (&installed.target, &installed.bytes),
+        ] {
+            settle_recovered_definition(
+                &installed.paths,
+                target,
+                &definition_digest(planned),
+                authority,
+            )
+            .unwrap();
+            let settle = LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: target.clone(),
+                definition_digest: definition_digest(planned),
+            };
+            assert!(!recovery_artifact_present(
+                &settle,
+                &installed.paths,
+                target,
+                RecoveryPhysical {
+                    snapshot: Some(&installed.snapshot),
+                    incarnation: None,
+                    target_artifact_present: false,
+                },
+                authority,
+            )
+            .unwrap());
+        }
         assert!(settle_recovered_definition(
             &installed.paths,
             &installed.target,
@@ -4798,10 +5200,25 @@ mod tests {
             authority,
         )
         .is_err());
+        assert!(recovery_artifact_present(
+            &LifecycleEffect::SettleSystemdDefinitionTransaction {
+                target: other.clone(),
+                definition_digest: definition_digest(&other_bytes),
+            },
+            &installed.paths,
+            &other,
+            RecoveryPhysical {
+                snapshot: Some(&installed.snapshot),
+                incarnation: None,
+                target_artifact_present: false,
+            },
+            authority,
+        )
+        .is_err());
     }
 
     #[test]
-    fn intended_artifacts_tolerate_an_unreloaded_unit_with_no_process() {
+    fn intended_artifacts_tolerate_an_unreloaded_or_replaced_manager() {
         let installed = Installed::new();
         let (other, _) = installed.other_target();
         let mut loaded_as_other = installed.snapshot.clone();
@@ -4815,15 +5232,11 @@ mod tests {
             installed.authority(),
         )
         .unwrap());
-        let mut running_as_other = loaded_as_other.clone();
-        running_as_other.active_state = "active".into();
-        running_as_other.sub_state = "running".into();
-        running_as_other.main_process_id = 99;
         assert!(exact_target_artifact_present(
             &installed.paths,
             &installed.unit,
             &installed.target,
-            Some(&running_as_other),
+            Some(&running(loaded_as_other)),
             installed.authority(),
         )
         .is_err());
@@ -4837,65 +5250,190 @@ mod tests {
             installed.authority(),
         )
         .unwrap());
-        let reload = LifecycleEffect::ReloadSystemdManager {
-            manager: installed.snapshot.manager.clone(),
-            unit: installed.unit.clone(),
-        };
+        let replaced = SystemdManagerIdentity::new(":1.99".into(), 99, 501).unwrap();
         let physical = |snapshot| RecoveryPhysical {
-            manager: &installed.snapshot.manager,
             snapshot,
             incarnation: None,
-            target_artifact_present: false,
+            target_artifact_present: true,
         };
-        assert!(!recovery_artifact_present(
-            &reload,
-            &installed.paths,
-            &other,
-            physical(Some(&installed.snapshot)),
-            installed.authority(),
-        )
-        .unwrap());
-        let mut running = installed.snapshot.clone();
-        running.active_state = "active".into();
-        running.sub_state = "running".into();
-        running.main_process_id = 99;
+        let reload = |manager: &SystemdManagerIdentity| LifecycleEffect::ReloadSystemdManager {
+            manager: manager.clone(),
+            unit: installed.unit.clone(),
+        };
+        for manager in [&installed.snapshot.manager, &replaced] {
+            assert!(!recovery_artifact_present(
+                &reload(manager),
+                &installed.paths,
+                &other,
+                physical(Some(&installed.snapshot)),
+                installed.authority(),
+            )
+            .unwrap());
+            assert!(recovery_artifact_present(
+                &reload(manager),
+                &installed.paths,
+                &installed.target,
+                physical(Some(&installed.snapshot)),
+                installed.authority(),
+            )
+            .unwrap());
+            assert!(recovery_artifact_present(
+                &LifecycleEffect::StartSystemdUnit {
+                    manager: manager.clone(),
+                    unit: installed.unit.clone(),
+                    mode: SystemdJobMode::Fail,
+                },
+                &installed.paths,
+                &installed.target,
+                physical(Some(&installed.snapshot)),
+                installed.authority(),
+            )
+            .unwrap());
+        }
         assert!(recovery_artifact_present(
-            &reload,
+            &reload(&replaced),
             &installed.paths,
             &other,
-            physical(Some(&running)),
+            physical(Some(&running(installed.snapshot.clone()))),
             installed.authority(),
         )
         .is_err());
     }
 
+    /// Keeps what recovery journals so tests can read it back.
+    #[derive(Default)]
+    struct RecordingJournal {
+        observations: std::sync::Mutex<Vec<(LifecycleObservationSource, LifecycleObservation)>>,
+        outcomes: std::sync::Mutex<Vec<(String, Option<LifecycleObservation>)>>,
+    }
+
+    impl RecordingJournal {
+        fn receipt(&self, kind: LifecycleRecordKind) -> AuditDeliveryReceipt {
+            AuditDeliveryReceipt::new(
+                ReconciliationCorrelation::parse("00000000-0000-4000-8000-000000000002".into())
+                    .unwrap(),
+                1,
+                kind,
+            )
+        }
+    }
+
+    impl GatewayReconciliationJournalSession for RecordingJournal {
+        fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            unreachable!("recovery admits no intent")
+        }
+        fn outcome(
+            &self,
+            _: &crate::gateway::application::GatewayReconciliationOutcome,
+        ) -> Result<(), crate::gateway::application::GatewayReconciliationOutcomeError> {
+            unreachable!("recovery records a physical outcome")
+        }
+        fn joined(&self, _: &GatewayReconciliationRequest) -> Result<(), GatewayError> {
+            unreachable!("recovery joins no request")
+        }
+        fn effect_plan(
+            &self,
+            _: &str,
+            _: Option<&ReconciliationIncarnation>,
+            _: &ReconciliationTarget,
+            _: &LifecyclePlanStep,
+            _: &[LifecyclePlanStep],
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            unreachable!("recovery plans no effect")
+        }
+        fn effect_completion(
+            &self,
+            _: &str,
+            _: &str,
+            _: &LifecycleCommandResult,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            Ok(self.receipt(LifecycleRecordKind::EffectCompletion))
+        }
+        fn observation(
+            &self,
+            source: &LifecycleObservationSource,
+            state: &LifecycleObservation,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            self.observations
+                .lock()
+                .unwrap()
+                .push((source.clone(), state.clone()));
+            Ok(self.receipt(LifecycleRecordKind::Observation))
+        }
+        fn physical_outcome(
+            &self,
+            physical: &LifecyclePhysicalOutcome,
+            last_confirmed: Option<&LifecycleObservation>,
+            cleanup: ReconciliationCleanupDecision,
+        ) -> Result<AuditDeliveryReceipt, GatewayError> {
+            assert_eq!(cleanup, ReconciliationCleanupDecision::RetainPrior);
+            let LifecyclePhysicalOutcome::Failed { message, .. } = physical else {
+                panic!("recovery closes as failed");
+            };
+            self.outcomes
+                .lock()
+                .unwrap()
+                .push((message.clone(), last_confirmed.cloned()));
+            Ok(self.receipt(LifecycleRecordKind::Outcome))
+        }
+    }
+
     #[test]
     fn an_intent_without_a_plan_closes_on_whatever_is_found() {
         let installed = Installed::new();
-        let mut running = installed.snapshot.clone();
-        running.active_state = "active".into();
-        running.sub_state = "running".into();
-        running.invocation = Some(SystemdInvocationId::new(vec![7; 16]).unwrap());
-        running.main_process_id = 99;
-        for snapshot in [None, Some(installed.snapshot.clone()), Some(running)] {
-            let recovery = installed.recovery(false, None, None);
-            let journal = discard_reconciliation_audit()
-                .open(recovery.attempt(), None)
-                .unwrap();
+        for (snapshot, state, artifact) in [
+            (None, SystemdUnitState::Absent, true),
+            (
+                Some(installed.snapshot.clone()),
+                SystemdUnitState::Inactive,
+                true,
+            ),
+            (
+                Some(running(installed.snapshot.clone())),
+                SystemdUnitState::Unknown,
+                true,
+            ),
+        ] {
+            let journal = RecordingJournal::default();
             installed
-                .gateway(snapshot)
-                .recover(&recovery, journal.as_ref())
+                .fixed_gateway(snapshot)
+                .recover(&installed.recovery(false, None), &journal)
                 .unwrap();
+            let observations = journal.observations.lock().unwrap();
+            let [(source, observation)] = observations.as_slice() else {
+                panic!("one fresh observation");
+            };
+            assert_eq!(source, &LifecycleObservationSource::Intent);
+            assert_eq!(observation.systemd_state(), Some(state));
+            assert_eq!(observation.target_artifact_present(), artifact);
+            let outcomes = journal.outcomes.lock().unwrap();
+            assert_eq!(
+                outcomes.as_slice(),
+                [(FRESH_RECOVERY.to_owned(), Some(observation.clone()))]
+            );
         }
-        fs::write(&installed.paths.unit_file, b"foreign bytes").unwrap();
-        let recovery = installed.recovery(false, None, None);
-        let journal = discard_reconciliation_audit()
-            .open(recovery.attempt(), None)
+        fs::remove_file(&installed.paths.wants_link).unwrap();
+        fs::remove_file(&installed.paths.unit_file).unwrap();
+        let journal = RecordingJournal::default();
+        installed
+            .fixed_gateway(None)
+            .recover(&installed.recovery(false, None), &journal)
             .unwrap();
+        assert!(!journal.observations.lock().unwrap()[0]
+            .1
+            .target_artifact_present());
+        fs::write(&installed.paths.unit_file, b"foreign bytes").unwrap();
+        fs::set_permissions(
+            &installed.paths.unit_file,
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let journal = RecordingJournal::default();
         assert!(installed
-            .gateway(Some(installed.snapshot.clone()))
-            .recover(&recovery, journal.as_ref())
+            .fixed_gateway(Some(installed.snapshot.clone()))
+            .recover(&installed.recovery(false, None), &journal)
             .is_err());
+        assert!(journal.outcomes.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -4904,24 +5442,32 @@ mod tests {
         // A step observation records that step's artifact with no systemd
         // state, unlike any fresh whole-target observation.
         let durable = LifecycleObservation::new(3, None, true);
-        let recovery = installed.recovery(true, Some(durable), None);
-        let journal = discard_reconciliation_audit()
-            .open(recovery.attempt(), None)
-            .unwrap();
+        let journal = RecordingJournal::default();
         installed
-            .gateway(Some(installed.snapshot.clone()))
-            .recover(&recovery, journal.as_ref())
+            .fixed_gateway(Some(installed.snapshot.clone()))
+            .recover(&installed.recovery(true, Some(durable.clone())), &journal)
             .unwrap();
-        let recovery = installed.recovery(true, None, None);
+        assert!(journal.observations.lock().unwrap().is_empty());
+        let outcomes = journal.outcomes.lock().unwrap();
+        let [(message, last)] = outcomes.as_slice() else {
+            panic!("one outcome");
+        };
+        assert!(message.contains("last durable observation"), "{message}");
+        assert_eq!(last.as_ref(), Some(&durable));
+        drop(outcomes);
         assert!(installed
-            .gateway(Some(installed.snapshot.clone()))
-            .recover(&recovery, journal.as_ref())
+            .fixed_gateway(Some(installed.snapshot.clone()))
+            .recover(
+                &installed.recovery(true, None),
+                &RecordingJournal::default()
+            )
             .is_err());
     }
 
     struct AdvertisingLater {
         advertisement: GatewayEndpointAdvertisement,
         remaining: AtomicUsize,
+        observations: AtomicUsize,
     }
 
     impl LinuxRuntimeContext for AdvertisingLater {
@@ -4933,6 +5479,7 @@ mod tests {
             (None, None, None)
         }
         fn observe_endpoint_health(&self, _: &Path) -> Result<Option<LinuxEndpointHealth>, String> {
+            self.observations.fetch_add(1, Ordering::SeqCst);
             let before = self.remaining.load(Ordering::SeqCst);
             if before > 0 {
                 self.remaining.store(before - 1, Ordering::SeqCst);
@@ -4944,20 +5491,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_start_is_judged_once_the_forked_server_advertises() {
-        let installed = Installed::new();
-        let mut running = installed.snapshot.clone();
-        running.active_state = "active".into();
-        running.sub_state = "running".into();
-        running.invocation = Some(SystemdInvocationId::new(vec![7; 16]).unwrap());
-        running.main_process_id = 99;
+    fn run_start(
+        installed: &Installed,
+        snapshot: UnitSnapshot,
+        advertises_after: usize,
+        ready_deadline: Instant,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> (Result<(), GatewayError>, usize) {
         let manager = JobManager {
-            identity: running.manager.clone(),
-            unit_path: running.unit_path.clone(),
-            snapshot: Some(running.clone()),
+            identity: snapshot.manager.clone(),
+            unit_path: snapshot.unit_path.clone(),
+            snapshot: Some(snapshot.clone()),
             terminal: Ok(JobTerminal {
-                manager: running.manager.clone(),
+                manager: snapshot.manager.clone(),
                 object_path: "/org/freedesktop/systemd1/job/7".into(),
                 job_id: 7,
                 unit: installed.unit.clone(),
@@ -4965,22 +5511,12 @@ mod tests {
             }),
         };
         let context = AdvertisingLater {
-            advertisement: endpoint_for(
-                &installed.target,
-                "550e8400-e29b-41d4-a716-446655440001",
-                99,
-            ),
-            remaining: AtomicUsize::new(3),
+            advertisement: installed.advertisement(),
+            remaining: AtomicUsize::new(advertises_after),
+            observations: AtomicUsize::new(0),
         };
-        let progress = RecordingProgress {
-            correlation: ReconciliationCorrelation::parse(
-                "00000000-0000-4000-8000-000000000888".into(),
-            )
-            .unwrap(),
-            sequence: AtomicUsize::new(0),
-        };
-        run_systemd_job(
-            &progress,
+        let result = run_systemd_job(
+            progress,
             "start-systemd-unit",
             LifecycleEffect::StartSystemdUnit {
                 manager: manager.identity.clone(),
@@ -4996,10 +5532,94 @@ mod tests {
                 paths: &installed.paths,
                 runtime_context: &context,
                 clock: &SystemMonotonicClock,
+                ready_deadline,
             },
-        )
-        .unwrap();
-        assert_eq!(context.remaining.load(Ordering::SeqCst), 0);
+        );
+        (result, context.observations.load(Ordering::SeqCst))
+    }
+
+    #[test]
+    fn a_start_is_judged_once_the_forked_server_advertises() {
+        let installed = Installed::new();
+        let later = SystemMonotonicClock.now() + READY_TIMEOUT;
+        let (result, observations) = run_start(
+            &installed,
+            running(installed.snapshot.clone()),
+            3,
+            later,
+            &recording_progress(),
+        );
+        result.unwrap();
+        assert_eq!(observations, 4);
+    }
+
+    #[test]
+    fn a_start_is_not_reached_once_the_unit_stops_running_or_the_deadline_passes() {
+        let installed = Installed::new();
+        let later = SystemMonotonicClock.now() + READY_TIMEOUT;
+        // Exited again: reported at once rather than at the deadline.
+        let (result, observations) = run_start(
+            &installed,
+            installed.snapshot.clone(),
+            usize::MAX,
+            later,
+            &recording_progress(),
+        );
+        assert!(result.is_err());
+        assert_eq!(observations, 1);
+        // Still activating: observed until the deadline.
+        let mut activating = installed.snapshot.clone();
+        activating.active_state = "activating".into();
+        activating.sub_state = "start".into();
+        let soon = SystemMonotonicClock.now() + Duration::from_millis(300);
+        let (result, observations) = run_start(
+            &installed,
+            activating,
+            usize::MAX,
+            soon,
+            &recording_progress(),
+        );
+        assert!(result.is_err());
+        assert!(observations > 1, "{observations}");
+        // Running without advertising past the deadline.
+        let (result, observations) = run_start(
+            &installed,
+            running(installed.snapshot.clone()),
+            usize::MAX,
+            SystemMonotonicClock.now(),
+            &recording_progress(),
+        );
+        assert!(result.is_err());
+        assert_eq!(observations, 1);
+    }
+
+    #[test]
+    fn an_audit_failure_after_a_start_keeps_its_physical_result() {
+        let installed = Installed::new();
+        let later = SystemMonotonicClock.now() + READY_TIMEOUT;
+        for (snapshot, reached) in [
+            (running(installed.snapshot.clone()), true),
+            (installed.snapshot.clone(), false),
+        ] {
+            let observed = AtomicUsize::new(0);
+            let progress = FailingAttemptProgress {
+                inner: recording_progress(),
+                observed: &observed,
+            };
+            let (result, _) = run_start(&installed, snapshot, 0, later, &progress);
+            let Err(GatewayError::Audit {
+                physical: Some(physical),
+                ..
+            }) = result
+            else {
+                panic!("an audit failure keeps the physical result");
+            };
+            assert_eq!(
+                matches!(physical, GatewayPhysicalResult::Succeeded),
+                reached
+            );
+            assert_eq!(observed.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[cfg(target_os = "linux")]

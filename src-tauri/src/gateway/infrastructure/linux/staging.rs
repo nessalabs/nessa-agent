@@ -185,7 +185,7 @@ fn validate_private_tree(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn tree_fingerprint(directory: &Path) -> Result<String, String> {
+pub(super) fn tree_fingerprint(directory: &Path) -> Result<String, String> {
     let root = directory
         .canonicalize()
         .map_err(|error| error.to_string())?;

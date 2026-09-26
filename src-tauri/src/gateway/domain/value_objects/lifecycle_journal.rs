@@ -855,9 +855,9 @@ impl LifecycleHistory {
                         return Err(LifecycleJournalError::StateMismatch)
                     }
                     // No plan means no effect was authorized, so whatever the
-                    // fresh observation found was not caused by this attempt.
-                    // The closure records it as found and requires only that
-                    // it was observed.
+                    // observation records was not caused by this attempt. The
+                    // closure requires only that there is one; each adapter
+                    // decides which states it closes on.
                     LifecyclePhysicalOutcome::Failed { .. }
                         if self.plans.is_empty() && self.latest_observation.is_none() =>
                     {

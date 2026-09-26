@@ -199,20 +199,23 @@ Admission, before any intent:
 | --- | --- | --- |
 | Not loaded | None | Fresh install (unchanged). |
 | Exact, active, running, owned PID | Corroborated | Ready or replacement (unchanged). |
-| Exact definition of the target its `ExecStartEx` names, `inactive`/`dead`, main PID 0, enabled, no drop-ins | None at all | Admit with no `before`; the installed bytes are the prior definition, so publication replaces them (or republishes equal bytes); reload, link, `StartUnit`. |
+| Owned (this manager, owned fragment and link, enabled, no drop-ins), `inactive`/`dead`, main PID 0, and the file an exact owned render of any target | None at all | Admit with no `before`; the file is the prior definition, so publication replaces it (or republishes equal bytes); reload, link, `StartUnit`. What the manager has loaded may predate the file until that reload, so loaded content is not compared. |
+| Not loaded, file an exact owned render | None | Fresh install whose publication replaces that file. Foreign bytes stay, and publication refuses them. |
 | Anything else: active without endpoint, `failed`, transitional, a process, drop-ins, an inexact or foreign definition, or any advertisement beside an inactive unit | Any | Refuse and preserve (unchanged). |
 | Changes between classification and revalidation | Appears or changes | Refuse before the intent (unchanged). |
 
 Effects on a path with no running prior (fresh install or inactive unit): the
 definition publication, the manager reload, and `StartUnit` each first confirm
-that the unit still has no process. A unit that started meanwhile is refused
-before its definition changes under it.
+that the unit is absent or has no process. A unit that started meanwhile is
+refused before its definition changes under it.
 
 `StartUnit` is judged by what follows it, not by the first look: its job ends
 when systemd forks the server, before the server advertises. After the job the
 adapter observes until the unit is exact, active, and advertising (reached),
 leaves `activating`/`running` (not reached, reported at once), or the ready
-deadline passes. The journal records that settling observation.
+deadline passes; the readiness wait that follows shares that one deadline. The
+journal records that settling observation, and an audit failure while
+recording the job keeps the physical result beside it.
 
 Recovery of an unresolved attempt, never replaying a command:
 
@@ -220,9 +223,15 @@ Recovery of an unresolved attempt, never replaying a command:
 | --- | --- | --- |
 | Intent only, no plan | Anything the adapter can classify exactly | Close failed/retain-prior with that observation. No plan means no effect was authorized, so whatever exists (nothing, the inactive unit, a gateway systemd started meanwhile) was not caused by this attempt. |
 | A pending step | Anything classified exactly | Unchanged: mark an unreturned step indeterminate, record the fresh observation, close failed/retain-prior. |
-| Plans, no pending step, a durable observation | Not compared | Close failed/retain-prior with the last durable observation. The step observations record only that step's artifact, so comparing them with a fresh broad observation always disagreed. |
-| Definition publication or its cleanup pending; no transaction temporaries; the current bytes are an exact owned render of another target of this unit | Any | Nothing to settle: the publication never ran. The intended definition is recorded absent. |
-| Loaded unit declares another exact owned target while inactive | Any | The intended definition is not loaded yet: a pending reload is recorded not observed, not contradicted. |
+| Plans, no pending step, a durable observation | Must still be exact; not compared | Close failed/retain-prior with the last durable observation, saying so. A step observation records only that step's artifact, so it cannot be compared with a fresh whole-target observation. |
+| Definition publication or its cleanup pending; no transaction temporaries; the current bytes are an exact owned render other than the planned one (another target, or the same target with another agent path) | Any | Nothing to settle: the publication never ran. |
+| Loaded unit declares another target with no process | Any | The intended definition is not loaded yet: a pending reload is recorded not observed, not contradicted. |
+| A reload or job planned in a manager since replaced (reboot or relogin) | From the current manager | The fresh snapshot is the fact: the current manager loaded the file itself, and the old job settled there or not at all. |
+
+macOS keeps its own stricter closure: its adapter closes an intent with no plan
+only when fresh state agrees with the prior, as before. Loosening the shared
+domain rule changed no macOS behaviour; the domain no longer duplicates that
+adapter decision.
 
 Whether the intended target's artifacts are present counts the wants link only
 when the unit file it names is the intended definition; the link itself does
