@@ -247,3 +247,41 @@ fn a_selection_is_one_the_question_could_have_offered() {
         ExecutionError::UnofferedAnswer
     );
 }
+
+#[test]
+fn a_required_question_is_answered_by_a_choice_and_not_by_words_alone() {
+    let required = Question::new(
+        "question_0",
+        "Which environment?",
+        None,
+        AnswerShape::One,
+        vec![option("staging"), option("production")],
+        Some("question_0_custom".into()),
+        true,
+    )
+    .unwrap();
+    let ask =
+        AgentQuestion::new("Which environment?", vec![required, question("question_1")]).unwrap();
+    let answer = |values: Vec<String>, words: Option<&str>| {
+        AcceptedAnswer::new(
+            &ask,
+            vec![QuestionChoice::new("question_0", values, words.map(str::to_owned)).unwrap()],
+        )
+    };
+    // The asker required the choice field; words go to the companion field, so
+    // on their own they leave the required one empty.
+    assert_eq!(
+        answer(vec![], Some("dev box")).unwrap_err(),
+        ExecutionError::UnansweredQuestion
+    );
+    assert_eq!(
+        AcceptedAnswer::new(
+            &ask,
+            vec![QuestionChoice::new("question_1", vec!["staging".into()], None).unwrap()],
+        )
+        .unwrap_err(),
+        ExecutionError::UnansweredQuestion
+    );
+    assert!(answer(vec!["staging".into()], None).is_ok());
+    assert!(answer(vec!["staging".into()], Some("the eu region")).is_ok());
+}

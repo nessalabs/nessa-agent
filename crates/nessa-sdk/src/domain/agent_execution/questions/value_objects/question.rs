@@ -200,6 +200,10 @@ impl Question {
     }
 
     /// Whether the asker said this question may not be skipped.
+    ///
+    /// A required question must be answered with at least one of its options;
+    /// words of the answerer's own may accompany the choice but do not stand in
+    /// for it, because the asker required the choice field, not the prose one.
     pub fn required(&self) -> bool {
         self.required
     }

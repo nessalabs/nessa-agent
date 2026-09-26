@@ -81,7 +81,8 @@ pub enum ExecutionError {
     DuplicateAnswerOption,
     /// An answer names a question the agent did not ask in this ask.
     UnaskedQuestion,
-    /// A question the asker said may not be skipped was left unanswered.
+    /// A question the asker said may not be skipped was answered with no
+    /// choice.
     UnansweredQuestion,
     /// An answer chooses something the question did not offer, or supplies
     /// prose where the question invited none.

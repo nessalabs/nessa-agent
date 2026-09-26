@@ -119,15 +119,14 @@ impl AcceptedAnswer {
                 return Err(ExecutionError::UnofferedAnswer);
             }
         }
-        // A question the asker said may not be skipped must have something in
-        // it: a choice, or words of the answerer's own. Otherwise the agent is
-        // sent content its own schema refuses, and receives an error in place
-        // of the answer it waited for.
+        // A required question must be chosen for. What the asker required is
+        // the choice field itself: prose goes to a separate field, so words
+        // alone would leave the required one empty, and the agent would be sent
+        // content its own schema refuses in place of the answer it waited for.
         for asked in question.questions().iter().filter(|asked| asked.required()) {
-            let answered = choices.iter().any(|choice| {
-                choice.key() == asked.key()
-                    && (!choice.values.is_empty() || choice.own_words().is_some())
-            });
+            let answered = choices
+                .iter()
+                .any(|choice| choice.key() == asked.key() && !choice.values.is_empty());
             if !answered {
                 return Err(ExecutionError::UnansweredQuestion);
             }

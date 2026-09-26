@@ -28,8 +28,9 @@ type Asked = NonNullable<Conversation["remote"]>["questions"][number]
  * as a floating approval a person has to clear.
  *
  * Skipping everything is what declining sends, and is always possible. Within
- * an answer, a question the agent marked required cannot be left out — the
- * agent would refuse that answer — so Answer waits until each one is answered.
+ * an answer, a question the agent marked required needs one of its options
+ * chosen — the agent required that field, and own words go to another — so
+ * Answer waits until each required question has a choice.
  */
 export function ConversationQuestions({
   conversation,
@@ -78,7 +79,9 @@ function ConversationQuestion({
     Boolean(chosen.get(question.key)?.length || ownWords.get(question.key)?.trim())
   const answered =
     ask.questions.some(hasAnswer) &&
-    ask.questions.every((question) => !question.required || hasAnswer(question))
+    ask.questions.every(
+      (question) => !question.required || Boolean(chosen.get(question.key)?.length),
+    )
 
   const send = (
     choices: { key: string; values: string[]; ownWords?: string }[] | null,
@@ -118,7 +121,7 @@ function ConversationQuestion({
           {/* Alone, a required question already holds Answer back; among
               several, it says which of them does. */}
           {ask.questions.length > 1 && question.required ? (
-            <QuestionnaireDescription>Needs an answer</QuestionnaireDescription>
+            <QuestionnaireDescription>Choose an answer</QuestionnaireDescription>
           ) : null}
           <QuestionnaireChoices
             aria-required={question.required}

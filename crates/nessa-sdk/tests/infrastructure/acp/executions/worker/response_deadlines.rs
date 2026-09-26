@@ -426,3 +426,154 @@ async fn an_execution_write_is_armed_with_what_the_read_left() {
         "{elapsed:?}"
     );
 }
+
+fn ask_params(field: &str) -> Value {
+    json!({"sessionId":"context","mode":"form","message":"Which environment?",
+        "requestedSchema":{"type":"object","properties":{
+            field:{"type":"string","oneOf":[{"const":"staging"}]}}}})
+}
+
+/// A sink that takes most of a grace interval to acknowledge each record.
+///
+/// Within its own bound every time, so each record it is given is delivered;
+/// what it exposes is anything that shares one deadline across several of them.
+#[derive(Default)]
+struct SlowAudit {
+    records: Mutex<Vec<ExecutionAuditRecord>>,
+}
+impl ExecutionAudit for SlowAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        self.records.lock().unwrap().push(record);
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(15)).await;
+            Ok(())
+        })
+    }
+}
+
+/// A teardown's deadline ends what the provider is told, not what is recorded.
+///
+/// Review found the asks taken out, then told, closed and audited one by one
+/// under the grace deadline: an audit sink that answered within its own bound,
+/// but slower than the grace left, had the rest of the loop dropped with the
+/// future — every ask not yet reached lost its closure and its record. Here the
+/// provider never reads, so no cancellation can be sent, and each ask must still
+/// close and be recorded as ended, with its delivery reported as failed.
+#[tokio::test]
+async fn asks_ended_by_a_teardown_are_closed_and_recorded_even_when_its_deadline_expires() {
+    let (mut worker, mut execution, mut events) = blocked_worker("").await;
+    let audit = Arc::new(SlowAudit::default());
+    worker.audit = audit.clone();
+    for (wire, field) in [(71, "question_0"), (72, "question_1"), (73, "question_2")] {
+        worker
+            .question(&mut execution, RpcId::Number(wire), ask_params(field), None)
+            .await
+            .unwrap();
+    }
+    assert_eq!(worker.questions.len(), 3);
+    tokio::time::pause();
+    let began = Instant::now();
+    assert_eq!(worker.send_cancellation("context").await, Ok(()));
+    assert!(
+        Instant::now() <= began + Duration::from_millis(20) + worker.config.shutdown_grace * 3,
+        "evidence was recorded, not waited on past each sink's own bound"
+    );
+    tokio::time::resume();
+    assert!(worker.questions.is_empty());
+
+    let mut asked = Vec::new();
+    let mut closed = Vec::new();
+    for _ in 0..6 {
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("each ask and each close is observed")
+            .unwrap();
+        match event.update() {
+            ExecutionUpdate::QuestionAsked { id, .. } => asked.push(id.clone()),
+            ExecutionUpdate::QuestionClosed { id } => closed.push(id.clone()),
+            _ => {}
+        }
+    }
+    closed.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    assert_eq!(asked.len(), 3);
+    assert_eq!(
+        closed, asked,
+        "every ask closes, not only those reached in time"
+    );
+
+    let records = audit.records.lock().unwrap();
+    let ended: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::QuestionAnswered(value) => Some(value),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended.len(), 3, "every ask's ending is recorded");
+    for record in ended {
+        assert_eq!(
+            record.response(),
+            &QuestionResponse::Cancelled(QuestionCancellation::SessionEnded)
+        );
+        assert_eq!(record.actor(), None);
+        assert_eq!(record.execution_id().as_str(), "active");
+        assert_eq!(
+            record.delivery(),
+            &PermissionAnswerDelivery::Failed(AgentError::Deadline)
+        );
+    }
+}
+
+/// A review that cannot be cancelled does not decide whether an ask ends.
+///
+/// Review cancellations stop at the first failed write. Asks were ended after
+/// them, so a provider that had gone away with a review and an ask both pending
+/// left the ask open, unclosed and unrecorded.
+#[tokio::test]
+async fn an_ask_ends_with_evidence_when_a_pending_review_cannot_be_cancelled() {
+    let (mut worker, mut execution, mut events) = blocked_worker("").await;
+    let audit = Arc::new(Audit::default());
+    worker.audit = audit.clone();
+    worker
+        .permission(&mut execution, RpcId::Number(77), permission_params(), None)
+        .await
+        .unwrap();
+    worker
+        .question(
+            &mut execution,
+            RpcId::Number(78),
+            ask_params("question_0"),
+            None,
+        )
+        .await
+        .unwrap();
+    // The provider is gone: nothing can be written to it at all.
+    worker.scope.stdin = None;
+    assert_eq!(
+        worker.send_cancellation("context").await,
+        Err(AgentError::Closed)
+    );
+    assert!(worker.questions.is_empty());
+    let mut closed = false;
+    for _ in 0..3 {
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("the review, the ask and its close are observed")
+            .unwrap();
+        closed |= matches!(event.update(), ExecutionUpdate::QuestionClosed { .. });
+    }
+    assert!(closed, "the ask closes");
+    let records = audit.records.lock().unwrap();
+    let ended: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::QuestionAnswered(value) => Some(value),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended.len(), 1, "{records:?}");
+    assert_eq!(
+        ended[0].delivery(),
+        &PermissionAnswerDelivery::Failed(AgentError::Closed)
+    );
+}

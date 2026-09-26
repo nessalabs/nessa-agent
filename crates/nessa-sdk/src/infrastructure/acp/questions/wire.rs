@@ -9,8 +9,9 @@ use crate::domain::agent_execution::questions::{
     AcceptedAnswer, AgentQuestion, AnswerOption, AnswerShape, Question,
 };
 use crate::infrastructure::acp::fields::string;
-use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::json_rpc::{protocol, success, RpcId};
 use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
 
 /// The `_meta` key marking a free-text field as one question's "other" box.
 ///
@@ -41,7 +42,7 @@ pub(crate) fn question(params: &Value) -> Result<AgentQuestion, AgentError> {
     // something to depend on. The companion's own field name is what travels:
     // an answer written under a name the schema does not have is an answer the
     // asker never receives.
-    let mut free_text = std::collections::HashMap::new();
+    let mut free_text = HashMap::new();
     for (key, field) in properties {
         if let Some(owner) = custom_answer_for(field) {
             free_text.insert(owner.unwrap_or(key.as_str()).to_owned(), key.clone());
@@ -58,9 +59,17 @@ pub(crate) fn question(params: &Value) -> Result<AgentQuestion, AgentError> {
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
-                .collect::<std::collections::HashSet<_>>()
+                .collect::<HashSet<_>>()
         })
         .unwrap_or_default();
+    // A required prose field says the answerer must write something, whatever
+    // they choose. Nothing here can require that of a person, so the ask is
+    // refused now rather than answered with content the asker's schema refuses.
+    if free_text.values().any(|field| required.contains(field)) {
+        return Err(AgentError::Unsupported(
+            "a question whose own-words field is required cannot be answered here".into(),
+        ));
+    }
 
     let mut questions = Vec::new();
     for (key, field) in properties {
@@ -151,11 +160,7 @@ fn answer_options(options: &[Value]) -> Result<Vec<AnswerOption>, AgentError> {
 ///
 /// A question left alone contributes nothing, which is how skipping is
 /// expressed. Whether the asker permits that is checked before we get here.
-pub(crate) fn accepted(
-    id: &crate::infrastructure::json_rpc::RpcId,
-    asked: &AgentQuestion,
-    answer: &AcceptedAnswer,
-) -> Value {
+pub(crate) fn accepted(id: &RpcId, asked: &AgentQuestion, answer: &AcceptedAnswer) -> Value {
     let mut content = Map::new();
     for choice in answer.choices() {
         let Some(question) = asked
@@ -179,18 +184,18 @@ pub(crate) fn accepted(
             content.insert(field.to_owned(), json!(words));
         }
     }
-    crate::infrastructure::json_rpc::success(id, json!({"action":"accept","content":content}))
+    success(id, json!({"action":"accept","content":content}))
 }
 
 /// The answer that declines to answer: asked, and answered with nothing.
-pub(crate) fn declined(id: &crate::infrastructure::json_rpc::RpcId) -> Value {
-    crate::infrastructure::json_rpc::success(id, json!({"action":"decline"}))
+pub(crate) fn declined(id: &RpcId) -> Value {
+    success(id, json!({"action":"decline"}))
 }
 
 /// The answer that no longer applies, because the question was withdrawn or the
 /// work it belonged to is over.
-pub(crate) fn cancelled(id: &crate::infrastructure::json_rpc::RpcId) -> Value {
-    crate::infrastructure::json_rpc::success(id, json!({"action":"cancel"}))
+pub(crate) fn cancelled(id: &RpcId) -> Value {
+    success(id, json!({"action":"cancel"}))
 }
 
 #[cfg(test)]

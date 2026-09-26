@@ -185,11 +185,44 @@ fn a_required_question_cannot_be_skipped_and_an_optional_one_can() {
         .unwrap_err(),
         ExecutionError::UnansweredQuestion
     );
-    // Words of the answerer's own are an answer to it, and the optional
+    // Words alone are not a choice. The asker required `environment`, and prose
+    // goes to `explanation`, so this answer would leave the required field
+    // empty. A second review reproduced exactly that being accepted.
+    let words_only =
+        vec![QuestionChoice::new("environment", vec![], Some("dev box".into())).unwrap()];
+    assert_eq!(
+        AcceptedAnswer::new(&asked, words_only).unwrap_err(),
+        ExecutionError::UnansweredQuestion
+    );
+    // A choice is an answer to it, words may accompany it, and the optional
     // question may be left alone.
-    assert!(AcceptedAnswer::new(
+    let answer = AcceptedAnswer::new(
         &asked,
-        vec![QuestionChoice::new("environment", vec![], Some("dev box".into())).unwrap()],
+        vec![QuestionChoice::new(
+            "environment",
+            vec!["staging".into()],
+            Some("dev box".into()),
+        )
+        .unwrap()],
     )
-    .is_ok());
+    .unwrap();
+    let content = &accepted(&RpcId::Text("ask".into()), &asked, &answer)["result"]["content"];
+    assert_eq!(content["environment"], json!("staging"));
+    assert!(content.get("checks").is_none());
+}
+
+#[test]
+fn an_ask_that_requires_prose_is_refused_rather_than_answered_against_its_schema() {
+    // Nothing here can make a person write something, so an asker that requires
+    // its own-words field cannot be satisfied; refusing the ask is what lets
+    // the worker answer it cancelled instead of sending content it refuses.
+    let ask = question(&json!({
+        "mode":"form","sessionId":"session","message":"Which environment?",
+        "requestedSchema":{"type":"object","required":["question_0_custom"],"properties":{
+            "question_0":{"type":"string","oneOf":[{"const":"staging"}]},
+            "question_0_custom":{"type":"string",
+                "_meta":{"_askUserQuestionCustomAnswer":{"questionId":"question_0","isCustomAnswer":true}}}
+        }}
+    }));
+    assert!(matches!(ask, Err(AgentError::Unsupported(_))), "{ask:?}");
 }

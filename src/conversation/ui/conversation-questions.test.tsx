@@ -86,6 +86,23 @@ function choose(key: string, value: string) {
   act(() => input.click())
 }
 
+function write(key: string, words: string) {
+  const input = host.querySelector<HTMLInputElement>(
+    `input[name="${CSS.escape(`${key}_custom`)}"]`,
+  )
+  if (!input) throw new Error(`no own-words field for ${key}`)
+  // React tracks the value it last rendered; setting it through the native
+  // setter is what makes the input event read as a change.
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set
+  act(() => {
+    setValue?.call(input, words)
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+}
+
 function answer() {
   return [...host.querySelectorAll("button")].find(
     (button) => button.textContent === "Answer",
@@ -117,6 +134,23 @@ describe("an ask in the conversation", () => {
     expect(answer().disabled).toBe(true)
     expect(host.querySelector('[aria-required="true"]')).not.toBeNull()
     choose("needed", "b")
+    expect(answer().disabled).toBe(false)
+  })
+
+  it("does not take own words in place of a required choice", () => {
+    // The agent required the choice field; prose travels in another, so
+    // words alone would send it an answer its own schema refuses.
+    show([{ ...question("needed", true), freeText: true }])
+    write("needed", "somewhere else")
+    expect(answer().disabled).toBe(true)
+    choose("needed", "a")
+    expect(answer().disabled).toBe(false)
+  })
+
+  it("takes own words alone for an optional question", () => {
+    // The guard for the test above: the same words do reach the answer.
+    show([{ ...question("optional", false), freeText: true }])
+    write("optional", "somewhere else")
     expect(answer().disabled).toBe(false)
   })
 

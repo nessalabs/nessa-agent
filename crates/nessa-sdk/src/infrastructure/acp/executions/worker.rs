@@ -548,20 +548,26 @@ impl<P: AcpProfile> Worker<P> {
     }
     async fn send_cancellation(&mut self, session_id: &str) -> Result<(), AgentError> {
         let deadline = self.begin_shutdown_grace();
-        match tokio::time::timeout_at(deadline, self.cancel_wire_permissions()).await {
-            Err(_) => return Ok(()),
-            Ok(Err(AgentError::Deadline)) if Instant::now() >= deadline => return Ok(()),
-            Ok(result) => result?,
+        let sent = tokio::time::timeout_at(deadline, self.cancel_wire_requests()).await;
+        // Outside the grace, not under it: a deadline ends what the provider is
+        // told, never what is recorded about the asks it was told about.
+        let closed = self.close_ended_questions().await;
+        match sent {
+            Err(_) => return closed,
+            Ok(Err(AgentError::Deadline)) if Instant::now() >= deadline => return closed,
+            Ok(Err(error)) => return closed.and(Err(error)),
+            Ok(Ok(())) => {}
         }
         let frame = json_rpc::encode(
             json_rpc::notification("session/cancel", json!({"sessionId": session_id})),
             self.config.max_frame_bytes,
         )?;
-        match self.send_encoded(frame, Some(deadline)).await {
+        let cancelled = match self.send_encoded(frame, Some(deadline)).await {
             // Expiry means cooperative grace ended, not that explicit close failed.
             Err(AgentError::Deadline) if Instant::now() >= deadline => Ok(()),
             result => result,
-        }
+        };
+        cancelled.and(closed)
     }
     fn current_deadline(&self) -> Option<Instant> {
         self.shutdown_deadline.or_else(|| {
@@ -1469,8 +1475,16 @@ impl<P: AcpProfile> Worker<P> {
                     // Left open, a surface would keep offering it, and a later
                     // answer would be written into a request nobody is waiting on.
                     let open = self.questions.remove(&id).expect("question found above");
-                    self.end_question(id, open, QuestionCancellation::ProviderWithdrawal)
-                        .await?;
+                    let delivery = self.send(question_wire::cancelled(&open.wire_id)).await;
+                    let closed = self
+                        .close_question(
+                            id,
+                            open,
+                            QuestionCancellation::ProviderWithdrawal,
+                            delivery.clone(),
+                        )
+                        .await;
+                    delivery.and(closed)?;
                 }
             }
             return Ok(());
@@ -1535,8 +1549,10 @@ impl<P: AcpProfile> Worker<P> {
             // Successful normal completion leaves the reusable session without it.
             let previous_deadline = self.shutdown_deadline;
             let deadline = self.begin_shutdown_grace();
-            match tokio::time::timeout_at(deadline, self.cancel_wire_permissions()).await {
-                Ok(result) => result?,
+            let sent = tokio::time::timeout_at(deadline, self.cancel_wire_requests()).await;
+            let closed = self.close_ended_questions().await;
+            match sent {
+                Ok(result) => result.and(closed)?,
                 Err(_) => {
                     self.failure_cause = ObservationFailureCause::DeadlineExceeded;
                     self.cancellation_cause.get_or_insert((
@@ -1921,6 +1937,7 @@ impl<P: AcpProfile> Worker<P> {
                 session_id: execution.id().clone(),
                 execution_id,
                 question,
+                cancel_delivery: None,
             },
         );
         self.emit(event)
@@ -2139,20 +2156,54 @@ impl<P: AcpProfile> Worker<P> {
             Ok(())
         }
     }
-    async fn cancel_wire_permissions(&mut self) -> Result<(), AgentError> {
+    /// Tell the provider that nothing it is waiting on will be answered.
+    ///
+    /// Only the wire is touched here, because only this runs under the grace
+    /// deadline, and a deadline drops this future wherever it has got to. Each
+    /// ask's result is kept on the ask as it is sent, so what reached the
+    /// provider outlives the future that sent it. Asks go first: a failed
+    /// review cancellation returns early, and must not decide whether an ask
+    /// is told. The first failure to tell the provider anything is returned.
+    async fn cancel_wire_requests(&mut self) -> Result<(), AgentError> {
+        let asked: Vec<QuestionId> = self.questions.keys().cloned().collect();
+        let mut failure = None;
+        for id in asked {
+            let Some(wire_id) = self.questions.get(&id).map(|open| open.wire_id.clone()) else {
+                continue;
+            };
+            let delivery = self.send(question_wire::cancelled(&wire_id)).await;
+            if let Err(error) = &delivery {
+                failure.get_or_insert(error.clone());
+            }
+            if let Some(open) = self.questions.get_mut(&id) {
+                open.cancel_delivery = Some(delivery);
+            }
+        }
         let permissions = std::mem::take(&mut self.permissions);
         for wire_id in permissions.into_values() {
             self.send(permission_wire::permission_cancel(&wire_id))
                 .await?;
         }
-        // A question nobody will answer is cancelled for the same reason a
-        // pending review is: the agent is waiting on this request, and leaving
-        // it unanswered leaves it waiting forever.
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// Close every ask the session is ending, and record that it ended.
+    ///
+    /// A question nobody will answer is ended for the same reason a pending
+    /// review is: the agent is waiting on it. Run after the deadline-bound
+    /// sends, never under them, so a deadline cannot drop an ask's evidence
+    /// with it. An ask whose cancellation was never sent — the deadline came
+    /// first — is recorded as not delivered, because it was not.
+    async fn close_ended_questions(&mut self) -> Result<(), AgentError> {
         let questions = std::mem::take(&mut self.questions);
         let mut failure = None;
-        for (id, open) in questions {
+        for (id, mut open) in questions {
+            let delivery = open
+                .cancel_delivery
+                .take()
+                .unwrap_or(Err(AgentError::Deadline));
             if let Err(error) = self
-                .end_question(id, open, QuestionCancellation::SessionEnded)
+                .close_question(id, open, QuestionCancellation::SessionEnded, delivery)
                 .await
             {
                 failure.get_or_insert(error);
@@ -2161,21 +2212,22 @@ impl<P: AcpProfile> Worker<P> {
         failure.map_or(Ok(()), Err)
     }
 
-    /// End one ask that nobody answered, and leave the evidence of why.
+    /// Close one ask that nobody answered, and leave the evidence of why.
     ///
-    /// Every step is attempted whatever the one before it did. The provider
-    /// is told, so the agent is not left waiting; the close is observed, so a
-    /// surface still showing the ask stops offering it; and the cause is
-    /// recorded, because an ask ending is a transition like any other and a
-    /// teardown is not an exception to that. The first failure is what is
-    /// returned, and none of them stops the others.
-    async fn end_question(
+    /// `delivery` is what telling the provider came to, and is recorded, not
+    /// returned: whoever sent it reports it, since only the sender knows whether
+    /// a deadline there was a failure or the end of a grace. Both steps here are
+    /// attempted whatever the other did: the close is observed, so a surface
+    /// still showing the ask stops offering it; and the cause is recorded,
+    /// because an ask ending is a transition like any other and a teardown is
+    /// not an exception to that. The first local failure is returned.
+    async fn close_question(
         &mut self,
         id: QuestionId,
         open: OpenQuestion,
         cause: QuestionCancellation,
+        delivery: Result<(), AgentError>,
     ) -> Result<(), AgentError> {
-        let delivery = self.send(question_wire::cancelled(&open.wire_id)).await;
         let closed = ExecutionEvent::new(
             open.execution_id.clone(),
             ExecutionUpdate::QuestionClosed { id: id.clone() },
@@ -2196,7 +2248,7 @@ impl<P: AcpProfile> Worker<P> {
                 ),
             ))
             .await;
-        delivery.and(observed).and(recorded)
+        observed.and(recorded)
     }
 }
 
@@ -2212,6 +2264,10 @@ struct OpenQuestion {
     session_id: ExecutionSessionId,
     execution_id: ExecutionId,
     question: AgentQuestion,
+    /// What telling the provider this ask is over came to, once a teardown
+    /// has tried. Kept here because that attempt runs under a deadline that
+    /// can drop it, and the record made afterwards must say what happened.
+    cancel_delivery: Option<Result<(), AgentError>>,
 }
 
 /// Which of the two things a profile's refusal was saying.

@@ -1843,7 +1843,7 @@
         },
         "required": {
           "type": "boolean",
-          "description": "Whether an answer must include this question. Declining the whole ask is still possible; leaving out only this one is refused."
+          "description": "Whether an answer must choose at least one of this question's options; own words alone do not satisfy it. Declining the whole ask is still possible."
         },
         "options": {
           "type": "array",
