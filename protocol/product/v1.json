@@ -2223,7 +2223,8 @@
       "description": "One preset the binding can honor for this model.",
       "properties": {
         "id": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Nessa identifier for this binding-owned native preset."
         },
         "name": {
           "type": "string",
@@ -2359,7 +2360,8 @@
           "description": "Stable action identifier retained for retries of one logical command."
         },
         "mode": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Preset requested for this conversation."
         }
       },
       "required": ["conversationId", "requestId", "mode"]
@@ -2377,7 +2379,8 @@
           "description": "Original action identifier."
         },
         "mode": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Preset durably committed by this command."
         }
       },
       "required": ["requestId", "mode"]
@@ -2395,7 +2398,8 @@
           "description": "Correlated action identifier."
         },
         "requestedMode": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Requested preset, kept separate from the committed mode during recovery."
         },
         "status": {
           "type": "string",

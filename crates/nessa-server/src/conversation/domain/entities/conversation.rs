@@ -35,6 +35,10 @@ impl Conversation {
         self
     }
     /// Bind an identity to the authenticated creator. Ownership never comes from prompt data.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the persisted conversation has nine distinct creation facts"
+    )]
     pub fn new(
         id: ConversationId,
         organization: OrganizationId,
@@ -63,6 +67,10 @@ impl Conversation {
     /// newer build added, say. Such a conversation is still its owner's: it is
     /// listed, and it can be deleted; it cannot be opened
     /// (`a_conversation_naming_an_unknown_agent_is_listed_and_deleted_but_not_opened`).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "restoration names every persisted creation fact explicitly"
+    )]
     pub fn restore(
         id: ConversationId,
         organization: OrganizationId,

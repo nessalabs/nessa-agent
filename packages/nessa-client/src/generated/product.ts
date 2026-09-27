@@ -861,6 +861,7 @@ export const ApprovalMode = { Ask: "ask", Auto: "auto", Full: "full" } as const
 export type ApprovalMode = (typeof ApprovalMode)[keyof typeof ApprovalMode]
 /** One preset the binding can honor for this model. */
 export interface ApprovalModeChoice {
+  /** Nessa identifier for this binding-owned native preset. */
   id: ApprovalMode
   /** Short user-facing mode name. */
   name: string
@@ -902,18 +903,21 @@ export interface ConversationSetApprovalModeParams {
   conversationId: string
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
+  /** Preset requested for this conversation. */
   mode: ApprovalMode
 }
 /** Durably committed choice or typed refusal. */
 export interface ConversationSetApprovalModeResult {
   /** Original action identifier. */
   requestId: string
+  /** Preset durably committed by this command. */
   mode: ApprovalMode
 }
 /** A change in progress or awaiting recovery; the committed mode remains separate. */
 export interface ApprovalModeChange {
   /** Correlated action identifier. */
   requestId: string
+  /** Requested preset, kept separate from the committed mode during recovery. */
   requestedMode: ApprovalMode
   /** Turn admission state. */
   status: "changing" | "recovery_required"

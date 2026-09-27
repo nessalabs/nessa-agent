@@ -113,13 +113,11 @@ impl CredentialedClaudeProvider {
             CREDENTIAL_READ_DEADLINE,
         )
         .await?;
-        Ok(
-            ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())
-                .map_err(ProviderOpenError::no_resources)?
-                .with_system_prompt(self.prompt.clone())
-                .with_approval_mode(self.approval_mode)
-                .map_err(ProviderOpenError::no_resources)?,
-        )
+        ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())
+            .map_err(ProviderOpenError::no_resources)?
+            .with_system_prompt(self.prompt.clone())
+            .with_approval_mode(self.approval_mode)
+            .map_err(ProviderOpenError::no_resources)
     }
 }
 
