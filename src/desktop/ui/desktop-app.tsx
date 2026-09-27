@@ -1,8 +1,8 @@
-import { useState, type PointerEvent } from "react"
+import { useEffect, useRef, useState, type PointerEvent } from "react"
 import {
   ArrowLeft,
   ArrowRight,
-  Home,
+  Home as HomeIcon,
   Maximize2,
   Minimize2,
   PanelLeft,
@@ -14,7 +14,9 @@ import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
-  SidebarHeader,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuItem,
   SidebarProvider,
@@ -23,7 +25,7 @@ import {
 import { SplitView, SplitViewPanel, SplitViewSeparator } from "@nessa-ui/react/split-view"
 import type { HostKind } from "../../host/features"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
-import { BrowserTitlebar } from "./browser-titlebar"
+import { Home } from "./home"
 import { WindowTitlebar } from "./window-titlebar"
 
 /** Track only the local glow position; SplitView continues to own dragging. */
@@ -33,7 +35,11 @@ function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
   edge.style.setProperty("--edge-glow-y", `${y}px`)
 }
 
-/** Composes the existing shell, sidebars, and split view without product/backend state. */
+const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent)
+const shortcut = (keys: string) =>
+  isMac ? keys : keys.replace("⌥", "Alt+").replace("⌘", "Ctrl+")
+
+/** Composes the shell, sidebars, and split view without product/backend state. */
 export function DesktopApp({
   hostKind,
   browserSurface,
@@ -54,41 +60,41 @@ export function DesktopApp({
     workspaceCollapsed,
   } = useSidebarLayout()
   const [rightMaximized, setRightMaximized] = useState(false)
-  const rightToggle = (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-8 text-muted-foreground"
-      aria-label="Toggle right sidebar"
-      aria-expanded={rightOpen || rightMaximized}
-      aria-controls="right"
-      title="Toggle right sidebar"
-      onClick={() => {
-        setRightMaximized(false)
-        setOpen("right", rightMaximized ? false : !rightOpen)
-      }}
-    >
-      <PanelRight />
-    </Button>
-  )
+  const rightShown = rightOpen || rightMaximized
+
+  const toggleRight = () => {
+    setRightMaximized(false)
+    setOpen("right", rightMaximized ? false : !rightOpen)
+  }
+
+  // ⌥⌘B mirrors the left sidebar's ⌘B for the panel on the other side.
+  const toggleRightRef = useRef(toggleRight)
+  toggleRightRef.current = toggleRight
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = isMac ? event.metaKey : event.ctrlKey
+      if (mod && event.altKey && event.code === "KeyB") {
+        event.preventDefault()
+        toggleRightRef.current()
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
+  const leftLabel = `${leftOpen && !rightMaximized ? "Hide" : "Show"} Sidebar (${shortcut("⌘B")})`
+  const rightLabel = `${rightShown ? "Hide" : "Show"} Panel (${shortcut("⌥⌘B")})`
+  const maximizeLabel = rightMaximized ? "Restore Panel (Esc)" : "Expand Panel"
 
   const rightControls = (
-    <div className="flex items-center gap-1">
-      {rightOpen || rightMaximized ? (
+    <div className="flex items-center gap-0.5">
+      {rightShown ? (
         <Button
           variant="ghost"
           size="icon"
-          className="size-8 text-muted-foreground"
-          aria-label={
-            rightMaximized
-              ? "Restore right sidebar"
-              : "Expand right sidebar to full window"
-          }
-          title={
-            rightMaximized
-              ? "Restore right sidebar"
-              : "Expand right sidebar to full window"
-          }
+          className="desktop-titlebar-button"
+          aria-label={maximizeLabel}
+          title={maximizeLabel}
           aria-pressed={rightMaximized}
           aria-controls="right"
           onClick={() => setRightMaximized((value) => !value)}
@@ -96,13 +102,25 @@ export function DesktopApp({
           {rightMaximized ? <Minimize2 /> : <Maximize2 />}
         </Button>
       ) : null}
-      {rightToggle}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="desktop-titlebar-button"
+        aria-label={rightLabel}
+        aria-expanded={rightShown}
+        aria-controls="right"
+        title={rightLabel}
+        onClick={toggleRight}
+      >
+        <PanelRight />
+      </Button>
     </div>
   )
 
   return (
     <SidebarProvider
       data-host={hostKind}
+      data-surface={browserSurface ? "browser" : "window"}
       open={leftOpen && !rightMaximized}
       onOpenChange={(open) => {
         setRightMaximized(false)
@@ -112,7 +130,7 @@ export function DesktopApp({
       keyboardShortcut={{ key: "b", modifier: "mod" }}
     >
       <AppShell
-        className="relative h-svh w-full min-w-[350px]"
+        className="desktop-shell relative h-svh w-full min-w-[350px]"
         data-right-maximized={rightMaximized || undefined}
         onKeyDownCapture={(event) => {
           if (event.key === "Escape" && rightMaximized) {
@@ -122,31 +140,33 @@ export function DesktopApp({
         }}
         maximizeShortcut={false}
       >
-        {browserSurface ? (
-          <BrowserTitlebar trailing={rightControls} />
-        ) : (
-          <WindowTitlebar
-            className="absolute inset-x-0 top-0 z-20"
-            style={{ background: "transparent" }}
-            data-tauri-drag-region
-            windowControlsInset="var(--desktop-window-controls-inset, 8px)"
-            height={42}
-            leading={
-              <SidebarTrigger
-                aria-expanded={leftOpen && !rightMaximized}
-                aria-controls="left"
-              >
-                <PanelLeft />
-              </SidebarTrigger>
-            }
-            navigation={{
-              back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
-              forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
-            }}
-            trailing={rightControls}
-          />
-        )}
-        <AppShellBody>
+        <div className="desktop-ambient" aria-hidden="true" />
+        {/* One titlebar for every surface, outside the split view, so no
+            toggle moves when a sidebar opens or closes. */}
+        <WindowTitlebar
+          className="desktop-titlebar absolute inset-x-0 top-0 z-20"
+          style={{ background: "transparent" }}
+          data-tauri-drag-region
+          windowControlsInset="var(--desktop-window-controls-inset)"
+          height="var(--desktop-titlebar-height)"
+          leading={
+            <SidebarTrigger
+              className="desktop-titlebar-button"
+              aria-label={leftLabel}
+              title={leftLabel}
+              aria-expanded={leftOpen && !rightMaximized}
+              aria-controls="left"
+            >
+              <PanelLeft />
+            </SidebarTrigger>
+          }
+          navigation={{
+            back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
+            forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
+          }}
+          trailing={rightControls}
+        />
+        <AppShellBody className="bg-transparent">
           <SplitView
             ref={groupRef}
             className="desktop-split h-full w-full"
@@ -166,45 +186,31 @@ export function DesktopApp({
               <Sidebar
                 aria-label="Main navigation"
                 collapsible="none"
-                className={`desktop-sidebar ${browserSurface ? "" : "pt-[42px]"}`}
+                className="desktop-sidebar desktop-glass"
               >
-                <SidebarHeader className="flex h-14 shrink-0 flex-row items-center gap-2 px-5 py-0">
-                  <span
-                    aria-hidden="true"
-                    className="size-1.5 shrink-0 rounded-[1px] bg-foreground"
-                  />
-                  <span className="text-base font-semibold tracking-tight">nessa</span>
-                </SidebarHeader>
                 <SidebarContent>
                   <SidebarMenu>
-                    <SidebarMenuItem asChild icon={<Home />} isActive>
+                    <SidebarMenuItem asChild icon={<HomeIcon />} isActive>
                       <a href="#home" aria-current="page">
                         Home
                       </a>
                     </SidebarMenuItem>
                   </SidebarMenu>
+                  <SidebarGroup className="mt-4">
+                    <SidebarGroupLabel>Recents</SidebarGroupLabel>
+                    <SidebarGroupContent>
+                      <p className="desktop-empty-note">
+                        Your conversations will appear here.
+                      </p>
+                    </SidebarGroupContent>
+                  </SidebarGroup>
                 </SidebarContent>
-                <SidebarFooter className="flex-row items-center justify-between border-t border-border px-3 py-2">
-                  <span className="flex min-w-0 items-center gap-2 text-sm tracking-tight">
-                    <span
-                      aria-hidden="true"
-                      className="size-1.5 shrink-0 rounded-[1px] bg-foreground"
-                    />
-                    <span className="truncate">
-                      <span className="font-semibold">nessa</span>
-                      <span className="font-normal text-muted-foreground">Studio</span>
-                    </span>
+                <SidebarFooter className="desktop-identity">
+                  <span aria-hidden="true" className="desktop-mark" />
+                  <span className="truncate">
+                    <span className="font-semibold">nessa</span>
+                    <span className="font-normal text-muted-foreground">Studio</span>
                   </span>
-                  {browserSurface && (
-                    <SidebarTrigger
-                      aria-label="Close sidebar"
-                      title="Close sidebar"
-                      aria-expanded={true}
-                      aria-controls="left"
-                    >
-                      <PanelLeft />
-                    </SidebarTrigger>
-                  )}
                 </SidebarFooter>
               </Sidebar>
             </SplitViewPanel>
@@ -227,11 +233,9 @@ export function DesktopApp({
               inert={rightMaximized || workspaceCollapsed}
               aria-hidden={rightMaximized || workspaceCollapsed}
             >
-              <AppShellMain
-                id="home"
-                aria-label="Home"
-                className={browserSurface ? "pt-14" : "pt-[42px]"}
-              />
+              <AppShellMain id="home" aria-label="Home" className="desktop-main">
+                <Home />
+              </AppShellMain>
             </SplitViewPanel>
             <SplitViewSeparator
               className="desktop-sidebar-edge"
@@ -253,11 +257,11 @@ export function DesktopApp({
               minSize={`${rightMinWidth}px`}
               collapsible
               collapsedSize={0}
-              inert={!rightOpen && !rightMaximized}
-              aria-hidden={!rightOpen && !rightMaximized}
+              inert={!rightShown}
+              aria-hidden={!rightShown}
             >
               <SidebarProvider
-                open={rightOpen || rightMaximized}
+                open={rightShown}
                 onOpenChange={(open) => setOpen("right", open)}
                 sidebarWidth="100%"
                 className="desktop-right-content h-full min-h-0"
@@ -266,9 +270,11 @@ export function DesktopApp({
                   side="right"
                   aria-label="Right sidebar"
                   collapsible="none"
-                  className={`desktop-sidebar ${browserSurface ? "pt-14" : "pt-[42px]"}`}
+                  className="desktop-sidebar desktop-glass"
                 >
-                  <SidebarContent />
+                  <SidebarContent className="items-center justify-center">
+                    <p className="desktop-empty-note text-center">Nothing open</p>
+                  </SidebarContent>
                 </Sidebar>
               </SidebarProvider>
             </SplitViewPanel>

@@ -13,9 +13,93 @@ body {
   font-family: var(--nessa-font-sans);
 }
 
-/* Native macOS window buttons remain host-owned; other hosts need no inset. */
-[data-host="macos"] {
+/*
+ * Geometry shared by the titlebar and the floating panels. The titlebar sits
+ * over the panels, so each panel's content starts below it.
+ */
+[data-surface] {
+  --desktop-titlebar-height: 48px;
+  --desktop-window-controls-inset: 14px;
+  --desktop-gutter: 8px;
+  --desktop-radius: 14px;
+  --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Native macOS window buttons remain host-owned and sit inside the sidebar. */
+[data-host="macos"][data-surface="window"] {
+  --desktop-titlebar-height: 42px;
   --desktop-window-controls-inset: 79px;
+}
+
+.desktop-shell {
+  isolation: isolate;
+  background: var(--background);
+}
+
+/* A slow, faint light behind everything, so the glass has something to hold. */
+.desktop-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.desktop-ambient::before,
+.desktop-ambient::after {
+  content: "";
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  animation: desktop-drift 28s var(--desktop-ease) infinite alternate;
+}
+
+.desktop-ambient::before {
+  left: 10%;
+  top: -35%;
+  background: radial-gradient(closest-side, oklch(0.42 0.09 265 / 45%), transparent);
+}
+
+.desktop-ambient::after {
+  right: -20%;
+  bottom: -45%;
+  background: radial-gradient(closest-side, oklch(0.45 0.08 200 / 30%), transparent);
+  animation-duration: 36s;
+  animation-direction: alternate-reverse;
+}
+
+@keyframes desktop-drift {
+  to {
+    transform: translate3d(6vw, 4vh, 0) scale(1.08);
+  }
+}
+
+.desktop-titlebar-button,
+.desktop-titlebar [data-slot="app-shell-titlebar-navigation"] {
+  color: color-mix(in oklab, var(--foreground) 55%, transparent);
+  border-radius: 8px;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.desktop-titlebar-button:hover {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.desktop-titlebar-button {
+  width: 32px;
+  height: 28px;
+}
+
+.desktop-titlebar-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6;
 }
 
 /* SplitView owns sizing, capture, keyboard resizing, and collapse snapping. */
@@ -29,12 +113,198 @@ body {
   border: 0;
 }
 
+/*
+ * A floating pane of glass, inset from the window edge. The titlebar's
+ * controls sit on top of it; its content starts below them.
+ */
+.desktop-glass[data-slot="sidebar"] {
+  height: calc(100% - 2 * var(--desktop-gutter));
+  width: calc(100% - var(--desktop-gutter));
+  margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
+  padding-top: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  border-radius: var(--desktop-radius);
+  background: color-mix(in oklab, var(--sidebar) 62%, transparent);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 7%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
+    0 12px 40px -12px rgb(0 0 0 / 55%);
+  overflow: hidden;
+  transition:
+    opacity 260ms var(--desktop-ease),
+    transform 320ms var(--desktop-ease);
+}
+
+.desktop-glass[data-side="right"],
+#right .desktop-glass[data-slot="sidebar"] {
+  margin: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
+}
+
+/* Closing slides the pane toward its edge as it fades, instead of clipping it. */
+#left[data-collapsed] .desktop-glass {
+  opacity: 0;
+  transform: translateX(-12px) scale(0.985);
+}
+
+#right[data-collapsed] .desktop-glass {
+  opacity: 0;
+  transform: translateX(12px) scale(0.985);
+}
+
+.desktop-empty-note {
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: color-mix(in oklab, var(--foreground) 38%, transparent);
+}
+
+.desktop-identity[data-slot="sidebar-footer"] {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 14px;
+  border-top: 0;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.desktop-mark {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 1.5px;
+  background: var(--foreground);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--foreground) 45%, transparent);
+}
+
+.desktop-main[data-slot] {
+  background: transparent;
+  padding-top: var(--desktop-titlebar-height);
+}
+
+/* Home: one greeting and one field, centred slightly above the middle. */
+.desktop-home {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px 12vh;
+}
+
+.desktop-home-inner {
+  width: 100%;
+  max-width: 620px;
+  animation: desktop-rise 700ms var(--desktop-ease) both;
+}
+
+@keyframes desktop-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(4px);
+  }
+}
+
+.desktop-greeting {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  background: linear-gradient(
+    100deg,
+    var(--foreground) 0%,
+    color-mix(in oklab, var(--foreground) 62%, transparent) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.desktop-subtitle {
+  margin: 8px 0 28px;
+  font-size: 15px;
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+}
+
+.desktop-composer {
+  border-radius: 18px;
+  padding: 14px 14px 10px 18px;
+  background: color-mix(in oklab, var(--card, var(--sidebar)) 70%, transparent);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
+    0 20px 50px -24px rgb(0 0 0 / 70%);
+  transition: box-shadow 200ms ease;
+}
+
+.desktop-composer:focus-within {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 18%, transparent),
+    0 0 0 4px color-mix(in oklab, oklch(0.62 0.12 265) 18%, transparent),
+    0 20px 50px -24px rgb(0 0 0 / 70%);
+}
+
+.desktop-composer textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.desktop-composer textarea::placeholder {
+  color: color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+
+.desktop-composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.desktop-composer-hint {
+  font-size: 12px;
+  color: color-mix(in oklab, var(--foreground) 32%, transparent);
+}
+
+.desktop-send {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.desktop-send:disabled {
+  opacity: 0.25;
+}
+
+.desktop-send svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.2;
+}
+
 .desktop-sidebar [data-slot="sidebar-content"] {
   min-width: 150px;
 }
 
 .desktop-split > [data-slot="split-view-panel"] {
-  transition: flex-grow 180ms ease-out;
+  transition: flex-grow 340ms var(--desktop-ease);
 }
 
 .desktop-split:has([data-resizing])
@@ -42,8 +312,9 @@ body {
   transition: none;
 }
 
+/* The panes carry their own edges; the separator is only a hit target and a glow. */
 .desktop-sidebar-edge[data-slot="split-view-separator"] {
-  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  background: transparent;
   box-shadow: none;
 }
 
@@ -73,8 +344,15 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .desktop-split > [data-slot="split-view-panel"],
-  .desktop-sidebar-edge[data-slot="split-view-separator"]::before {
+  .desktop-sidebar-edge[data-slot="split-view-separator"]::before,
+  .desktop-glass[data-slot="sidebar"] {
     transition: none;
+  }
+
+  .desktop-ambient::before,
+  .desktop-ambient::after,
+  .desktop-home-inner {
+    animation: none;
   }
 }
 

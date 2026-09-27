@@ -45,9 +45,12 @@ Its drag region and double-click maximize have desktop-scoped capabilities. It d
 or surface credentials. Platform preparation still runs before Tauri starts.
 
 `desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
-system's AppShell frame and Sidebar with a single Home link and an empty main
-area. The app controls SidebarProvider from its shared layout; the provider supplies
-the optional Cmd/Ctrl+B shortcut.
+system's AppShell frame and Sidebar with a Home link, an empty Recents group,
+and `ui/home.tsx` in the main area: a time-of-day greeting (`model/greeting.ts`)
+and a composer that takes text but cannot send, and says so, until conversations
+are wired in. The app controls SidebarProvider from its shared layout; the
+provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
+Cmd/Ctrl+Alt+B for the right one.
 The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
 leading/trailing slots, optional labeled history actions, height, and native-control
 inset. It renders design-system Buttons and forwards native header props; it does
@@ -56,15 +59,14 @@ Reuse it with AppShell by placing it before AppShellBody and passing a
 SidebarTrigger in `leading`. Each consuming app must configure its own native
 window and drag permissions. No changes to `nessa_ui` are required.
 
-Browser composition uses `ui/browser-titlebar.tsx` instead. Expanded navigation
-shows a solid square and lowercase nessa identity inside the sidebar header,
-and a close toggle in the sidebar footer
-beside the square-mark nessaStudio wordmark. Collapsed navigation shows a plain reopen icon in the header;
-there is no hover replacement. Native desktop composition retains its fixed
-traffic-light row. The right sidebar toggle stays at the top-right in both open
-and collapsed states, in browsers and the native titlebar. Sidebars and
-their resize borders extend to the top of the window, underneath transparent
-window controls; native sidebar content begins below the 42px control row.
+Every surface, browser and native, uses the same titlebar, laid over the split
+view. The sidebar toggle sits at its leading edge (after the traffic lights on
+macOS) and the right-panel toggle at its trailing edge, and neither moves when a
+sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
+footer is the only identity. Both sidebars are inset, rounded panes of
+translucent glass over a faint ambient light; their content begins below the
+titlebar row (42px native macOS, 48px elsewhere), and closing one fades and
+slides it toward its edge while the split view animates its width.
 Inline sidebars explicitly use z-index 0 at all widths so the design system
 mobile sidebar stacking level cannot cover the fixed header controls.
 
