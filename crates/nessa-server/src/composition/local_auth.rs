@@ -8,9 +8,10 @@ use super::opencode_profile::EffectiveOpenCodeProfile;
 use super::opencode_profile::OpenCodeProfile;
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+use crate::product::generated::AgentsListResult;
 #[cfg(unix)]
 use crate::product::generated::{
-    AgentModelOption, AgentOption, AgentsListResult, ApprovalMode as WireApprovalMode,
+    AgentModelOption, AgentOption, ApprovalMode as WireApprovalMode,
     ApprovalModeChoice as WireApprovalModeChoice,
 };
 #[cfg(unix)]
