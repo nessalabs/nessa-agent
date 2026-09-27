@@ -502,7 +502,7 @@ body {
   min-width: 150px;
 }
 
-.desktop-split > [data-slot="split-view-panel"] {
+.desktop-split[data-settled] > [data-slot="split-view-panel"] {
   transition: flex-grow 340ms var(--desktop-ease);
 }
 
@@ -547,7 +547,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .desktop-split > [data-slot="split-view-panel"],
+  .desktop-split[data-settled] > [data-slot="split-view-panel"],
   .desktop-sidebar-edge[data-slot="split-view-separator"]::before,
   .desktop-glass[data-slot="sidebar"],
   .desktop-peek {

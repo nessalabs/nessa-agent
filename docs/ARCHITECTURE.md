@@ -97,8 +97,13 @@ mobile sidebar stacking level cannot cover the fixed header controls.
 `ui/desktop-app.tsx` composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
 keyboard resizing, and collapse snapping. The left sidebar opens at 250px,
-with a 200px minimum and 450px maximum (`adapters/sidebar-sizing.ts`). The main workspace has a 350px expanded minimum. The right sidebar normally has a 160px expanded minimum, reduced to the
-available surplus in narrow windows so opening it never closes the left sidebar.
+with a 200px minimum and 450px maximum (`adapters/sidebar-sizing.ts`). The main workspace has a 350px expanded minimum. The right panel has a 200px
+minimum and takes precedence over the left: `fitSidebarWidths` gives the
+workspace its minimum, then the open right panel its minimum, then the left what
+it asked for (narrowing, then closing below 200px), then grows the right with
+what remains. Opening the right panel in a narrow window therefore narrows or
+closes the left, and the right closes rather than shrinking under 200px. Both
+fit together from a 750px window up.
 It can use all remaining space, with no percentage cap. It defaults to 400px, leaving the remainder for
 the workspace; at a 1100px window with two 1px borders, that is 250px left,
 448px workspace, and 400px right. A window too narrow for 250px plus the
@@ -121,10 +126,11 @@ Borders show a localized glow in the theme's edge colour, centered on the
 pointer during hover and drag, instead of highlighting the entire edge. Keyboard focus shows the same
 glow at the center. The low-opacity gradient fades across a 220px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
 toggle transitions animate for 340ms and respect reduced motion. The center
-uses 350px while expanded and is inert while snapped closed. On window shrink, the right sidebar fits the remaining surplus;
-it closes only when there is no surplus. The left closes if 200px plus the
-workspace cannot fit. The shell itself has a 350px minimum width. Explicit
-right-open requests and right-edge resizing never change the left sidebar.
+uses 350px while expanded and is inert while snapped closed. On window shrink the same order applies: the left gives way first,
+then the right closes once it cannot keep 200px. The shell itself has a 350px
+minimum width. Right-edge resizing never changes the left sidebar. Widths
+animate only after the first measured layout has painted, so a window opens at
+its final layout instead of sliding in from equal thirds.
 
 The expand/restore button inside the right pane, beside the titlebar's panel
 toggle, fills the app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control

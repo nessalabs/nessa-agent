@@ -3,6 +3,9 @@ import {
   LEFT_DEFAULT_WIDTH,
   LEFT_MAX_WIDTH,
   LEFT_MIN_WIDTH,
+  RIGHT_DEFAULT_WIDTH,
+  RIGHT_MIN_WIDTH,
+  WORKSPACE_MIN_WIDTH,
 } from "./sidebar-sizing"
 import { useCallback, useLayoutEffect, useRef, useState, type PointerEvent } from "react"
 import {
@@ -16,7 +19,7 @@ export function useSidebarLayout() {
   const availableWidth = useRef(0)
   const [layout, setLayout] = useState<SplitViewLayout>()
   const resizingSide = useRef<"left" | "right">("left")
-  const expanded = useRef({ left: LEFT_DEFAULT_WIDTH, right: 400 })
+  const expanded = useRef({ left: LEFT_DEFAULT_WIDTH, right: RIGHT_DEFAULT_WIDTH })
 
   const constrain = useCallback((next: SplitViewLayout, width: number) => {
     const percent = (pixels: number) => (pixels / width) * 100
@@ -42,15 +45,20 @@ export function useSidebarLayout() {
         },
         {
           panelId: "center",
-          minSize: percent(350),
+          minSize: percent(WORKSPACE_MIN_WIDTH),
           maxSize: 100,
           collapsible: true,
           collapsedSize: 0,
         },
         {
           panelId: "right",
+          // The left yields to the right, so the right's floor is its
+          // minimum wherever the window has room for it at all.
           minSize: percent(
-            Math.min(160, Math.max(0, width - left - (center === 0 ? 0 : 350))),
+            Math.min(
+              RIGHT_MIN_WIDTH,
+              Math.max(0, width - (center === 0 ? 0 : WORKSPACE_MIN_WIDTH)),
+            ),
           ),
           maxSize: 100,
           collapsible: true,
@@ -75,7 +83,9 @@ export function useSidebarLayout() {
       availableWidth.current = width
       setLayout((current) => {
         const left = current ? (current.left / 100) * previousWidth : LEFT_DEFAULT_WIDTH
-        const right = current ? (current.right / 100) * previousWidth : 400
+        const right = current
+          ? (current.right / 100) * previousWidth
+          : RIGHT_DEFAULT_WIDTH
         return constrain(
           {
             left: (left / width) * 100,
@@ -100,7 +110,7 @@ export function useSidebarLayout() {
       const leftBorder = (group.children[1] as HTMLElement | undefined)?.offsetWidth ?? 0
       const workspaceWidth =
         event.clientX - group.getBoundingClientRect().left - leftWidth - leftBorder
-      if (workspaceWidth < 350) {
+      if (workspaceWidth < WORKSPACE_MIN_WIDTH) {
         event.preventDefault()
         setLayout(
           (current) =>
@@ -159,11 +169,10 @@ export function useSidebarLayout() {
     snapWorkspace,
     workspaceCollapsed: layout?.center === 0,
     rightMinWidth: Math.min(
-      160,
+      RIGHT_MIN_WIDTH,
       Math.max(
         0,
-        availableWidth.current * (1 - (layout?.left ?? 0) / 100) -
-          (layout?.center === 0 ? 0 : 350),
+        availableWidth.current - (layout?.center === 0 ? 0 : WORKSPACE_MIN_WIDTH),
       ),
     ),
     layout,

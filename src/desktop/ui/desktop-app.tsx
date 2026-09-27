@@ -31,6 +31,8 @@ import {
   LEFT_DEFAULT_WIDTH,
   LEFT_MAX_WIDTH,
   LEFT_MIN_WIDTH,
+  RIGHT_DEFAULT_WIDTH,
+  WORKSPACE_MIN_WIDTH,
 } from "../adapters/sidebar-sizing"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
@@ -70,6 +72,14 @@ export function DesktopApp({
   } = useSidebarLayout()
   const [theme, setTheme] = useThemePreference()
   const [rightMaximized, setRightMaximized] = useState(false)
+  // Widths animate only once the first measured layout has painted; before
+  // that, panels would visibly slide from equal thirds into place on load.
+  const [settled, setSettled] = useState(false)
+  useEffect(() => {
+    if (!layout || settled) return
+    const frame = requestAnimationFrame(() => setSettled(true))
+    return () => cancelAnimationFrame(frame)
+  }, [layout, settled])
   const rightShown = rightOpen || rightMaximized
   const leftDocked = leftOpen && !rightMaximized
   const peek = useEdgePeek(!leftOpen && !rightMaximized)
@@ -208,6 +218,7 @@ export function DesktopApp({
           <SplitView
             ref={groupRef}
             className="desktop-split h-full w-full"
+            data-settled={settled || undefined}
             layout={layout}
             onLayoutChange={changeLayout}
           >
@@ -242,7 +253,7 @@ export function DesktopApp({
             />
             <SplitViewPanel
               id="center"
-              minSize="350px"
+              minSize={`${WORKSPACE_MIN_WIDTH}px`}
               collapsible
               collapsedSize={0}
               inert={rightMaximized || workspaceCollapsed}
@@ -268,7 +279,7 @@ export function DesktopApp({
             />
             <SplitViewPanel
               id="right"
-              defaultSize="400px"
+              defaultSize={`${RIGHT_DEFAULT_WIDTH}px`}
               minSize={`${rightMinWidth}px`}
               collapsible
               collapsedSize={0}
