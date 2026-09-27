@@ -433,7 +433,7 @@ body {
   background:
     radial-gradient(
       120% 70% at 50% -10%,
-      color-mix(in oklab, var(--foreground) 6%, transparent),
+      color-mix(in oklab, var(--foreground) 3%, transparent),
       transparent 60%
     ),
     linear-gradient(
@@ -446,32 +446,6 @@ body {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 20%),
     0 32px 80px -32px rgb(0 0 0 / 75%);
-  transition:
-    background 280ms var(--desktop-ease),
-    box-shadow 280ms var(--desktop-ease),
-    transform 280ms var(--desktop-ease);
-}
-
-/*
- * Focus is felt rather than outlined: the surface brightens a touch and lifts
- * on a deeper shadow. No ring, no rim.
- */
-.desktop-composer:focus-within {
-  background:
-    radial-gradient(
-      120% 70% at 50% -10%,
-      color-mix(in oklab, var(--foreground) 8%, transparent),
-      transparent 60%
-    ),
-    linear-gradient(
-      color-mix(in oklab, var(--foreground) 7%, transparent),
-      color-mix(in oklab, var(--foreground) 4%, transparent)
-    ),
-    color-mix(in oklab, var(--card, var(--sidebar)) 62%, transparent);
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 22%),
-    0 40px 90px -30px rgb(0 0 0 / 85%);
-  transform: translateY(-1px);
 }
 
 .desktop-composer textarea {
@@ -490,6 +464,102 @@ body {
   /* Grows with what is typed, then scrolls. */
   field-sizing: content;
   max-height: 40vh;
+}
+
+/*
+ * The page: a draft that outgrows the card (model/page-mode.ts) dissolves it.
+ * Surface, shadow and corners go; the text sits on the window itself like a
+ * document under the greeting, the text scrolls, and the toolbar rests at the
+ * foot of the page.
+ */
+.desktop-home[data-page] {
+  align-items: stretch;
+  padding: var(--desktop-titlebar-height) 24px 16px;
+}
+
+.desktop-home[data-page] .desktop-home-inner {
+  display: flex;
+  max-width: 720px;
+  flex-direction: column;
+}
+
+/* The greeting stays, heading the page, on the same left edge as the text. */
+.desktop-home[data-page] .desktop-greeting {
+  margin: 20px 0 0;
+}
+
+.desktop-home[data-page] .desktop-composer {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 24px 0 0;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+.desktop-home[data-page] .desktop-composer-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  cursor: text;
+  /* Text fades out under the greeting and above the toolbar rather than stopping at a hard edge. */
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 20px,
+    black calc(100% - 32px),
+    transparent
+  );
+}
+
+.desktop-home[data-page] .desktop-composer textarea {
+  max-height: none;
+  padding-top: 20px;
+  padding-bottom: 32px;
+  font-size: 16.5px;
+  line-height: 1.7;
+}
+
+.desktop-home[data-page] .desktop-composer-row {
+  margin-top: 4px;
+  padding-top: 10px;
+}
+
+/*
+ * The scrollbar stays, so where a long draft stands and a way to drag through
+ * it are always there, but drawn to the theme: a thin translucent thumb with
+ * no track, brightening under the pointer.
+ */
+.desktop-composer-body,
+.desktop-composer textarea {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 20%, transparent) transparent;
+}
+
+.desktop-composer-body::-webkit-scrollbar,
+.desktop-composer textarea::-webkit-scrollbar {
+  width: 10px;
+}
+
+.desktop-composer-body::-webkit-scrollbar-track,
+.desktop-composer textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.desktop-composer-body::-webkit-scrollbar-thumb,
+.desktop-composer textarea::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 20%, transparent) padding-box;
+}
+
+.desktop-composer-body::-webkit-scrollbar-thumb:hover,
+.desktop-composer textarea::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--foreground) 35%, transparent);
 }
 
 .desktop-composer textarea::placeholder {
@@ -895,8 +965,7 @@ body {
   .desktop-split[data-settled] > [data-slot="split-view-panel"],
   .desktop-sidebar-edge[data-slot="split-view-separator"]::before,
   .desktop-glass[data-slot="sidebar"],
-  .desktop-peek,
-  .desktop-composer {
+  .desktop-peek {
     transition: none;
   }
 

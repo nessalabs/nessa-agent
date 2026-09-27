@@ -64,9 +64,14 @@ offered only to a reasoning model, with the control's Fast toggle on models
 `fastModeFor` lists (the catalog does not record Fast yet) and a small bolt
 beside the brain while Fast is on. They rest as quiet
 text chips in one colour, open frosted menus that spring into place, and hold
-no state beyond the page yet. The composer has no rim or focus ring: focused,
-its surface brightens and lifts on a deeper shadow, and its text area grows
-with what is typed up to 40% of the window. In a narrow composer the project shows only its folder, so the model keeps
+no state beyond the page yet. The composer has no rim and does not change when
+focused, and its text area grows with what is typed up to 40% of the window. A draft that outgrows the card dissolves it into
+a page (`model/page-mode.ts`, which holds the thresholds and their table): the
+card's surface, shadow and corners go, the greeting stays as the page's
+heading, the text sits on the window beneath it and scrolls, with a thin
+translucent scrollbar kept for orientation and dragging, and the toolbar rests at the foot. It opens at seven
+lines and closes at three, apart so a draft near one threshold does not flip
+the layout, and the change is immediate, with no animation. In a narrow composer the project shows only its folder, so the model keeps
 its name. The app controls SidebarProvider from its shared layout; the
 provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
 Cmd/Ctrl+Alt+B for the right one.

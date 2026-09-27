@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import { ArrowUp, Brain, ChevronDown, Folder, FolderPlus, Zap } from "lucide-react"
 import {
   DropdownMenu,
@@ -25,6 +25,7 @@ import {
   thinkingLevelsFor,
   type ComposerModel,
 } from "../model/composer-options"
+import { nextPageMode } from "../model/page-mode"
 
 /**
  * A provider's mark on a small glass tile, like an app icon: the agent's own
@@ -67,13 +68,39 @@ function findComposerModel(
   )
 }
 
+/** How many lines the draft fills, from the text area's height less its padding. */
+function draftLines(textarea: HTMLTextAreaElement): number {
+  const style = getComputedStyle(textarea)
+  const lineHeight = Number.parseFloat(style.lineHeight)
+  const padding =
+    Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom)
+  return lineHeight > 0 ? Math.round((textarea.scrollHeight - padding) / lineHeight) : 1
+}
+
 /**
  * The home composer: a message, and beneath it the three choices a turn is
  * sent with — model, thinking, and what the agent may do without asking.
  * Nothing is sent yet: the shell has no conversation wiring, and says so.
  */
-export function Composer() {
+export function Composer({
+  page,
+  onPageChange,
+}: {
+  /** Whether the composer shows as a full writing page rather than a card. */
+  page: boolean
+  onPageChange: (page: boolean) => void
+}) {
   const [draft, setDraft] = useState("")
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Measured after each edit, before paint, so the layout changes with the
+  // keystroke that crossed a threshold rather than a frame after it.
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    const next = nextPageMode(page, draftLines(textarea))
+    if (next !== page) onPageChange(next)
+  }, [draft, page, onPageChange])
   const [model, setModel] = useState(() => defaultComposerModel(composerModels))
   const [thinking, setThinking] = useState(defaultThinkingLevel)
   const [access, setAccess] = useState<ComposerAccessModeValue>("ask-approval")
@@ -85,13 +112,24 @@ export function Composer() {
 
   return (
     <form className="desktop-composer" onSubmit={(event) => event.preventDefault()}>
-      <textarea
-        aria-label="Message"
-        placeholder="What would you like to work on?"
-        rows={2}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-      />
+      <div
+        className="desktop-composer-body"
+        // The page's empty space below the text still places the caret.
+        onMouseDown={(event) => {
+          if (event.target !== event.currentTarget) return
+          event.preventDefault()
+          textareaRef.current?.focus()
+        }}
+      >
+        <textarea
+          ref={textareaRef}
+          aria-label="Message"
+          placeholder="What would you like to work on?"
+          rows={2}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </div>
       <div className="desktop-composer-row">
         <div className="desktop-composer-controls">
           <ProjectMenu />
