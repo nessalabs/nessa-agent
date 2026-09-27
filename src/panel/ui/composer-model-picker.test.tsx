@@ -92,6 +92,7 @@ it("shows only the agent's mark, and names the model for a tooltip and a reader"
   expect(trigger().getAttribute("aria-label")).toBe("Model: Sonnet 5")
   const hint = container.querySelector('[data-slot="model-hint"]')
   expect(hint?.textContent).toBe("Sonnet 5")
+  expect(hint?.querySelector("svg path")).not.toBeNull()
   expect(hint?.getAttribute("aria-hidden")).toBe("true")
   // Not the native tooltip, which waits before it shows.
   expect(container.querySelector("[title]")).toBeNull()

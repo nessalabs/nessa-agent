@@ -983,10 +983,14 @@ body {
 .nessa-model-hint-label {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 8px);
+  /* Clear of the composer's edge, so it reads as its own label. */
+  bottom: calc(100% + 16px);
   z-index: 40;
-  padding: 6px 12px;
-  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 8px;
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: 0 0 0 1px var(--border);

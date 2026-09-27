@@ -82,6 +82,11 @@ export function ComposerModelPicker({
       />
       {/* Hidden from readers: the trigger's label already says it. */}
       <span aria-hidden="true" data-slot="model-hint" className="nessa-model-hint-label">
+        {current?.icon ? (
+          <span className="flex size-3.5 items-center justify-center [&_svg]:size-3.5">
+            {current.icon}
+          </span>
+        ) : null}
         {name}
       </span>
     </span>
