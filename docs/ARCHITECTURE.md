@@ -51,7 +51,36 @@ Its drag region and double-click maximize have desktop-scoped capabilities.
 
 `desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
 system's AppShell frame and Sidebar with a Home link, an empty Recents group,
-and `ui/home.tsx` in the main area: a time-of-day greeting (`model/greeting.ts`)
+and `ui/home.tsx` in the main area: a night scene in text heading one stack
+from the top of the workspace with the greeting and composer (`model/night-scene.ts`, a dim and a lit
+layer of one grid, set one over the other by `ui/night-scene.tsx` as
+decoration hidden from assistive technology; its box's height comes from
+the workspace's height alone, so resizing sideways or sliding a sidebar never
+moves the greeting or composer; laid out once at 10px and scaled by a
+transform around its sill to `nightSceneScale`, filling the box's height
+between 5px and 12px, so resizing never re-lays out its text; its sill always
+28px above the greeting, its faded last rows tucked behind it; cropped around
+its centre sideways, and narrowed in page mode to a faint strip across the top, cropped rather than rescaled, and in windows
+too short to have room for it; a Customize control in the header's corner,
+`ui/header-art.tsx`, swaps the scene for a picture the person chooses, GIFs
+included, checked by `model/header-image.ts` (images only, up to 25 MB, a
+typed refusal otherwise), remembered in the webview's IndexedDB by
+`adapters/header-image.ts`, and blended in the same way; the picture is
+framed by a focal point and zoom, placed by `placeHeaderImage` so it always
+covers the header, and adjusted in `ui/header-picture.tsx` by dragging,
+scrolling or pinching, the arrow keys and + and −, or its toolbar's zoom
+slider, Reset and Done, a new picture opening straight into it, and the
+framing remembered in the webview's storage; the picture also lends the
+window its colours: `model/image-palette.ts`, self-contained and free of the
+DOM, clusters its pixels (read by `adapters/image-pixels.ts`) into five main
+colours in OKLab and derives the three theme colours from them, the edge from
+the colour both vivid and plentiful, the light from above in its hue, the
+light from below from a second hue or an analogous one, neutral for a
+colourless picture, all held within the built-in themes' ranges; the palette
+shows in the Customize menu, and the theme tints the window, over the chosen
+light theme and fading in, unless "Tint app from picture" is turned off), the greeting
+"Working late?", the scene's own
+caption whatever the hour,
 and the composer (`ui/composer.tsx`), which takes text but cannot send, and says so on its send button, until conversations
 are wired in. Beneath the text sit the choices a turn will carry, in one
 row: on the left where and with what — a project chip, which will choose the
