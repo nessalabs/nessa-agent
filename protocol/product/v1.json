@@ -716,10 +716,10 @@
     },
     "IncomingElicitationSupport": {
       "type": "string",
-      "description": "Whether Nessa can receive and resolve an incoming elicitation.",
+      "description": "Whether the negotiated agent can ask and receive a correlated answer through Nessa.",
       "enum": [
         "unknown",
-        "unsupported_not_implemented",
+        "unsupported",
         "supported_with_correlated_round_trip"
       ]
     },

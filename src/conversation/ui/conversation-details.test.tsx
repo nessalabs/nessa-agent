@@ -48,7 +48,7 @@ it("describes scoped support without implying missing policy integrations", () =
         preToolPolicy: "unsupported_not_implemented",
         policyEndTurn: "unsupported_not_implemented",
         policyCloseSession: "unsupported_not_implemented",
-        incomingElicitation: "unsupported_not_implemented",
+        incomingElicitation: "supported_with_correlated_round_trip",
       },
     },
     lifecycle: { phase: "attached" },
@@ -82,6 +82,21 @@ it("describes scoped support without implying missing policy integrations", () =
     "Close a session from policyNot implemented in Nessa",
   )
   expect(document.body.textContent).toContain(
-    "Answer incoming questions in NessaNot implemented in Nessa",
+    "Answer incoming questions in NessaAvailable",
+  )
+
+  item.remote.capabilities.agentFeatures.incomingElicitation = "unsupported"
+  act(() => {
+    root.render(
+      <ConversationDetails
+        conversation={item}
+        rename={false}
+        onClose={() => {}}
+        onRename={() => {}}
+      />,
+    )
+  })
+  expect(document.body.textContent).toContain(
+    "Answer incoming questions in NessaUnavailable",
   )
 })

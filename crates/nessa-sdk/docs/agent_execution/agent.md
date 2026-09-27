@@ -115,13 +115,15 @@ answer is not deferral. Raw hook suppression, provider compaction notices,
 provider model-switch notices, and provider elicitation forwarding remain unknown
 until an adapter proves their full scoped behavior.
 
-The effective snapshot currently reports compaction and model-switch reporting,
-explicit permission deferral, configured pre-tool policy enforcement, policy
-end-turn, policy session-close, and incoming elicitation as
-`UnsupportedNotImplemented`. The SDK has no correlated application event or
-transition for those operations. This remains true even if a custom backend
-advertises every raw transport feature. These values describe present application
-behavior; they are not provider capability guesses.
+The effective snapshot reports compaction and model-switch reporting, explicit
+permission deferral, configured pre-tool policy enforcement, policy end-turn, and
+policy session-close as `UnsupportedNotImplemented`. The SDK has no correlated
+application event or transition for those operations. Incoming agent questions
+have a correlated application path. Their support is `Unknown` until connection
+negotiation, `SupportedWithCorrelatedRoundTrip` for a verified question-capable
+binding such as the pinned Claude ACP profile with tools enabled, and `Unsupported` for bindings
+that do not offer questions, including the current Codex and Opencode profiles.
+This concerns agent-originated form questions, not MCP elicitation forwarding.
 
 Support is a UI hint, not an admission permit: a supported operation can still
 fail because the target finished, the connection failed, or saved history is

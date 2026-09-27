@@ -80,7 +80,7 @@ const capabilities: ConversationCapabilities = {
     preToolPolicy: "unsupported_not_implemented",
     policyEndTurn: "unsupported_not_implemented",
     policyCloseSession: "unsupported_not_implemented",
-    incomingElicitation: "unsupported_not_implemented",
+    incomingElicitation: "unsupported",
   },
 }
 /** A view has arrived for this conversation, and it said the agent takes images. */

@@ -340,10 +340,10 @@ export const PolicyCloseSessionSupport = {
 } as const
 export type PolicyCloseSessionSupport =
   (typeof PolicyCloseSessionSupport)[keyof typeof PolicyCloseSessionSupport]
-/** Whether Nessa can receive and resolve an incoming elicitation. */
+/** Whether the negotiated agent can ask and receive a correlated answer through Nessa. */
 export const IncomingElicitationSupport = {
   Unknown: "unknown",
-  UnsupportedNotImplemented: "unsupported_not_implemented",
+  Unsupported: "unsupported",
   SupportedWithCorrelatedRoundTrip: "supported_with_correlated_round_trip",
 } as const
 export type IncomingElicitationSupport =

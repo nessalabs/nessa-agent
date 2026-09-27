@@ -28,7 +28,7 @@ const agentFeatures: AgentFeatures = {
   preToolPolicy: "unsupported_not_implemented",
   policyEndTurn: "unsupported_not_implemented",
   policyCloseSession: "unsupported_not_implemented",
-  incomingElicitation: "unsupported_not_implemented",
+  incomingElicitation: "unsupported",
 }
 
 function workingConversation(id: string): Conversation {

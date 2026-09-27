@@ -441,7 +441,7 @@ async fn restoration_publishes_provider_facts_only_after_verified_readiness() {
     );
     assert_eq!(
         pending.incoming_elicitation(),
-        IncomingElicitationCapability::UnsupportedNotImplemented
+        IncomingElicitationCapability::Unknown
     );
 
     std::fs::write(root.path().join("resume-healthy"), "ready").unwrap();
@@ -449,6 +449,10 @@ async fn restoration_publishes_provider_facts_only_after_verified_readiness() {
     let restored = opened.session.operation_capabilities();
     assert!(restored.negotiated());
     assert!(!restored.image_input());
+    assert_eq!(
+        restored.incoming_elicitation(),
+        IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip
+    );
     assert_eq!(
         restored.permission_denial(),
         PermissionDenialCapability::SupportedForOfferedPermissionReviews
