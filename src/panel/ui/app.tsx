@@ -63,7 +63,7 @@ import { useContentDrop } from "./use-content-drop"
 import { useHostDrop } from "./use-host-drop"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
-import { AddAttachmentMenu } from "./add-attachment-menu"
+import { ComposerTray } from "./composer-tray"
 import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
@@ -732,7 +732,7 @@ export function App({
                 ))}
               </ChatComposerAttachments>
               <PillComposerRow>
-                <AddAttachmentMenu
+                <ComposerTray
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
                   onSignOut={onSignOut}

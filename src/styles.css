@@ -969,6 +969,34 @@ body {
   color: var(--accent-foreground);
 }
 
+/* The + tray rises from the composer's corner; a page it switches to settles
+   in from the side it came from. Both are skipped for reduced motion. */
+@keyframes nessa-composer-tray-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+@keyframes nessa-composer-tray-page {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+.nessa-composer-tray {
+  transform-origin: bottom left;
+  animation: nessa-composer-tray-rise 180ms ease-out;
+}
+.nessa-composer-tray-page {
+  animation: nessa-composer-tray-page 180ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nessa-composer-tray,
+  .nessa-composer-tray-page {
+    animation: none;
+  }
+}
+
 .nessa-browser-login {
   height: 100%;
   overflow: auto;
