@@ -137,18 +137,19 @@ it("lets the approval row take the tray over and changes the mode", () => {
   const choice = approval()
   render({ approval: choice })
   click(plus())
-  expect(row("Tool approval").textContent).toBe("Tool approvalProvider asks")
+  expect(row("Tool approval").textContent).toBe("Tool approvalAsk")
 
   click(row("Tool approval"))
   expect(tray()?.textContent).not.toContain("Add files")
   const radios = container.querySelectorAll("[role=radio]")
+  expect([...radios].map((radio) => radio.textContent)).toEqual(["Ask", "Auto", "Full"])
   expect([...radios].map((radio) => radio.getAttribute("aria-checked"))).toEqual([
     "true",
     "false",
     "false",
   ])
 
-  click(row("Automatic review"))
+  click(row("Auto"))
   expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("auto")
   expect(tray()?.textContent).toContain("Add files")
 })
@@ -156,15 +157,13 @@ it("lets the approval row take the tray over and changes the mode", () => {
 it("shows the committed mode and a pending recovery without allowing another change", () => {
   const choice = approval({
     disabled: true,
-    status: "Recovery required: Automatic review",
+    status: "Recovery required: Auto",
   })
   render({ approval: choice })
   click(plus())
   expect(row("Tool approval").disabled).toBe(true)
-  expect(row("Tool approval").textContent).toContain(
-    "Recovery required: Automatic review",
-  )
-  expect(row("Tool approval").textContent).toContain("Provider asks")
+  expect(row("Tool approval").textContent).toContain("Recovery required: Auto")
+  expect(row("Tool approval").textContent).toContain("Ask")
 })
 
 it("does not ask to change to the mode already in force", () => {
@@ -172,7 +171,7 @@ it("does not ask to change to the mode already in force", () => {
   render({ approval: choice })
   click(plus())
   click(row("Tool approval"))
-  click(row("Provider asks"))
+  click(row("Ask"))
 
   expect(choice.onChange).not.toHaveBeenCalled()
 })
@@ -270,7 +269,7 @@ it("asks before turning full access on, with what it allows", () => {
   render({ approval: choice })
   click(plus())
   click(row("Tool approval"))
-  click(row("Full access"))
+  click(row("Full"))
 
   expect(choice.onChange).not.toHaveBeenCalled()
   expect(confirmPage()?.textContent).toContain("Turn on full access?")
@@ -288,13 +287,13 @@ it("leaves the mode alone when the confirmation is cancelled or escaped", () => 
   render({ approval: choice })
   click(plus())
   click(row("Tool approval"))
-  click(row("Full access"))
+  click(row("Full"))
   click(row("Cancel"))
 
   expect(choice.onChange).not.toHaveBeenCalled()
   expect(container.querySelector("[role=radiogroup]")).not.toBeNull()
 
-  click(row("Full access"))
+  click(row("Full"))
   key("Escape")
   expect(choice.onChange).not.toHaveBeenCalled()
   expect(container.querySelector("[role=radiogroup]")).not.toBeNull()
@@ -305,7 +304,7 @@ it("does not ask when leaving full access for a safer mode", () => {
   render({ approval: choice })
   click(plus())
   click(row("Tool approval"))
-  click(row("Provider asks"))
+  click(row("Ask"))
 
   expect(confirmPage()).toBeNull()
   expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("ask")
@@ -316,7 +315,7 @@ it("names full access in red on the tray's own row too", () => {
   click(plus())
 
   const value = [...row("Tool approval").querySelectorAll("span")].find(
-    (span) => span.textContent === "Full access",
+    (span) => span.textContent === "Full",
   )
   expect(value?.className).toContain("text-destructive")
 })
@@ -359,15 +358,15 @@ it("puts focus where the person was on every page", () => {
   click(row("Tool approval"))
   // The checked mode, not the back button.
   expect(document.activeElement?.getAttribute("aria-checked")).toBe("true")
-  expect(document.activeElement?.textContent).toContain("Automatic")
+  expect(document.activeElement?.textContent).toContain("Auto")
 
   key("Escape")
   expect(document.activeElement).toBe(row("Tool approval"))
 
   click(row("Tool approval"))
-  click(row("Full access"))
+  click(row("Full"))
   click(row("Cancel"))
-  expect(document.activeElement?.textContent).toContain("Full access")
+  expect(document.activeElement?.textContent).toContain("Full")
 })
 
 it("moves between the offered modes with the arrow keys, one tab stop for the group", () => {
@@ -394,11 +393,11 @@ it("moves between the offered modes with the arrow keys, one tab stop for the gr
   ).toEqual(["0", "-1"])
   arrow("ArrowDown")
   // The gateway did not offer Automatic, so it is not a radio.
-  expect(document.activeElement?.textContent).toContain("Full access")
+  expect(document.activeElement?.textContent).toContain("Full")
   arrow("ArrowDown")
-  expect(document.activeElement?.textContent).toContain("Provider asks")
+  expect(document.activeElement?.textContent).toContain("Ask")
   arrow("End")
-  expect(document.activeElement?.textContent).toContain("Full access")
+  expect(document.activeElement?.textContent).toContain("Full")
 })
 
 it("names + for everything it holds, and says it opens a dialog", () => {
@@ -414,9 +413,9 @@ it("describes the confirmation by its risks, and names each mode by its name alo
   const full = [...container.querySelectorAll("[role=radio]")].at(-1)
   const referenced = (element: Element | null | undefined, attribute: string) =>
     document.getElementById(element?.getAttribute(attribute) ?? "")
-  expect(referenced(full, "aria-labelledby")?.textContent).toBe("Full access")
+  expect(referenced(full, "aria-labelledby")?.textContent).toBe("Full")
 
-  click(row("Full access"))
+  click(row("Full"))
   const risks = referenced(confirmPage(), "aria-describedby")
   expect(risks?.textContent).toContain("Edits and deletes files without asking")
   expect(row("Turn on").className).toContain("text-destructive-foreground")
