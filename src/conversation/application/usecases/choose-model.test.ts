@@ -33,6 +33,22 @@ describe("choosing a tab's model", () => {
     expect(opened.modelChoice).toEqual(opus)
   })
 
+  it("opens a new tab when a choice lands while the conversation is being created", () => {
+    const tabs = openConversation(emptyLocalTabs())
+    const id = tabs.activeId
+    const binding = {
+      ...tabs,
+      conversations: tabs.conversations.map((item) =>
+        item.id === id ? { ...item, serverConversationId: "c0" } : item,
+      ),
+    }
+    const next = chooseModel(binding, { id, choice: opus })
+
+    expect(next.conversations.find((item) => item.id === id)!.modelChoice).toBeUndefined()
+    expect(next.conversations.at(-1)!.modelChoice).toEqual(opus)
+    expect(next.activeId).not.toBe(id)
+  })
+
   it("changes nothing for a tab that is gone", () => {
     const tabs = openConversation(emptyLocalTabs())
     expect(chooseModel(tabs, { id: "gone", choice: opus })).toBe(tabs)

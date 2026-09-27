@@ -36,14 +36,19 @@ export type ModelChoice = { agent: string; model: string }
 
 /**
  * Whether a conversation's model can still be chosen. A conversation is created
- * with its model on the first send (ADR 231 §2), so until then choosing is
- * free; afterwards its model is fixed, and a different choice is a new tab.
+ * with its model (ADR 231 §2), so until creation starts choosing is free;
+ * afterwards its model is fixed, and a different choice is a new tab.
+ *
+ * Creation starts when the tab is bound to a server id, which every path does
+ * before it calls `conversation.create` — a send, and an attachment staged
+ * before anything is sent. Waiting for the gateway's answer instead would let a
+ * choice land while a create already carrying the earlier one is in flight.
  */
 export function modelChoiceOpen(conversation: {
-  serverReady?: boolean
+  serverConversationId?: string
   turns: readonly unknown[]
 }): boolean {
-  return !conversation.serverReady && conversation.turns.length === 0
+  return !conversation.serverConversationId && conversation.turns.length === 0
 }
 
 /**
@@ -58,7 +63,7 @@ export function modelChoiceOpen(conversation: {
  */
 export function approvalChoice(
   conversation: {
-    serverReady?: boolean
+    serverConversationId?: string
     turns: readonly unknown[]
     modelChoice?: ModelChoice
     approvalChoice?: ApprovalMode
@@ -81,7 +86,7 @@ export function approvalChoice(
  */
 export function effectiveModel(
   conversation: {
-    serverReady?: boolean
+    serverConversationId?: string
     turns: readonly unknown[]
     modelChoice?: ModelChoice
     remote?: { runtime?: { agent?: string; model: string } }

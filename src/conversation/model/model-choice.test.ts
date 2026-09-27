@@ -28,10 +28,15 @@ const fresh = { turns: [] }
 const sent = { turns: [{}] }
 
 describe("whether a conversation's model can still be chosen", () => {
-  it("is open until the first send creates it", () => {
+  it("is open until creation starts", () => {
     expect(modelChoiceOpen(fresh)).toBe(true)
     expect(modelChoiceOpen(sent)).toBe(false)
-    expect(modelChoiceOpen({ turns: [], serverReady: true })).toBe(false)
+  })
+
+  it("closes as soon as creation starts, before the gateway answers", () => {
+    // An attachment staged before any message binds the tab and awaits the
+    // create: a choice now would miss the create already in flight.
+    expect(modelChoiceOpen({ turns: [], serverConversationId: "c0" })).toBe(false)
   })
 })
 
