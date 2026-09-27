@@ -65,7 +65,11 @@ import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { ComposerTray } from "./composer-tray"
 import { ComposerModelPicker } from "./composer-model-picker"
-import { useConversationChoices, type ConversationChoices } from "./use-agent-choices"
+import {
+  useBindCatalogFallback,
+  useConversationChoices,
+  type ConversationChoices,
+} from "./use-agent-choices"
 import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
@@ -152,6 +156,14 @@ export function App({
           (model) => model.modelId === selectedAgent.defaultModel,
         )
       : undefined)
+  useBindCatalogFallback({
+    id: chat.active.id,
+    selection: chat.active.selection,
+    serverConversationId: chat.active.serverConversationId,
+    agent: selectedAgent?.agent,
+    model: selectedModel?.modelId,
+    setSelection: chat.setSelection,
+  })
   const selection = chat.active.selection
   const modelValue = chat.active.remote?.runtime
     ? {

@@ -157,6 +157,11 @@ it("shows the catalog model beside the voice control on a new draft", async () =
     '[data-slot="model-picker-trigger"]',
   )
   expect(picker?.getAttribute("aria-label")).toBe("Model: Sonnet 5")
+  expect(store.getState().conversation.conversations[0]?.selection).toEqual({
+    agent: "claude",
+    model: "claude-sonnet-5",
+    approvalMode: "ask",
+  })
   expect(picker?.classList.contains("nessa-composer-model")).toBe(true)
   expect(picker?.parentElement?.nextElementSibling?.getAttribute("aria-label")).toBe(
     "Start voice input",
@@ -181,6 +186,46 @@ it("shows the catalog model beside the voice control on a new draft", async () =
       .querySelector<HTMLButtonElement>('[data-slot="model-picker-trigger"]')
       ?.getAttribute("aria-label"),
   ).toBe("Model: claude-retired-4")
+})
+
+it("binds the displayed catalog fallback when the host choice is stale", async () => {
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  const choices: ConversationChoices = {
+    chosenAgent: "removed-agent",
+    catalog: {
+      agents: [
+        {
+          agent: "codex",
+          defaultModel: "astra",
+          models: [
+            {
+              modelId: "astra",
+              displayName: "Astra",
+              maxContextWindowTokens: 100_000,
+              reasoning: true,
+              imageInput: false,
+              approvalModes: [
+                { id: "ask", name: "Ask", description: "Ask before changes." },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  }
+  await act(async () => root.render(panel(choices)))
+  expect(
+    host
+      .querySelector<HTMLButtonElement>('[data-slot="model-picker-trigger"]')
+      ?.getAttribute("aria-label"),
+  ).toBe("Model: Astra")
+  expect(store.getState().conversation.conversations[0]?.selection).toEqual({
+    agent: "codex",
+    model: "astra",
+    approvalMode: "ask",
+  })
 })
 
 function chips() {

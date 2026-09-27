@@ -142,6 +142,10 @@ impl ProviderSessionDeleter for CredentialedClaudeProvider {
 }
 
 impl AgentProvider for CredentialedClaudeProvider {
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        Some(self.approval_mode)
+    }
+
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }
@@ -200,6 +204,17 @@ fn credential_open_failure(failure: AgentCredentialFailure) -> ProviderOpenError
 mod tests {
     use super::*;
     use crate::agents::application::AgentCredential;
+    use nessa_sdk::{
+        application::{
+            agent_execution::providers::ExecutableUseSnapshot,
+            dto::{ModalitiesDto, ModelMetadataDto},
+        },
+        domain::agent_execution::{
+            permissions::PermissionOfferPolicy,
+            prompts::{PromptContribution, PromptSource, PromptSourceKind},
+        },
+        infrastructure::clock::RuntimeClock,
+    };
     use std::sync::{mpsc, Mutex};
     use tokio::sync::oneshot;
 
@@ -230,6 +245,73 @@ mod tests {
             let _ = self.release.lock().unwrap().recv();
             Ok(None)
         }
+    }
+
+    #[tokio::test]
+    async fn the_credential_wrapper_reports_the_mode_it_launches() {
+        let root = tempfile::tempdir().unwrap();
+        let text = ModalitiesDto {
+            text: true,
+            image: false,
+            audio: false,
+        };
+        let model = ModelMetadata::try_from(ModelMetadataDto {
+            provider: "anthropic".into(),
+            model_id: "claude-sonnet-5".into(),
+            display_name: "Sonnet 5".into(),
+            input: text,
+            image_input: None,
+            output: text,
+            tool_use: true,
+            reasoning: true,
+            max_context_window_tokens: 1_000_000,
+            max_output_tokens: 32_000,
+            knowledge_cutoff: "2026-01".into(),
+            documentation_url: "https://example.com".into(),
+        })
+        .unwrap();
+        let config = AcpConfig {
+            executable: ExecutableUseSnapshot::unmanaged("/bin/true".into()),
+            arguments: Vec::new(),
+            environment: BTreeMap::new(),
+            credential_environment: BTreeMap::new(),
+            workspace: root.path().into(),
+            tools_enabled: true,
+            mcp_servers: Vec::new(),
+            permissions: PermissionOfferPolicy::once_only(),
+            launch_timeout: Duration::from_secs(10),
+            startup_timeout: Duration::from_secs(10),
+            execution_timeout: None,
+            shutdown_grace: Duration::from_secs(1),
+            kill_timeout: Duration::from_secs(1),
+            event_capacity: 16,
+            max_frame_bytes: 8192,
+            max_incoming_frame_bytes: 8192,
+            images: None,
+            clock: Arc::new(RuntimeClock::new()),
+        };
+        let prompt = SystemPrompt::new(vec![PromptContribution::new(
+            PromptSource::new(PromptSourceKind::Core, "test").unwrap(),
+            "Be concise.",
+        )])
+        .unwrap();
+        let credentials = Arc::new(Credentials(Ok(None)));
+        let provider = CredentialedClaudeProvider::new(
+            config,
+            model,
+            TokenLimits::new(100_000, 32_000).unwrap(),
+            Arc::new(crate::conversation_test_support::AcceptingAudit),
+            prompt,
+            credentials,
+        )
+        .unwrap()
+        .with_approval_mode(ApprovalMode::Auto)
+        .unwrap();
+        assert_eq!(provider.approval_mode(), Some(ApprovalMode::Auto));
+        assert_eq!(
+            provider.current().await.unwrap().approval_mode(),
+            Some(ApprovalMode::Auto)
+        );
     }
 
     #[test]

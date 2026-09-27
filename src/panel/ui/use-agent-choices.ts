@@ -1,4 +1,5 @@
 import type { AgentsListResult } from "@nessa/client"
+import type { ConversationSelection } from "../../conversation"
 import * as React from "react"
 
 export type ConversationChoices = {
@@ -29,4 +30,27 @@ export function useConversationChoices(
     }
   }, [available, load])
   return choices
+}
+
+/** Creation reads the stored draft choice, so bind the catalog choice shown by the panel. */
+export function useBindCatalogFallback({
+  id,
+  selection,
+  serverConversationId,
+  agent,
+  model,
+  setSelection,
+}: {
+  id: string
+  selection?: ConversationSelection
+  serverConversationId?: string
+  agent?: string
+  model?: string
+  setSelection: (id: string, selection: ConversationSelection) => void
+}): void {
+  React.useLayoutEffect(() => {
+    if (!selection && !serverConversationId && agent && model) {
+      setSelection(id, { agent, model, approvalMode: "ask" })
+    }
+  }, [id, selection, serverConversationId, agent, model, setSelection])
 }

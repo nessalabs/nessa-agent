@@ -583,6 +583,8 @@ impl nessa_auth::application::ports::Clock for TestClock {
 }
 #[derive(Default)]
 pub(crate) struct ProviderFactory {
+    /// Deliberately misconfigure the next resolved cold profile for refusal tests.
+    pub(crate) force_ask_mode: AtomicBool,
     pub(crate) mode_updates: Mutex<Vec<ApprovalMode>>,
     pub(crate) mode_failure: Mutex<Option<AgentError>>,
     pub(crate) mode_started: Notify,
@@ -766,21 +768,44 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
     .expect("one configured agent is its own default")
 }
 struct ModeAgentSource {
-    agent: ConversationAgent,
+    provider: Arc<ProviderFactory>,
+    audit: Arc<dyn ExecutionAudit>,
 }
 impl ConversationAgentSource for ModeAgentSource {
     fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
-        let found = (agent == AgentId::Claude).then(|| self.agent.clone());
+        let found = (agent == AgentId::Claude).then(|| self.for_mode(ApprovalMode::Ask));
         Box::pin(async move { Ok(found) })
     }
     fn resolve_for<'a>(
         &'a self,
         agent: AgentId,
         model: &'a str,
-        _mode: crate::conversation::domain::ConversationApprovalMode,
+        mode: crate::conversation::domain::ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a> {
-        let found = (agent == AgentId::Claude && model == "test").then(|| self.agent.clone());
+        let mode = match mode {
+            crate::conversation::domain::ConversationApprovalMode::Ask => ApprovalMode::Ask,
+            crate::conversation::domain::ConversationApprovalMode::Auto => ApprovalMode::Auto,
+            crate::conversation::domain::ConversationApprovalMode::Full => ApprovalMode::Full,
+        };
+        let found = (agent == AgentId::Claude && model == "test").then(|| {
+            let mode = if self.provider.force_ask_mode.load(Ordering::SeqCst) {
+                ApprovalMode::Ask
+            } else {
+                mode
+            };
+            self.for_mode(mode)
+        });
         Box::pin(async move { Ok(found) })
+    }
+}
+impl ModeAgentSource {
+    fn for_mode(&self, mode: ApprovalMode) -> ConversationAgent {
+        ConversationAgent {
+            provider: Arc::new(Provider::new(self.provider.clone()).with_mode(mode)),
+            execution_audit: self.audit.clone(),
+            reserved_output_tokens: 4096,
+            readiness: None,
+        }
     }
 }
 #[derive(Default)]
@@ -797,20 +822,13 @@ impl ExecutionAudit for RecordingModeExecutionAudit {
     }
 }
 pub(crate) fn mode_agents(
-    provider: Arc<dyn AgentProvider>,
+    provider: Arc<ProviderFactory>,
     audit: Arc<dyn ExecutionAudit>,
 ) -> ConversationAgents {
     ConversationAgents::from_source(
         HashSet::from([AgentId::Claude]),
         AgentId::Claude,
-        Arc::new(ModeAgentSource {
-            agent: ConversationAgent {
-                provider,
-                execution_audit: audit,
-                reserved_output_tokens: 4096,
-                readiness: None,
-            },
-        }),
+        Arc::new(ModeAgentSource { provider, audit }),
     )
     .unwrap()
 }
@@ -828,10 +846,7 @@ pub(crate) fn mode_fixture() -> (
     let mode_audit = Arc::new(RecordingModeAudit::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            agents: mode_agents(
-                Arc::new(Provider::new(provider.clone())),
-                execution_audit.clone(),
-            ),
+            agents: mode_agents(provider.clone(), execution_audit.clone()),
             storage,
             metadata: repository.clone(),
             mode_audit: mode_audit.clone(),
@@ -892,6 +907,7 @@ pub(crate) fn fixture(
 pub(crate) struct Provider {
     factory: Arc<ProviderFactory>,
     configured_capabilities: EffectiveCapabilities,
+    approval_mode: ApprovalMode,
 }
 impl Provider {
     pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
@@ -899,12 +915,17 @@ impl Provider {
         Self {
             factory,
             configured_capabilities,
+            approval_mode: ApprovalMode::Ask,
         }
+    }
+    fn with_mode(mut self, mode: ApprovalMode) -> Self {
+        self.approval_mode = mode;
+        self
     }
 }
 impl AgentProvider for Provider {
     fn approval_mode(&self) -> Option<ApprovalMode> {
-        Some(ApprovalMode::Ask)
+        Some(self.approval_mode)
     }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gateway-test", "test", "test").unwrap()

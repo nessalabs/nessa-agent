@@ -3,21 +3,24 @@ use crate::conversation::application::{
     ConversationError, ConversationFuture, ConversationModeApplication, ConversationModeAudit,
     ConversationModeAuditPhase, ConversationModeRequest,
 };
+use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 pub struct DurableConversationModeAudit {
     directory: PathBuf,
+    clock: Arc<dyn Clock>,
 }
 impl DurableConversationModeAudit {
-    pub fn new(directory: PathBuf) -> Result<Self, ConversationError> {
+    pub fn new(directory: PathBuf, clock: Arc<dyn Clock>) -> Result<Self, ConversationError> {
         create_directory(&directory).map_err(|_| ConversationError::Audit)?;
-        Ok(Self { directory })
+        Ok(Self { directory, clock })
     }
 }
 impl ConversationModeAudit for DurableConversationModeAudit {
@@ -76,6 +79,9 @@ impl ConversationModeAudit for DurableConversationModeAudit {
             },
             "correlationId": request.request_id,
             "requestedAtMs": request.requested_at_ms,
+            // This is when the adapter observed the phase for durable delivery,
+            // not the unknown time of an external provider effect.
+            "observedAtMs": self.clock.unix_milliseconds(),
         });
         let directory = self.directory.clone();
         Box::pin(async move {
@@ -126,6 +132,12 @@ fn agrees(destination: &Path, expected: &Value) -> Result<bool, ConversationErro
     let _ = expected
         .as_object_mut()
         .and_then(|value| value.remove("requestedAtMs"));
+    let _ = stored
+        .as_object_mut()
+        .and_then(|value| value.remove("observedAtMs"));
+    let _ = expected
+        .as_object_mut()
+        .and_then(|value| value.remove("observedAtMs"));
     if stored != expected {
         return Err(ConversationError::Audit);
     }
@@ -138,6 +150,14 @@ mod tests {
     use crate::conversation::application::ConversationModeRequestState;
     use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
     use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TestClock(AtomicU64);
+    impl Clock for TestClock {
+        fn unix_milliseconds(&self) -> u64 {
+            self.0.fetch_add(1, Ordering::SeqCst)
+        }
+    }
 
     fn request() -> ConversationModeRequest {
         ConversationModeRequest {
@@ -157,7 +177,11 @@ mod tests {
     #[tokio::test]
     async fn application_evidence_is_immutable_and_recovery_has_its_own_record() {
         let root = tempfile::tempdir().unwrap();
-        let audit = DurableConversationModeAudit::new(root.path().join("mode")).unwrap();
+        let audit = DurableConversationModeAudit::new(
+            root.path().join("mode"),
+            Arc::new(TestClock(AtomicU64::new(500))),
+        )
+        .unwrap();
         let first = request();
         audit
             .record(first.clone(), ConversationModeAuditPhase::Application)
@@ -185,11 +209,14 @@ mod tests {
                 && record["transition"]["requested"] == "auto"
                 && record["transition"]["phase"] == "application"
                 && record["initiator"]["principalId"] == "person"
+                && record["requestedAtMs"] == 231
+                && record["observedAtMs"] == 500
         }));
         assert!(records.iter().any(|record| {
             record["transition"]["phase"] == "recovery_restored"
                 && record["transition"]["committedAfterRecovery"] == "ask"
                 && record["initiator"]["originalPrincipalId"] == "person"
+                && record["observedAtMs"] == 502
         }));
         assert!(matches!(
             audit

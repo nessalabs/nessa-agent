@@ -1237,10 +1237,14 @@ impl ConversationService {
         // requested-mode mutation is replayed.
         let live = self.resolve_unchecked(id, caller).await?;
         live.join_attachment_owner().await;
-        live.agent
-            .set_approval_mode(provider_approval_mode(request.prior))
-            .await
-            .map_err(|_| ConversationError::ApprovalModeUncertain)?;
+        // The newly attached provider was constructed from the committed row.
+        // Verify that choice rather than sending a second mutation: fixed-mode
+        // providers such as OpenCode have no live set-mode operation.
+        if live.agent.attachment_status().phase() != AttachmentPhase::Attached
+            || live.agent.approval_mode() != Some(provider_approval_mode(request.prior))
+        {
+            return Err(ConversationError::ApprovalModeUncertain);
+        }
         self.inner
             .mode_audit
             .record(

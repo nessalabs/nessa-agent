@@ -112,11 +112,7 @@ async fn an_idle_mode_change_commits_once_and_an_uncertain_change_recovers_prior
         .is_none());
     assert_eq!(
         provider.mode_updates.lock().unwrap().as_slice(),
-        &[
-            ProviderApprovalMode::Auto,
-            ProviderApprovalMode::Full,
-            ProviderApprovalMode::Auto
-        ]
+        &[ProviderApprovalMode::Auto, ProviderApprovalMode::Full]
     );
     service
         .submit(
@@ -203,10 +199,7 @@ async fn lost_mode_intent_acknowledgement_never_dispatches_a_provider_change() {
         .await
         .unwrap()
         .is_none());
-    assert_eq!(
-        provider.mode_updates.lock().unwrap().as_slice(),
-        &[ProviderApprovalMode::Ask]
-    );
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
     service.shutdown().await.unwrap();
 }
 
@@ -286,7 +279,7 @@ async fn audit_failure_after_live_application_restores_the_prior_mode() {
         .is_none());
     assert_eq!(
         provider.mode_updates.lock().unwrap().as_slice(),
-        &[ProviderApprovalMode::Auto, ProviderApprovalMode::Ask]
+        &[ProviderApprovalMode::Auto]
     );
     assert!(mode_audit
         .records
@@ -551,7 +544,7 @@ async fn an_uncommitted_mode_change_recovers_the_prior_choice() {
         .is_none());
     assert_eq!(
         provider.mode_updates.lock().unwrap().as_slice(),
-        &[ProviderApprovalMode::Auto, ProviderApprovalMode::Ask]
+        &[ProviderApprovalMode::Auto]
     );
     service.shutdown().await.unwrap();
 }
@@ -808,6 +801,9 @@ async fn a_pending_permission_keeps_mode_changes_out_of_the_provider() {
 #[tokio::test]
 async fn a_cold_open_recovers_an_unfinished_intent_from_the_committed_mode() {
     let (service, provider, records, _, _) = mode_fixture();
+    *provider.mode_failure.lock().unwrap() = Some(AgentError::Unsupported(
+        "fixed provider has no live mode mutation".into(),
+    ));
     let conversation_id = id();
     records.records.lock().unwrap().insert(
         conversation_id.clone(),
@@ -860,10 +856,8 @@ async fn a_cold_open_recovers_an_unfinished_intent_from_the_committed_mode() {
         .await
         .unwrap()
         .is_none());
-    assert_eq!(
-        provider.mode_updates.lock().unwrap().as_slice(),
-        &[ProviderApprovalMode::Ask]
-    );
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert!(provider.mode_failure.lock().unwrap().is_some());
     service.shutdown().await.unwrap();
 }
 
@@ -919,6 +913,7 @@ async fn a_deferred_mode_is_committed_but_a_wrong_cold_profile_cannot_admit_a_tu
         ConversationApprovalMode::Auto
     );
     assert!(provider.mode_updates.lock().unwrap().is_empty());
+    provider.force_ask_mode.store(true, Ordering::SeqCst);
     service
         .read(
             conversation_id.clone(),

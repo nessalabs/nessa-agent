@@ -455,7 +455,7 @@ fn conversations(
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let mode_audit = Arc::new(
-        DurableConversationModeAudit::new(root.join("audit").join("approval-mode"))
+        DurableConversationModeAudit::new(root.join("audit").join("approval-mode"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let file_link_audit = Arc::new(

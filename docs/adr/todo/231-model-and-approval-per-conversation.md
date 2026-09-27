@@ -316,7 +316,9 @@ Recovery always retires the uncertain session and uses a fresh process with the
 fixed profile, the same conversation/model, and the existing session restoration
 contract. It restores the last durably committed mode, which may be the requested
 mode if commit succeeded despite a lost acknowledgement. It does not attempt an
-in-place rollback. Verify the restored preset and record the recovery outcome
+in-place rollback. The fresh attachment verifies the committed preset; recovery
+does not send a second live mode mutation, which a fixed-mode provider cannot
+perform. Verify the restored preset and record the recovery outcome
 before permitting a turn; if either fails, remain blocked. When an unfinished
 request has no commit, settle it as failed after recovery; a new user request
 uses a new request ID. Recovery attribution is system-originated and retains the
@@ -335,9 +337,12 @@ uses native `default` behavior rather than the old blanket review rule.
 
 Every admitted change retains its intent, prior/requested/committed mode, caller,
 provider acknowledgement and verification scope, terminal request result, and
-any recovery cause/outcome. Rejections retain typed reasons. Every turn records
-the committed mode and session generation it was admitted under, so an automatic
-action can be traced to its preset without inventing a user approval.
+any recovery cause/outcome. The durable audit records both the original request
+time and each phase's observation time; an observation time does not claim when
+an external provider effect occurred. Rejections retain typed reasons. Every
+turn records the committed mode and session generation it was admitted under,
+so an automatic action can be traced to its preset without inventing a user
+approval.
 
 The durable conversation record is authoritative for commitment; the audit sink
 is authoritative for delivered application/recovery evidence. Correlation and
