@@ -228,3 +228,53 @@ it("measures the row when the composer is unwrapped on a layout compositor", () 
   expect(style.bottom).toBe(`${596 - 550 + 10}px`)
   expect(style.left).toBe("-6px")
 })
+
+function confirmPage() {
+  return container.querySelector("[role=alertdialog]")
+}
+
+it("asks before turning full access on, with what it allows", () => {
+  const choice = approval()
+  render({ approval: choice })
+  click(plus())
+  click(row("Tool approval"))
+  click(row("Full access"))
+
+  expect(choice.onChange).not.toHaveBeenCalled()
+  expect(confirmPage()?.textContent).toContain("Turn on full access?")
+  expect(confirmPage()?.textContent).toContain("without asking")
+  // Focus lands on Cancel, so Enter backs out.
+  expect(document.activeElement?.textContent).toBe("Cancel")
+
+  click(row("Turn on"))
+  expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("full")
+  expect(tray()?.textContent).toContain("Add files")
+})
+
+it("leaves the mode alone when the confirmation is cancelled or escaped", () => {
+  const choice = approval()
+  render({ approval: choice })
+  click(plus())
+  click(row("Tool approval"))
+  click(row("Full access"))
+  click(row("Cancel"))
+
+  expect(choice.onChange).not.toHaveBeenCalled()
+  expect(container.querySelector("[role=radiogroup]")).not.toBeNull()
+
+  click(row("Full access"))
+  key("Escape")
+  expect(choice.onChange).not.toHaveBeenCalled()
+  expect(container.querySelector("[role=radiogroup]")).not.toBeNull()
+})
+
+it("does not ask when leaving full access for a safer mode", () => {
+  const choice = approval({ mode: "full" })
+  render({ approval: choice })
+  click(plus())
+  click(row("Tool approval"))
+  click(row("Ask first"))
+
+  expect(confirmPage()).toBeNull()
+  expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("ask")
+})

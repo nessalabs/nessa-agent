@@ -11,7 +11,17 @@ export interface TrayApproval {
   onChange: (mode: ApprovalMode) => void
 }
 
-type Page = "root" | "approval"
+type Page = "root" | "approval" | "confirm-full"
+
+/**
+ * What full access lets the agent do, said before it is turned on. Plain
+ * consequences, not a policy: the person decides with these in front of them.
+ */
+const FULL_ACCESS_RISKS = [
+  "Edits and deletes files in your workspace without asking.",
+  "Runs any command, including ones that reach the internet.",
+  "You see what it did afterwards, not before.",
+] as const
 
 const ROW =
   "flex w-full items-center gap-3 rounded-[14px] px-3.5 py-3 text-start nessa-text-4 text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
@@ -112,7 +122,8 @@ export function ComposerTray({
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       event.preventDefault()
-      if (page === "approval") setPage("root")
+      if (page === "confirm-full") setPage("approval")
+      else if (page === "approval") setPage("root")
       else close(true)
     }
     document.addEventListener("pointerdown", away)
@@ -189,7 +200,7 @@ export function ComposerTray({
                 </button>
               ) : null}
             </div>
-          ) : approval ? (
+          ) : page === "approval" && approval ? (
             <div key="approval" className="nessa-composer-tray-page flex flex-col">
               <button
                 type="button"
@@ -212,6 +223,12 @@ export function ComposerTray({
                       disabled={!offered}
                       className={`${ROW} items-start`}
                       onClick={() => {
+                        // Turning full access on asks first; every other
+                        // choice, including leaving full access, does not.
+                        if (mode === "full" && !chosen) {
+                          setPage("confirm-full")
+                          return
+                        }
                         setPage("root")
                         if (!chosen) approval.onChange(mode)
                       }}
@@ -237,6 +254,47 @@ export function ComposerTray({
                     </button>
                   )
                 })}
+              </div>
+            </div>
+          ) : page === "confirm-full" && approval ? (
+            <div
+              key="confirm-full"
+              role="alertdialog"
+              aria-labelledby={`${trayId}-full-title`}
+              className="nessa-composer-tray-page flex flex-col gap-3 p-2"
+            >
+              <p
+                id={`${trayId}-full-title`}
+                className="m-0 px-1.5 pt-1 nessa-text-5 font-semibold text-foreground"
+              >
+                Turn on full access?
+              </p>
+              <ul className="m-0 flex flex-col gap-1.5 rounded-[16px] bg-muted/60 px-4 py-3 nessa-text-3 text-muted-foreground">
+                {FULL_ACCESS_RISKS.map((risk) => (
+                  <li key={risk} className="list-none">
+                    {risk}
+                  </li>
+                ))}
+              </ul>
+              <div className="flex gap-2">
+                {/* First, so it is where focus lands: Enter backs out. */}
+                <button
+                  type="button"
+                  onClick={() => setPage("approval")}
+                  className="flex-1 whitespace-nowrap rounded-full bg-muted px-4 py-2.5 nessa-text-4 font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPage("root")
+                    approval.onChange("full")
+                  }}
+                  className="flex-1 whitespace-nowrap rounded-full bg-destructive px-4 py-2.5 nessa-text-4 font-medium text-white outline-none transition-opacity hover:opacity-90 focus-visible:opacity-90"
+                >
+                  Turn on
+                </button>
               </div>
             </div>
           ) : null}
