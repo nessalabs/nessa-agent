@@ -1,0 +1,6 @@
+{"phase":"connected","t":0.0274}
+{"phase":"create_sent","id":"a83fe9f1-8076-4e2b-9125-2df2a5da9c9d","t":0.0277}
+{"phase":"create_returned","t":0.1791}
+{"phase":"projection","t":0.1799,"read_ms":0.7664159999999924,"lifecycle":{"phase":"starting"}}
+{"phase":"projection","t":1.4368,"read_ms":0.6450420000001031,"lifecycle":{"phase":"attached"}}
+{"phase":"closed","t":2.1054}

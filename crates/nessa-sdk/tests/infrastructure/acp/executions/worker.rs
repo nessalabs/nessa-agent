@@ -311,3 +311,6 @@ fn questions_are_advertised_in_the_shape_acp_reads_and_only_where_answerable() {
     let silent = initialize_params(false);
     assert!(silent["clientCapabilities"].get("elicitation").is_none());
 }
+
+#[path = "worker/timing.rs"]
+mod timing;

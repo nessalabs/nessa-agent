@@ -1,0 +1,66 @@
+[
+  {
+    "sourceFile": "8615361c-9134-4a98-bda8-2ece20852bf4.json",
+    "observedAtMs": 1790470789781,
+    "kind": "attachment_transition",
+    "sessionId": "3c42d85e-dcb2-49c4-b44a-bb42087c4a0a",
+    "before": "waiting",
+    "after": "starting"
+  },
+  {
+    "sourceFile": "dd77d701-a8a9-4b8e-89a7-2ee9bbffd0e4.json",
+    "observedAtMs": 1790470789794,
+    "kind": "queue_admitted",
+    "sessionId": "3c42d85e-dcb2-49c4-b44a-bb42087c4a0a",
+    "before": "unowned",
+    "after": "owned"
+  },
+  {
+    "sourceFile": "70031fa0-c20f-4ba2-9b24-53654af2e7cb.json",
+    "observedAtMs": 1790470798617,
+    "kind": "attachment_transition",
+    "sessionId": "3c42d85e-dcb2-49c4-b44a-bb42087c4a0a",
+    "before": "starting",
+    "after": "context_published"
+  },
+  {
+    "sourceFile": "6932eed1-73b7-4074-949c-866990871a3a.json",
+    "observedAtMs": 1790470805116,
+    "kind": "permission_answered",
+    "sessionId": "8844fc39-eaf8-4f6b-8124-b58246ec3ded",
+    "before": null,
+    "after": null
+  },
+  {
+    "sourceFile": "33898225-dc4e-4b38-951e-114df3114143.json",
+    "observedAtMs": 1790470808392,
+    "kind": "permission_answered",
+    "sessionId": "8844fc39-eaf8-4f6b-8124-b58246ec3ded",
+    "before": null,
+    "after": null
+  },
+  {
+    "sourceFile": "71ceffd4-e019-4b77-a91e-24daeb6d1878.json",
+    "observedAtMs": 1790470820515,
+    "kind": "execution_finished",
+    "sessionId": "8844fc39-eaf8-4f6b-8124-b58246ec3ded",
+    "before": "active",
+    "after": "released"
+  },
+  {
+    "sourceFile": "e67f43e4-6d76-4d4a-a0d1-447a8d63fe88.json",
+    "observedAtMs": 1790472309168,
+    "kind": "attachment_transition",
+    "sessionId": "a83fe9f1-8076-4e2b-9125-2df2a5da9c9d",
+    "before": "waiting",
+    "after": "starting"
+  },
+  {
+    "sourceFile": "a80f5bf9-6d78-4c2a-91bf-aa0a8885ff6c.json",
+    "observedAtMs": 1790472310181,
+    "kind": "attachment_transition",
+    "sessionId": "a83fe9f1-8076-4e2b-9125-2df2a5da9c9d",
+    "before": "starting",
+    "after": "context_published"
+  }
+]

@@ -1,0 +1,379 @@
+[
+  {
+    "name": "background-1",
+    "utc": "2026-09-27T01:24:17Z",
+    "events": [],
+    "spawn_seconds": 0.0022601670000000004,
+    "priority": "PID  PPID PRI NI\n65856 65854   4  0",
+    "initialize_seconds": 2.7826,
+    "session_ready_seconds": 3.3595,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 3.5054
+  },
+  {
+    "name": "background-2",
+    "utc": "2026-09-27T01:24:26Z",
+    "events": [],
+    "spawn_seconds": 0.002460791000000004,
+    "priority": "PID  PPID PRI NI\n66147 66121   4  0",
+    "initialize_seconds": 0.3348,
+    "session_ready_seconds": 0.8635,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 1.5028
+  },
+  {
+    "name": "background-3",
+    "utc": "2026-09-27T01:24:57Z",
+    "events": [
+      {
+        "t": 1.0809,
+        "phase": "validate-cwd",
+        "duration_ms": 0,
+        "total_ms": 0
+      },
+      {
+        "t": 1.1643,
+        "phase": "settings",
+        "duration_ms": 83,
+        "total_ms": 84
+      },
+      {
+        "t": 1.175,
+        "phase": "prepare-query",
+        "duration_ms": 11,
+        "total_ms": 94
+      },
+      {
+        "t": 1.6976,
+        "phase": "sdk-initialize",
+        "duration_ms": 522,
+        "total_ms": 617
+      },
+      {
+        "t": 1.6991,
+        "phase": "models",
+        "duration_ms": 1,
+        "total_ms": 618
+      },
+      {
+        "t": 1.6996,
+        "phase": "modes",
+        "duration_ms": 1,
+        "total_ms": 619
+      },
+      {
+        "t": 1.7002,
+        "phase": "agents",
+        "duration_ms": 0,
+        "total_ms": 619
+      },
+      {
+        "t": 1.7026,
+        "phase": "register",
+        "duration_ms": 2,
+        "total_ms": 621
+      }
+    ],
+    "spawn_seconds": 0.002506457999999996,
+    "priority": "PID  PPID PRI NI\n66759 66757   4  0",
+    "initialize_seconds": 1.0706,
+    "session_ready_seconds": 1.7026,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 2.3535
+  },
+  {
+    "name": "background-4",
+    "utc": "2026-09-27T01:25:03Z",
+    "events": [
+      {
+        "t": 0.661,
+        "phase": "validate-cwd",
+        "duration_ms": 0,
+        "total_ms": 0
+      },
+      {
+        "t": 0.756,
+        "phase": "settings",
+        "duration_ms": 95,
+        "total_ms": 95
+      },
+      {
+        "t": 0.761,
+        "phase": "prepare-query",
+        "duration_ms": 5,
+        "total_ms": 100
+      },
+      {
+        "t": 1.2977,
+        "phase": "sdk-initialize",
+        "duration_ms": 536,
+        "total_ms": 637
+      },
+      {
+        "t": 1.3006,
+        "phase": "models",
+        "duration_ms": 3,
+        "total_ms": 640
+      },
+      {
+        "t": 1.3007,
+        "phase": "modes",
+        "duration_ms": 0,
+        "total_ms": 640
+      },
+      {
+        "t": 1.3008,
+        "phase": "agents",
+        "duration_ms": 0,
+        "total_ms": 640
+      },
+      {
+        "t": 1.3042,
+        "phase": "register",
+        "duration_ms": 1,
+        "total_ms": 641
+      }
+    ],
+    "spawn_seconds": 0.0026176249999999984,
+    "priority": "PID  PPID PRI NI\n66953 66951   4  0",
+    "initialize_seconds": 0.6467,
+    "session_ready_seconds": 1.3043,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 1.4624
+  },
+  {
+    "name": "interactive-1",
+    "utc": "2026-09-27T01:24:21Z",
+    "events": [],
+    "spawn_seconds": 0.0012744579999999991,
+    "priority": "PID  PPID PRI NI\n65971 65970  31  0",
+    "initialize_seconds": 0.1265,
+    "session_ready_seconds": 0.4296,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 0.5055
+  },
+  {
+    "name": "interactive-2",
+    "utc": "2026-09-27T01:24:25Z",
+    "events": [],
+    "spawn_seconds": 0.0013447910000000014,
+    "priority": "PID  PPID PRI NI\n66047 66046  31  0",
+    "initialize_seconds": 0.1446,
+    "session_ready_seconds": 0.3471,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 0.9531
+  },
+  {
+    "name": "interactive-3",
+    "utc": "2026-09-27T01:25:00Z",
+    "events": [
+      {
+        "t": 0.1956,
+        "phase": "validate-cwd",
+        "duration_ms": 0,
+        "total_ms": 0
+      },
+      {
+        "t": 0.2248,
+        "phase": "settings",
+        "duration_ms": 29,
+        "total_ms": 29
+      },
+      {
+        "t": 0.228,
+        "phase": "prepare-query",
+        "duration_ms": 3,
+        "total_ms": 33
+      },
+      {
+        "t": 0.6002,
+        "phase": "sdk-initialize",
+        "duration_ms": 372,
+        "total_ms": 405
+      },
+      {
+        "t": 0.6014,
+        "phase": "models",
+        "duration_ms": 1,
+        "total_ms": 406
+      },
+      {
+        "t": 0.6016,
+        "phase": "modes",
+        "duration_ms": 0,
+        "total_ms": 406
+      },
+      {
+        "t": 0.6017,
+        "phase": "agents",
+        "duration_ms": 0,
+        "total_ms": 406
+      },
+      {
+        "t": 0.6028,
+        "phase": "register",
+        "duration_ms": 1,
+        "total_ms": 407
+      }
+    ],
+    "spawn_seconds": 0.0015109170000000005,
+    "priority": "PID  PPID PRI NI\n66858 66854  31  0",
+    "initialize_seconds": 0.1898,
+    "session_ready_seconds": 0.6029,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 1.1528
+  },
+  {
+    "name": "interactive-4",
+    "utc": "2026-09-27T01:25:02Z",
+    "events": [
+      {
+        "t": 0.1164,
+        "phase": "validate-cwd",
+        "duration_ms": 0,
+        "total_ms": 0
+      },
+      {
+        "t": 0.1376,
+        "phase": "settings",
+        "duration_ms": 21,
+        "total_ms": 21
+      },
+      {
+        "t": 0.1398,
+        "phase": "prepare-query",
+        "duration_ms": 2,
+        "total_ms": 24
+      },
+      {
+        "t": 0.3304,
+        "phase": "sdk-initialize",
+        "duration_ms": 191,
+        "total_ms": 214
+      },
+      {
+        "t": 0.331,
+        "phase": "models",
+        "duration_ms": 1,
+        "total_ms": 215
+      },
+      {
+        "t": 0.3311,
+        "phase": "modes",
+        "duration_ms": 0,
+        "total_ms": 215
+      },
+      {
+        "t": 0.3311,
+        "phase": "agents",
+        "duration_ms": 0,
+        "total_ms": 215
+      },
+      {
+        "t": 0.3316,
+        "phase": "register",
+        "duration_ms": 0,
+        "total_ms": 215
+      }
+    ],
+    "spawn_seconds": 0.0012365000000000015,
+    "priority": "PID  PPID PRI NI\n66922 66921  31  0",
+    "initialize_seconds": 0.1131,
+    "session_ready_seconds": 0.3317,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 0.4063
+  },
+  {
+    "name": "normal-1",
+    "utc": "2026-09-27T01:24:08Z",
+    "events": [],
+    "spawn_seconds": 0.0017834580000000017,
+    "priority": "PID  PPID PRI NI\n65509 65506  31  0",
+    "initialize_seconds": 0.2192,
+    "session_ready_seconds": 1.0122,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 1.1459
+  },
+  {
+    "name": "standard-1",
+    "utc": "2026-09-27T01:24:21Z",
+    "events": [],
+    "spawn_seconds": 0.0017836659999999963,
+    "priority": "PID  PPID PRI NI\n66000 65999  46  0",
+    "initialize_seconds": 0.309,
+    "session_ready_seconds": 2.8666,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 3.5067
+  },
+  {
+    "name": "standard-2",
+    "utc": "2026-09-27T01:24:28Z",
+    "events": [],
+    "spawn_seconds": 0.0017892080000000005,
+    "priority": "PID  PPID PRI NI\n66256 66253  46  0",
+    "initialize_seconds": 0.221,
+    "session_ready_seconds": 0.714,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 1.3006
+  },
+  {
+    "name": "standard-3",
+    "utc": "2026-09-27T01:25:01Z",
+    "events": [
+      {
+        "t": 0.1278,
+        "phase": "validate-cwd",
+        "duration_ms": 0,
+        "total_ms": 0
+      },
+      {
+        "t": 0.1527,
+        "phase": "settings",
+        "duration_ms": 25,
+        "total_ms": 25
+      },
+      {
+        "t": 0.1559,
+        "phase": "prepare-query",
+        "duration_ms": 3,
+        "total_ms": 28
+      },
+      {
+        "t": 0.3388,
+        "phase": "sdk-initialize",
+        "duration_ms": 183,
+        "total_ms": 211
+      },
+      {
+        "t": 0.3393,
+        "phase": "models",
+        "duration_ms": 1,
+        "total_ms": 212
+      },
+      {
+        "t": 0.3394,
+        "phase": "modes",
+        "duration_ms": 0,
+        "total_ms": 212
+      },
+      {
+        "t": 0.3394,
+        "phase": "agents",
+        "duration_ms": 0,
+        "total_ms": 212
+      },
+      {
+        "t": 0.3399,
+        "phase": "register",
+        "duration_ms": 0,
+        "total_ms": 212
+      }
+    ],
+    "spawn_seconds": 0.0018573750000000014,
+    "priority": "PID  PPID PRI NI\n66890 66889  20  0",
+    "initialize_seconds": 0.1244,
+    "session_ready_seconds": 0.34,
+    "outcome": "success",
+    "total_with_cleanup_seconds": 1.0122
+  }
+]

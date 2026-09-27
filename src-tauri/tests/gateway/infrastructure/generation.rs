@@ -65,6 +65,25 @@ fn reverting_configuration_gets_fresh_generation_and_failed_bootstrap_retry_reus
     );
 }
 #[test]
+fn interactive_policy_replaces_background_registration_then_reuses_its_generation() {
+    let mut background = base("/data");
+    background["ProcessType"] = json!("Background");
+    let current = installed(&background, OLD);
+    let mut interactive = background.clone();
+    interactive["ProcessType"] = json!("Interactive");
+    let selected =
+        select_generation(&interactive, Some(&current), None, || Ok(NEW.into())).unwrap();
+    assert_eq!(selected, NEW);
+    let published = installed(&interactive, &selected);
+    assert_eq!(
+        select_generation(&interactive, Some(&published), None, || panic!(
+            "unchanged interactive policy must reuse its generation"
+        ))
+        .unwrap(),
+        NEW
+    );
+}
+#[test]
 fn every_definition_change_or_invalid_generation_requires_new_identity() {
     let desired = base("/data");
     let current = installed(&desired, OLD);

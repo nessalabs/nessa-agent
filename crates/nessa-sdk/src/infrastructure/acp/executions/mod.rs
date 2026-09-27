@@ -26,6 +26,10 @@
 //! A partial frame waiting for more OS input does not block dispatch indefinitely;
 //! buffered decode work and task-budget exhaustion do not count as absent input.
 //! Permission audit delivery precedes successful settlement.
+//! Diagnostic timings use `nessa_sdk::timing`: startup exchanges and the first
+//! accepted nonempty answer per dispatched prompt, measured on the injected clock.
+//! They contain identifiers and durations, not message or credential payloads.
+//! `worker/timing.rs` tests the first-response boundary and one-shot emission.
 //! Failure aggregation retains primary operation errors alongside audit and
 //! process-cleanup errors before settling command, stream, and close results.
 //! The worker never awaits an injected image source: the session reads, verifies,

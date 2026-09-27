@@ -1353,11 +1353,13 @@ fn register(
     // is respawned every ThrottleInterval, and one killed by SIGSEGV is
     // respawned too — launchd prints no `last exit code` for that at all, only
     // the terminating signal.
+    // The gateway serves user requests, and its agents inherit its scheduling
+    // policy. Keep the independent service responsive with app-level resources.
     let mut definition = serde_json::json!({
         "Label":label, "ProgramArguments":arguments,
         "WorkingDirectory":data, "EnvironmentVariables": environment, "RunAtLoad":true,
         "KeepAlive":{"SuccessfulExit":false},
-        "ThrottleInterval":5,"ExitTimeOut":30,"ProcessType":"Background",
+        "ThrottleInterval":5,"ExitTimeOut":30,"ProcessType":"Interactive",
         "StandardOutPath":log,"StandardErrorPath":log
     });
     let installed_data = installed

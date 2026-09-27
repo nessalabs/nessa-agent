@@ -12,7 +12,8 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_FILTER: &str = "nessa_server=info,nessa_sdk=warn,nessa_gateway_endpoint=error";
+const DEFAULT_FILTER: &str =
+    "nessa_server=info,nessa_sdk=warn,nessa_sdk::timing=info,nessa_gateway_endpoint=error";
 
 /// Install the process-global tracing subscriber. Call once at startup, before any log line.
 pub fn init() {
@@ -24,7 +25,7 @@ pub fn init() {
 /// The SDK is where an agent actually runs, and the endpoint crate owns the
 /// publication steps required before the gateway can announce that it is
 /// listening. Their warnings and errors are the operator's to see. Info and
-/// debug lines stay off, because those are a developer's.
+/// debug lines stay off, except the bounded startup and first-response timings.
 fn filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter())
 }
@@ -130,5 +131,20 @@ mod tests {
             "{log}"
         );
         assert!(log.contains("error.raw_os_code=5"), "{log}");
+    }
+    #[test]
+    fn default_filter_includes_timings_without_enabling_other_sdk_info() {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        tracing::subscriber::with_default(
+            subscriber(move || writer.clone(), false, default_filter()),
+            || {
+                tracing::info!(target: "nessa_sdk::timing", metric = "agent_first_text_response_ms", elapsed_ms = 50.0, "agent first text response");
+                tracing::info!(target: "nessa_sdk::other", "unrelated sdk detail");
+            },
+        );
+        let log = captured.text();
+        assert!(log.contains("agent_first_text_response_ms"), "{log}");
+        assert!(!log.contains("unrelated sdk detail"), "{log}");
     }
 }
