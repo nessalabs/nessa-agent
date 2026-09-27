@@ -48,6 +48,7 @@ pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
     "CronCreate",
     "CronDelete",
     "CronList",
+    "ScheduleWakeup",
     "EnterWorktree",
     "ExitWorktree",
     // Effects beyond this machine.
@@ -58,11 +59,6 @@ pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
 ];
 /// The namespace the harness gives every tool of a configured MCP server.
 pub(in crate::infrastructure::claude_acp) const MCP_NAMESPACE: &str = "mcp__";
-/// The permission rule that routes every tool the harness offers — its
-/// built-ins and the tools of configured MCP servers — to Nessa's permission
-/// owner. Naming tools individually left the rest running unreviewed inside
-/// the harness; what Nessa refuses outright is denied separately.
-pub(in crate::infrastructure::claude_acp) const REVIEWED_TOOLS_RULE: &str = "*";
 fn bounded_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128

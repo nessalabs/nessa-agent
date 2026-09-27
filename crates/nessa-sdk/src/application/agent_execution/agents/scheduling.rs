@@ -210,6 +210,9 @@ struct Pending {
     _work: WorkPermit,
 }
 impl Scheduler {
+    pub(super) fn is_idle(&self) -> bool {
+        !self.running && self.queue.is_empty()
+    }
     pub(super) fn new() -> Self {
         Self {
             queue: InvocationQueue::new(64).expect("positive queue bound"),
@@ -759,13 +762,19 @@ impl Agent {
             .expect("admission checked under scheduler lock");
         let id = input.execution_id.clone();
         let audit_actor = actor.clone();
+        let admission_generation =
+            format!("{}:{}", self.inner.instance_id, work.provider_generation());
+        let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
         let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
-        let audit_record = ExecutionAuditRecord::QueueAdmitted(QueueAdmissionRecord::submitted(
-            self.inner.manager.id().clone(),
-            id.clone(),
-            mode,
-            audit_actor.clone(),
-        ));
+        let audit_record = ExecutionAuditRecord::QueueAdmitted(
+            QueueAdmissionRecord::submitted(
+                self.inner.manager.id().clone(),
+                id.clone(),
+                mode,
+                audit_actor.clone(),
+            )
+            .with_approval_context(approval_mode, admission_generation),
+        );
         let audit = match self
             .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
             .await
@@ -1423,6 +1432,15 @@ impl Agent {
                     .enqueue(input.execution_id.clone(), InvocationKind::Steering)
                     .expect("admission checked under scheduler lock");
                 let audit_actor = actor.clone();
+                let admission_generation = format!(
+                    "{}:{}",
+                    self.inner.instance_id,
+                    work_owner
+                        .as_ref()
+                        .expect("admitted steering owner")
+                        .provider_generation()
+                );
+                let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
                 let receipt = Self::accept_pending(
                     &mut scheduler,
                     input,
@@ -1432,13 +1450,15 @@ impl Agent {
                     target,
                     work_owner.take().expect("admitted steering owner"),
                 );
-                let audit_record =
-                    ExecutionAuditRecord::QueueAdmitted(QueueAdmissionRecord::submitted(
+                let audit_record = ExecutionAuditRecord::QueueAdmitted(
+                    QueueAdmissionRecord::submitted(
                         self.inner.manager.id().clone(),
                         id.clone(),
                         SubmissionMode::Steering,
                         audit_actor.clone(),
-                    ));
+                    )
+                    .with_approval_context(approval_mode, admission_generation),
+                );
                 let audit = match self
                     .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
                     .await

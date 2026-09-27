@@ -974,6 +974,8 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
             agents,
             storage: Arc::new(InMemoryStorage::new()),
             metadata: Arc::new(MemoryRepository::default()),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
@@ -1040,7 +1042,11 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
 
     let first = conversation_id();
     service
-        .create(first.clone(), caller("create-first"), None)
+        .create(
+            first.clone(),
+            caller("create-first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1079,7 +1085,11 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
     );
     let reads_before_reopen = store.reads.load(Ordering::SeqCst);
     service
-        .create(first.clone(), caller("reopen-first"), None)
+        .create(
+            first.clone(),
+            caller("reopen-first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     assert_eq!(store.reads.load(Ordering::SeqCst), reads_before_reopen);
@@ -1087,7 +1097,11 @@ async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_
 
     let second = conversation_id();
     service
-        .create(second.clone(), caller("create-second"), None)
+        .create(
+            second.clone(),
+            caller("create-second"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1210,7 +1224,11 @@ async fn missing_key_skips_startup_warm_up_and_a_later_key_recovers_on_the_cold_
     let service = service(root.path(), resolver);
     let conversation = conversation_id();
     service
-        .create(conversation.clone(), caller("create-after-save"), None)
+        .create(
+            conversation.clone(),
+            caller("create-after-save"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1273,7 +1291,11 @@ async fn rotated_key_shares_runtime_preparation_but_the_conversation_uses_fresh_
     let service = service(root.path(), resolver);
     let conversation = conversation_id();
     service
-        .create(conversation.clone(), caller("create-after-rotation"), None)
+        .create(
+            conversation.clone(),
+            caller("create-after-rotation"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1367,7 +1389,11 @@ async fn standalone_explicit_profile_launches_with_captured_environment_and_no_m
     let service = service(root.path(), resolver);
     let conversation = conversation_id();
     service
-        .create(conversation.clone(), caller("create-standalone"), None)
+        .create(
+            conversation.clone(),
+            caller("create-standalone"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1439,7 +1465,11 @@ async fn stopping_during_native_resolution_prevents_provider_launch_and_preserve
         let service = service.clone();
         async move {
             service
-                .create(conversation_id(), caller("create-stopped"), None)
+                .create(
+                    conversation_id(),
+                    caller("create-stopped"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
                 .await
         }
     });

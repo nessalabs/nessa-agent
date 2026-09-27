@@ -5,7 +5,14 @@ use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 #[cfg(unix)]
 use super::opencode_profile::EffectiveOpenCodeProfile;
 #[cfg(unix)]
+use super::opencode_profile::OpenCodeProfile;
+#[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
+#[cfg(unix)]
+use crate::product::generated::{
+    AgentModelOption, AgentOption, AgentsListResult, ApprovalMode as WireApprovalMode,
+    ApprovalModeChoice as WireApprovalModeChoice,
+};
 #[cfg(unix)]
 use crate::{
     agent_warm_up::application::AgentWarmUp,
@@ -18,7 +25,7 @@ use crate::{
     conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, LocalConversationStore,
+        DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
     },
 };
 use crate::{
@@ -49,6 +56,14 @@ use nessa_auth::{
 };
 #[cfg(unix)]
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
+#[cfg(unix)]
+use nessa_sdk::{
+    application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice},
+    infrastructure::{
+        claude_acp::sessions::ClaudeAcpProvider, codex_acp::sessions::CodexAcpProvider,
+        model_metadata_json::load_catalog, opencode_acp::sessions::OpencodeAcpProvider,
+    },
+};
 #[cfg(unix)]
 use std::collections::HashSet;
 use std::{
@@ -171,7 +186,7 @@ pub(super) fn product_state(
                 managed_opencode,
             )?;
             (
-                Some((built.service, built.attachments)),
+                Some((built.service, built.attachments, built.agents_catalog)),
                 built.agent_probe,
                 built.warm_ups,
             )
@@ -210,10 +225,11 @@ pub(super) fn product_state(
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some((service, attachments)) = conversations {
+    if let Some((service, attachments, agents_catalog)) = conversations {
         product = product
             .with_conversations(Arc::new(service))
-            .with_attachments(attachments);
+            .with_attachments(attachments)
+            .with_agents_catalog(agents_catalog);
     }
     Ok(LocalProduct {
         routes: product,
@@ -271,6 +287,7 @@ fn launch_files(
 struct BuiltConversations {
     service: ConversationService,
     attachments: AttachmentService,
+    agents_catalog: AgentsListResult,
     /// Which configured agents this run cannot start even though they are
     /// installed. Known only once every provider has been built, and needed
     /// before the readiness probe is, which is why this is a function rather
@@ -436,6 +453,10 @@ fn conversations(
         DurableConversationCreationAudit::new(root.join("audit").join("creation"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    let mode_audit = Arc::new(
+        DurableConversationModeAudit::new(root.join("audit").join("approval-mode"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let file_link_audit = Arc::new(
         DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -452,6 +473,11 @@ fn conversations(
         credentials.clone(),
     );
     let warm_current_opencode = opencode.configured().is_some();
+    let mut configured: HashSet<AgentId> = built.providers.keys().copied().collect();
+    if warm_current_opencode {
+        configured.insert(AgentId::Opencode);
+    }
+    let agents_catalog = agent_catalog(agents, &configured, opencode.configured())?;
     let resolver = Arc::new(CurrentAgentResolver::new(CurrentAgentResolverInput {
         fixed: built.providers,
         fixed_probe,
@@ -470,7 +496,6 @@ fn conversations(
         images: attachments.images.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
     }));
-    let configured = resolver.configured();
     let selected = resolver.default_agent()?;
     // The one registry of how each agent deletes its own record of a session:
     // the fixed agents' bindings, built above, and OpenCode's, whose binding
@@ -485,6 +510,7 @@ fn conversations(
             storage,
             metadata: metadata.clone(),
             creation_audit,
+            mode_audit,
             file_link_audit,
             deletion_audit,
             attachments: Some(attachments.conversations),
@@ -504,6 +530,7 @@ fn conversations(
     Ok(BuiltConversations {
         service,
         attachments: attachments.service,
+        agents_catalog,
         agent_probe: resolver,
         warm_ups,
     })
@@ -511,6 +538,85 @@ fn conversations(
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {
     RunError::Authentication(error.to_string())
+}
+
+#[cfg(unix)]
+fn agent_catalog(
+    config: &AgentsConfig,
+    configured: &HashSet<AgentId>,
+    opencode: Option<&OpenCodeProfile>,
+) -> Result<AgentsListResult, RunError> {
+    let models = load_catalog(
+        std::fs::File::open(&config.catalog)
+            .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
+    )
+    .map_err(|error| RunError::Agent(error.to_string()))?
+    .models();
+    let agents = AgentId::ALL
+        .iter()
+        .copied()
+        .filter(|agent| configured.contains(agent))
+        .map(|agent| {
+            let default_model = match agent {
+                AgentId::Opencode => opencode
+                    .map(OpenCodeProfile::model_id)
+                    .ok_or_else(|| RunError::Agent("OpenCode profile missing".into()))?,
+                _ => config
+                    .runtime(agent)
+                    .map(|runtime| runtime.model.as_str())
+                    .ok_or_else(|| RunError::Agent("agent runtime missing".into()))?,
+            };
+            let provider = super::agent::catalog_provider(agent);
+            // OpenCode still launches its one validated static profile. Do not
+            // advertise catalog entries its current resolver cannot compose.
+            let options = models
+                .iter()
+                .filter(|model| {
+                    model.provider == provider
+                        && (agent != AgentId::Opencode || model.model_id == default_model)
+                })
+                .map(|model| {
+                    let modes = match agent {
+                        AgentId::Claude => ClaudeAcpProvider::approval_modes(&model.model_id),
+                        AgentId::Codex => CodexAcpProvider::approval_modes(&model.model_id),
+                        AgentId::Opencode => OpencodeAcpProvider::approval_modes(),
+                    };
+                    AgentModelOption {
+                        model_id: model.model_id.clone(),
+                        display_name: model.display_name.clone(),
+                        max_context_window_tokens: u64::from(model.max_context_window_tokens),
+                        reasoning: model.reasoning,
+                        image_input: model.image_input.is_some(),
+                        approval_modes: modes.iter().copied().map(wire_mode_choice).collect(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            if !options.iter().any(|model| model.model_id == default_model) {
+                return Err(RunError::Agent(format!(
+                    "default model {default_model} missing from {provider} catalog"
+                )));
+            }
+            Ok(AgentOption {
+                agent: agent.name().into(),
+                default_model: default_model.into(),
+                models: options,
+            })
+        })
+        .collect::<Result<Vec<_>, RunError>>()?;
+    Ok(AgentsListResult { agents })
+}
+
+#[cfg(unix)]
+fn wire_mode_choice(choice: ApprovalModeChoice) -> WireApprovalModeChoice {
+    WireApprovalModeChoice {
+        id: match choice.id {
+            ApprovalMode::Ask => WireApprovalMode::Ask,
+            ApprovalMode::Auto => WireApprovalMode::Auto,
+            ApprovalMode::Full => WireApprovalMode::Full,
+        },
+        name: choice.name.into(),
+        description: choice.description.into(),
+    }
 }
 
 /// Move durable lifecycle writes off Tokio's socket workers. The store serializes

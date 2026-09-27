@@ -6,6 +6,7 @@ use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{
         ConversationCreationDisposition, ConversationError, ConversationListing,
+        ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
         ConversationRepository, ConversationSummaries,
     },
     domain::{
@@ -52,12 +53,145 @@ fn owned_by(id: &ConversationId, organization: &str, owner: &str, at: u64) -> Co
         "create".into(),
         at,
         AgentId::Claude,
+        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap()
 }
 fn owned(id: &ConversationId) -> Conversation {
     owned_by(id, "org", "alice", 1)
 }
+
+#[tokio::test]
+async fn mode_intent_and_commit_survive_restart_without_reapplying() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let request = ConversationModeRequest {
+        conversation_id: id.clone(),
+        organization_id: OrganizationId::new("org").unwrap(),
+        request_id: "mode-1".into(),
+        initiator_principal_id: PrincipalId::new("alice").unwrap(),
+        initiator_surface_id: "panel".into(),
+        prior: crate::conversation::domain::ConversationApprovalMode::Ask,
+        requested: crate::conversation::domain::ConversationApprovalMode::Auto,
+        state: ConversationModeRequestState::Pending,
+        application: None,
+        requested_at_ms: 2,
+    };
+    opened
+        .store
+        .begin_mode_change(request.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.store.pending_mode_change(&id).await.unwrap(),
+        Some(request.clone())
+    );
+    assert!(matches!(
+        opened
+            .store
+            .begin_mode_change(ConversationModeRequest {
+                request_id: "mode-2".into(),
+                ..request.clone()
+            })
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    let observed = opened
+        .store
+        .observe_mode_application(&id, "mode-1", ConversationModeApplication::Applied)
+        .await
+        .unwrap();
+    assert_eq!(
+        observed.application,
+        Some(ConversationModeApplication::Applied)
+    );
+    opened
+        .store
+        .finish_mode_change(&id, "mode-1", ConversationModeRequestState::Applied)
+        .await
+        .unwrap();
+    drop(opened.store);
+    let reopened = LocalConversationStore::open(&opened.path).unwrap();
+    assert_eq!(reopened.pending_mode_change(&id).await.unwrap(), None);
+    assert_eq!(
+        ConversationRepository::load(&reopened, &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        crate::conversation::domain::ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        reopened
+            .mode_change(&id, "mode-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ConversationModeRequestState::Applied
+    );
+    assert_eq!(
+        reopened
+            .finish_mode_change(&id, "mode-1", ConversationModeRequestState::Applied)
+            .await
+            .unwrap()
+            .state,
+        ConversationModeRequestState::Applied
+    );
+}
+
+#[tokio::test]
+async fn an_applied_mode_request_without_application_evidence_is_unreadable() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let connection = raw(&opened.path);
+    connection
+        .execute(
+            "INSERT INTO mode_requests
+             (conversation_id, request_id, initiator, surface, prior_mode,
+              requested_mode, state, application, requested_at_ms)
+             VALUES (?1, 'bad-result', 'alice', 'panel', 'ask', 'auto', 'applied', 'refused', 2)",
+            [id.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        opened.store.mode_change(&id, "bad-result").await,
+        Err(ConversationError::Metadata)
+    ));
+}
+
+#[test]
+fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let old = nessa_local_database::Schema::new(
+        "CREATE TABLE conversations (id TEXT PRIMARY KEY NOT NULL) STRICT;\nPRAGMA user_version = 1;",
+    )
+    .unwrap();
+    let connection = nessa_local_database::open(&path, &old).unwrap();
+    connection
+        .execute("INSERT INTO conversations (id) VALUES ('old-chat')", [])
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(nessa_local_database::OpenError::Version {
+            found: 1,
+            expected: 2
+        })
+    ));
+    let old_row: String = raw(&path)
+        .query_row("SELECT id FROM conversations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(old_row, "old-chat");
+}
+
 fn deletion(request: &str) -> ConversationDeletion {
     ConversationDeletion::new(
         OrganizationId::new("org").unwrap(),
@@ -119,6 +253,8 @@ async fn ownership_is_create_once_and_survives_reopening() {
         "overwrite".into(),
         456,
         AgentId::Codex,
+        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     let existing = store.create(impostor).await.unwrap();
@@ -204,6 +340,8 @@ async fn a_conversation_with_no_agent_is_never_created() {
         "create".into(),
         1,
         None,
+        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     assert!(matches!(
@@ -800,7 +938,7 @@ fn many(path: &Path, owner: &str, count: usize) {
         let id = new_id().to_string();
         transaction
             .execute(
-                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude')",
+                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask')",
                 params![id, owner],
             )
             .unwrap();
@@ -901,7 +1039,7 @@ async fn unfinished_deletions_are_read_by_their_index_and_an_unnamed_one_is_coun
     let unnamed = "not-a-conversation";
     let raw = raw(&path);
     raw.execute(
-        "INSERT INTO conversations VALUES (?1, 'org', 'alice', 'panel', 'create', 1, 'claude')",
+        "INSERT INTO conversations VALUES (?1, 'org', 'alice', 'panel', 'create', 1, 'claude', 'test-model', 'ask')",
         [unnamed],
     )
     .unwrap();

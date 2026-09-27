@@ -4,12 +4,12 @@
 
 People choose which model a conversation runs on, and how much its agent may do
 without asking, from the composer. Today both are fixed for every conversation
-of an agent. This record proposes the wire contract, where each choice is owned,
+of an agent. This record defines the intended wire contract, where each choice is owned,
 how the three approval modes map onto each agent's own modes, and what happens
 when the mode changes mid-conversation.
 
 - **Date:** 2026-09-26
-- **Status:** proposed
+- **Status:** accepted
 - **Issue:** [#231](https://github.com/nessalabs/nessa-agent/issues/231)
 
 ## Context
@@ -18,9 +18,11 @@ when the mode changes mid-conversation.
   per agent (`composition/agent.rs`, `build::provider`), with the model baked into
   it. Sessions already run one process each (`acp/sessions/binding.rs`), so a
   model per session costs no new process model. It only has to reach the binding.
-- **Creation is lazy.** The panel opens a tab locally and sends
-  `conversation.create` on the first send (`gateway/effects.ts`). So choosing a
-  model before that is free: nothing exists yet to change.
+- **Creation is usually lazy.** The panel opens a tab locally and sends
+  `conversation.create` on the first send (`gateway/effects.ts`). Staging an
+  image creates the server conversation earlier because the upload needs an
+  owner. The model becomes fixed at either creation point; choosing another
+  model after staging opens a separate draft and keeps the staged draft intact.
 - **Nessa bindings pin their configured mode and refuse a change.**
   Claude runs `default` with the reviewed-tools ask rule and deny list, Codex
   runs `read-only`, and OpenCode runs `plan` (`*_acp/sessions/profile.rs`). A
@@ -95,19 +97,31 @@ provider behaviours at the pinned versions, not completed Nessa integration test
   to `read-only` restored those requests. It is not Claude's `acceptEdits` policy.
 - **Claude also has native `auto`.** It ran the benign test actions on Sonnet,
   but selecting Haiku changed the effective mode to `acceptEdits`; requesting
-  `auto` on Haiku also returned that fallback. This is a possible alternative
-  to the proposed mapping, not an adopted substitution. Adopting it requires
-  model-dependent availability and rejection of unintended fallback.
+  `auto` on Haiku also returned that fallback. The decision below adopts native
+  `auto` only where supported, with model-dependent availability and rejection
+  of unintended fallback.
 - **The harnesses do not enforce idle-only changes.** Both accepted a mode change
   while an approval was pending. Nessa must own the proposed `turnRunning`
   rejection. Claude emitted its expected mode notification before the RPC reply;
   Codex stored the selection for subsequent turns without a mode notification in
   the captured changes.
 
-The remaining work is explicit: select Claude's rule strategy, implement and
-verify the Nessa lifecycle, cover consequential failures, and test additional
-policy boundaries listed in the report. The finite benign probes cannot define
-what a provider's automatic reviewer will decide for arbitrary risky input.
+The later boundary probes also found that automatic review is not necessarily
+an approval prompt: Claude's classifier denied an authorized fixture deletion
+without asking, while Codex's Guardian approved that same disposable operation.
+Both ignored the tested injected instructions before attempting the forbidden
+actions. Preserve the distinction between agent refusal, classifier decision,
+and user approval; “anything risky still asks” is not supported. The
+[detailed report](../../reviews/231-acp-approval-spike.md#follow-up-deny-list-coverage-and-automatic-review-counterexamples)
+records each deny-list entry, controls, decision evidence and remaining limits.
+
+The policy and recovery decisions below are settled. Remaining work is to
+implement and verify the Nessa lifecycle and cover consequential failures. Automatic-review
+classification belongs to the ACP providers. Nessa exposes the supported modes
+and preserves the outcomes they provide; reproducing or certifying arbitrary
+Claude/Codex classifier decisions is outside this feature's scope and is not a
+release gate. The observed counterexamples settle the UI wording, while Nessa
+continues to own its explicit restrictions and mode-change lifecycle.
 
 ## Decision
 
@@ -117,12 +131,15 @@ A new product read, `agents.list`, returns the agents configured on this gateway
 For each agent it gives:
 
 - `agent` (`claude` | `codex` | `opencode`);
-- the models this gateway will run for it: every catalog model whose provider
-  matches the agent, as `{modelId, displayName, maxContextWindowTokens,
-  reasoning, imageInput}`;
+- the models this gateway will run for it: catalog models whose provider
+  matches the agent and whose launch profile is available (OpenCode's fixed
+  profile currently offers only its configured model), as `{modelId,
+  displayName, maxContextWindowTokens, reasoning, imageInput}`;
 - `defaultModel`, the configured `agents.runtimes.<agent>.model`;
-- `approvalModes`, the subset of `ask` | `auto` | `full` this binding can honour
-  and verify (§3).
+- each model's `approvalModes`, the subset of `ask` | `auto` | `full` this
+  binding can honour and verify for that model, including binding-owned labels
+  and descriptions (§3). There is no agent-wide list that implies every model
+  supports Claude native `auto`.
 
 The catalog stays where it is (`crates/nessa-sdk/data/models.json`). The panel
 renders this list and holds no model or agent table of its own.
@@ -157,36 +174,53 @@ provider's. `ConversationRuntime` also gains:
 
 A conversation's details can then name its model without the catalog read.
 
-There is no mid-conversation model switch. Picking another model after the first
-message opens a new conversation. Carrying the transcript into that conversation
+There is no mid-conversation model switch. Picking another model after the server
+conversation exists opens a new draft, including when an image upload created it
+before the first message. Carrying the transcript into that conversation
 so the new agent continues from it is a separate, later decision.
 
 ### 3. Three approval modes, each mapped by its binding
 
 The choices are native approval presets, with descriptions published by the
 binding and rendered by the panel. `ask` does not promise approval before each
-tool across agents. The proposed mappings below are candidates until behaviour
-is verified under Nessa's complete launch configuration.
+tool across agents. These mappings are the implementation decision; availability
+still requires verification under Nessa's complete launch configuration. The
+initial implementation focuses on Claude and Codex. OpenCode keeps its existing
+fixed profile; new OpenCode mode switching and paid-provider probes are deferred.
 
 | Mode | Claude | Codex | OpenCode |
 | --- | --- | --- | --- |
-| `ask` | `default` + blanket ask rule: ask before tools covered by that rule | `read-only`: workspace actions may run; escalation asks the user | Current `plan` + restrictive launch policy; do not describe denied operations as approval requests |
-| `auto` | `acceptEdits` without the blanket ask rule: workspace edits run; tested outside paths, MCP and WebFetch ask (see follow-up) | `agent`: workspace actions may run; escalation uses native automatic review | Candidate `build` with explicit permission rules; unavailable until verified |
-| `full` | `bypassPermissions` without explicit ask rules: tested operations run; provider checks can still ask | `agent-full-access`: native full-access preset | Candidate `build` with explicit allow rules for permitted tools; unavailable until verified |
+| `ask` | `default` with native permission rules: reads may run; the provider requests approval where required | `read-only`: workspace actions may run; escalation asks the user | Current `plan` + restrictive launch policy; do not describe denied operations as approval requests |
+| `auto` | Native `auto`, only on supported models: the provider's classifier reviews actions and may allow or deny without asking | `agent`: workspace actions may run; escalation uses native automatic review | Unavailable in this implementation |
+| `full` | `bypassPermissions` without explicit ask rules: tested operations run; provider checks can still ask | `agent-full-access`: native full-access preset | Unavailable in this implementation |
 
 - **The deny list remains policy.** Changing approval must preserve the binding's
-  denied-tool boundary. Native Bash exclusion was checked through elevated modes;
-  the remaining deny-list entries still need coverage before offering them.
-  “Every tool runs” is not the UI promise.
-- **Claude's mode and permission rules must be designed together.** Retaining
-  `ask: ["*"]` defeated automatic file approval in the spike, including in
-  `bypassPermissions`. Removing or replacing that rule, and restoring it when
-  returning to `ask`, requires a rule-strategy decision. Fresh-process resume
-  applied changed rules in the follow-up; live `set_config_option permissions`
-  was refused. Preserve strict ask semantics through verified reopening, or
-  explicitly decide to adopt a fixed native-rule profile with different read
-  approval semantics. Neither choice is silently made by this spike.
-- **A binding lists a mode in `approvalModes` only after behaviour tests**, not
+  denied-tool boundary. The boundary follow-up accounts for all 17 entries:
+  13 are offered without the policy and excluded with it across the tested modes;
+  four are unavailable even in the baseline. Historical alias exclusion was
+  also verified. That investigation exposed `ScheduleWakeup`, whose stop
+  operation ran in bypass. It is now added to the same deny policy because
+  scheduling work beyond the execution is outside Nessa's ownership. The list
+  therefore contains 18 entries. “Every tool runs” is not the UI promise.
+- **Claude uses one fixed native-rule profile.** Remove the blanket
+  `permissions.ask: ["*"]` for conversations using this feature. Do not replace
+  it with selective ask rules that also survive bypass. Preserve the explicit
+  deny list and existing isolation of external settings/hooks in every mode.
+  This intentionally replaces the current ask-before-every-tool/file-path
+  contract: native `default` may read without asking. Label it “Provider asks”,
+  not “Ask before every tool”. Returning to `ask` restores native `default`,
+  not the old blanket rule. Normal changes use the mode RPC without reopening
+  or changing permission rules. Restored sessions must start in this same
+  profile; never reuse a process with the legacy blanket rule.
+- **Native `auto` is not `acceptEdits`.** `acceptEdits` is not offered as the
+  `auto` choice. The binding owns model-dependent availability, checked against
+  the pinned provider's effective configuration. A success reply containing
+  `acceptEdits` after requesting `auto` is a failed application, not success or
+  an automatic substitution. Hide known-unsupported choices; reject newly
+  discovered fallbacks and recover as in §4. Do not maintain a second model/mode
+  capability table in the panel. Unknown support stays unavailable until the
+  binding has verified it; classifier outcomes themselves are provider-owned.
+- **Newly enabled presets require behaviour tests**, not
   just a configuration acknowledgement. Exercise reads, edits, shell, network,
   MCP and denied tools where the binding exposes them, using the complete Nessa
   launch configuration. Test transitions back to `ask` as well as elevation.
@@ -194,10 +228,15 @@ is verified under Nessa's complete launch configuration.
   Nessa regression coverage and the report's excluded boundaries remain separate.
   Unsupported or unverified modes stay unavailable
   ([gate 7](../../../CODING_STANDARDS.md#gates)).
-- **OpenCode mode and launch permission policy are separate.** Switching to
-  `build` does not establish the proposed `auto` or `full` policy. Verify the
-  paid-provider permission round trip and how policy changes reach a live or
-  reopened session before offering those modes.
+- **OpenCode is deferred.** Keep its existing fixed `plan` launch policy. Its
+  models publish one fixed `ask` descriptor, labelled “Fixed plan policy”, whose
+  description says operations may be denied rather than offered for approval.
+  Creation with omitted mode or explicit `ask` uses that existing profile;
+  `auto`/`full` are refused. A one-choice list renders no switch control. This
+  represents the existing fixed configuration, not newly enabled switching or
+  evidence of verified native approval behavior. OpenCode's paid
+  permission round trip and policy replacement are separate follow-up work;
+  they do not block Claude/Codex implementation.
 - Unexpected `current_mode_update` remains a protocol error. Expected updates
   during an admitted change need ordering rules (§4); comparing them only to
   the old mode would reject the change being requested.
@@ -207,52 +246,118 @@ user-facing description for each offered mode alongside its ID, so the panel
 neither invents a universal promise nor maintains its own provider policy table.
 
 `ConversationCreateParams` gains an optional `approvalMode` (default `ask`). A
-mode not in the agent's `approvalModes` is refused, typed
+mode not in the selected model's binding-published `approvalModes` is refused, typed
 `approvalModeUnavailable`. The conversation view gains `approvalMode` and
-`approvalModes` (its agent's list from §1). The composer's tray can then offer
+`approvalModes` (its binding's list for the conversation's fixed model from §1). The composer's tray can then offer
 exactly what this conversation's agent honours without a second read.
 
 ### 4. Changing the mode mid-conversation
 
 A new command, `conversation.setApprovalMode {conversationId, requestId, mode}`,
-changes it. This remains a proposed lifecycle, not a capability established by
-the spike. Mode selection alone is insufficient when a binding also needs to
-change launch permission rules. Before implementation, settle whether each
-binding can apply the complete policy live or needs session reopening, including
-how reopening preserves the conversation context. Claude rule replacement worked
-through fresh-process resume in the follow-up; Codex applies its selected preset
-to subsequent turns. Gate 15's initial table:
+changes the choice. These are required implementation semantics, not claims
+that the spike verified Nessa's lifecycle.
 
-| State when the change arrives | Result |
+The conversation admission owner serializes mode changes, turn admission and
+session close. The binding alone translates and checks the provider preset.
+Claude and Codex use a live `session/set_config_option` mode RPC with the fixed
+rules in §3. For Codex, “verified” means the pinned ACP adapter accepted and
+reported the exact session mode; it does not certify every action the provider
+will later take under that mode. Neither normal path requires reopening.
+Unexpected configuration changes block
+turn admission rather than silently updating the conversation's choice.
+
+The durable conversation state owns the committed mode. A change has a correlated
+record containing the request ID, caller, conversation, prior committed mode,
+requested mode, and application/verification evidence. There are three admission
+states: ready, changing, and recovery required. Changing and recovery required
+both prohibit turn admission. The view reports the committed `approvalMode`
+separately from change status and requested mode; an in-flight selection is never
+shown as confirmed.
+
+The order is explicit:
+
+1. Validate authority, model/mode availability and idle state under the admission
+   owner. Durably record intent before contacting the binding. Intent is not a
+   committed mode. Failure here makes no provider call.
+2. If a session is open, apply and verify the exact preset. If no session exists,
+   record verification as deferred until open; do not start a process merely to
+   change a saved choice.
+3. Deliver the correlated outcome to the durable audit sink, then persist the
+   committed mode and terminal request result together in one conversation
+   storage operation. Audit evidence at this stage describes provider application
+   (or deferred application), not an already committed conversation change. This
+   avoids claiming a distributed transaction across audit and conversation stores.
+   Only storage acknowledgement permits a success reply or reopening admission.
+4. If the outcome or commit is uncertain, retain the intent and block turns.
+   Reconcile by reading durable records, not by guessing from the RPC error.
+   Recovery records link back to the same request and original application
+   evidence; they do not rewrite it as a user refusal or confirmed rollback.
+
+| State or event | Required result and regression |
 | --- | --- |
-| No live session (idle, closed, or not yet created) | Accepted and persisted. The next session opens in the new mode. |
-| Session open, no turn running | Accepted. The binding applies and verifies the complete mode and permission policy before the command succeeds; the per-binding mechanism remains to be settled. A confirmed refusal with unchanged policy fails `approvalModeNotApplied`. A mismatch or lost reply does not prove that the old policy remains; recovery is unresolved below. |
-| Turn running (including a pending permission) | Refused, `turnRunning`. The mode never changes under a running turn. The panel says to try again when the turn ends. |
-| Same mode as current, with verified effective policy | Accepted without contacting the agent (idempotent). An uncertain earlier change must first be reconciled. |
-| Repeated `requestId` | Answered with the first result (the existing idempotent-request rule). |
-| Two changes racing | Serialized by the conversation. Each is judged against the state the previous one left. |
-| Expected Claude mode notification before the command reply | Correlate with the admitted change; do not reject merely because it differs from the previous mode. Observed by the follow-up. |
-| Successful RPC reports a different effective mode | Do not publish the requested mode as applied. Observed for Claude `auto` on Haiku; model-dependent modes require explicit availability and fallback handling. |
+| No live session, idle | Audit deferred application and commit the choice; verify it before the next session admits any turn. If open refuses or falls back, block and report `approvalModeNotApplied`; do not silently choose another mode. |
+| Session open, idle | Record intent, apply exact preset, audit outcome, commit, then return success. Turn admission remains blocked throughout. |
+| Turn running, including pending permission | Refuse `turnRunning`; no provider mutation. Record the refusal with caller and target. |
+| Same mode, ready and verified (or no live session) | Return success without a provider mutation; retain a terminal idempotency result. An uncertain session cannot take this shortcut. |
+| Repeated request ID, identical payload | Return its durable terminal result; while pending return `approvalModeUncertain` without reapplying, and expose the change status on read. A reused ID with different input is a typed request conflict. |
+| Two changes, or a change racing a send/close | Serialize admission. A send admitted first causes `turnRunning`; a change admitted first blocks the send until resolved. A second change during recovery is refused `approvalModeUncertain`. Close may release resources but cannot erase pending intent/evidence. |
+| Expected Claude notification precedes reply | Match the session generation and sole admitted change; retain it as evidence, but wait for exact reply verification and durable commit before success. |
+| Provider reply, notification, or error does not prove the exact effective mode | Mark the effect uncertain, return `approvalModeUncertain`, retire the session, and recover the prior committed mode. A notification alone cannot commit a change. No Nessa-side classification of provider decisions is inferred. |
+| Lost reply, timeout, or transport failure after dispatch | The effect is uncertain. Return `approvalModeUncertain`; admit no turns and recover the session. Do not retry the mutation on that session. |
+| Intent persistence fails or its acknowledgement is lost | Do not call the provider. Read back by request ID before retrying; if the store cannot be read, remain blocked. |
+| Audit fails after provider application | Do not commit the requested choice or return success. Report audit failure, retain application evidence, retire the session and recover the prior committed mode. Cleanup still runs if audit is unavailable; admission stays blocked until required evidence is durable. |
+| Commit fails or acknowledgement is lost after audit | Read back the correlated terminal record. If committed, that mode/result is authoritative; if absent, the prior mode remains authoritative. If unreadable, remain blocked. Never infer rollback from a storage error. |
+| Caller disconnects after admission | The owned operation continues to a durable terminal result or recovery state. Caller loss does not cancel evidence delivery, undo a provider effect, or release admission early. |
+| Restart with unfinished intent | Start blocked; read the committed mode and terminal request record. Retire any surviving old session, reconcile the request, and reopen only from the authoritative committed choice. No blind replay of the requested change. |
+| Session retirement or context restoration fails | Remain blocked with typed recovery failure. Preserve the conversation and transcript; do not replace it with an empty conversation or start a second process while the old one may still be live. |
+| Restart after commit but before reply | Recover the committed mode and original terminal result; retry of the same request returns that result without another mode mutation. |
 
-The proposed admission owner must serialize mode changes with turn admission.
-Before implementing this command, extend the table with lost replies after application, partial mode/rule
-changes, audit or storage failure after application, caller disconnect, and
-restart recovery. Define how further turns are blocked while effective policy
-is uncertain and how it becomes verified again. The spike supplies no rollback
-guarantee; this proposal remains open on those failure orderings.
+Recovery always retires the uncertain session and uses a fresh process with the
+fixed profile, the same conversation/model, and the existing session restoration
+contract. It restores the last durably committed mode, which may be the requested
+mode if commit succeeded despite a lost acknowledgement. It does not attempt an
+in-place rollback. Verify the restored preset and record the recovery outcome
+before permitting a turn; if either fails, remain blocked. When an unfinished
+request has no commit, settle it as failed after recovery; a new user request
+uses a new request ID. Recovery attribution is system-originated and retains the
+original caller on the attempted change. Stale replies/notifications from a
+retired session cannot resolve the new session's state.
 
-### 5. Audit
+This alpha release makes the new conversation schema the only current contract.
+Every new conversation records a model and approval mode at creation. A local
+database from the old schema is refused by the existing schema-version gate;
+there is no migration, compatibility reader, or inferred model for old chats.
+Users who retain an old alpha database must start with a fresh local database
+to use this release. Release notes must also state that Claude's `ask` mode
+uses native `default` behavior rather than the old blanket review rule.
 
-- **Every accepted mode change is recorded:** conversation, before and after,
-  the caller, and whether the agent verified it.
-- **Every turn records the mode it ran under.** A tool that ran without asking
-  can then be traced to the mode that allowed it.
-- **A refused change is recorded with its typed reason.**
+### 5. Audit and implementation evidence
 
-These follow [audit evidence](../../../CODING_STANDARDS.md#audit-evidence-is-part-of-the-behavior).
-An audit failure must fail the command. How a provider policy already changed
-is reconciled with durable conversation state remains part of §4's unresolved
-failure design; reporting failure alone does not restore the previous policy.
+Every admitted change retains its intent, prior/requested/committed mode, caller,
+provider acknowledgement and verification scope, terminal request result, and
+any recovery cause/outcome. Rejections retain typed reasons. Every turn records
+the committed mode and session generation it was admitted under, so an automatic
+action can be traced to its preset without inventing a user approval.
+
+The durable conversation record is authoritative for commitment; the audit sink
+is authoritative for delivered application/recovery evidence. Correlation and
+ordering are validated on restore. Audit delivery is independent of UI event
+consumers and caller lifetime. Audit failure fails the command and blocks further
+turns, while necessary cleanup proceeds. These requirements implement
+[audit evidence](../../../CODING_STANDARDS.md#audit-evidence-is-part-of-the-behavior)
+with the failure orderings in §4.
+
+Implementation tests must cover the table with controlled failure seams, including
+both outcomes of an ambiguous commit, audit failure during recovery, caller loss,
+and send/change/close races. Binding integration tests cover the
+complete fixed launch profile, exact model IDs, model-dependent `auto`, downgrade
+to native `default`, and restoration without losing context. Claude and Codex are
+the release scope. OpenCode expansion and arbitrary classifier certification are
+not prerequisites. A stale Claude notification and fresh-process preset
+reapplication on Claude and Codex have controlled ACP tests. Opt-in live tests
+also exercise Nessa's Agent and saved-session restoration against pinned Claude
+ACP (native `auto`) and Codex ACP (`ask` on `gpt-6-sol`). They do not certify
+arbitrary classifier decisions or every live mode/model combination.
 
 ## Alternatives considered
 

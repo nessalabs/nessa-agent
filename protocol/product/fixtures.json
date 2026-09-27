@@ -24,9 +24,7 @@
     "audienceId": "gateway",
     "expiresAt": 200,
     "grants": [],
-    "methods": [
-      "server.health"
-    ]
+    "methods": ["server.health"]
   },
   "CredentialRevokeParams": {
     "requestId": "revoke-1",
@@ -145,12 +143,31 @@
           }
         ]
       }
-    ]
+    ],
+    "approvalMode": "ask",
+    "approvalModes": [
+      {
+        "id": "ask",
+        "name": "Provider asks",
+        "description": "The provider requests approval where its native policy requires it."
+      }
+    ],
+    "runtime": {
+      "agent": "claude",
+      "model": "claude-sonnet-5",
+      "modelName": "Claude Sonnet 5",
+      "contextWindowTokens": 200000,
+      "reasoning": true,
+      "provider": "Claude",
+      "workspace": "/tmp"
+    }
   },
   "ConversationReadParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001"
   },
-  "ConversationListParams": { "archived": true },
+  "ConversationListParams": {
+    "archived": true
+  },
   "ConversationArchiveParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "archive-1"
@@ -216,10 +233,7 @@
   "ConversationReorderParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "reorder-1",
-    "executionIds": [
-      "execution-2",
-      "execution-1"
-    ]
+    "executionIds": ["execution-2", "execution-1"]
   },
   "ConversationReorderResult": {
     "requestId": "reorder-1",
@@ -233,11 +247,42 @@
     "choices": [
       {
         "key": "question_0",
-        "values": [
-          "staging"
-        ],
+        "values": ["staging"],
         "ownWords": null
       }
     ]
+  },
+  "AgentsListResult": {
+    "agents": [
+      {
+        "agent": "claude",
+        "defaultModel": "claude-sonnet-5",
+        "models": [
+          {
+            "modelId": "claude-sonnet-5",
+            "displayName": "Claude Sonnet 5",
+            "maxContextWindowTokens": 200000,
+            "reasoning": true,
+            "imageInput": true,
+            "approvalModes": [
+              {
+                "id": "ask",
+                "name": "Provider asks",
+                "description": "The provider requests approval where its native policy requires it."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "ConversationSetApprovalModeParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "mode-1",
+    "mode": "ask"
+  },
+  "ConversationSetApprovalModeResult": {
+    "requestId": "mode-1",
+    "mode": "ask"
   }
 }

@@ -1,14 +1,15 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::agents::domain::AgentId;
 use crate::conversation::application::{
-    AttachmentRelease, ConversationAgent, ConversationAgents, ConversationAttachments,
-    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
-    ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
-    ConversationDeletionBudgets, ConversationDependencies, ConversationError,
-    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFuture,
-    ConversationLimits, ConversationListing, ConversationRepository, ConversationService,
-    ConversationSummaries, ListedConversation, ListedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, UnfinishedDeletions,
+    AttachmentRelease, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
+    ConversationAgents, ConversationAttachments, ConversationCreation, ConversationCreationAudit,
+    ConversationCreationAuditRecord, ConversationCreationDisposition, ConversationDeletionAudit,
+    ConversationDeletionAuditRecord, ConversationDeletionBudgets, ConversationDependencies,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFuture, ConversationLimits, ConversationListing, ConversationModeApplication,
+    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+    ConversationService, ConversationSummaries, ListedConversation, ListedConversations,
+    ProviderSessionEraser, ProviderSessionErasers, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
@@ -27,12 +28,13 @@ use nessa_sdk::{
                 PermissionResolution, PermissionSelectionState, QuestionAnswer,
             },
             providers::{
-                AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
-                ExecutionReport, ObservationFailure, OpenedProviderSession,
+                AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome,
+                ExecutionEventStream, ExecutionReport, ObservationFailure, OpenedProviderSession,
                 ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenFuture, ProviderOpenRequest,
-                ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
-                ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
+                ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
+                ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
+                ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
+                ProviderSessionState, SessionCloseRequest,
             },
         },
         dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
@@ -67,7 +69,7 @@ impl ExecutionAudit for AcceptingAudit {
     }
 }
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -78,6 +80,10 @@ use tokio::sync::{mpsc, oneshot, Notify};
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
+    pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
+    pub(crate) lose_mode_intent_ack: AtomicBool,
+    pub(crate) lose_mode_commit_ack: AtomicBool,
+    pub(crate) refuse_mode_commit_once: AtomicBool,
     /// Refuse to write a tombstone that says the deletion finished.
     pub(crate) refuse_finishing: AtomicBool,
     /// Refuse to write a tombstone that settles the provider session.
@@ -85,7 +91,215 @@ pub(crate) struct MemoryRepository {
     /// Refuse to keep what a deletion read of its history.
     pub(crate) refuse_keeping_the_read: AtomicBool,
 }
+
+pub(crate) struct AcceptingModeAudit;
+impl crate::conversation::application::ConversationModeAudit for AcceptingModeAudit {
+    fn record(
+        &self,
+        _request: crate::conversation::application::ConversationModeRequest,
+        _phase: crate::conversation::application::ConversationModeAuditPhase,
+    ) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+#[derive(Default)]
+pub(crate) struct RecordingModeAudit {
+    pub(crate) records: Mutex<
+        Vec<(
+            ConversationModeRequest,
+            crate::conversation::application::ConversationModeAuditPhase,
+        )>,
+    >,
+    pub(crate) fail_application_once: AtomicBool,
+    pub(crate) fail_recovery_once: AtomicBool,
+    pub(crate) refuse_recovery: AtomicBool,
+}
+impl crate::conversation::application::ConversationModeAudit for RecordingModeAudit {
+    fn record(
+        &self,
+        request: ConversationModeRequest,
+        phase: crate::conversation::application::ConversationModeAuditPhase,
+    ) -> ConversationFuture<'_, ()> {
+        let fail = match phase {
+            crate::conversation::application::ConversationModeAuditPhase::Application => {
+                self.fail_application_once.swap(false, Ordering::SeqCst)
+            }
+            crate::conversation::application::ConversationModeAuditPhase::RecoveryRestored => {
+                self.refuse_recovery.load(Ordering::SeqCst)
+                    || self.fail_recovery_once.swap(false, Ordering::SeqCst)
+            }
+            crate::conversation::application::ConversationModeAuditPhase::AdmissionRefused => false,
+        };
+        if !fail {
+            self.records.lock().unwrap().push((request, phase));
+        }
+        Box::pin(async move {
+            if fail {
+                Err(ConversationError::Audit)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
 impl ConversationRepository for MemoryRepository {
+    fn begin_mode_change(
+        &self,
+        request: ConversationModeRequest,
+    ) -> ConversationFuture<'_, ConversationModeRequest> {
+        let records = self.records.lock().unwrap();
+        let mut requests = self.mode_requests.lock().unwrap();
+        let result = (|| {
+            let current = records
+                .get(&request.conversation_id)
+                .ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            let key = (request.conversation_id.clone(), request.request_id.clone());
+            if let Some(existing) = requests.get(&key) {
+                if existing.initiator_principal_id != request.initiator_principal_id
+                    || existing.organization_id != request.organization_id
+                    || existing.initiator_surface_id != request.initiator_surface_id
+                    || existing.requested != request.requested
+                {
+                    return Err(ConversationError::RequestConflict);
+                }
+                return Ok(existing.clone());
+            }
+            if requests.values().any(|other| {
+                other.conversation_id == request.conversation_id
+                    && other.state == ConversationModeRequestState::Pending
+            }) || current.approval_mode() != request.prior
+                || current.organization() != &request.organization_id
+            {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            requests.insert(key, request.clone());
+            if self.lose_mode_intent_ack.swap(false, Ordering::SeqCst) {
+                Err(ConversationError::Metadata)
+            } else {
+                Ok(request)
+            }
+        })();
+        Box::pin(async move { result })
+    }
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>> {
+        let found = self
+            .mode_requests
+            .lock()
+            .unwrap()
+            .values()
+            .find(|request| {
+                &request.conversation_id == id
+                    && request.state == ConversationModeRequestState::Pending
+            })
+            .cloned();
+        Box::pin(async move { Ok(found) })
+    }
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>> {
+        let found = self
+            .mode_requests
+            .lock()
+            .unwrap()
+            .get(&(id.clone(), request_id.to_owned()))
+            .cloned();
+        Box::pin(async move { Ok(found) })
+    }
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        let found = self.mode_requests.lock().unwrap().values().any(|request| {
+            &request.conversation_id == id
+                && request.state == ConversationModeRequestState::Applied
+                && request.application == Some(ConversationModeApplication::Deferred)
+        });
+        Box::pin(async move { Ok(found) })
+    }
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModeApplication,
+    ) -> ConversationFuture<'_, ConversationModeRequest> {
+        let mut requests = self.mode_requests.lock().unwrap();
+        let result = (|| {
+            let request = requests
+                .get_mut(&(id.clone(), request_id.to_owned()))
+                .ok_or(ConversationError::NotFound)?;
+            if request.state != ConversationModeRequestState::Pending
+                || request
+                    .application
+                    .is_some_and(|existing| existing != application)
+            {
+                return Err(ConversationError::RequestConflict);
+            }
+            request.application = Some(application);
+            Ok(request.clone())
+        })();
+        Box::pin(async move { result })
+    }
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModeRequestState,
+    ) -> ConversationFuture<'_, ConversationModeRequest> {
+        let mut records = self.records.lock().unwrap();
+        let mut requests = self.mode_requests.lock().unwrap();
+        let result = (|| {
+            if state == ConversationModeRequestState::Pending {
+                return Err(ConversationError::InvalidInput);
+            }
+            let request = requests
+                .get_mut(&(id.clone(), request_id.to_owned()))
+                .ok_or(ConversationError::NotFound)?;
+            if request.application.is_none()
+                || (state == ConversationModeRequestState::Applied
+                    && !matches!(
+                        request.application,
+                        Some(
+                            ConversationModeApplication::Applied
+                                | ConversationModeApplication::Deferred
+                        )
+                    ))
+            {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if request.state != ConversationModeRequestState::Pending {
+                return if request.state == state {
+                    Ok(request.clone())
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            let current = records
+                .get(id)
+                .cloned()
+                .ok_or(ConversationError::NotFound)?;
+            if current.approval_mode() != request.prior {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if self.refuse_mode_commit_once.swap(false, Ordering::SeqCst) {
+                return Err(ConversationError::Metadata);
+            }
+            if state == ConversationModeRequestState::Applied {
+                records.insert(id.clone(), current.with_approval_mode(request.requested));
+            }
+            request.state = state;
+            if self.lose_mode_commit_ack.swap(false, Ordering::SeqCst) {
+                Err(ConversationError::Metadata)
+            } else {
+                Ok(request.clone())
+            }
+        })();
+        Box::pin(async move { result })
+    }
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let value = self.records.lock().unwrap().get(id).cloned();
         Box::pin(async move { Ok(value) })
@@ -369,7 +583,12 @@ impl nessa_auth::application::ports::Clock for TestClock {
 }
 #[derive(Default)]
 pub(crate) struct ProviderFactory {
+    pub(crate) mode_updates: Mutex<Vec<ApprovalMode>>,
+    pub(crate) mode_failure: Mutex<Option<AgentError>>,
+    pub(crate) mode_started: Notify,
+    pub(crate) mode_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) open_calls: AtomicUsize,
+    pub(crate) open_failure: Mutex<Option<AgentError>>,
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) executions: Mutex<Vec<String>>,
@@ -505,6 +724,8 @@ pub(crate) fn image_fixture_with_model(
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments,
@@ -544,6 +765,92 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
     )
     .expect("one configured agent is its own default")
 }
+struct ModeAgentSource {
+    agent: ConversationAgent,
+}
+impl ConversationAgentSource for ModeAgentSource {
+    fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
+        let found = (agent == AgentId::Claude).then(|| self.agent.clone());
+        Box::pin(async move { Ok(found) })
+    }
+    fn resolve_for<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        _mode: crate::conversation::domain::ConversationApprovalMode,
+    ) -> ConversationAgentFuture<'a> {
+        let found = (agent == AgentId::Claude && model == "test").then(|| self.agent.clone());
+        Box::pin(async move { Ok(found) })
+    }
+}
+#[derive(Default)]
+pub(crate) struct RecordingModeExecutionAudit {
+    pub(crate) records: Mutex<Vec<ExecutionAuditRecord>>,
+}
+impl ExecutionAudit for RecordingModeExecutionAudit {
+    fn record(
+        &self,
+        record: ExecutionAuditRecord,
+    ) -> nessa_sdk::application::agent_execution::agents::AgentFuture<'_, ()> {
+        self.records.lock().unwrap().push(record);
+        Box::pin(async { Ok(()) })
+    }
+}
+pub(crate) fn mode_agents(
+    provider: Arc<dyn AgentProvider>,
+    audit: Arc<dyn ExecutionAudit>,
+) -> ConversationAgents {
+    ConversationAgents::from_source(
+        HashSet::from([AgentId::Claude]),
+        AgentId::Claude,
+        Arc::new(ModeAgentSource {
+            agent: ConversationAgent {
+                provider,
+                execution_audit: audit,
+                reserved_output_tokens: 4096,
+                readiness: None,
+            },
+        }),
+    )
+    .unwrap()
+}
+pub(crate) fn mode_fixture() -> (
+    ConversationService,
+    Arc<ProviderFactory>,
+    Arc<MemoryRepository>,
+    Arc<RecordingModeExecutionAudit>,
+    Arc<RecordingModeAudit>,
+) {
+    let provider = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let execution_audit = Arc::new(RecordingModeExecutionAudit::default());
+    let mode_audit = Arc::new(RecordingModeAudit::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: mode_agents(
+                Arc::new(Provider::new(provider.clone())),
+                execution_audit.clone(),
+            ),
+            storage,
+            metadata: repository.clone(),
+            mode_audit: mode_audit.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            provider_sessions: claude_erasers(),
+            deletion_budgets: DELETION_BUDGETS,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    (service, provider, repository, execution_audit, mode_audit)
+}
 pub(crate) fn fixture(
     limits: ConversationLimits,
 ) -> (
@@ -561,6 +868,8 @@ pub(crate) fn fixture(
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -594,6 +903,9 @@ impl Provider {
     }
 }
 impl AgentProvider for Provider {
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        Some(ApprovalMode::Ask)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gateway-test", "test", "test").unwrap()
     }
@@ -608,6 +920,9 @@ impl AgentProvider for Provider {
             let gate = self.factory.open_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
+            }
+            if let Some(error) = self.factory.open_failure.lock().unwrap().take() {
+                return Err(ProviderOpenError::no_resources(error));
             }
             let (sender, receiver) = mpsc::unbounded_channel();
             Ok(OpenedProviderSession {
@@ -657,6 +972,23 @@ struct Backend {
     sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
 }
 impl ProviderSessionBackend for Backend {
+    fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            self.factory.mode_updates.lock().unwrap().push(mode);
+            self.factory.mode_started.notify_one();
+            let gate = self.factory.mode_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            if let Some(error) = self.factory.mode_failure.lock().unwrap().take() {
+                return Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::CleanupRequired,
+                ));
+            }
+            Ok(())
+        })
+    }
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         ProviderOperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),

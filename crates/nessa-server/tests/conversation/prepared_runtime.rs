@@ -111,6 +111,8 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
             .expect("one configured agent is its own default"),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -134,7 +136,11 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
     provider.opening.notified().await;
     let conversation = conversation_id();
     service
-        .create(conversation.clone(), caller(), None)
+        .create(
+            conversation.clone(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .expect("preparation returns before runtime readiness");
     wait_for_waiting_conversation(&provider).await;

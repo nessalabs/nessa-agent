@@ -2,13 +2,14 @@ use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{
         ConversationCreation, ConversationCreationDisposition, ConversationError,
-        ConversationFuture, ConversationListing, ConversationRepository, ConversationSummaries,
-        ListedConversation, ListedConversations, UnfinishedDeletions,
+        ConversationFuture, ConversationListing, ConversationModeApplication,
+        ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+        ConversationSummaries, ListedConversation, ListedConversations, UnfinishedDeletions,
     },
     domain::{
-        Conversation, ConversationDeletion, ConversationId, ConversationPreview,
-        ConversationSummary, ConversationTitle, DeletionContradiction, ProviderSessionErasure,
-        ProviderSessionLink,
+        Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
+        ConversationModelId, ConversationPreview, ConversationSummary, ConversationTitle,
+        DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -35,7 +36,7 @@ const DEFINITION: &str = include_str!("schema.sql");
 /// `Conversation::deletion` is read from.
 pub(crate) const LIST: &str = "
     SELECT c.id, c.organization, c.owner, c.creator_surface, c.creation_action,
-           c.creation_requested_at_ms, c.agent,
+           c.creation_requested_at_ms, c.agent, c.model, c.approval_mode,
            s.title, s.preview, s.updated_at_ms, s.archived
     FROM conversations AS c
     JOIN summaries AS s ON s.conversation_id = c.id
@@ -159,10 +160,12 @@ struct StoredConversation {
     creation_action: String,
     creation_requested_at_ms: i64,
     agent: String,
+    model: String,
+    approval_mode: String,
 }
 impl StoredConversation {
     const COLUMNS: &'static str = "id, organization, owner, creator_surface, creation_action, \
-                                   creation_requested_at_ms, agent";
+                                   creation_requested_at_ms, agent, model, approval_mode";
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get(0)?,
@@ -172,6 +175,8 @@ impl StoredConversation {
             creation_action: row.get(4)?,
             creation_requested_at_ms: row.get(5)?,
             agent: row.get(6)?,
+            model: row.get(7)?,
+            approval_mode: row.get(8)?,
         })
     }
     /// A record naming an agent this server has no adapter for is read with
@@ -187,6 +192,8 @@ impl StoredConversation {
             self.creation_action,
             time(self.creation_requested_at_ms)?,
             AgentId::parse(&self.agent),
+            ConversationModelId::new(self.model).ok()?,
+            ConversationApprovalMode::parse(&self.approval_mode)?,
         )
         .ok()
     }
@@ -363,6 +370,114 @@ fn read(
     }
 }
 
+fn read_mode_request(
+    connection: &Connection,
+    id: &ConversationId,
+    request_id: Option<&str>,
+) -> Result<Option<ConversationModeRequest>, ConversationError> {
+    let query = if request_id.is_some() {
+        "SELECT m.request_id, m.initiator, m.surface, m.prior_mode, m.requested_mode,
+                m.state, m.requested_at_ms, m.application, c.organization
+         FROM mode_requests AS m JOIN conversations AS c ON c.id = m.conversation_id
+         WHERE m.conversation_id = ?1 AND m.request_id = ?2"
+    } else {
+        "SELECT m.request_id, m.initiator, m.surface, m.prior_mode, m.requested_mode,
+                m.state, m.requested_at_ms, m.application, c.organization
+         FROM mode_requests AS m JOIN conversations AS c ON c.id = m.conversation_id
+         WHERE m.conversation_id = ?1 AND m.state = 'pending'"
+    };
+    let decode = |row: &Row<'_>| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    };
+    let row = match request_id {
+        Some(request_id) => {
+            connection.query_row(query, params![id.to_string(), request_id], decode)
+        }
+        None => connection.query_row(query, [id.to_string()], decode),
+    }
+    .optional()
+    .map_err(failed)?;
+    let Some((
+        request_id,
+        initiator,
+        surface,
+        prior,
+        requested,
+        state,
+        requested_at_ms,
+        application,
+        organization,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let invalid = || unreadable("mode_requests", &id.to_string());
+    let request = ConversationModeRequest {
+        conversation_id: id.clone(),
+        organization_id: OrganizationId::new(organization).map_err(|_| invalid())?,
+        request_id,
+        initiator_principal_id: PrincipalId::new(initiator).map_err(|_| invalid())?,
+        initiator_surface_id: surface,
+        prior: ConversationApprovalMode::parse(&prior).ok_or_else(invalid)?,
+        requested: ConversationApprovalMode::parse(&requested).ok_or_else(invalid)?,
+        state: match state.as_str() {
+            "pending" => ConversationModeRequestState::Pending,
+            "applied" => ConversationModeRequestState::Applied,
+            "not_applied" => ConversationModeRequestState::NotApplied,
+            _ => return Err(invalid()),
+        },
+        application: application
+            .map(|value| match value.as_str() {
+                "deferred" => Ok(ConversationModeApplication::Deferred),
+                "applied" => Ok(ConversationModeApplication::Applied),
+                "refused" => Ok(ConversationModeApplication::Refused),
+                "uncertain" => Ok(ConversationModeApplication::Uncertain),
+                _ => Err(invalid()),
+            })
+            .transpose()?,
+        requested_at_ms: time(requested_at_ms).ok_or_else(invalid)?,
+    };
+    if matches!(request.state, ConversationModeRequestState::Applied)
+        && !matches!(
+            request.application,
+            Some(ConversationModeApplication::Applied | ConversationModeApplication::Deferred)
+        )
+    {
+        return Err(invalid());
+    }
+    if request.state == ConversationModeRequestState::NotApplied && request.application.is_none() {
+        return Err(invalid());
+    }
+    Ok(Some(request))
+}
+
+fn mode_request_state(state: ConversationModeRequestState) -> &'static str {
+    match state {
+        ConversationModeRequestState::Pending => "pending",
+        ConversationModeRequestState::Applied => "applied",
+        ConversationModeRequestState::NotApplied => "not_applied",
+    }
+}
+
+fn mode_application(application: ConversationModeApplication) -> &'static str {
+    match application {
+        ConversationModeApplication::Deferred => "deferred",
+        ConversationModeApplication::Applied => "applied",
+        ConversationModeApplication::Refused => "refused",
+        ConversationModeApplication::Uncertain => "uncertain",
+    }
+}
+
 fn write_deletion(
     connection: &Connection,
     id: &ConversationId,
@@ -431,7 +546,7 @@ impl ConversationRepository for LocalConversationStore {
             transaction
                 .execute(
                     &format!(
-                        "INSERT INTO conversations ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        "INSERT INTO conversations ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         StoredConversation::COLUMNS
                     ),
                     params![
@@ -442,6 +557,8 @@ impl ConversationRepository for LocalConversationStore {
                         conversation.creation_action(),
                         stored_time(conversation.creation_requested_at_ms())?,
                         agent.name(),
+                        conversation.model().as_str(),
+                        conversation.approval_mode().as_str(),
                     ],
                 )
                 .map_err(failed)?;
@@ -450,6 +567,188 @@ impl ConversationRepository for LocalConversationStore {
                 conversation,
                 disposition: ConversationCreationDisposition::Created,
             })
+        })
+    }
+    fn begin_mode_change(
+        &self,
+        request: ConversationModeRequest,
+    ) -> ConversationFuture<'_, ConversationModeRequest> {
+        self.run(move |connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let current =
+                read(&transaction, &request.conversation_id)?.ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            if let Some(existing) = read_mode_request(
+                &transaction,
+                &request.conversation_id,
+                Some(&request.request_id),
+            )? {
+                if existing.initiator_principal_id != request.initiator_principal_id
+                    || existing.organization_id != request.organization_id
+                    || existing.initiator_surface_id != request.initiator_surface_id
+                    || existing.requested != request.requested
+                {
+                    return Err(ConversationError::RequestConflict);
+                }
+                return Ok(existing);
+            }
+            if read_mode_request(&transaction, &request.conversation_id, None)?.is_some() {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if current.approval_mode() != request.prior
+                || current.organization() != &request.organization_id
+                || request.state != ConversationModeRequestState::Pending
+            {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            transaction
+                .execute(
+                    "INSERT INTO mode_requests
+                 (conversation_id, request_id, initiator, surface, prior_mode,
+                  requested_mode, state, requested_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
+                    params![
+                        request.conversation_id.to_string(),
+                        request.request_id,
+                        request.initiator_principal_id.as_str(),
+                        request.initiator_surface_id,
+                        request.prior.as_str(),
+                        request.requested.as_str(),
+                        stored_time(request.requested_at_ms)?,
+                    ],
+                )
+                .map_err(failed)?;
+            transaction.commit().map_err(failed)?;
+            Ok(request)
+        })
+    }
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>> {
+        let id = id.clone();
+        self.run(move |connection| read_mode_request(connection, &id, None))
+    }
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>> {
+        let id = id.clone();
+        let request_id = request_id.to_owned();
+        self.run(move |connection| read_mode_request(connection, &id, Some(&request_id)))
+    }
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        let id = id.clone();
+        self.run(move |connection| {
+            let found = connection
+                .query_row(
+                    "SELECT EXISTS (
+                    SELECT 1 FROM mode_requests
+                    WHERE conversation_id = ?1 AND state = 'applied'
+                      AND application = 'deferred'
+                )",
+                    [id.to_string()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(failed)?;
+            Ok(found)
+        })
+    }
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModeApplication,
+    ) -> ConversationFuture<'_, ConversationModeRequest> {
+        let id = id.clone();
+        let request_id = request_id.to_owned();
+        self.run(move |connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let request = read_mode_request(&transaction, &id, Some(&request_id))?
+                .ok_or(ConversationError::NotFound)?;
+            if request.state != ConversationModeRequestState::Pending {
+                return Err(ConversationError::RequestConflict);
+            }
+            if let Some(existing) = request.application {
+                if existing != application {
+                    return Err(ConversationError::RequestConflict);
+                }
+                return Ok(request);
+            }
+            transaction
+                .execute(
+                    "UPDATE mode_requests SET application = ?1
+                 WHERE conversation_id = ?2 AND request_id = ?3 AND application IS NULL",
+                    params![mode_application(application), id.to_string(), request_id],
+                )
+                .map_err(failed)?;
+            transaction.commit().map_err(failed)?;
+            Ok(ConversationModeRequest {
+                application: Some(application),
+                ..request
+            })
+        })
+    }
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModeRequestState,
+    ) -> ConversationFuture<'_, ConversationModeRequest> {
+        let id = id.clone();
+        let request_id = request_id.to_owned();
+        self.run(move |connection| {
+            if state == ConversationModeRequestState::Pending {
+                return Err(ConversationError::InvalidInput);
+            }
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let request = read_mode_request(&transaction, &id, Some(&request_id))?
+                .ok_or(ConversationError::NotFound)?;
+            if request.application.is_none()
+                || (state == ConversationModeRequestState::Applied
+                    && !matches!(
+                        request.application,
+                        Some(ConversationModeApplication::Applied | ConversationModeApplication::Deferred)
+                    ))
+            {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if request.state != ConversationModeRequestState::Pending {
+                return if request.state == state {
+                    Ok(request)
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            let current = read(&transaction, &id)?.ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            if current.approval_mode() != request.prior {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if state == ConversationModeRequestState::Applied {
+                transaction.execute(
+                    "UPDATE conversations SET approval_mode = ?1 WHERE id = ?2 AND approval_mode = ?3",
+                    params![request.requested.as_str(), id.to_string(), request.prior.as_str()],
+                ).map_err(failed)?;
+            }
+            transaction.execute(
+                "UPDATE mode_requests SET state = ?1
+                 WHERE conversation_id = ?2 AND request_id = ?3 AND state = 'pending'",
+                params![mode_request_state(state), id.to_string(), request_id],
+            ).map_err(failed)?;
+            transaction.commit().map_err(failed)?;
+            Ok(ConversationModeRequest { state, ..request })
         })
     }
     fn record_deletion(
@@ -591,10 +890,10 @@ impl ConversationListing for LocalConversationStore {
                 let conversation = StoredConversation::from_row(row);
                 let summary = (|| {
                     Ok(StoredSummary {
-                        title: row.get(7)?,
-                        preview: row.get(8)?,
-                        updated_at_ms: row.get(9)?,
-                        archived: row.get(10)?,
+                        title: row.get(9)?,
+                        preview: row.get(10)?,
+                        updated_at_ms: row.get(11)?,
+                        archived: row.get(12)?,
                     })
                 })();
                 let name = row.get::<_, String>(0).unwrap_or_default();

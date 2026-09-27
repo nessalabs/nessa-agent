@@ -2,9 +2,9 @@ import { pollConversation } from "../adapters/gateway/polling"
 import { useEffect, useEffectEvent, useState } from "react"
 import {
   type ApprovalMode,
+  type ConversationSelection,
   type FileAttachment,
   type MessageContent,
-  type ModelChoice,
 } from "../model"
 import type { UploadChange, UploadedFile } from "../application/ports"
 import { activeConversation } from "../application/queries/active-conversation"
@@ -15,14 +15,15 @@ import {
   stageAttachment,
   takeUploadStep,
   closeTab,
-  chooseModel,
-  chooseApproval,
   openConversation,
+  chooseModel,
   openListed,
   sendDraft,
   setActive,
   moveActive,
   setDraft,
+  setSelection,
+  controlConversation,
   stopGenerating,
   refreshConversation,
   invalidateRead,
@@ -57,6 +58,10 @@ export function useConversation() {
   }, [dispatch, active.id, active.serverReady, gatewayAvailable])
 
   return {
+    setApprovalMode: (id: string, mode: ApprovalMode) =>
+      dispatch(controlConversation({ id, control: { kind: "setApprovalMode", mode } })),
+    setSelection: (id: string, selection: ConversationSelection) =>
+      dispatch(setSelection({ id, selection })),
     rename: (id: string, title: string) => dispatch(renameConversation({ id, title })),
     deliveryMode,
     setDeliveryMode,
@@ -136,17 +141,10 @@ export function useConversation() {
     openConversation: () => {
       dispatch(openConversation())
     },
-    /** What a model can be chosen from; undefined until something loads it. */
-    catalog: tabs.catalog,
-    /**
-     * Choose the active tab's model. A tab whose conversation already exists
-     * keeps its model, so the choice opens in a new tab.
-     */
-    chooseModel: (choice: ModelChoice) =>
-      dispatch(chooseModel({ id: active.id, choice })),
-    /** Choose the approval mode the active tab's conversation is created with. */
-    chooseApproval: (mode: ApprovalMode) =>
-      dispatch(chooseApproval({ id: active.id, mode })),
+    chooseModel: (agent: string, model: string) => {
+      const selection: ConversationSelection = { agent, model, approvalMode: "ask" }
+      dispatch(chooseModel(selection))
+    },
     closeConversation: (id: string) => {
       void dispatch(closeTab(id))
     },

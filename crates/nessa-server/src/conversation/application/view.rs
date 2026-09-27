@@ -1,3 +1,5 @@
+use crate::agents::domain::AgentId;
+use crate::conversation::domain::ConversationApprovalMode;
 use nessa_sdk::{
     application::agent_execution::providers::{
         CompactionReportingCapability, ElicitationForwardingCapability,
@@ -10,10 +12,23 @@ use nessa_sdk::{
 };
 use serde::Serialize;
 
+/// Internal fixed selection used to enrich the product view from the same
+/// catalog that powers agents.list. It is not an independent wire field.
+#[derive(Clone, Debug)]
+pub struct ConversationSelectionView {
+    pub agent: AgentId,
+    pub model: String,
+    pub approval_mode: ConversationApprovalMode,
+}
+
 /// A bounded replacement view. Its revision is transient and is not a durable event cursor.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationView {
+    #[serde(skip_serializing)]
+    pub selection: Option<ConversationSelectionView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_mode_change: Option<ConversationApprovalModeChangeView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
     pub conversation_id: String,
@@ -35,6 +50,19 @@ pub struct ConversationView {
     /// the same title `conversation.list` shows, from the same summary — or
     /// `None` before anything was said. Always on the wire, as `null` then.
     pub title: Option<String>,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationApprovalModeChangeView {
+    pub request_id: String,
+    pub requested_mode: String,
+    pub status: ConversationApprovalModeChangeStatus,
+}
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationApprovalModeChangeStatus {
+    Changing,
+    RecoveryRequired,
 }
 /// Current provider attachment lifecycle. It grants no operation authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

@@ -18,6 +18,10 @@ import { bindConversation, controlConversation, refreshConversation } from "./sl
  */
 const view = (conversationId: string): ConversationView => ({
   conversationId,
+  approvalMode: "ask",
+  approvalModes: [
+    { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+  ],
   title: null,
   revision: "1",
   messages: [],

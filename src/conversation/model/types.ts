@@ -23,29 +23,40 @@ export type AgentFeatures = {
 /**
  * What a conversation runs on, as the gateway reports it.
  *
- * `agent`, `modelName`, `contextWindowTokens` and `reasoning` arrive with ADR 231
- * (docs/adr/todo/231-model-and-approval-per-conversation.md). Until a gateway
- * sends them, details name the model by its identifier and draw no mark.
+ * `agent`, `modelName`, `contextWindowTokens` and `reasoning` are required by
+ * ADR 231's current product contract. A conversation may have no runtime yet
+ * while its agent is starting; an attached runtime is complete.
  */
 export type ConversationRuntime = {
   model: string
   provider: string
   workspace: string
   /** The conversation's agent id, e.g. `claude`, not the harness in `provider`. */
-  agent?: string
+  agent: string
   /** The catalog's display name for `model`. */
-  modelName?: string
+  modelName: string
   /** The catalog's context window for `model`, in tokens. */
-  contextWindowTokens?: number
+  contextWindowTokens: number
   /** Whether the catalog says `model` reasons before answering. */
-  reasoning?: boolean
+  reasoning: boolean
 }
 
 /**
- * How much the agent may do without asking (ADR 231). The panel names these;
- * which ones an agent honours is the gateway's answer, never the panel's.
+ * How much the agent may do without asking (ADR 231). The gateway publishes
+ * both availability and user-facing names; the panel renders that answer.
  */
 export type ApprovalMode = "ask" | "auto" | "full"
+export type ApprovalModeChoice = {
+  id: ApprovalMode
+  name: string
+  description: string
+}
+/** A local, uncreated tab's fixed choices from the authenticated catalog. */
+export type ConversationSelection = {
+  agent: string
+  model: string
+  approvalMode: ApprovalMode
+}
 
 export type ConversationCapabilities = {
   queue: boolean
@@ -82,6 +93,12 @@ export type CommandFailure =
   | "conversation-capacity"
   | "agent-not-configured"
   | "agent-unsupported"
+  | "model-unavailable"
+  | "approval-mode-unavailable"
+  | "approval-mode-not-applied"
+  | "approval-mode-uncertain"
+  | "approval-request-conflict"
+  | "turn-running"
   | "conversations-not-configured"
   | "agent-startup-deadline"
   | "conversation-state-unreadable"
@@ -214,6 +231,8 @@ export type Turn = UserTurn | AssistantTurn
 
 type ConversationState = {
   id: string
+  /** Frozen when this tab is first bound to a gateway identity. */
+  selection?: ConversationSelection
   title: string
   titleEdited?: boolean
   turns: Turn[]
@@ -252,10 +271,16 @@ type ConversationState = {
   controlPending?: boolean
   remote?: {
     runtime?: ConversationRuntime
-    /** The approval mode this conversation runs under, once the gateway reports it. */
-    approvalMode?: ApprovalMode
-    /** The modes this conversation's agent can honour, as the gateway reports them. */
-    approvalModes?: ApprovalMode[]
+    /** The committed approval mode in this gateway view. */
+    approvalMode: ApprovalMode
+    /** The modes this conversation's agent can honour. */
+    approvalModes: ApprovalModeChoice[]
+    /** A requested mode is not confirmed while this durable change is pending. */
+    approvalModeChange?: {
+      requestId: string
+      requestedMode: ApprovalMode
+      status: string
+    }
     /** Last gateway view reports an invocation still running, even before its first chunk. */
     running: boolean
     permissions: {

@@ -5,6 +5,7 @@ import { UNTITLED } from "../queries/roster"
 import {
   beginSend,
   closeConversation,
+  chooseModel,
   failSend,
   openConversation,
   openListed,
@@ -77,6 +78,46 @@ describe("openConversation / closeConversation", () => {
     const opened = openConversation(emptyLocalTabs())
     expect(opened.conversations.map((item) => item.id)).toEqual(["c0", "c1"])
     expect(opened.activeId).toBe("c1")
+  })
+
+  it("preserves a draft when staging has already created the conversation", () => {
+    const existing = emptyLocalTabs()
+    const draft = textContent("Message waiting for an uploaded image")
+    const selection = {
+      agent: "claude",
+      model: "claude-sonnet-5",
+      approvalMode: "ask" as const,
+    }
+    const next = chooseModel(
+      {
+        ...existing,
+        conversations: existing.conversations.map((item) => ({
+          ...item,
+          serverConversationId: "saved-id",
+          draft,
+        })),
+      },
+      selection,
+    )
+    expect(next.conversations[0]).toMatchObject({
+      serverConversationId: "saved-id",
+      draft,
+    })
+    expect(next.conversations[1]).toMatchObject({ id: "c1", selection })
+    expect(next.activeId).toBe("c1")
+  })
+
+  it("keeps an unsent draft when its model changes", () => {
+    const tabs = emptyLocalTabs()
+    const selection = {
+      agent: "codex",
+      model: "gpt-6-astra",
+      approvalMode: "ask" as const,
+    }
+    const next = chooseModel(tabs, selection)
+    expect(next.conversations).toHaveLength(1)
+    expect(next.conversations[0]?.selection).toEqual(selection)
+    expect(next.activeId).toBe("c0")
   })
 
   it("never empties the tabs", () => {

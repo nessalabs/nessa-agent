@@ -17,7 +17,7 @@ use nessa_sdk::{
         agents::AgentError,
         executions::ExecutionAudit,
         providers::{
-            AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture,
+            AgentProvider, ApprovalMode, ProviderIdentity, ProviderOpenError, ProviderOpenFuture,
             ProviderOpenRequest, ProviderSessionDeleter, ProviderSessionDeletionFuture,
         },
     },
@@ -45,6 +45,7 @@ pub struct CredentialedClaudeProvider {
     limits: TokenLimits,
     audit: Arc<dyn ExecutionAudit>,
     prompt: SystemPrompt,
+    approval_mode: ApprovalMode,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
     capabilities: EffectiveCapabilities,
@@ -76,11 +77,30 @@ impl CredentialedClaudeProvider {
             limits,
             audit,
             prompt,
+            approval_mode: ApprovalMode::Ask,
             credentials,
             identity,
             capabilities,
             deleting: LaunchedDeletions::default(),
         })
+    }
+
+    /// Select one preset verified by the underlying Claude binding for this model.
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Unsupported`] when the preset has not been verified.
+    pub fn with_approval_mode(mut self, mode: ApprovalMode) -> Result<Self, AgentError> {
+        ClaudeAcpProvider::approval_modes(self.model.key().model_id())
+            .iter()
+            .any(|choice| choice.id == mode)
+            .then_some(())
+            .ok_or_else(|| {
+                AgentError::Unsupported(
+                    "Claude approval preset is unavailable for this model".into(),
+                )
+            })?;
+        self.approval_mode = mode;
+        Ok(self)
     }
 
     /// A Claude binding launched with the credential current now.
@@ -96,7 +116,9 @@ impl CredentialedClaudeProvider {
         Ok(
             ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())
                 .map_err(ProviderOpenError::no_resources)?
-                .with_system_prompt(self.prompt.clone()),
+                .with_system_prompt(self.prompt.clone())
+                .with_approval_mode(self.approval_mode)
+                .map_err(ProviderOpenError::no_resources)?,
         )
     }
 }

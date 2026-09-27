@@ -5,6 +5,7 @@ import pathlib
 import sys
 
 mode = sys.argv[1]
+approval_mode = {"approval-auto": "agent", "approval-full": "agent-full-access"}.get(mode, "read-only")
 root = pathlib.Path.cwd()
 session = "codex-thread-" + str(os.getpid())
 
@@ -13,7 +14,7 @@ session = "codex-thread-" + str(os.getpid())
 # binding gets to say before the protocol starts, so it is checked here.
 config = json.loads(os.environ["CODEX_CONFIG"])
 model = config["model"]
-assert os.environ["INITIAL_AGENT_MODE"] == "read-only"
+assert os.environ["INITIAL_AGENT_MODE"] == approval_mode
 assert os.environ["NO_BROWSER"] == "1"
 if mode == "instructions":
     assert config["instructions"] == "Core instructions.\nPlugin instructions."
@@ -22,6 +23,7 @@ else:
 
 (root / "pid").write_text(str(os.getpid()))
 selected = "codex-default"
+selected_mode = approval_mode
 configured_steps = []
 pending = None
 
@@ -44,7 +46,7 @@ def text(value):
 
 def configs():
     offered = ["codex-default"] if mode == "model-not-offered" else ["codex-default", model]
-    current = "agent-full-access" if mode == "mode-refused" else "read-only"
+    current = "agent-full-access" if mode == "mode-refused" else selected_mode
     return {"configOptions": [
         {"id": "model", "currentValue": selected,
          "options": [{"value": value} for value in offered]},
@@ -129,8 +131,13 @@ for line in sys.stdin:
         else:
             # The model is always settled first: a refused model must not leave
             # a session that has been put into its approval mode anyway.
-            assert configured_steps == ["model", "mode"], configured_steps
-            assert params["value"] == "read-only"
+            if mode == "live-approval":
+                assert configured_steps[:2] == ["model", "mode"], configured_steps
+                assert params["value"] in ("read-only", "agent", "agent-full-access")
+                selected_mode = params["value"]
+            else:
+                assert configured_steps == ["model", "mode"], configured_steps
+                assert params["value"] == approval_mode
             # One line per process that got this far. A resumed session is a
             # fresh process, so the count is how many times this binding
             # configured a session — which is the only way a test can see that

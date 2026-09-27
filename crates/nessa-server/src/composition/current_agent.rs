@@ -37,7 +37,10 @@ use std::{
 };
 
 use nessa_auth::application::ports::Clock;
-use nessa_sdk::application::agent_execution::providers::UserImageSource;
+use nessa_sdk::application::agent_execution::providers::{ApprovalMode, UserImageSource};
+use nessa_sdk::infrastructure::{
+    claude_acp::sessions::ClaudeAcpProvider, codex_acp::sessions::CodexAcpProvider,
+};
 use tokio::sync::Semaphore;
 
 use super::{
@@ -64,7 +67,7 @@ use crate::{
             ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationError,
             ConversationFuture, ProviderSessionEraser,
         },
-        domain::ProviderSessionErasure,
+        domain::{ConversationApprovalMode, ProviderSessionErasure},
     },
     core::RunError,
 };
@@ -396,6 +399,65 @@ impl ConversationAgentSource for CurrentAgentResolver {
             tokio::time::timeout(RESOLUTION_DEADLINE, source.resolve_opencode())
                 .await
                 .map_err(|_| crate::conversation::application::ConversationError::Unavailable)?
+        })
+    }
+
+    fn resolve_for<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+    ) -> ConversationAgentFuture<'a> {
+        let selected = match mode {
+            ConversationApprovalMode::Ask => ApprovalMode::Ask,
+            ConversationApprovalMode::Auto => ApprovalMode::Auto,
+            ConversationApprovalMode::Full => ApprovalMode::Full,
+        };
+        if agent == AgentId::Opencode {
+            if mode != ConversationApprovalMode::Ask {
+                return Box::pin(async { Err(ConversationError::ApprovalModeUnavailable) });
+            }
+            return Box::pin(async move {
+                let configured = self.resolve(agent).await?;
+                match configured {
+                    Some(value) if value.provider.identity().model_id() != model => {
+                        Err(ConversationError::ModelUnavailable)
+                    }
+                    other => Ok(other),
+                }
+            });
+        }
+        let Some(default) = self.fixed.get(&agent) else {
+            return Box::pin(async { Ok(None) });
+        };
+        let offered = match agent {
+            AgentId::Claude => ClaudeAcpProvider::approval_modes(model),
+            AgentId::Codex => CodexAcpProvider::approval_modes(model),
+            AgentId::Opencode => unreachable!(),
+        };
+        if !offered.iter().any(|choice| choice.id == selected) {
+            return Box::pin(async { Err(ConversationError::ApprovalModeUnavailable) });
+        }
+        if mode == ConversationApprovalMode::Ask && default.provider.identity().model_id() == model
+        {
+            let configured = default.clone();
+            return Box::pin(async move { Ok(Some(configured)) });
+        }
+        let source = self.clone();
+        let model = model.to_owned();
+        let readiness = default.readiness.clone();
+        Box::pin(async move {
+            let mut configured = tokio::task::spawn_blocking(move || {
+                agent::provider_for_fixed(agent, &source.config, &model, selected, &source.provider)
+            })
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+            .map_err(|error| {
+                tracing::warn!(%error, "conversation model could not be composed");
+                ConversationError::ModelUnavailable
+            })?;
+            configured.readiness = readiness;
+            Ok(Some(configured))
         })
     }
 }

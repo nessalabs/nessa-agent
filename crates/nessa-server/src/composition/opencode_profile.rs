@@ -172,6 +172,10 @@ impl EffectiveOpenCodeProfile {
 }
 
 impl OpenCodeProfile {
+    pub(super) fn model_id(&self) -> &str {
+        &self.runtime.model
+    }
+
     pub(super) fn validated(&self) -> &ValidatedOpenCodePolicy {
         &self.validated
     }

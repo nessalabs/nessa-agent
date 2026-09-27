@@ -269,7 +269,11 @@ async fn wrong_instance_or_generation_cannot_close_admission() {
     let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let other = Uuid::new_v4().to_string();
@@ -293,7 +297,11 @@ async fn wrong_instance_or_generation_cannot_close_admission() {
             0
         );
         service
-            .create(conversation_id(), caller(), None)
+            .create(
+                conversation_id(),
+                caller(),
+                crate::conversation::application::RequestedConversation::default(),
+            )
             .await
             .unwrap();
     }
@@ -323,7 +331,11 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
         .await
         .unwrap();
     assert!(service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default()
+        )
         .await
         .is_err());
     assert_eq!(
@@ -357,7 +369,11 @@ async fn durable_fence_restores_only_the_admitted_generation_and_preserves_origi
             .await
             .unwrap();
         replacement_service
-            .create(conversation_id(), caller(), None)
+            .create(
+                conversation_id(),
+                caller(),
+                crate::conversation::application::RequestedConversation::default(),
+            )
             .await
             .unwrap();
         replacement_service.shutdown().await.unwrap();
@@ -707,7 +723,11 @@ async fn wrong_generation_rejection_can_be_read_after_restart_and_does_not_poiso
     assert!(restarted_reader.fence().unwrap().is_none());
     assert!(restarted_reader.evidence().unwrap().is_none());
     service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let admitted = RetirementRequest::new(
@@ -743,7 +763,11 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
     let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
     let (service, _, _, _) = fixture(ConversationLimits::default());
     service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let original = request(INSTANCE);
@@ -771,7 +795,11 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
     .await
     .unwrap();
     assert!(restarted_service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default()
+        )
         .await
         .is_err());
     assert_eq!(
@@ -796,7 +824,11 @@ async fn admitted_failure_survives_rejected_requests_and_successful_retry_keeps_
         original.id()
     );
     assert!(service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default()
+        )
         .await
         .is_err());
 
@@ -824,7 +856,11 @@ async fn cleanup_failure_restores_admission_fence_with_original_correlation() {
     let files = RetirementFiles::new(root.path(), Arc::new(TestClock)).unwrap();
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     *provider.close_failure.lock().unwrap() = Some(AgentError::CleanupUncertain);
@@ -855,7 +891,11 @@ async fn cleanup_failure_restores_admission_fence_with_original_correlation() {
     .await
     .unwrap();
     assert!(restarted_service
-        .create(conversation_id(), caller(), None)
+        .create(
+            conversation_id(),
+            caller(),
+            crate::conversation::application::RequestedConversation::default()
+        )
         .await
         .is_err());
     assert_eq!(

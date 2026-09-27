@@ -2,6 +2,7 @@ use super::super::tools::wire;
 use super::configuration;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
+use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -13,16 +14,54 @@ use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+const ASK: ApprovalModeChoice = ApprovalModeChoice {
+    id: ApprovalMode::Ask,
+    name: "Provider asks",
+    description:
+        "Claude may read without asking and requests approval where its native policy requires it.",
+};
+const AUTO: ApprovalModeChoice = ApprovalModeChoice {
+    id: ApprovalMode::Auto,
+    name: "Claude automatic review",
+    description: "Claude's reviewer may allow or deny an action without asking. Some actions still request approval.",
+};
+const FULL: ApprovalModeChoice = ApprovalModeChoice {
+    id: ApprovalMode::Full,
+    name: "Claude full access",
+    description: "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable.",
+};
+
+/// Choices demonstrated for the exact catalog model by the pinned harness.
+/// Other models retain native default until their auto/full behavior is tested.
+pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
+    if model_id == "claude-sonnet-5" {
+        &[ASK, AUTO, FULL]
+    } else {
+        &[ASK]
+    }
+}
+
+/// Translate a published product choice into the exact ACP mode identifier.
+pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
+    match mode {
+        ApprovalMode::Ask => "default",
+        ApprovalMode::Auto => "auto",
+        ApprovalMode::Full => "bypassPermissions",
+    }
+}
+
 /// The pinned Claude harness's configuration contract and built-in tool schemas.
 #[derive(Clone)]
 pub(super) struct ClaudeProfile {
+    approval_mode: ApprovalMode,
     tool_names: HashMap<String, wire::ObservedTool>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
 }
 impl ClaudeProfile {
-    pub(super) fn new(system_prompt: Option<SystemPrompt>) -> Self {
+    pub(super) fn new(system_prompt: Option<SystemPrompt>, approval_mode: ApprovalMode) -> Self {
         Self {
+            approval_mode,
             tool_names: HashMap::new(),
             system_prompt,
             mcp_prefixes: Vec::new(),
@@ -76,12 +115,11 @@ impl AcpProfile for ClaudeProfile {
             .iter()
             .map(|server| json!({"serverName":server.name}))
             .collect();
-        let ask = [wire::REVIEWED_TOOLS_RULE];
         let mut params = json!({"cwd":config.workspace,"mcpServers":servers,"_meta":{"claudeCode":{"options":{
-            "model":capabilities.model().model_id(),"settingSources":[],"tools":tools,"permissionMode":"default",
+            "model":capabilities.model().model_id(),"settingSources":[],"tools":tools,"permissionMode":native_mode(self.approval_mode),
             "disallowedTools":wire::DISALLOWED_TOOLS,
             "settings":{"disableAllHooks":true,"allowedMcpServers":allowed_servers,"disableClaudeAiConnectors":true,
-                "permissions":{"defaultMode":"default","ask":ask,"deny":wire::DISALLOWED_TOOLS}}
+                "permissions":{"defaultMode":native_mode(self.approval_mode),"deny":wire::DISALLOWED_TOOLS}}
         }}}});
         if let Some(prompt) = &self.system_prompt {
             params["_meta"]["systemPrompt"] = json!(prompt.text().as_str());
@@ -91,7 +129,17 @@ impl AcpProfile for ClaudeProfile {
     fn session_configuration(&self, session_id: &str) -> Vec<Value> {
         // The model is pinned in the session parameters and verified with the
         // session itself, so permission mode is the only selection left.
-        vec![json!({"sessionId":session_id,"configId":"mode","value":"default"})]
+        vec![
+            json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
+        ]
+    }
+    fn change_approval_mode(
+        &mut self,
+        session_id: &str,
+        mode: ApprovalMode,
+    ) -> Result<Value, AgentError> {
+        self.approval_mode = mode;
+        Ok(json!({"sessionId":session_id,"configId":"mode","value":native_mode(mode)}))
     }
     fn verify_session(
         &self,
@@ -99,7 +147,11 @@ impl AcpProfile for ClaudeProfile {
         capabilities: &EffectiveCapabilities,
         configured: bool,
     ) -> Result<(), AgentError> {
-        configuration::verify_config(result, capabilities.model().model_id(), configured)
+        configuration::verify_config(
+            result,
+            capabilities.model().model_id(),
+            configured.then_some(native_mode(self.approval_mode)),
+        )
     }
     fn verify_update(
         &self,
@@ -113,11 +165,21 @@ impl AcpProfile for ClaudeProfile {
             // provider is entitled to report its options before the selection
             // this binding asked for has been answered, and failing the session
             // over that would be failing it for being early.
-            "config_option_update" => {
-                configuration::verify_config(update, capabilities.model().model_id(), configured)
-            }
-            "current_mode_update" if string(update, "currentModeId")? != "default" => {
-                Err(protocol("permission mode changed"))
+            "config_option_update" => configuration::verify_config(
+                update,
+                capabilities.model().model_id(),
+                configured.then_some(native_mode(self.approval_mode)),
+            ),
+            "current_mode_update" => {
+                let reported = string(update, "currentModeId")?;
+                let selected = native_mode(self.approval_mode);
+                if reported == selected
+                    || (!configured && reported == native_mode(ApprovalMode::Ask))
+                {
+                    Ok(())
+                } else {
+                    Err(protocol("permission mode changed"))
+                }
             }
             _ => Ok(()),
         }

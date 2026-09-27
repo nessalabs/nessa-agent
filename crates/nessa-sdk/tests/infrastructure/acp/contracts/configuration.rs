@@ -1,10 +1,177 @@
 use super::support::*;
+use crate::application::agent_execution::providers::ApprovalMode;
 use crate::application::agent_execution::sessions::SessionManager;
+use crate::application::dto::ModelMetadataDto;
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use crate::infrastructure::acp::sessions::StdioMcpServer;
 use crate::infrastructure::process::ProcessScope;
 use crate::infrastructure::session_storage::InMemoryStorage;
 use serde_json::json;
+
+#[tokio::test]
+async fn claude_verified_presets_are_selected_on_open_and_resume() {
+    let _process_slot = process_test_slot().await;
+    for (fixture, choice) in [
+        ("approval-auto", ApprovalMode::Auto),
+        ("approval-full", ApprovalMode::Full),
+    ] {
+        let (root, config, fixture_model) = test_acp_configuration(fixture, 16);
+        let mut metadata = ModelMetadataDto::from(&fixture_model);
+        metadata.model_id = "claude-sonnet-5".into();
+        let model = ModelMetadata::try_from(metadata).unwrap();
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap()
+        .with_approval_mode(choice)
+        .unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let id = opened.session.id().clone();
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+        let restored = binding
+            .open(ProviderOpenRequest::without_startup_control(Some(id)))
+            .await
+            .unwrap();
+        restored
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+        assert_gone(&root, "pid");
+    }
+}
+
+#[tokio::test]
+async fn claude_live_mode_requires_the_exact_reply_after_early_notification() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("live-approval", 16);
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    opened
+        .session
+        .set_approval_mode(ApprovalMode::Auto)
+        .await
+        .unwrap();
+    opened
+        .session
+        .set_approval_mode(ApprovalMode::Ask)
+        .await
+        .unwrap();
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn claude_live_fallback_does_not_acknowledge_the_requested_mode() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("live-approval-fallback", 16);
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let failure = opened
+        .session
+        .set_approval_mode(ApprovalMode::Auto)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        &AgentError::Protocol("provider permission mode did not match selection".into())
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn stale_claude_mode_notification_after_verified_change_fails_the_generation() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("live-approval-stale-update", 16);
+    let mut opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    opened
+        .session
+        .set_approval_mode(ApprovalMode::Auto)
+        .await
+        .unwrap();
+    assert!(matches!(
+        opened
+            .events
+            .next()
+            .await
+            .map_err(|failure| failure.into_error()),
+        Err(AgentError::Protocol(_))
+    ));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert_gone(&root, "pid");
+}
+
+#[test]
+fn unverified_claude_model_cannot_select_automatic_review() {
+    let (_root, config, model) = test_acp_configuration("echo", 16);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    assert!(binding.with_approval_mode(ApprovalMode::Auto).is_err());
+}
+
+#[tokio::test]
+async fn claude_auto_fallback_is_a_failed_open() {
+    let _process_slot = process_test_slot().await;
+    let (root, config, fixture_model) = test_acp_configuration("approval-auto-fallback", 16);
+    let mut metadata = ModelMetadataDto::from(&fixture_model);
+    metadata.model_id = "claude-sonnet-5".into();
+    let model = ModelMetadata::try_from(metadata).unwrap();
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap()
+    .with_approval_mode(ApprovalMode::Auto)
+    .unwrap();
+    let error = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .err()
+        .expect("fallback is not the selected preset");
+    assert_eq!(
+        error.cause(),
+        &AgentError::Protocol("provider permission mode did not match selection".into())
+    );
+    assert_gone(&root, "pid");
+}
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 use std::{
@@ -169,7 +336,7 @@ async fn fails_closed_on_invalid_configuration() {
                     "provider did not select the exact configured model".into(),
                 ),
                 "wrong-mode" => {
-                    AgentError::Protocol("provider permission mode is not default".into())
+                    AgentError::Protocol("provider permission mode did not match selection".into())
                 }
                 "wrong-version" => AgentError::Protocol("requires Claude ACP 0.76.0".into()),
                 mode if mode.starts_with("duplicate-") => {
@@ -667,7 +834,7 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
             error,
             AgentError::OperationAndCleanupFailure {
                 operation_error: Box::new(AgentError::Protocol(
-                    "provider permission mode is not default".into()
+                    "provider permission mode did not match selection".into()
                 )),
                 cleanup_error: Box::new(AgentError::AuditFailure),
             }

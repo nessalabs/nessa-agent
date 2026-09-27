@@ -48,6 +48,16 @@ pub enum ConversationError {
     /// this build. Telling the caller storage was unavailable would invite a
     /// retry that can only fail the same way.
     AgentUnsupported,
+    /// A v1 ownership row has not yet been assigned a model from verified
+    /// saved-session evidence or a recorded prospective default.
+    /// The selected or saved model cannot be run by this agent on this gateway.
+    ModelUnavailable,
+    /// The binding has not verified this approval preset for the model.
+    ApprovalModeUnavailable,
+    RequestConflict,
+    TurnRunning,
+    ApprovalModeNotApplied,
+    ApprovalModeUncertain,
     Capacity,
     Unavailable,
     Metadata,

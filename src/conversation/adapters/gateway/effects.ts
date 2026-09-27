@@ -23,7 +23,7 @@ import {
   type ControlOutcome,
   type ConversationEffects,
 } from "../../application/ports"
-import type { CommandFailure, ReadFailure } from "../../model"
+import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 
 function conversationView(value: GatewayConversationView): ConversationView {
   const features = value.capabilities.agentFeatures
@@ -172,6 +172,12 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversation_capacity: "conversation-capacity",
   agent_not_configured: "agent-not-configured",
   agent_unsupported: "agent-unsupported",
+  model_unavailable: "model-unavailable",
+  approval_mode_unavailable: "approval-mode-unavailable",
+  approval_mode_not_applied: "approval-mode-not-applied",
+  approval_mode_uncertain: "approval-mode-uncertain",
+  approval_request_conflict: "approval-request-conflict",
+  turn_running: "turn-running",
   conversations_not_configured: "conversations-not-configured",
   agent_startup_deadline: "agent-startup-deadline",
   conversation_state_unreadable: "conversation-state-unreadable",
@@ -246,6 +252,12 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   submission_unresolved: "unavailable",
   temporarily_unavailable: "unavailable",
   unknown_method: "unavailable",
+  model_unavailable: "unavailable",
+  approval_mode_unavailable: "unavailable",
+  approval_mode_not_applied: "unavailable",
+  approval_mode_uncertain: "unavailable",
+  approval_request_conflict: "unavailable",
+  turn_running: "unavailable",
 }
 
 /**
@@ -393,7 +405,14 @@ export function gatewayEffects(
     }
   }
   return {
-    create(conversationId) {
+    async setApprovalMode(conversationId, mode) {
+      try {
+        return (await api().setApprovalMode(conversationId, mode)).mode
+      } catch (error) {
+        throw controlFailure(error)
+      }
+    },
+    create(conversationId, selection?: ConversationSelection) {
       const existing = creations.get(conversationId)
       if (existing) return existing
       // A conversation that could not be opened is a message that was not sent,
@@ -406,8 +425,16 @@ export function gatewayEffects(
       // trip, and a session that was retired inside it must not be the one
       // this create is sent over.
       api()
-      const request = chosenAgent()
-        .then((agent) => api().create({ conversationId, agent }))
+      const request = (selection ? Promise.resolve(selection.agent) : chosenAgent())
+        .then((agent) =>
+          api().create({
+            conversationId,
+            agent,
+            ...(selection
+              ? { model: selection.model, approvalMode: selection.approvalMode }
+              : {}),
+          }),
+        )
         .catch((error: unknown) => {
           creations.delete(conversationId)
           throw submissionFailure(error)

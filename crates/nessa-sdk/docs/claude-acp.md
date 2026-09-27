@@ -58,11 +58,10 @@ cleanup. An already-settled invocation keeps its earlier result.
 - Text prompts/output with an optional Claude-native tool preset, including
   WebSearch and WebFetch, plus explicitly configured stdio MCP servers. The
   preset defers tool schemas: the model calls ToolSearch to load a tool before
-  it may call that tool at all. Every tool the harness offers — its built-ins
-  and the tools of configured MCP servers — is therefore reviewable, and is
-  routed to Nessa's permission owner by a single `ask` rule. A built-in this
-  adapter has never heard of is reviewed with its input preserved rather than
-  refused; refusing one ended the whole execution. An unfamiliar *name* is what
+  it may call that tool at all. Native permission presets decide which allowed
+  tools ask; the fixed Nessa deny list remains in every preset. A built-in this
+  adapter has never heard of is admitted under that native policy with its input
+  preserved rather than ending the execution. An unfamiliar *name* is what
   this covers: denied names still fail closed. A structurally tagged tool-result
   block this adapter does not render becomes a fixed visible placeholder, while
   malformed known text/diff shapes still end the execution. Native file tools
@@ -82,7 +81,8 @@ cleanup. An already-settled invocation keeps its earlier result.
   tools, including Shepherd-backed shell execution, are exposed through MCP.
   EnterPlanMode and ExitPlanMode are denied to preserve default permission mode.
   Work that would outlive or escape the execution that asked for it is denied
-  too: Workflow, CronCreate/CronDelete/CronList, and EnterWorktree/ExitWorktree.
+  too: Workflow, CronCreate/CronDelete/CronList, ScheduleWakeup, and
+  EnterWorktree/ExitWorktree.
   So are effects on services beyond this machine: Artifact, PushNotification,
   RemoteTrigger and SendFeedback. Reviewing a tool is not the same as owning
   what it does.
@@ -269,15 +269,13 @@ it hopefully.
 
 A `resource_link` is text, not an instruction to open anything. The model may then
 choose to call its own `Read` tool on the path, which is an ordinary tool call:
-under this profile every tool the harness offers is in permission `ask`
-(`REVIEWED_TOOLS_RULE` in `src/infrastructure/claude_acp/tools/wire.rs`), so
-every such read raises
-`session/request_permission`, including a path inside the launch workspace that
-the adapter's own default would have allowed without asking. The workspace is the
-child's working directory, not a sandbox: an approved read outside it succeeds. A
-linked PDF was read this way and summarized correctly, so a document reaches the
-model through the agent's file tool and a user approval, never through a prompt
-payload.
+the native `default` preset may allow a workspace read without asking and
+asks for an outside read in the pinned-harness probes. The workspace is the
+child's working directory, not a sandbox: an approved read outside it succeeds.
+A linked PDF was read and summarized in the earlier strict-ask profile. With
+native rules the approval outcome depends on the path and provider policy;
+the document still reaches the model through its file tool, never through a
+prompt payload.
 
 This is what `LinkedFile` and its `resource_link` block are built on: see
 [prompts](agent_execution/prompts.md) for the value object and

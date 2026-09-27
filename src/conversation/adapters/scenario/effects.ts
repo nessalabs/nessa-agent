@@ -65,6 +65,9 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     return { executionId: input.executionId, disposition: "queued" }
   }
   return {
+    async setApprovalMode() {
+      throw new Error("Scenario does not offer approval-mode changes.")
+    },
     async create(conversationId) {
       if (scenario === "offline") throw new Error("Scenario: backend offline")
       // A deleted identity is never reopened, as the gateway's tombstone refuses it.
@@ -73,6 +76,10 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       if (!views.has(conversationId))
         views.set(conversationId, {
           conversationId,
+          approvalMode: "ask",
+          approvalModes: [
+            { id: "ask", name: "Provider asks", description: "Scenario mode." },
+          ],
           // The gateway derives titles; a scenario has no rule to derive one by.
           title: null,
           revision: "0",

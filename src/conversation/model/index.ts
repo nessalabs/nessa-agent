@@ -16,6 +16,8 @@ export {
   type BusyConversation,
   type AgentFeatures,
   type ApprovalMode,
+  type ApprovalModeChoice,
+  type ConversationSelection,
   type CommandFailure,
   type Conversation,
   type ConversationCapabilities,

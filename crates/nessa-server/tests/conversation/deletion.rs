@@ -142,6 +142,8 @@ fn service_over(
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: audit,
@@ -226,7 +228,11 @@ async fn talked_in(fixture: &Deleting) -> ConversationId {
     let id = new_id();
     fixture
         .service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     fixture
@@ -324,10 +330,22 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
     // Its owner is told it was deleted, by every command, a creation included:
     // the panel creates before every command, and a creation that succeeded
     // would bring the identity back.
-    deleted(service.create(id.clone(), caller("create"), None).await);
     deleted(
         service
-            .create(id.clone(), caller("create-again"), None)
+            .create(
+                id.clone(),
+                caller("create"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
+    deleted(
+        service
+            .create(
+                id.clone(),
+                caller("create-again"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
             .await,
     );
     deleted(service.read(id.clone(), caller("read")).await);
@@ -393,7 +411,15 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
             .is_empty());
     }
     // Anybody else is told only that there is no such conversation.
-    not_found(service.create(id.clone(), stranger("create"), None).await);
+    not_found(
+        service
+            .create(
+                id.clone(),
+                stranger("create"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
     not_found(service.read(id.clone(), stranger("read")).await);
     not_found(service.close(id.clone(), stranger("close")).await);
     not_found(service.archive(id.clone(), stranger("archive"), true).await);
@@ -582,7 +608,11 @@ async fn an_unconfirmed_stop_erases_nothing_and_a_repeat_finishes() {
     deleted(
         fixture
             .service
-            .create(id.clone(), caller("create"), None)
+            .create(
+                id.clone(),
+                caller("create"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
             .await,
     );
     assert!(fixture.audit.records.lock().unwrap().is_empty());
@@ -632,6 +662,46 @@ impl ConversationRepository for Unfenceable {
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.0.create(conversation)
     }
+    fn begin_mode_change(
+        &self,
+        request: crate::conversation::application::ConversationModeRequest,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.0.begin_mode_change(request)
+    }
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.0.pending_mode_change(id)
+    }
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.0.mode_change(id, request_id)
+    }
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.0.requires_mode_verification(id)
+    }
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: crate::conversation::application::ConversationModeApplication,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.0.observe_mode_application(id, request_id, application)
+    }
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationModeRequestState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.0.finish_mode_change(id, request_id, state)
+    }
     fn record_deletion(
         &self,
         _: &ConversationId,
@@ -674,6 +744,8 @@ fn service_with(
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage,
             metadata,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: fixture.audit.clone(),
@@ -736,6 +808,47 @@ impl ConversationRepository for Faulty {
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.repository.create(conversation)
     }
+    fn begin_mode_change(
+        &self,
+        request: crate::conversation::application::ConversationModeRequest,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.repository.begin_mode_change(request)
+    }
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.repository.pending_mode_change(id)
+    }
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.repository.mode_change(id, request_id)
+    }
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.repository.requires_mode_verification(id)
+    }
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: crate::conversation::application::ConversationModeApplication,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.repository
+            .observe_mode_application(id, request_id, application)
+    }
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationModeRequestState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.repository.finish_mode_change(id, request_id, state)
+    }
     fn record_deletion(
         &self,
         id: &ConversationId,
@@ -751,7 +864,11 @@ impl ConversationRepository for Faulty {
 async fn created(service: &ConversationService) -> ConversationId {
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     id
@@ -1213,6 +1330,8 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: Arc::new(Unopenable),
             metadata: fixture.repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: fixture.audit.clone(),
@@ -1593,6 +1712,47 @@ impl ConversationRepository for PausingRepository {
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         self.inner.create(conversation)
     }
+    fn begin_mode_change(
+        &self,
+        request: crate::conversation::application::ConversationModeRequest,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.inner.begin_mode_change(request)
+    }
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.inner.pending_mode_change(id)
+    }
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.inner.mode_change(id, request_id)
+    }
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.requires_mode_verification(id)
+    }
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: crate::conversation::application::ConversationModeApplication,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.inner
+            .observe_mode_application(id, request_id, application)
+    }
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationModeRequestState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.inner.finish_mode_change(id, request_id, state)
+    }
     fn record_deletion(
         &self,
         id: &ConversationId,
@@ -1618,6 +1778,8 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(RecordingDeletionAudit::default()),
@@ -1637,7 +1799,11 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
     .unwrap();
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service.close(id.clone(), caller("close")).await.unwrap();
@@ -1654,7 +1820,15 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
     let creating = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("create-before-send"), None).await }
+        async move {
+            service
+                .create(
+                    id,
+                    caller("create-before-send"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
+                .await
+        }
     });
     entered.await.unwrap();
 
@@ -1674,7 +1848,11 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
     assert!(history(&storage, &id).await.is_none());
     deleted(
         service
-            .create(id.clone(), caller("create-later"), None)
+            .create(
+                id.clone(),
+                caller("create-later"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
             .await,
     );
     assert!(service
@@ -1732,6 +1910,8 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             agents,
             storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
             metadata: metadata.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(
                 DurableConversationCreationAudit::new(root.join("audit").join("creation")).unwrap(),
             ),
@@ -1759,13 +1939,21 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
     .unwrap();
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     // Reopened by a second request, and a message naming a file: creation,
     // reopen, file-link and execution evidence are all on disk.
     service
-        .create(id.clone(), caller("reopen"), None)
+        .create(
+            id.clone(),
+            caller("reopen"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1844,7 +2032,15 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         .unwrap()
         .unwrap();
     assert!(kept.deletion().is_some_and(|deletion| deletion.erased()));
-    deleted(service.create(id.clone(), caller("create"), None).await);
+    deleted(
+        service
+            .create(
+                id.clone(),
+                caller("create"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
     service.shutdown().await.unwrap();
 }
 
@@ -1868,6 +2064,8 @@ fn never_opened(fixture: &Deleting) -> ConversationId {
             "create".into(),
             1,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -2386,6 +2584,8 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
                 snapshot,
             }),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: audit.clone(),
@@ -2414,6 +2614,8 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
             "create".into(),
             1,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -2461,6 +2663,8 @@ async fn a_conversation_naming_an_unknown_agent_is_listed_and_deleted_but_not_op
             known.creation_action().into(),
             known.creation_requested_at_ms(),
             None,
+            crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap()
     };
@@ -2522,6 +2726,8 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
             ))),
             storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: Arc::new(
@@ -2550,6 +2756,8 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
                 "create".into(),
                 1,
                 AgentId::Claude,
+                crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+                crate::conversation::domain::ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )
@@ -2914,6 +3122,8 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
             ))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: deletions.clone(),
@@ -2930,7 +3140,11 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
     .unwrap();
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     // The panel's create before a command, held as it acknowledges the
@@ -2943,7 +3157,15 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
     let reopening = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("create-before-send"), None).await }
+        async move {
+            service
+                .create(
+                    id,
+                    caller("create-before-send"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
+                .await
+        }
     });
     entered.await.unwrap();
     // The delete runs to the end meanwhile.
@@ -3044,6 +3266,8 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: fixture.storage.clone(),
             metadata: fixture.repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: fixture.audit.clone(),
@@ -3064,7 +3288,11 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
     fixture.service.shutdown().await.unwrap();
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
 
@@ -3111,6 +3339,8 @@ fn over_with(
             agents: only(Arc::new(Provider::new(fixture.provider.clone()))),
             storage: fixture.storage.clone(),
             metadata: fixture.repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             deletion_audit: fixture.audit.clone(),
@@ -3303,7 +3533,11 @@ async fn a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unf
     let service = over_with(&fixture, fixture.store.clone(), long);
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -3488,6 +3722,8 @@ async fn a_conversation_nobody_can_ask_about_takes_no_agent_slot() {
             known.creation_action().into(),
             known.creation_requested_at_ms(),
             None,
+            crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap()
     };
@@ -3790,7 +4026,11 @@ async fn a_delete_whose_agent_stops_after_the_stop_budget_is_finished_once_it_ha
     let service = over_with(&fixture, fixture.store.clone(), short_stop);
     let id = new_id();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     // The agent confirms its stop only after the delete stops waiting.
@@ -4293,6 +4533,8 @@ async fn a_clock_stepped_back_since_creation_still_deletes() {
             "create".into(),
             created,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );

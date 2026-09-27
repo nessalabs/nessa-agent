@@ -18,6 +18,10 @@ const agentFeatures: AgentFeatures = {
 it("shows a late bounded startup failure from the replacement view", () => {
   const value = conversation("tab")
   value.remote = {
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+    ],
     questions: [],
     running: false,
     permissions: [],
@@ -48,6 +52,10 @@ it("shows a late bounded startup failure from the replacement view", () => {
 it("shows late mandatory lifecycle evidence failure after attachment succeeds", () => {
   const value = conversation("tab")
   value.remote = {
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+    ],
     questions: [],
     running: false,
     permissions: [],

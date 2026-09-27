@@ -1,6 +1,7 @@
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{
-    ConversationDeletion, ConversationId, DeletionContradiction, LATEST_TIME_MS,
+    ConversationApprovalMode, ConversationDeletion, ConversationId, ConversationModelId,
+    DeletionContradiction, LATEST_TIME_MS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 
@@ -24,9 +25,15 @@ pub struct Conversation {
     creation_requested_at_ms: u64,
     /// `None` for a record naming an agent this build has no adapter for.
     agent: Option<AgentId>,
+    model: ConversationModelId,
+    approval_mode: ConversationApprovalMode,
     deletion: Option<ConversationDeletion>,
 }
 impl Conversation {
+    pub fn with_approval_mode(mut self, mode: ConversationApprovalMode) -> Self {
+        self.approval_mode = mode;
+        self
+    }
     /// Bind an identity to the authenticated creator. Ownership never comes from prompt data.
     pub fn new(
         id: ConversationId,
@@ -36,6 +43,8 @@ impl Conversation {
         creation_action: String,
         creation_requested_at_ms: u64,
         agent: AgentId,
+        model: ConversationModelId,
+        approval_mode: ConversationApprovalMode,
     ) -> Result<Self, &'static str> {
         Self::restore(
             id,
@@ -45,6 +54,8 @@ impl Conversation {
             creation_action,
             creation_requested_at_ms,
             Some(agent),
+            model,
+            approval_mode,
         )
     }
     /// A conversation read back from its ownership record. `agent` is `None`
@@ -60,6 +71,8 @@ impl Conversation {
         creation_action: String,
         creation_requested_at_ms: u64,
         agent: Option<AgentId>,
+        model: ConversationModelId,
+        approval_mode: ConversationApprovalMode,
     ) -> Result<Self, &'static str> {
         Self::check_creator_context(&creator_surface, &creation_action)?;
         // Listed as `createdAtMs`: never a time a list could not carry
@@ -75,6 +88,8 @@ impl Conversation {
             creation_action,
             creation_requested_at_ms,
             agent,
+            model,
+            approval_mode,
             deletion: None,
         })
     }
@@ -163,6 +178,14 @@ impl Conversation {
     /// `None` when the record names an agent this build has no adapter for.
     pub fn agent(&self) -> Option<AgentId> {
         self.agent
+    }
+    /// The fixed model selected when the conversation was created.
+    pub fn model(&self) -> &ConversationModelId {
+        &self.model
+    }
+    /// The last durably committed approval choice.
+    pub fn approval_mode(&self) -> ConversationApprovalMode {
+        self.approval_mode
     }
     /// The decision that deleted it, if somebody did.
     pub fn deletion(&self) -> Option<&ConversationDeletion> {

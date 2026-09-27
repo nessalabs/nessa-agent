@@ -4,24 +4,27 @@ use super::{
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
     view::{
+        ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
         ConversationMessageStatus, ConversationPendingMode, ConversationReorderOutcome,
-        ConversationRuntime, ConversationStartupFailure, ConversationStartupFailureCode,
-        ConversationView, SubmissionReceipt,
+        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
+        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
     },
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
     ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
     ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
     ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
-    ListedConversation, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
+    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ConversationId, ConversationSummary,
-    ProviderSessionErasure, ProviderSessionLink,
+    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
+    ConversationModelId, ConversationSummary, ProviderSessionErasure, ProviderSessionLink,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -37,7 +40,7 @@ use nessa_sdk::application::agent_execution::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, PermissionSelectionState, QuestionAnswer,
     },
-    providers::{AgentProvider, OperationCapabilities},
+    providers::{AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities},
     sessions::{
         SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
     },
@@ -65,6 +68,7 @@ use std::{
     },
     time::Duration,
 };
+
 use tokio::{
     sync::{
         watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedSemaphorePermit, RwLock,
@@ -74,6 +78,14 @@ use tokio::{
     time::Instant,
 };
 use uuid::Uuid;
+
+fn provider_approval_mode(mode: ConversationApprovalMode) -> ProviderApprovalMode {
+    match mode {
+        ConversationApprovalMode::Ask => ProviderApprovalMode::Ask,
+        ConversationApprovalMode::Auto => ProviderApprovalMode::Auto,
+        ConversationApprovalMode::Full => ProviderApprovalMode::Full,
+    }
+}
 
 /// Most conversations one list returns, applied after the caller's ownership
 /// has been checked so that nobody else's conversations take a place in it.
@@ -167,6 +179,15 @@ pub enum RequestedAgent {
     Unknown,
 }
 
+/// Optional choices for a new conversation. A repeated conversation identity
+/// always reopens its stored selection and ignores these hints.
+#[derive(Default)]
+pub struct RequestedConversation {
+    pub agent: Option<RequestedAgent>,
+    pub model: Option<String>,
+    pub approval_mode: Option<ConversationApprovalMode>,
+}
+
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
 ///
 /// What is here is the same for every agent. The output budget a submission
@@ -219,6 +240,12 @@ pub type ConversationAgentFuture<'a> =
 /// storage or provider effects. Existing live slots never call this port.
 pub trait ConversationAgentSource: Send + Sync {
     fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_>;
+    fn resolve_for<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+    ) -> ConversationAgentFuture<'a>;
 }
 
 #[derive(Clone)]
@@ -230,6 +257,26 @@ impl ConversationAgentSource for FixedConversationAgentSource {
     fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
         let configured = self.agents.get(&agent).cloned();
         Box::pin(async move { Ok(configured) })
+    }
+    fn resolve_for<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+    ) -> ConversationAgentFuture<'a> {
+        let configured = self.agents.get(&agent).cloned();
+        Box::pin(async move {
+            let Some(configured) = configured else {
+                return Ok(None);
+            };
+            if configured.provider.identity().model_id() != model {
+                return Err(ConversationError::ModelUnavailable);
+            }
+            if mode != ConversationApprovalMode::Ask {
+                return Err(ConversationError::ApprovalModeUnavailable);
+            }
+            Ok(Some(configured))
+        })
     }
 }
 
@@ -303,6 +350,25 @@ impl ConversationAgents {
         }
         Ok(configured)
     }
+    async fn resolve_for(
+        &self,
+        agent: AgentId,
+        model: &str,
+        mode: ConversationApprovalMode,
+    ) -> Result<ConversationAgent, ConversationError> {
+        if !self.configured.contains(&agent) {
+            return Err(ConversationError::AgentNotConfigured);
+        }
+        let configured = self
+            .source
+            .resolve_for(agent, model, mode)
+            .await?
+            .ok_or(ConversationError::AgentNotConfigured)?;
+        if configured.reserved_output_tokens == 0 {
+            return Err(ConversationError::InvalidInput);
+        }
+        Ok(configured)
+    }
 }
 #[derive(Clone, Copy)]
 pub enum SubmissionMode {
@@ -361,6 +427,7 @@ struct Inner {
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn ConversationCreationAudit>,
+    mode_audit: Arc<dyn ConversationModeAudit>,
     file_link_audit: Arc<dyn ConversationFileLinkAudit>,
     deletion_audit: Arc<dyn ConversationDeletionAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
@@ -380,6 +447,7 @@ struct Inner {
     // erasure, so a second delete waits for the first and answers from the
     // tombstone it left (`concurrent_deletes_of_one_conversation_run_one_after_the_other`).
     deletions: ConversationLocks,
+    mode_changes: ConversationLocks,
     /// Who is asked to delete an agent's own record of a provider session.
     provider_sessions: ProviderSessionErasers,
     deletion_budgets: ConversationDeletionBudgets,
@@ -520,6 +588,7 @@ pub struct ConversationDependencies {
     pub storage: Arc<dyn SessionStorage>,
     pub metadata: Arc<dyn ConversationRepository>,
     pub creation_audit: Arc<dyn ConversationCreationAudit>,
+    pub mode_audit: Arc<dyn ConversationModeAudit>,
     /// Records that a message pointed the agent at files on this machine.
     /// Not optional: a message may name a path on any gateway, so there is no
     /// configuration under which that grant goes unrecorded.
@@ -567,6 +636,7 @@ impl ConversationService {
             storage,
             metadata,
             creation_audit,
+            mode_audit,
             file_link_audit,
             deletion_audit,
             attachments,
@@ -590,6 +660,7 @@ impl ConversationService {
                 storage,
                 metadata,
                 creation_audit,
+                mode_audit,
                 file_link_audit,
                 deletion_audit,
                 attachments,
@@ -597,6 +668,7 @@ impl ConversationService {
                 listing,
                 summary_writes: ConversationLocks::default(),
                 deletions: ConversationLocks::default(),
+                mode_changes: ConversationLocks::default(),
                 provider_sessions,
                 deletion_budgets,
                 clock,
@@ -623,7 +695,7 @@ impl ConversationService {
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-        agent: Option<RequestedAgent>,
+        requested: RequestedConversation,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
@@ -697,12 +769,41 @@ impl ConversationService {
             // conversation that does not need that agent at all. The same is
             // true of a name no adapter exists for, which is why that one is
             // carried this far instead of being refused where it was parsed.
-            let requested = match agent {
+            let agent_request = match requested.agent {
                 Some(RequestedAgent::Known(agent)) => Some(agent),
                 Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
                 None => None,
             };
-            let agent = service.inner.agents.select(requested)?;
+            let agent = service.inner.agents.select(agent_request)?;
+            let approval_mode = requested
+                .approval_mode
+                .unwrap_or(ConversationApprovalMode::Ask);
+            let configured = match requested.model.as_deref() {
+                Some(model) => {
+                    service
+                        .inner
+                        .agents
+                        .resolve_for(agent, model, approval_mode)
+                        .await?
+                }
+                None => {
+                    let default = service.inner.agents.resolve(agent).await?;
+                    if approval_mode == ConversationApprovalMode::Ask {
+                        default
+                    } else {
+                        service
+                            .inner
+                            .agents
+                            .resolve_for(
+                                agent,
+                                default.provider.identity().model_id(),
+                                approval_mode,
+                            )
+                            .await?
+                    }
+                }
+            };
+            let selected_model = configured.provider.identity();
             let proposed = Conversation::new(
                 id.clone(),
                 caller.organization_id.clone(),
@@ -711,6 +812,9 @@ impl ConversationService {
                 caller.action_id.clone(),
                 requested_at_ms,
                 agent,
+                ConversationModelId::new(selected_model.model_id())
+                    .map_err(|_| ConversationError::InvalidInput)?,
+                approval_mode,
             )
             .map_err(|_| ConversationError::InvalidInput)?;
             {
@@ -812,6 +916,16 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
+        if self.inner.metadata.pending_mode_change(id).await?.is_some() {
+            return Err(ConversationError::ApprovalModeUncertain);
+        }
+        self.resolve_unchecked(id, caller).await
+    }
+    async fn resolve_unchecked(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
         let actor = caller.actor()?;
         let record = self
             .inner
@@ -891,7 +1005,11 @@ impl ConversationService {
                             })?;
                             let mut stops = service.inner.stops.subscribe();
                             let configured = tokio::select! {
-                                resolved = service.inner.agents.resolve(agent) => {
+                                resolved = service.inner.agents.resolve_for(
+                                    agent,
+                                    record.model().as_str(),
+                                    record.approval_mode(),
+                                ) => {
                                     resolved.map_err(|cause| OpeningFailure {
                                         cause,
                                         holds: false,
@@ -950,6 +1068,11 @@ impl ConversationService {
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
+                            projection.view.selection = Some(ConversationSelectionView {
+                                agent: record.agent().expect("agent was resolved"),
+                                model: record.model().as_str().into(),
+                                approval_mode: record.approval_mode(),
+                            });
                             projection.lifecycle(lifecycle_view(&agent));
                             if let Some(workspace) = &service.inner.workspace {
                                 let identity = configured.provider.identity();
@@ -1062,6 +1185,277 @@ impl ConversationService {
             ready.await;
         }
     }
+    async fn retire_mode_session(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        let actor = ActionContext::new(
+            "gateway",
+            "mode_recovery",
+            format!("recovery-{}", Uuid::new_v4()),
+        )
+        .map_err(|_| ConversationError::ApprovalModeUncertain)?;
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        if let Some(slot) = slot {
+            self.stop_slot(id, slot, &actor)
+                .await
+                .map_err(|_| ConversationError::ApprovalModeUncertain)?;
+        }
+        Ok(())
+    }
+    async fn recover_mode_change(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(), ConversationError> {
+        let record = self
+            .inner
+            .metadata
+            .load(id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        let Some(mut request) = self.inner.metadata.pending_mode_change(id).await? else {
+            return Ok(());
+        };
+        self.retire_mode_session(id).await?;
+        if request.application.is_none() {
+            request = self
+                .inner
+                .metadata
+                .observe_mode_application(
+                    id,
+                    &request.request_id,
+                    ConversationModeApplication::Uncertain,
+                )
+                .await?;
+        }
+        self.inner
+            .mode_audit
+            .record(request.clone(), ConversationModeAuditPhase::Application)
+            .await
+            .map_err(|_| ConversationError::Audit)?;
+        // The ownership row still carries the prior committed mode. Opening a
+        // fresh Agent from that row re-applies it at session startup; no
+        // requested-mode mutation is replayed.
+        let live = self.resolve_unchecked(id, caller).await?;
+        live.join_attachment_owner().await;
+        live.agent
+            .set_approval_mode(provider_approval_mode(request.prior))
+            .await
+            .map_err(|_| ConversationError::ApprovalModeUncertain)?;
+        self.inner
+            .mode_audit
+            .record(
+                request.clone(),
+                ConversationModeAuditPhase::RecoveryRestored,
+            )
+            .await
+            .map_err(|_| ConversationError::Audit)?;
+        self.inner
+            .metadata
+            .finish_mode_change(
+                id,
+                &request.request_id,
+                ConversationModeRequestState::NotApplied,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Change the preset only while this conversation is idle. The per-owner
+    /// admission lock remains held through durable intent, provider
+    /// verification, audit acknowledgement and terminal storage.
+    pub async fn set_approval_mode(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        mode: ConversationApprovalMode,
+    ) -> Result<ConversationApprovalMode, ConversationError> {
+        let service = self.clone();
+        supervised(async move {
+            let _admission = service.admit().await?;
+            let _mode = service.inner.mode_changes.lock(&id).await;
+            let _actor = caller.actor()?;
+            let record = service
+                .inner
+                .metadata
+                .load(&id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            record.check_access(&caller.organization_id, &caller.principal_id)?;
+            if let Some(existing) = service
+                .inner
+                .metadata
+                .mode_change(&id, &caller.action_id)
+                .await?
+            {
+                if existing.requested != mode
+                    || existing.organization_id != caller.organization_id
+                    || existing.initiator_principal_id != caller.principal_id
+                    || existing.initiator_surface_id != caller.surface_id
+                {
+                    return Err(ConversationError::RequestConflict);
+                }
+                return match existing.state {
+                    ConversationModeRequestState::Applied => Ok(existing.requested),
+                    ConversationModeRequestState::NotApplied => {
+                        Err(ConversationError::ApprovalModeNotApplied)
+                    }
+                    ConversationModeRequestState::Pending => {
+                        Err(ConversationError::ApprovalModeUncertain)
+                    }
+                };
+            }
+            let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
+            service
+                .inner
+                .agents
+                .resolve_for(agent, record.model().as_str(), mode)
+                .await?;
+            let live_slot = service.inner.conversations.lock().await.get(&id).cloned();
+            let live = if let Some(slot) = live_slot {
+                Some(service.wait_for_slot(&id, slot).await?)
+            } else {
+                None
+            };
+            if let Some(live) = &live {
+                if !live.agent.idle_for_approval_change().await {
+                    service.inner.mode_audit.record(ConversationModeRequest {
+                        conversation_id: id.clone(),
+                        organization_id: caller.organization_id.clone(),
+                        request_id: caller.action_id.clone(),
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        prior: record.approval_mode(),
+                        requested: mode,
+                        state: ConversationModeRequestState::NotApplied,
+                        application: Some(ConversationModeApplication::Refused),
+                        requested_at_ms: service.inner.clock.unix_milliseconds(),
+                    }, ConversationModeAuditPhase::AdmissionRefused)
+                    .await.map_err(|_| ConversationError::Audit)?;
+                    return Err(ConversationError::TurnRunning);
+                }
+                live.join_attachment_owner().await;
+                if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
+                    return Err(ConversationError::ApprovalModeUncertain);
+                }
+                if live.agent.approval_mode()
+                    != Some(provider_approval_mode(record.approval_mode()))
+                {
+                    return Err(ConversationError::ApprovalModeNotApplied);
+                }
+            }
+            let intent = ConversationModeRequest {
+                conversation_id: id.clone(),
+                organization_id: caller.organization_id.clone(),
+                    request_id: caller.action_id.clone(),
+                    initiator_principal_id: caller.principal_id.clone(),
+                    initiator_surface_id: caller.surface_id.clone(),
+                    prior: record.approval_mode(),
+                    requested: mode,
+                    state: ConversationModeRequestState::Pending,
+                application: None,
+                requested_at_ms: service.inner.clock.unix_milliseconds(),
+            };
+            let request = match service.inner.metadata.begin_mode_change(intent).await {
+                Ok(request) => request,
+                Err(error) => {
+                    // A lost write acknowledgement must not cause a second
+                    // provider mutation. Correlate the durable intent first.
+                    return match service.inner.metadata.mode_change(&id, &caller.action_id).await {
+                        Ok(Some(_)) | Err(_) => Err(ConversationError::ApprovalModeUncertain),
+                        Ok(None) => Err(error),
+                    };
+                }
+            };
+            match request.state {
+                ConversationModeRequestState::Applied => return Ok(request.requested),
+                ConversationModeRequestState::NotApplied => {
+                    return Err(ConversationError::ApprovalModeNotApplied)
+                }
+                ConversationModeRequestState::Pending if request.application.is_some() => {
+                    return Err(ConversationError::ApprovalModeUncertain)
+                }
+                ConversationModeRequestState::Pending => {}
+            }
+            let application = match &live {
+                None => ConversationModeApplication::Deferred,
+                Some(_) if mode == request.prior => ConversationModeApplication::Applied,
+                Some(live) => match live
+                    .agent
+                    .set_approval_mode(provider_approval_mode(mode))
+                    .await
+                {
+                    Ok(()) => ConversationModeApplication::Applied,
+                    Err(_) => ConversationModeApplication::Uncertain,
+                },
+            };
+            let request = match service
+                .inner
+                .metadata
+                .observe_mode_application(&id, &request.request_id, application)
+                .await {
+                    Ok(request) => request,
+                    Err(error) => {
+                        drop(live);
+                        let _ = service.retire_mode_session(&id).await;
+                        return Err(error);
+                    }
+                };
+            if service
+                .inner
+                .mode_audit
+                .record(request.clone(), ConversationModeAuditPhase::Application)
+                .await
+                .is_err()
+            {
+                drop(live);
+                let _ = service.recover_mode_change(&id, &caller).await;
+                return Err(ConversationError::Audit);
+            }
+            if application == ConversationModeApplication::Uncertain {
+                drop(live);
+                if let Err(error) = service.recover_mode_change(&id, &caller).await {
+                    tracing::warn!(conversation_id = %id, %error, "approval-mode recovery remains pending");
+                }
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            let terminal = match service
+                .inner
+                .metadata
+                .finish_mode_change(
+                    &id,
+                    &request.request_id,
+                    ConversationModeRequestState::Applied,
+                )
+                .await {
+                    Ok(terminal) => terminal,
+                    Err(_) => {
+                        match service.inner.metadata.mode_change(&id, &request.request_id).await {
+                            Ok(Some(terminal)) if terminal.state == ConversationModeRequestState::Applied => {
+                                if let Some(live) = &live {
+                                    if let Some(selection) = &mut live.projection.lock().await.view.selection {
+                                        selection.approval_mode = terminal.requested;
+                                    }
+                                }
+                                return Ok(terminal.requested);
+                            }
+                            _ => {
+                                drop(live);
+                                let _ = service.recover_mode_change(&id, &caller).await;
+                                return Err(ConversationError::ApprovalModeUncertain);
+                            }
+                        }
+                    }
+                };
+            if let Some(live) = live {
+                if let Some(selection) = &mut live.projection.lock().await.view.selection {
+                    selection.approval_mode = terminal.requested;
+                }
+            }
+            Ok(terminal.requested)
+        })
+        .await
+    }
+
     /// Read a bounded current replacement projection; never replay provider input to reconstruct it.
     pub async fn read(
         &self,
@@ -1069,6 +1463,13 @@ impl ConversationService {
         caller: ConversationCaller,
     ) -> Result<ConversationView, ConversationError> {
         let _admission = self.admit().await?;
+        let _mode = self.inner.mode_changes.lock(&id).await;
+        if let Err(error) = self.recover_mode_change(&id, &caller).await {
+            if let Some(view) = self.read_pending_mode_change(&id, &caller).await? {
+                return Ok(view);
+            }
+            return Err(error);
+        }
         let live = self.resolve(&id, &caller).await?;
         let order = live.agent.queued_ids().await;
         let snapshot = live.agent.session_manager().snapshot().await;
@@ -1097,6 +1498,77 @@ impl ConversationService {
         drop(projection);
         view.title = self.title(&id).await;
         Ok(view)
+    }
+    async fn read_pending_mode_change(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Option<ConversationView>, ConversationError> {
+        let record = self
+            .inner
+            .metadata
+            .load(id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        record.check_access(&caller.organization_id, &caller.principal_id)?;
+        let Some(request) = self.inner.metadata.pending_mode_change(id).await? else {
+            return Ok(None);
+        };
+        let change = ConversationApprovalModeChangeView {
+            request_id: request.request_id,
+            requested_mode: request.requested.as_str().into(),
+            status: if request.application.is_some() {
+                ConversationApprovalModeChangeStatus::RecoveryRequired
+            } else {
+                ConversationApprovalModeChangeStatus::Changing
+            },
+        };
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        let live = slot
+            .as_ref()
+            .and_then(|slot| slot.value.get())
+            .and_then(|result| result.as_ref().ok())
+            .cloned();
+        let mut view = if let Some(live) = live {
+            live.projection
+                .lock()
+                .await
+                .read_with_mode_change(Some(change.clone()))
+        } else {
+            let session_id = SessionId::new(id.to_string()).expect("conversation UUID session key");
+            let lease = self.inner.storage.open_existing(session_id).await?;
+            let snapshot = match &lease {
+                Some(lease) => lease.load().await?,
+                None => None,
+            };
+            Projection::new(
+                id.to_string(),
+                ConversationCapabilities {
+                    queue: false,
+                    steer: false,
+                    resume: false,
+                    permissions: false,
+                    image_input: false,
+                    agent_features: OperationCapabilities::default().into(),
+                },
+                snapshot.as_ref(),
+            )
+            .read_with_mode_change(Some(change))
+        };
+        view.selection = Some(ConversationSelectionView {
+            agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
+            model: record.model().as_str().into(),
+            approval_mode: record.approval_mode(),
+        });
+        view.capabilities.queue = false;
+        view.capabilities.steer = false;
+        view.capabilities.resume = false;
+        view.capabilities.permissions = false;
+        view.capabilities.image_input = false;
+        view.permissions.clear();
+        view.questions.clear();
+        view.title = self.title(id).await;
+        Ok(Some(view))
     }
     /// The title a list shows for the conversation, which a read shows too:
     /// one rule, the summary's, whichever of the two is drawing it
@@ -1135,6 +1607,8 @@ impl ConversationService {
                 files,
             } = message;
             let _admission = service.admit().await?;
+            let _mode = service.inner.mode_changes.lock(&id).await;
+            service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
             if text.len() > service.inner.limits.max_input_bytes {
                 return Err(ConversationError::InvalidInput);
@@ -1174,6 +1648,39 @@ impl ConversationService {
             let message = UserMessage::new(prompt, images, files)
                 .map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
+            let non_default_mode = live
+                .projection
+                .lock()
+                .await
+                .view
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.approval_mode != ConversationApprovalMode::Ask);
+            if non_default_mode
+                || service
+                    .inner
+                    .metadata
+                    .requires_mode_verification(&id)
+                    .await?
+            {
+                live.join_attachment_owner().await;
+                if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
+                    return Err(ConversationError::ApprovalModeNotApplied);
+                }
+                let committed = live
+                    .projection
+                    .lock()
+                    .await
+                    .view
+                    .selection
+                    .as_ref()
+                    .map(|selection| selection.approval_mode)
+                    .ok_or(ConversationError::ApprovalModeNotApplied)?;
+                let expected = provider_approval_mode(committed);
+                if live.agent.approval_mode() != Some(expected) {
+                    return Err(ConversationError::ApprovalModeNotApplied);
+                }
+            }
             // A submission the agent already has is the agent's to answer: the
             // same message recovers its original delivery and any other is a
             // conflict, whatever this conversation holds today. Its images were
@@ -1817,6 +2324,7 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
+            let _mode = service.inner.mode_changes.lock(&id).await;
             let actor = caller.actor()?;
             // Whose conversation this is comes from the ownership record, before
             // anything else. Letting go of files must not depend on being able
@@ -1828,33 +2336,49 @@ impl ConversationService {
                 .await?
                 .ok_or(ConversationError::NotFound)?;
             record.check_access(&caller.organization_id, &caller.principal_id)?;
-            let (closed, may_release) = match service.resolve(&id, &caller).await {
-                Ok(live) => {
-                    let result = live.agent.close(actor).await;
-                    if result.is_ok() {
-                        live.join_attachment_owner().await;
-                        service.release_live_slot(&id, &live).await;
+            let pending_mode = service.inner.metadata.pending_mode_change(&id).await?;
+            let (closed, may_release) = if pending_mode.is_some() {
+                let slot = service.inner.conversations.lock().await.get(&id).cloned();
+                match slot {
+                    Some(slot) => {
+                        let stopped = service
+                            .stop_slot(&id, slot, &actor)
+                            .await
+                            .map_err(|_| ConversationError::ApprovalModeUncertain);
+                        let may_release = stopped.is_ok();
+                        (stopped, may_release)
                     }
-                    // Refresh only terminal records. A concurrently accepted new turn
-                    // retains its live observation state; there is no second closed flag.
-                    let snapshot = live.agent.session_manager().snapshot().await;
-                    live.projection.lock().await.settled_all(snapshot.as_ref());
-                    // A closed agent runs nothing more, so nothing can still
-                    // need the files. An agent that did not close keeps its
-                    // saved invocations, and one of those may be a turn that
-                    // names images and has not settled.
-                    let may_release = result.is_ok() || !awaits_images(snapshot.as_ref());
-                    (
-                        result.map(|_| ()).map_err(ConversationError::Agent),
-                        may_release,
-                    )
+                    None => (Ok(()), true),
                 }
-                // No room for another live conversation, a provider that will
-                // not start, storage that will not open: the agent was not
-                // closed, and that is reported. Nothing was read about what it
-                // has queued either, so its files stay where they are and the
-                // next close, which can open it, lets them go.
-                Err(error) => (Err(error), false),
+            } else {
+                match service.resolve(&id, &caller).await {
+                    Ok(live) => {
+                        let result = live.agent.close(actor).await;
+                        if result.is_ok() {
+                            live.join_attachment_owner().await;
+                            service.release_live_slot(&id, &live).await;
+                        }
+                        // Refresh only terminal records. A concurrently accepted new turn
+                        // retains its live observation state; there is no second closed flag.
+                        let snapshot = live.agent.session_manager().snapshot().await;
+                        live.projection.lock().await.settled_all(snapshot.as_ref());
+                        // A closed agent runs nothing more, so nothing can still
+                        // need the files. An agent that did not close keeps its
+                        // saved invocations, and one of those may be a turn that
+                        // names images and has not settled.
+                        let may_release = result.is_ok() || !awaits_images(snapshot.as_ref());
+                        (
+                            result.map(|_| ()).map_err(ConversationError::Agent),
+                            may_release,
+                        )
+                    }
+                    // No room for another live conversation, a provider that will
+                    // not start, storage that will not open: the agent was not
+                    // closed, and that is reported. Nothing was read about what it
+                    // has queued either, so its files stay where they are and the
+                    // next close, which can open it, lets them go.
+                    Err(error) => (Err(error), false),
+                }
             };
             let released = match (&service.inner.attachments, may_release) {
                 (Some(attachments), true) => {
@@ -1965,7 +2489,13 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            let (record, applied, _deleting) = match service.fence(&id, &caller).await? {
+            let mode = service.inner.mode_changes.lock(&id).await;
+            let fenced = service.fence(&id, &caller).await?;
+            // The tombstone now rejects new mode changes. Release the mode
+            // admission lock before cleanup so repeat deletes preserve their
+            // own ordering under the deletion lock.
+            drop(mode);
+            let (record, applied, _deleting) = match fenced {
                 Fence::Written {
                     record,
                     applied,

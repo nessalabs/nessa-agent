@@ -27,6 +27,10 @@ function attached(
 ) {
   const item = conversation("conversation")
   item.remote = {
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "The provider asks." },
+    ],
     questions: [],
     running: false,
     permissions: [],
@@ -94,7 +98,7 @@ it("says in a word whether approvals work here, without the capability jargon", 
   show(attached())
 
   expect(group("Approvals")).toBe(
-    "ApprovalsDeny a requestSupportedAnswer laterNot yet in Nessa",
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in Nessa",
   )
   expect(group("Model")).toBe("ModelImagesNot supported")
   expect(document.body.textContent).not.toContain("turn correlation")
@@ -113,28 +117,20 @@ it("names the model and its agent once the gateway reports them", () => {
         reasoning: true,
       },
       approvalMode: "auto",
+      approvalModes: [
+        { id: "ask", name: "Provider asks", description: "The provider asks." },
+        { id: "auto", name: "Automatic review", description: "The provider reviews." },
+      ],
     }),
   )
 
   expect(document.body.textContent).toContain("Sonnet 5Claude")
   expect(document.body.querySelector("p > svg")).not.toBeNull()
-  expect(group("Approvals")).toContain("Tool callsAutomatic")
+  expect(group("Approvals")).toContain("Tool callsAutomatic review")
   expect(group("Workspace")).toBe("Workspace/work/nessa")
   expect(group("Model")).toBe(
     "ModelContext window1 million tokensReasoningOnImagesNot supported",
   )
-})
-
-it("falls back to the identifier and harness when the gateway sends no agent", () => {
-  show(
-    attached({
-      runtime: { model: "gpt-5.6-terra", provider: "codex-acp", workspace: "/w" },
-    }),
-  )
-
-  expect(document.body.textContent).toContain("gpt-5.6-terracodex-acp")
-  expect(group("Approvals")).not.toContain("Tool calls")
-  expect(group("Model")).toBe("ModelImagesNot supported")
 })
 
 it("writes a context window that is not a round million as a plain count", () => {
@@ -142,6 +138,8 @@ it("writes a context window that is not a round million as a plain count", () =>
     attached({
       runtime: {
         model: "m",
+        modelName: "Model M",
+        agent: "codex",
         provider: "p",
         workspace: "/w",
         contextWindowTokens: 1_050_000,
@@ -160,13 +158,16 @@ it("names no agent for an id setup does not list", () => {
     attached({
       runtime: {
         model: "m",
+        modelName: "Model M",
         provider: "p",
         workspace: "/w",
         agent: "constructor",
+        contextWindowTokens: 100_000,
+        reasoning: false,
       },
     }),
   )
 
   expect(document.body.querySelector("p > svg")).toBeNull()
-  expect(document.body.textContent).toContain("mp")
+  expect(document.body.textContent).toContain("Model Mp")
 })

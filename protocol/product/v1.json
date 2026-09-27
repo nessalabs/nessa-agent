@@ -657,11 +657,21 @@
       "allOf": [
         {
           "if": {
-            "properties": { "phase": { "const": "failed" } },
+            "properties": {
+              "phase": {
+                "const": "failed"
+              }
+            },
             "required": ["phase"]
           },
-          "then": { "required": ["failure"] },
-          "else": { "not": { "required": ["failure"] } }
+          "then": {
+            "required": ["failure"]
+          },
+          "else": {
+            "not": {
+              "required": ["failure"]
+            }
+          }
         }
       ]
     },
@@ -717,11 +727,7 @@
     "IncomingElicitationSupport": {
       "type": "string",
       "description": "Whether the negotiated agent can ask and receive a correlated answer through Nessa.",
-      "enum": [
-        "unknown",
-        "unsupported",
-        "supported_with_correlated_round_trip"
-      ]
+      "enum": ["unknown", "unsupported", "supported_with_correlated_round_trip"]
     },
     "ConversationAgentFeatures": {
       "type": "object",
@@ -1227,15 +1233,7 @@
           "description": "Exact tool arguments observed through a permission request, or empty when unavailable."
         }
       },
-      "required": [
-        "executionId",
-        "toolId",
-        "title",
-        "kind",
-        "status",
-        "details",
-        "input"
-      ]
+      "required": ["executionId", "toolId", "title", "kind", "status", "details", "input"]
     },
     "ConversationView": {
       "type": "object",
@@ -1329,6 +1327,22 @@
             "$ref": "#/$defs/ConversationQuestion"
           },
           "description": "Questions the agent is waiting on, oldest first."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Last durably committed preset."
+        },
+        "approvalModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApprovalModeChoice"
+          },
+          "maxItems": 3,
+          "description": "Presets supported by this model."
+        },
+        "approvalModeChange": {
+          "$ref": "#/$defs/ApprovalModeChange",
+          "description": "Present while a change is in progress or recovery is required."
         }
       },
       "required": [
@@ -1343,7 +1357,9 @@
         "truncated",
         "queueComplete",
         "title",
-        "questions"
+        "questions",
+        "approvalMode",
+        "approvalModes"
       ]
     },
     "ConversationCreateParams": {
@@ -1371,6 +1387,17 @@
           "maxLength": 32,
           "x-utf8MaxBytes": 32,
           "description": "Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Catalog model identifier fixed at first creation; ignored on reopen."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Initial preset, default ask; ignored on reopen."
         }
       },
       "required": ["conversationId", "requestId"]
@@ -1876,9 +1903,41 @@
           "maxLength": 4096,
           "x-utf8MaxBytes": 4096,
           "description": "Working directory on the gateway host, not the client filesystem."
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "Conversation agent identity."
+        },
+        "modelName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Catalog display name."
+        },
+        "contextWindowTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295,
+          "description": "Catalog context-window ceiling."
+        },
+        "reasoning": {
+          "type": "boolean",
+          "description": "Catalog reasoning capability."
         }
       },
-      "required": ["model", "provider", "workspace"],
+      "required": [
+        "model",
+        "provider",
+        "workspace",
+        "agent",
+        "modelName",
+        "contextWindowTokens",
+        "reasoning"
+      ],
       "description": "Runtime configuration selected by the gateway composition for this conversation."
     },
     "ConversationPart": {
@@ -1931,6 +1990,12 @@
       "enum": [
         "agent_not_configured",
         "agent_unsupported",
+        "model_unavailable",
+        "approval_mode_unavailable",
+        "approval_mode_not_applied",
+        "approval_mode_uncertain",
+        "approval_request_conflict",
+        "turn_running",
         "conversations_not_configured",
         "unknown_method",
         "invalid_request",
@@ -1978,19 +2043,13 @@
           "description": "Text shown to whoever answers."
         },
         "description": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024,
           "x-utf8MaxBytes": 1024,
           "description": "Secondary text, where the agent supplied any."
         }
       },
-      "required": [
-        "value",
-        "label"
-      ]
+      "required": ["value", "label"]
     },
     "ConversationAsked": {
       "type": "object",
@@ -2012,10 +2071,7 @@
           "description": "What is being asked."
         },
         "header": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024,
           "x-utf8MaxBytes": 1024,
           "description": "Short label for the question, where the agent supplied one."
@@ -2041,14 +2097,7 @@
           "description": "What may be chosen, in the order the agent offered it."
         }
       },
-      "required": [
-        "key",
-        "prompt",
-        "multiSelect",
-        "freeText",
-        "required",
-        "options"
-      ]
+      "required": ["key", "prompt", "multiSelect", "freeText", "required", "options"]
     },
     "ConversationQuestion": {
       "type": "object",
@@ -2085,12 +2134,7 @@
           "description": "What is being asked, in the order the agent asked it."
         }
       },
-      "required": [
-        "executionId",
-        "questionId",
-        "message",
-        "questions"
-      ]
+      "required": ["executionId", "questionId", "message", "questions"]
     },
     "ConversationQuestionChoice": {
       "type": "object",
@@ -2116,19 +2160,13 @@
           "description": "Option values chosen, which the question must have offered."
         },
         "ownWords": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024,
           "x-utf8MaxBytes": 1024,
           "description": "Words of the answerer's own, only where the question invited them."
         }
       },
-      "required": [
-        "key",
-        "values"
-      ]
+      "required": ["key", "values"]
     },
     "ConversationAnswerQuestionParams": {
       "type": "object",
@@ -2164,10 +2202,7 @@
           "description": "The ask being answered."
         },
         "choices": {
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "maxItems": 16,
           "items": {
             "$ref": "#/$defs/ConversationQuestionChoice"
@@ -2175,12 +2210,200 @@
           "description": "What was chosen. Null declines the question, which is an answer the agent is told."
         }
       },
+      "required": ["conversationId", "requestId", "executionId", "questionId"]
+    },
+    "ApprovalMode": {
+      "type": "string",
+      "enum": ["ask", "auto", "full"],
+      "description": "Nessa name of a binding-owned native approval preset."
+    },
+    "ApprovalModeChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One preset the binding can honor for this model.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ApprovalMode"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "description": "Short user-facing mode name."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8MaxBytes": 512,
+          "description": "Precise provider-specific behavior without a universal approval promise."
+        }
+      },
+      "required": ["id", "name", "description"]
+    },
+    "AgentModelOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One catalog model this configured agent can open.",
+      "properties": {
+        "modelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact catalog model identifier."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Catalog display name."
+        },
+        "maxContextWindowTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295,
+          "description": "Published context-window ceiling."
+        },
+        "reasoning": {
+          "type": "boolean",
+          "description": "Catalog reasoning capability."
+        },
+        "imageInput": {
+          "type": "boolean",
+          "description": "Catalog image-input capability."
+        },
+        "approvalModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApprovalModeChoice"
+          },
+          "maxItems": 3,
+          "description": "Presets verified for this model."
+        }
+      },
       "required": [
-        "conversationId",
-        "requestId",
-        "executionId",
-        "questionId"
+        "modelId",
+        "displayName",
+        "maxContextWindowTokens",
+        "reasoning",
+        "imageInput",
+        "approvalModes"
       ]
+    },
+    "AgentOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One agent configured on this gateway.",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "Agent identity."
+        },
+        "defaultModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Default catalog model identifier."
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentModelOption"
+          },
+          "maxItems": 256,
+          "description": "Models runnable by this agent."
+        }
+      },
+      "required": ["agent", "defaultModel", "models"]
+    },
+    "AgentsListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Configured agents and their model-specific choices.",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentOption"
+          },
+          "maxItems": 3,
+          "description": "Configured agents."
+        }
+      },
+      "required": ["agents"]
+    },
+    "ConversationSetApprovalModeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Change a conversation approval preset while no turn runs.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "mode": {
+          "$ref": "#/$defs/ApprovalMode"
+        }
+      },
+      "required": ["conversationId", "requestId", "mode"]
+    },
+    "ConversationSetApprovalModeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Durably committed choice or typed refusal.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "mode": {
+          "$ref": "#/$defs/ApprovalMode"
+        }
+      },
+      "required": ["requestId", "mode"]
+    },
+    "ApprovalModeChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A change in progress or awaiting recovery; the committed mode remains separate.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Correlated action identifier."
+        },
+        "requestedMode": {
+          "$ref": "#/$defs/ApprovalMode"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["changing", "recovery_required"],
+          "description": "Turn admission state."
+        }
+      },
+      "required": ["requestId", "requestedMode", "status"]
     }
   }
 }

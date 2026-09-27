@@ -149,6 +149,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       runtime: view.runtime,
       approvalMode: view.approvalMode,
       approvalModes: view.approvalModes,
+      approvalModeChange: view.approvalModeChange,
       running: view.messages.some((message) => message.status === "running"),
       truncated: view.truncated,
       queueComplete: view.queueComplete,

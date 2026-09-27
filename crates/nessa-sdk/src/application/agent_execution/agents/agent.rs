@@ -28,9 +28,10 @@ use crate::application::agent_execution::permissions::{
     QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
-    validate_configured_input, AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream,
-    ExecutionReportSource, ObservationFailure, ObservationFailureCause, OperationCapabilities,
-    ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
+    validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
+    ExecutionEventStream, ExecutionReportSource, ObservationFailure, ObservationFailureCause,
+    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
+    ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, ProviderContext, SessionManager, StorageError,
@@ -54,6 +55,8 @@ pub struct Agent {
     pub(super) inner: Arc<Inner>,
 }
 pub(super) struct Inner {
+    pub(super) instance_id: String,
+    pub(super) approval_mode: RwLock<Option<ApprovalMode>>,
     pub(super) provider: Arc<dyn AgentProvider>,
     capabilities: EffectiveCapabilities,
     pub(super) audit: Arc<dyn ExecutionAudit>,
@@ -66,6 +69,53 @@ pub(super) struct Inner {
     pub(super) lifecycle: Arc<SessionLifecycle>,
 }
 impl Agent {
+    /// Whether this Agent currently has no running or queued work. This
+    /// snapshot does not reserve admission; a host must serialize subsequent
+    /// mode changes with its own turn-admission owner.
+    pub async fn idle_for_approval_change(&self) -> bool {
+        let scheduler = self.inner.scheduler.lock().await;
+        scheduler.is_idle() && self.inner.lifecycle.active().is_none()
+    }
+    /// The preset this agent generation was configured with or last verified
+    /// through a live mode change. `None` means this provider makes no claim.
+    pub fn approval_mode(&self) -> Option<ApprovalMode> {
+        *self.inner.approval_mode.read().expect("approval mode lock")
+    }
+    /// Apply and verify a native approval preset on an attached, idle provider
+    /// generation. The scheduler lock excludes queued admission and dispatch
+    /// until the response is checked. A failed application carries explicit
+    /// session status; callers must retire an uncertain generation before
+    /// admitting another turn.
+    pub async fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
+        let scheduler = self.inner.scheduler.lock().await;
+        if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Busy,
+                ProviderSessionState::Usable,
+            ));
+        }
+        let permit = self.inner.lifecycle.accept_control().map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        })?;
+        let attached = self
+            .inner
+            .lifecycle
+            .attached_provider(&permit)
+            .map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+            })?;
+        let result = attached.session.set_approval_mode(mode).await;
+        if result.is_ok() {
+            *self
+                .inner
+                .approval_mode
+                .write()
+                .expect("approval mode lock") = Some(mode);
+        }
+        drop(permit);
+        drop(scheduler);
+        result
+    }
     /// Load and validate saved evidence without opening a provider context.
     ///
     /// `provider` supplies immutable identity and model capabilities;
@@ -138,6 +188,8 @@ impl Agent {
         let (updates, _) = broadcast::channel(256);
         Ok(Self {
             inner: Arc::new(Inner {
+                instance_id: uuid::Uuid::new_v4().to_string(),
+                approval_mode: RwLock::new(provider.approval_mode()),
                 provider,
                 capabilities,
                 audit,

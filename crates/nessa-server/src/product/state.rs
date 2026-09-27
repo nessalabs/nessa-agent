@@ -1,3 +1,4 @@
+use super::generated::AgentsListResult;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::ConversationService;
@@ -47,6 +48,7 @@ pub struct ProductRouteState {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
     pub(crate) attachments: Option<AttachmentService>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
@@ -120,6 +122,7 @@ impl ProductRouteState {
             policy: dependencies.policy,
             admin: None,
             conversations: None,
+            agents_catalog: None,
             attachments: None,
             uptime_clock: dependencies.uptime_clock,
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
@@ -148,6 +151,12 @@ impl ProductRouteState {
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
         self.conversations = Some(service);
+        self
+    }
+
+    /// Publish the validated choices composed for this gateway.
+    pub fn with_agents_catalog(mut self, catalog: AgentsListResult) -> Self {
+        self.agents_catalog = Some(Arc::new(catalog));
         self
     }
 

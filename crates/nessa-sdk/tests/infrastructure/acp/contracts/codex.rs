@@ -1,7 +1,100 @@
 //! The Codex profile against a handler speaking Codex's own shapes: what it
 //! selects, what it refuses to proceed without, and what survives translation.
 use super::support::*;
+use crate::application::agent_execution::providers::ApprovalMode;
+use crate::application::dto::ModelMetadataDto;
 use crate::domain::agent_execution::tools::ToolContent;
+
+#[tokio::test]
+async fn codex_verified_presets_are_selected_on_open_and_resume() {
+    let _process_slot = process_test_slot().await;
+    for (fixture, choice) in [
+        ("approval-auto", ApprovalMode::Auto),
+        ("approval-full", ApprovalMode::Full),
+    ] {
+        let (root, config, fixture_model) = codex_configuration(fixture, 16);
+        let mut metadata = ModelMetadataDto::from(&fixture_model);
+        metadata.model_id = "gpt-6-astra".into();
+        let model = ModelMetadata::try_from(metadata).unwrap();
+        let binding = CodexAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap()
+        .with_approval_mode(choice)
+        .unwrap();
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let id = opened.session.id().clone();
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+        let restored = binding
+            .open(ProviderOpenRequest::without_startup_control(Some(
+                id.clone(),
+            )))
+            .await
+            .unwrap();
+        restored
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("resumed")).unwrap(),
+            id.as_str()
+        );
+        assert_gone(&root, "pid");
+    }
+}
+
+#[tokio::test]
+async fn codex_live_mode_is_verified_before_the_next_turn() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("live-approval", 16);
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    opened
+        .session
+        .set_approval_mode(ApprovalMode::Auto)
+        .await
+        .unwrap();
+    opened
+        .session
+        .set_approval_mode(ApprovalMode::Ask)
+        .await
+        .unwrap();
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[test]
+fn unverified_codex_model_cannot_select_automatic_review() {
+    let (_root, config, model) = codex_configuration("echo", 16);
+    let binding = CodexAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    assert!(binding.with_approval_mode(ApprovalMode::Auto).is_err());
+}
 
 #[tokio::test]
 async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime() {

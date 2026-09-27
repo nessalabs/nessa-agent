@@ -24,7 +24,11 @@ fn duplicate_policy_selectors_fail_in_every_order_before_value_checks() {
                         options.reverse();
                     }
                     assert_eq!(
-                        verify_config(&json!({"configOptions":options}), "exact", require_mode),
+                        verify_config(
+                            &json!({"configOptions":options}),
+                            "exact",
+                            require_mode.then_some("default")
+                        ),
                         Err(AgentError::Protocol(
                             "duplicate model or mode config option".into()
                         )),
@@ -40,16 +44,30 @@ fn duplicate_policy_selectors_fail_in_every_order_before_value_checks() {
 fn unique_configuration_keeps_initial_and_configured_mode_requirements() {
     let model = json!({"id":"model", "currentValue":"exact"});
     assert_eq!(
-        verify_config(&json!({"configOptions":[model.clone()]}), "exact", false),
+        verify_config(&json!({"configOptions":[model.clone()]}), "exact", None),
         Ok(())
     );
-    assert!(verify_config(&json!({"configOptions":[model.clone()]}), "exact", true).is_err());
+    assert!(verify_config(
+        &json!({"configOptions":[model.clone()]}),
+        "exact",
+        Some("default")
+    )
+    .is_err());
     assert_eq!(
         verify_config(
             &json!({"configOptions":[model, {"id":"mode", "currentValue":"default"}]}),
             "exact",
-            true
+            Some("default")
         ),
         Ok(())
     );
+    assert!(verify_config(
+        &json!({"configOptions":[
+            {"id":"model", "currentValue":"exact"},
+            {"id":"mode", "currentValue":"acceptEdits"}
+        ]}),
+        "exact",
+        Some("auto"),
+    )
+    .is_err());
 }

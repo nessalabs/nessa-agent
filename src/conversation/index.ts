@@ -51,9 +51,7 @@ export {
 
 export { ConversationTabMenu, ConversationDetails } from "./ui/conversation-details"
 // The approval modes' words, shared by the details sheet and the composer tray.
-export { APPROVAL_MODES, APPROVAL_MODE_TEXT } from "./ui/approval-mode"
-export type { ApprovalMode, ModelCatalog, ModelChoice } from "./model"
-export { approvalChoice, effectiveModel } from "./model"
+export type { ApprovalMode, ApprovalModeChoice, ConversationSelection } from "./model"
 export { restoreConversations } from "./adapters/store/slice"
 export {
   conversationTabSnapshot,

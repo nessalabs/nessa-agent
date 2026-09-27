@@ -67,6 +67,14 @@ function workingConversation(id: string): Conversation {
       },
     ],
     remote: {
+      approvalMode: "ask",
+      approvalModes: [
+        {
+          id: "ask",
+          name: "Provider asks",
+          description: "Provider asks where required.",
+        },
+      ],
       questions: [],
       running: true,
       permissions: [
@@ -179,6 +187,14 @@ function terminalConversation(
       },
     ],
     remote: {
+      approvalMode: "ask",
+      approvalModes: [
+        {
+          id: "ask",
+          name: "Provider asks",
+          description: "Provider asks where required.",
+        },
+      ],
       questions: [],
       running: false,
       permissions: [],
@@ -216,6 +232,14 @@ function queuedConversation(): Conversation {
       },
     ],
     remote: {
+      approvalMode: "ask",
+      approvalModes: [
+        {
+          id: "ask",
+          name: "Provider asks",
+          description: "Provider asks where required.",
+        },
+      ],
       questions: [],
       running: false,
       permissions: [],
