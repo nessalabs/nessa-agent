@@ -134,10 +134,11 @@ git fetch origin edea8fc4a2b6aea885aecc561a2713bad67fceb9
 git checkout --detach edea8fc4a2b6aea885aecc561a2713bad67fceb9
 ```
 
-The branch `codex/ws3-staging-20260922` is kept only so that commit stays
-reachable on the remote; do not delete it while this report cites it. Run with
-the packaged runtime installed at the path above and `CARGO_BUILD_JOBS=2` in
-the environment. The measurement binary
+The tag
+[`evidence/runtime-staging-profile-20260922`](https://github.com/nessalabs/nessa-agent/tree/evidence/runtime-staging-profile-20260922)
+points at that commit and keeps it reachable on the remote; do not delete it
+while this report cites it. Run with the packaged runtime installed at the path
+above and `CARGO_BUILD_JOBS=2` in the environment. The measurement binary
 embedded these exact `build_invocation` values:
 
 ```sh
