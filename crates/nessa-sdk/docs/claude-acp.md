@@ -86,8 +86,9 @@ cleanup. An already-settled invocation keeps its earlier result.
   So are effects on services beyond this machine: Artifact, PushNotification,
   RemoteTrigger and SendFeedback. Reviewing a tool is not the same as owning
   what it does.
-- This profile advertises form elicitation to the pinned Claude harness, which
-  offers AskUserQuestion and sends its form to Nessa for a correlated answer.
+- With tools enabled, this profile advertises form elicitation to the pinned
+  Claude harness, which offers AskUserQuestion and sends its form to Nessa for a
+  correlated answer.
   Terminal/filesystem client RPCs, provider-side hooks, plugin/settings-source
   loading, explicit reasoning controls and extended context remain unsupported.
   Unsupported incoming client requests receive a protocol error.

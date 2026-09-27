@@ -95,6 +95,9 @@ describe("conversation view agreement", () => {
     const sample = fixtures.ConversationView
     const parsed = conversationView(sample, sample.conversationId)
     expect(parsed.questions[0]?.executionId).toBe(parsed.messages[0]?.executionId)
+    expect(parsed.capabilities.agentFeatures.incomingElicitation).toBe(
+      "supported_with_correlated_round_trip",
+    )
   })
 
   it("accepts complete matching pending and tool evidence", () => {

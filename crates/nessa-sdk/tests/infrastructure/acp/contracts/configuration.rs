@@ -91,6 +91,47 @@ impl ExecutionAudit for SelectiveClosureAudit {
 }
 
 #[tokio::test]
+async fn disabled_tools_do_not_advertise_or_report_agent_questions() {
+    let _process_slot = process_test_slot().await;
+    for restored in [false, true] {
+        let (root, mut config, model) = test_acp_configuration("questions-disabled", 16);
+        config.tools_enabled = false;
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap();
+        let restore = restored.then(|| ExecutionSessionId::new("restored-context").unwrap());
+        if let Some(id) = &restore {
+            std::fs::write(
+                root.path().join("saved-session"),
+                json!({"id": id.as_str(), "history": []}).to_string(),
+            )
+            .unwrap();
+        }
+        let opened = binding
+            .open(ProviderOpenRequest::without_startup_control(restore))
+            .await
+            .unwrap();
+        assert_eq!(
+            opened
+                .session
+                .operation_capabilities()
+                .incoming_elicitation(),
+            IncomingElicitationCapability::Unsupported
+        );
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn fails_closed_on_invalid_configuration() {
     let _process_slot = process_test_slot().await;
     for mode in [

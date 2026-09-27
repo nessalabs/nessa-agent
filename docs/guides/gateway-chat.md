@@ -173,7 +173,7 @@ Native Bash, TaskOutput and TaskStop are disabled so commands use the MCP shell.
 The pinned Claude SDK canonicalizes the historical BashOutput and KillShell names
 to TaskOutput and TaskStop before applying permission rules.
 EnterPlanMode/ExitPlanMode remain disabled because this client holds the provider
-in its default permission mode. The pinned Claude ACP profile advertises form
+in its default permission mode. With tools enabled, the pinned Claude ACP profile advertises form
 elicitation, allowing its AskUserQuestion bridge to reach the conversation and
 return a correlated answer. The preset does not invent capabilities
 that the selected model or ACP client lacks. Native tools use Claude's executor;

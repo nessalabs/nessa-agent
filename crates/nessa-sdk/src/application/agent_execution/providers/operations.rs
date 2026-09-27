@@ -124,7 +124,7 @@ pub struct ProviderOperationCapabilities {
     pub permission_deferral: ProviderPermissionDeferralCapability,
     /// Correlated provider forwarding of MCP elicitation.
     pub elicitation_forwarding: ElicitationForwardingCapability,
-    /// The verified agent can ask through ACP form elicitation on this binding.
+    /// The verified agent can ask through ACP form elicitation with tools enabled.
     pub supports_questions: bool,
 }
 

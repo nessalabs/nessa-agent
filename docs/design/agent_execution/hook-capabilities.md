@@ -335,7 +335,7 @@ global `negotiated` bit cannot turn a native API declaration into support.
 | Evidence owner | Exact scope | What it establishes |
 | --- | --- | --- |
 | Historical Nessa baseline | `1b244f9be4cdc64c1298633422596a1a1e00fc6c`, SDK source | Had no question/elicitation advertisement or incoming question implementation. |
-| Merged question path | [PR #215](https://github.com/nessalabs/nessa-agent/pull/215), ACP subprocess and gateway/panel tests | The pinned Claude ACP profile advertises `elicitation.form: {}`. Its agent question reaches the conversation and a correlated answer returns. Codex and Opencode do not advertise questions. |
+| Merged question path | [PR #215](https://github.com/nessalabs/nessa-agent/pull/215), ACP subprocess and gateway/panel tests | With tools enabled, the pinned Claude ACP profile advertises `elicitation.form: {}`. Its agent question reaches the conversation and a correlated answer returns. Codex and Opencode do not advertise questions. |
 | Historical WS7 isolated probes | Claude ACP 0.76.0 / Codex ACP 1.12.0 handlers and installed ACP 1.4.0 schema, controlled connection | Tests malformed boolean and valid object inputs, field forwarding and correlated handler return only. No model/MCP/app-server/panel end-to-end proof. |
 
 The probe report says both pinned schema readers discard boolean `form: true`;

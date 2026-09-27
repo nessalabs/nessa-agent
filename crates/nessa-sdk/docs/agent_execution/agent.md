@@ -121,7 +121,7 @@ policy session-close as `UnsupportedNotImplemented`. The SDK has no correlated
 application event or transition for those operations. Incoming agent questions
 have a correlated application path. Their support is `Unknown` until connection
 negotiation, `SupportedWithCorrelatedRoundTrip` for a verified question-capable
-binding such as the pinned Claude ACP profile, and `Unsupported` for bindings
+binding such as the pinned Claude ACP profile with tools enabled, and `Unsupported` for bindings
 that do not offer questions, including the current Codex and Opencode profiles.
 This concerns agent-originated form questions, not MCP elicitation forwarding.
 

@@ -78,9 +78,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 /// What this client says about itself in `initialize`, on every connection
 /// it opens to an agent, whatever the connection is for.
 ///
-/// Questions are advertised only where `questions` says the profile's agent can
-/// be answered: advertising to one that cannot leaves the model holding a tool
-/// whose every use this binding would have to refuse. The form capability is an
+/// Questions are advertised only where `questions` says the configured agent can
+/// ask: advertising to one that cannot leaves the model holding a tool whose
+/// every use this binding would have to refuse. The form capability is an
 /// object, as ACP's schema reads it: a boolean `true` fails that schema and is
 /// read as absent, so an agent told `true` never asks at all.
 pub(in crate::infrastructure::acp) fn initialize_params(questions: bool) -> Value {
@@ -877,10 +877,11 @@ impl<P: AcpProfile> Worker<P> {
         } else {
             AgentStartupContext::New
         };
+        let questions_enabled = self.config.tools_enabled && self.profile.supports_questions();
         let init = self
             .rpc(
                 "initialize",
-                initialize_params(self.profile.supports_questions()),
+                initialize_params(questions_enabled),
                 spawn_deadline,
                 None,
             )
@@ -984,7 +985,7 @@ impl<P: AcpProfile> Worker<P> {
                 session_resume: init
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
-                supports_questions: self.profile.supports_questions(),
+                supports_questions: questions_enabled,
                 ..profile_capabilities
             });
         Ok(())
