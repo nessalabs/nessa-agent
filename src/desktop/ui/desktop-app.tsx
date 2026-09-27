@@ -24,8 +24,10 @@ import {
 } from "@nessa-ui/react/sidebar"
 import { SplitView, SplitViewPanel, SplitViewSeparator } from "@nessa-ui/react/split-view"
 import type { HostKind } from "../../host/features"
+import { useThemePreference } from "../adapters/theme-preference"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
+import { ThemeMenu } from "./theme-menu"
 import { WindowTitlebar } from "./window-titlebar"
 
 /** Track only the local glow position; SplitView continues to own dragging. */
@@ -59,6 +61,7 @@ export function DesktopApp({
     snapWorkspace,
     workspaceCollapsed,
   } = useSidebarLayout()
+  const [theme, setTheme] = useThemePreference()
   const [rightMaximized, setRightMaximized] = useState(false)
   const rightShown = rightOpen || rightMaximized
 
@@ -125,6 +128,7 @@ export function DesktopApp({
     <SidebarProvider
       data-host={hostKind}
       data-surface={browserSurface ? "browser" : "window"}
+      data-desktop-theme={theme}
       open={leftOpen && !rightMaximized}
       onOpenChange={(open) => {
         setRightMaximized(false)
@@ -207,10 +211,11 @@ export function DesktopApp({
                 </SidebarContent>
                 <SidebarFooter className="desktop-identity">
                   <span aria-hidden="true" className="desktop-mark" />
-                  <span className="truncate">
+                  <span className="min-w-0 flex-1 truncate">
                     <span className="font-semibold">nessa</span>
                     <span className="font-normal text-muted-foreground">Studio</span>
                   </span>
+                  <ThemeMenu theme={theme} onThemeChange={setTheme} />
                 </SidebarFooter>
               </Sidebar>
             </SplitViewPanel>

@@ -75,9 +75,14 @@ centred on the same row.
 Maximizing the right panel makes it the window rather than a floating card: no
 inset, rim, or corners, and the history arrows step aside; Esc restores it
 wherever focus is. The resize glow runs only along the straight part of a
-pane's rim, stopping where its corners curve. The ambient light's colours are
-three custom properties in `styles.css`, under a fine grain that keeps its
-falloff from banding.
+pane's rim, stopping where its corners curve. The ambient light, resize glow,
+focus halo, and text selection take their colours from a light theme:
+`model/theme.ts` lists the themes (Graphite, the neutral default; Ocean; Ember;
+Dusk), and each is three custom properties under its `[data-desktop-theme]`
+block in `styles.css`. The palette button in the sidebar footer switches them;
+`adapters/theme-preference.ts` remembers the choice in the webview's storage and
+falls back to the default when storage is unavailable or holds an unknown name.
+A fine grain over the light keeps its falloff from banding.
 Inline sidebars explicitly use z-index 0 at all widths so the design system
 mobile sidebar stacking level cannot cover the fixed header controls.
 

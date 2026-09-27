@@ -34,10 +34,83 @@ body {
   );
   --desktop-window-controls-inset: var(--desktop-control-edge);
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  /* Dusk: a violet light above, a low ember below. One place to retune. */
+}
+
+/*
+ * Light themes (src/desktop/model/theme.ts lists them). Each sets only three
+ * colours: the light from above, the light from below, and the edge used by
+ * the resize glow, focus halo, and menu swatch. Adding a theme is a block here
+ * and an entry there.
+ */
+[data-desktop-theme="graphite"] {
+  --desktop-light-high: oklch(0.78 0.005 250 / 16%);
+  --desktop-light-low: oklch(0.65 0.01 250 / 9%);
+  --desktop-light-edge: oklch(0.92 0 0);
+}
+
+[data-desktop-theme="ocean"] {
+  --desktop-light-high: oklch(0.58 0.1 235 / 34%);
+  --desktop-light-low: oklch(0.62 0.09 185 / 18%);
+  --desktop-light-edge: oklch(0.84 0.08 215);
+}
+
+[data-desktop-theme="ember"] {
+  --desktop-light-high: oklch(0.66 0.11 60 / 26%);
+  --desktop-light-low: oklch(0.56 0.14 25 / 20%);
+  --desktop-light-edge: oklch(0.87 0.08 65);
+}
+
+[data-desktop-theme="dusk"] {
   --desktop-light-high: oklch(0.52 0.15 295 / 42%);
   --desktop-light-low: oklch(0.6 0.13 35 / 22%);
   --desktop-light-edge: oklch(0.8 0.1 295);
+}
+
+/* Changing theme cross-fades the light rather than snapping it. */
+.desktop-ambient::before,
+.desktop-ambient::after {
+  transition: background 600ms ease;
+}
+
+.desktop-swatch {
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, var(--desktop-light-edge), transparent 70%),
+    linear-gradient(135deg, var(--desktop-light-high), var(--desktop-light-low)),
+    var(--background);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+
+.desktop-footer-button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in oklab, var(--foreground) 45%, transparent);
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.desktop-footer-button:hover,
+.desktop-footer-button[data-state="open"] {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.desktop-footer-button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.6;
 }
 
 /* Native macOS window buttons remain host-owned and sit inside the sidebar. */
@@ -171,6 +244,11 @@ body {
   margin: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
 }
 
+/* The design system's inner layer paints a solid fill; the glass is the fill here. */
+.desktop-glass [data-slot="sidebar-inner"] {
+  background: transparent;
+}
+
 /* Closing slides the pane toward its edge as it fades, instead of clipping it. */
 #left[data-collapsed] .desktop-glass {
   opacity: 0;
@@ -250,6 +328,21 @@ body {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/*
+ * The gradient is painted through transparent text, so a selection would show
+ * its highlight and no letters. Selected, the greeting is plain solid text.
+ */
+.desktop-greeting::selection {
+  color: var(--foreground);
+  -webkit-text-fill-color: var(--foreground);
+}
+
+/* Selections take the theme's edge colour instead of the system blue. */
+[data-desktop-theme] ::selection {
+  background: color-mix(in oklab, var(--desktop-light-edge) 32%, transparent);
+  color: var(--foreground);
 }
 
 .desktop-subtitle {
