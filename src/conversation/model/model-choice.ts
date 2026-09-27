@@ -47,6 +47,34 @@ export function modelChoiceOpen(conversation: {
 }
 
 /**
+ * The approval mode a conversation not yet created will start in, and the ones
+ * it may choose from: those its chosen agent honours, per the catalog. A mode
+ * the agent does not honour, such as one kept from a different agent, falls
+ * back to asking first (ADR 231 §3's default).
+ *
+ * Undefined once the conversation exists: changing it then is the gateway's
+ * `conversation.setApprovalMode`, and until the panel can send that it offers
+ * no change it cannot make.
+ */
+export function approvalChoice(
+  conversation: {
+    serverReady?: boolean
+    turns: readonly unknown[]
+    modelChoice?: ModelChoice
+    approvalChoice?: ApprovalMode
+    remote?: { runtime?: { agent?: string; model: string } }
+  },
+  catalog: ModelCatalog | undefined,
+): { mode: ApprovalMode; modes: ApprovalMode[] } | undefined {
+  if (!modelChoiceOpen(conversation)) return undefined
+  const agent = effectiveModel(conversation, catalog)?.agent
+  const modes = catalog?.agents.find((entry) => entry.agent === agent)?.approvalModes
+  if (!modes?.length) return undefined
+  const chosen = conversation.approvalChoice
+  return { mode: chosen && modes.includes(chosen) ? chosen : "ask", modes }
+}
+
+/**
  * The model a conversation runs on, or will be created with: what the gateway
  * reports once it exists, else what was chosen, else the catalog's default.
  * Undefined when none of those can be named, such as before a catalog loads.

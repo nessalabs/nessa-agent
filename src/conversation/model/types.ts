@@ -228,6 +228,8 @@ type ConversationState = {
    * what it runs on.
    */
   modelChoice?: ModelChoice
+  /** The approval mode chosen for this tab before its conversation exists. */
+  approvalChoice?: ApprovalMode
   serverReady?: boolean
   error?: string
   /**

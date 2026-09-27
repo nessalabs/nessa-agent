@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { effectiveModel, modelChoiceOpen, type ModelCatalog } from "./model-choice"
+import {
+  approvalChoice,
+  effectiveModel,
+  modelChoiceOpen,
+  type ModelCatalog,
+} from "./model-choice"
 
 const catalog: ModelCatalog = {
   defaultAgent: "codex",
@@ -13,7 +18,7 @@ const catalog: ModelCatalog = {
     {
       agent: "codex",
       defaultModel: "gpt-5.6-terra",
-      approvalModes: ["ask"],
+      approvalModes: ["ask", "auto", "full"],
       models: [],
     },
   ],
@@ -78,5 +83,45 @@ describe("the model a conversation runs on or will be created with", () => {
     expect(
       effectiveModel(fresh, { ...catalog, defaultAgent: "opencode" }),
     ).toBeUndefined()
+  })
+})
+
+describe("the approval mode a new conversation starts in", () => {
+  it("offers the modes the chosen agent honours, asking first by default", () => {
+    expect(approvalChoice(fresh, catalog)).toEqual({
+      mode: "ask",
+      modes: ["ask", "auto", "full"],
+    })
+  })
+
+  it("keeps a choice the agent honours", () => {
+    expect(approvalChoice({ ...fresh, approvalChoice: "full" }, catalog)?.mode).toBe(
+      "full",
+    )
+  })
+
+  it("falls back to asking first when the chosen agent does not honour the choice", () => {
+    expect(
+      approvalChoice(
+        {
+          ...fresh,
+          approvalChoice: "full",
+          modelChoice: { agent: "claude", model: "claude-sonnet-5" },
+        },
+        catalog,
+      ),
+    ).toEqual({ mode: "ask", modes: ["ask"] })
+  })
+
+  it("offers nothing once the conversation exists, or before a catalog", () => {
+    expect(approvalChoice(sent, catalog)).toBeUndefined()
+    // Even when the gateway names an agent whose modes the catalog lists.
+    expect(
+      approvalChoice(
+        { ...sent, remote: { runtime: { agent: "codex", model: "gpt-5.6-terra" } } },
+        catalog,
+      ),
+    ).toBeUndefined()
+    expect(approvalChoice(fresh, undefined)).toBeUndefined()
   })
 })

@@ -32,6 +32,7 @@ import {
   useConversation,
   toEditor,
   effectiveModel,
+  approvalChoice,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -327,6 +328,9 @@ export function App({
   const generating = chat.active.phase !== "idle"
   // What the composer's model shows: nothing until the gateway's catalog loads.
   const model = chat.catalog ? effectiveModel(chat.active, chat.catalog) : undefined
+  // The tray's approval row: offered while the conversation can still be
+  // created with a mode, from the modes its agent honours.
+  const approval = approvalChoice(chat.active, chat.catalog)
 
   const conversationTabs: ChatTabItem[] = chat.conversations.map((item) => ({
     id: item.id,
@@ -740,6 +744,7 @@ export function App({
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
                   onSignOut={onSignOut}
+                  approval={approval && { ...approval, onChange: chat.chooseApproval }}
                 />
                 <ChatComposerMarkdownEditor
                   key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}:${chat.active.draftReset ?? 0}`}

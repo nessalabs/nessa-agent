@@ -1,5 +1,6 @@
 import {
   contentText,
+  type ApprovalMode,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
   messageImages,
@@ -568,6 +569,9 @@ const conversationSlice = createSlice({
     chooseModel(state, action: PayloadAction<{ id: string; choice: ModelChoice }>) {
       return gateway.chooseModel(state, action.payload)
     },
+    chooseApproval(state, action: PayloadAction<{ id: string; mode: ApprovalMode }>) {
+      return gateway.chooseApproval(state, action.payload)
+    },
     catalogLoaded(state, action: PayloadAction<ModelCatalog>) {
       state.catalog = action.payload
     },
@@ -714,6 +718,7 @@ export const {
   setDraft,
   openConversation,
   chooseModel,
+  chooseApproval,
   catalogLoaded,
   openListed,
   closeConversation,

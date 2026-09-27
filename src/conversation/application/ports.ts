@@ -5,6 +5,7 @@ import type {
   SubmissionReceipt,
 } from "./view"
 import {
+  type ApprovalMode,
   type CommandFailure,
   type FileAttachment,
   type ImageReference,
@@ -28,6 +29,7 @@ export interface ConversationGateway {
   ): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
   chooseModel(tabs: LocalTabs, input: { id: string; choice: ModelChoice }): LocalTabs
+  chooseApproval(tabs: LocalTabs, input: { id: string; mode: ApprovalMode }): LocalTabs
   setDraft(tabs: LocalTabs, input: { draft: MessageContent; id?: string }): LocalTabs
   moveActive(tabs: LocalTabs, direction: -1 | 1): LocalTabs
   setActive(tabs: LocalTabs, conversationId: string): LocalTabs
