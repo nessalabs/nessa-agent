@@ -83,8 +83,10 @@ revealed copy, sized to the sidebar's own width, stays in place while the
 docked sidebar opens beneath it, then goes without animating, so the sidebar
 appears simply to stay while the content slides over. The rules are a pure state machine in
 `model/edge-peek.ts`, with its state table and tests; `adapters/use-edge-peek.ts`
-runs it against the clock. The panel's maximize control lives inside the right
-pane, beside the titlebar's panel toggle, so it cannot sit outside a narrow pane.
+runs it against the clock. The panel's maximize control sits in the titlebar beside
+the panel toggle, over the pane's corner; the panel's 200px minimum always
+leaves room for both. Controls must live in the titlebar, not in the panes
+beneath it: the titlebar spans the top row and takes every pointer event there.
 Maximizing the right panel makes it the window rather than a floating card: no
 inset, rim, or corners, and the history arrows step aside; Esc restores it
 wherever focus is. The resize glow runs only along the straight part of a
@@ -138,8 +140,8 @@ minimum width. Right-edge resizing never changes the left sidebar. Widths
 animate only after the first measured layout has painted, so a window opens at
 its final layout instead of sliding in from equal thirds.
 
-The expand/restore button inside the right pane, beside the titlebar's panel
-toggle, fills the app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control
+The expand/restore button in the titlebar, beside the panel toggle, fills the
+app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control
 row stays available. A fixed content layer preserves the measured split layout
 underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.

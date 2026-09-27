@@ -260,20 +260,6 @@ body {
   background: transparent;
 }
 
-/* The panel's own control, beside the titlebar's panel toggle, so it can never
-   sit outside the pane however narrow the pane gets. */
-.desktop-maximize {
-  position: absolute;
-  z-index: 1;
-  top: var(--desktop-control-inset);
-  right: calc(var(--desktop-control-inset) + var(--desktop-control-size) + 4px);
-}
-
-[data-right-maximized] .desktop-maximize {
-  top: var(--desktop-control-edge);
-  right: calc(var(--desktop-control-edge) + var(--desktop-control-size) + 4px);
-}
-
 /* A collapsed pane has no rim, so its edge has nothing to glow along. */
 #left[data-collapsed] + .desktop-sidebar-edge::before,
 .desktop-sidebar-edge:has(+ #right[data-collapsed])::before {

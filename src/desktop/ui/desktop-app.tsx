@@ -117,7 +117,7 @@ export function DesktopApp({
     <Button
       variant="ghost"
       size="icon"
-      className="desktop-titlebar-button desktop-maximize"
+      className="desktop-titlebar-button"
       aria-label={maximizeLabel}
       title={maximizeLabel}
       aria-pressed={rightMaximized}
@@ -187,7 +187,14 @@ export function DesktopApp({
             back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
             forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
           }}
-          trailing={rightToggle}
+          trailing={
+            // Maximize sits beside the panel toggle, over the pane's corner.
+            // The panel's 200px minimum always leaves room for both.
+            <div className="flex items-center gap-1">
+              {rightShown ? maximizeButton : null}
+              {rightToggle}
+            </div>
+          }
         />
         {/* Dock-style reveal: resting on the left edge while the sidebar is
             collapsed slides it in over the content until the pointer leaves. */}
@@ -302,7 +309,6 @@ export function DesktopApp({
                   collapsible="none"
                   className="desktop-sidebar desktop-glass"
                 >
-                  {maximizeButton}
                   <SidebarContent className="items-center justify-center">
                     <p className="desktop-empty-note text-center">Nothing open</p>
                   </SidebarContent>
