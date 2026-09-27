@@ -180,3 +180,51 @@ it("closes on a press outside it, but not on one inside", () => {
   })
   expect(tray()).toBeNull()
 })
+
+function rect(top: number, left: number, width: number, height: number) {
+  return DOMRect.fromRect({ x: left, y: top, width, height })
+}
+
+/** The tray inside a composer and its row, as the panel renders it. */
+function renderInComposer() {
+  act(() => {
+    root.render(
+      <div data-slot="pill-composer">
+        <div data-slot="pill-composer-row">
+          <ComposerTray disabled={false} onChoose={() => {}} />
+        </div>
+      </div>,
+    )
+  })
+  const composer = container.querySelector<HTMLElement>('[data-slot="pill-composer"]')
+  const row = container.querySelector<HTMLElement>('[data-slot="pill-composer-row"]')
+  const wrapper = plus().parentElement
+  if (!composer || !row || !wrapper) throw new Error("composer did not render")
+  // The + sits in the row's bottom-left corner; the composer holds an
+  // attachment strip above the row.
+  wrapper.getBoundingClientRect = () => rect(560, 26, 36, 36)
+  row.getBoundingClientRect = () => rect(550, 20, 380, 56)
+  composer.getBoundingClientRect = () => rect(480, 20, 380, 126)
+  return { composer }
+}
+
+it("rises clear of the whole composer, attachments included, when it has a box", () => {
+  const { composer } = renderInComposer()
+  composer.getClientRects = () => [rect(480, 20, 380, 126)] as unknown as DOMRectList
+  click(plus())
+
+  const style = (tray() as HTMLElement).style
+  expect(style.bottom).toBe(`${596 - 480 + 10}px`)
+  expect(style.left).toBe("-6px")
+  expect(style.width).toBe("336px")
+})
+
+it("measures the row when the composer is unwrapped on a layout compositor", () => {
+  const { composer } = renderInComposer()
+  composer.getClientRects = () => [] as unknown as DOMRectList
+  click(plus())
+
+  const style = (tray() as HTMLElement).style
+  expect(style.bottom).toBe(`${596 - 550 + 10}px`)
+  expect(style.left).toBe("-6px")
+})

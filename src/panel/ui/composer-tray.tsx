@@ -23,9 +23,54 @@ const ROW =
  * the tray over in place, with a way back, rather than opening a menu beside
  * it: the panel is narrow, and a side menu would open off its edge.
  *
- * It sits inside the pill composer, whose box is its positioning parent, so the
- * tray's bottom edge follows the composer's top as the draft grows.
+ * The tray is positioned from the + button's own wrapper, which has a box on
+ * every compositor, and measured against the composer so it rises clear of it
+ * (see `useTrayPlacement`).
  */
+/**
+ * Where the tray sits relative to the + wrapper: its bottom edge just above the
+ * composer, its left edge on the composer's, no wider than the composer.
+ *
+ * Measured rather than left to CSS because the composer is not always a box.
+ * On a layout compositor the pill composer is `display: contents` (styles.css),
+ * so it cannot be the tray's containing block, and a tray anchored to it would
+ * resolve against the panel instead. The composer row keeps its box there, so
+ * the composer is measured when it has one and the row when it does not. The
+ * observer follows the draft growing and attachments arriving while it is open.
+ */
+function useTrayPlacement(
+  open: boolean,
+  wrapper: React.RefObject<HTMLDivElement | null>,
+) {
+  const [placement, setPlacement] = React.useState<React.CSSProperties>()
+  React.useLayoutEffect(() => {
+    if (!open) return
+    const own = wrapper.current
+    const composer = own?.closest<HTMLElement>('[data-slot="pill-composer"]')
+    const anchor =
+      composer && composer.getClientRects().length > 0
+        ? composer
+        : own?.closest<HTMLElement>('[data-slot="pill-composer-row"]')
+    if (!own || !anchor) return
+    const measure = () => {
+      const from = own.getBoundingClientRect()
+      const to = anchor.getBoundingClientRect()
+      setPlacement({
+        bottom: from.bottom - to.top + 10,
+        left: to.left - from.left,
+        width: Math.min(336, to.width),
+      })
+    }
+    measure()
+    if (typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(measure)
+    observer.observe(anchor)
+    observer.observe(own)
+    return () => observer.disconnect()
+  }, [open, wrapper])
+  return placement
+}
+
 export function ComposerTray({
   disabled,
   onChoose,
@@ -44,6 +89,7 @@ export function ComposerTray({
   const trigger = React.useRef<HTMLButtonElement>(null)
   const tray = React.useRef<HTMLDivElement>(null)
   const trayId = React.useId()
+  const placement = useTrayPlacement(open, root)
 
   const close = React.useCallback((returnFocus: boolean) => {
     setOpen(false)
@@ -79,7 +125,7 @@ export function ComposerTray({
 
   const label = onSignOut ? "More options" : "Add attachment"
   return (
-    <div ref={root} className="contents">
+    <div ref={root} className="relative flex shrink-0">
       <ChatComposerAction
         ref={trigger}
         className="nessa-composer-control"
@@ -102,7 +148,8 @@ export function ComposerTray({
           id={trayId}
           role="dialog"
           aria-label="Composer options"
-          className="nessa-composer-tray absolute bottom-[calc(100%+10px)] left-0 z-50 w-[21rem] max-w-full overflow-hidden rounded-[22px] border border-border/60 bg-popover p-1.5 text-popover-foreground shadow-xl"
+          style={placement}
+          className="nessa-composer-tray absolute bottom-[calc(100%+10px)] left-0 z-50 w-[21rem] overflow-hidden rounded-[22px] border border-border/60 bg-popover p-1.5 text-popover-foreground shadow-xl"
         >
           {page === "root" ? (
             <div key="root" className="nessa-composer-tray-page flex flex-col">
