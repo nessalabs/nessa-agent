@@ -8,19 +8,13 @@ use crate::domain::agent_execution::tools::ToolContent;
 #[tokio::test]
 async fn codex_verified_presets_are_selected_on_open_and_resume() {
     let _process_slot = process_test_slot().await;
-    for (model_id, fixture, choice) in [
-        ("gpt-6-astra", "approval-auto", ApprovalMode::Auto),
-        ("gpt-5.6-sol", "approval-auto", ApprovalMode::Auto),
-        ("gpt-5.6-terra", "approval-auto", ApprovalMode::Auto),
-        ("gpt-5.6-luna", "approval-auto", ApprovalMode::Auto),
-        ("gpt-6-astra", "approval-full", ApprovalMode::Full),
-        ("gpt-5.6-sol", "approval-full", ApprovalMode::Full),
-        ("gpt-5.6-terra", "approval-full", ApprovalMode::Full),
-        ("gpt-5.6-luna", "approval-full", ApprovalMode::Full),
+    for (fixture, choice) in [
+        ("approval-auto", ApprovalMode::Auto),
+        ("approval-full", ApprovalMode::Full),
     ] {
         let (root, config, fixture_model) = codex_configuration(fixture, 16);
         let mut metadata = ModelMetadataDto::from(&fixture_model);
-        metadata.model_id = model_id.into();
+        metadata.model_id = "gpt-6-astra".into();
         let model = ModelMetadata::try_from(metadata).unwrap();
         let binding = CodexAcpProvider::new(
             config,
@@ -90,16 +84,36 @@ async fn codex_live_mode_is_verified_before_the_next_turn() {
 }
 
 #[test]
-fn unverified_codex_model_cannot_select_automatic_review() {
-    let (_root, config, model) = codex_configuration("echo", 16);
-    let binding = CodexAcpProvider::new(
-        config,
-        &model,
-        TokenLimits::new(900, 100).unwrap(),
-        Arc::new(RecordingAudit::default()),
-    )
-    .unwrap();
-    assert!(binding.with_approval_mode(ApprovalMode::Auto).is_err());
+fn unverified_codex_models_cannot_select_elevated_presets() {
+    for model_id in [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "unknown-model",
+    ] {
+        for mode in [ApprovalMode::Ask, ApprovalMode::Auto, ApprovalMode::Full] {
+            let (_root, config, fixture_model) = codex_configuration("echo", 16);
+            let mut metadata = ModelMetadataDto::from(&fixture_model);
+            metadata.model_id = model_id.into();
+            let model = ModelMetadata::try_from(metadata).unwrap();
+            let binding = CodexAcpProvider::new(
+                config,
+                &model,
+                TokenLimits::new(900, 100).unwrap(),
+                Arc::new(RecordingAudit::default()),
+            )
+            .unwrap();
+            let result = binding.with_approval_mode(mode);
+            if mode == ApprovalMode::Ask {
+                assert!(result.is_ok(), "{model_id}");
+            } else {
+                assert!(
+                    matches!(result, Err(AgentError::Unsupported(_))),
+                    "{model_id}"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

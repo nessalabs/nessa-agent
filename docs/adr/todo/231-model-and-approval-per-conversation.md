@@ -224,10 +224,12 @@ fixed profile; new OpenCode mode switching and paid-provider probes are deferred
   0.76.0 and Codex ACP 1.12.0 adapters, changing the model and then each mode
   returned the selected effective mode for Claude Sonnet 5, Opus 5, Fable 5.1
   and Codex Astra, Sol, Terra, Luna. Claude Haiku 4.5 returned `acceptEdits`
-  after `auto`, so it offers `ask` and `full` only. Isolated live native-edit
+  after `auto`. Isolated live native-edit
   turns succeeded on Opus 5 in `auto` and `bypassPermissions`, and Luna in
-  `agent` and `agent-full-access`. This extends the binding-owned choices;
-  it does not certify every classifier decision for every model.
+  `agent` and `agent-full-access`. These are partial probes, not the complete
+  behavior matrix required below. They do not extend the binding-owned choices:
+  only Sonnet and Astra retain Auto/Full; the other models retain Ask until
+  the required behavior evidence exists.
 - **Newly enabled presets require behaviour tests**, not
   just a configuration acknowledgement. Exercise reads, edits, shell, network,
   MCP and denied tools where the binding exposes them, using the complete Nessa

@@ -106,14 +106,13 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
                 .iter()
                 .map(|choice| choice.id)
                 .collect();
-            let expected = if model.model_id == "claude-haiku-4-5-20251001" {
-                vec![WireApprovalMode::Ask, WireApprovalMode::Full]
-            } else {
-                vec![
+            let expected = match model.model_id.as_str() {
+                "claude-sonnet-5" | "gpt-6-astra" => vec![
                     WireApprovalMode::Ask,
                     WireApprovalMode::Auto,
                     WireApprovalMode::Full,
-                ]
+                ],
+                _ => vec![WireApprovalMode::Ask],
             };
             assert_eq!(ids, expected, "{} {}", agent.agent, model.model_id);
         }

@@ -47,11 +47,12 @@ const FULL: ApprovalModeChoice = ApprovalModeChoice {
     description: "Codex runs in its native full-access preset without user approval requests.",
 };
 
-/// Choices verified for catalog models against the pinned Codex adapter.
+/// Choices demonstrated for this catalog model by the pinned adapter.
 pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
-    match model_id {
-        "gpt-6-astra" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &[ASK, AUTO, FULL],
-        _ => &[ASK],
+    if model_id == "gpt-6-astra" {
+        &[ASK, AUTO, FULL]
+    } else {
+        &[ASK]
     }
 }
 
