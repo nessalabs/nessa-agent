@@ -1,10 +1,12 @@
 //! Offline local owner provisioning. OS access and the exclusive registry lock
 //! establish authority; these commands are never available through the gateway.
+use super::credential_registry::{self, RegistryOpenContext};
 use super::local_auth::SystemClock;
 use crate::{core::RunError, env::Environment};
 use nessa_auth::{
     adapters::local::{BootstrapRequest, LocalCredentialStore},
     application::{
+        credential_admin::IssueCredentialOutcome,
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
@@ -21,8 +23,15 @@ use uuid::Uuid;
 
 /// Parse the explicit offline command; credential material never appears in argv.
 pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
+    execute_with_context(args, RegistryOpenContext::LocalAuthCommand)
+}
+
+pub(super) fn execute_with_context(
+    args: &[String],
+    registry_context: RegistryOpenContext,
+) -> Result<(), RunError> {
     if args.get(1).is_some_and(|arg| arg == "provision-surface") {
-        return provision_command(args);
+        return provision_command(args, registry_context);
     }
     let (recover, output) = parse(&args[..args.len().min(4)])?;
     let extra = &args[args.len().min(4)..];
@@ -39,12 +48,9 @@ pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
         .unwrap_or("server.read,conversation.write,credential.manage");
     validate_grants(chat_grants)?;
     let directory = Environment::auth_directory_from_system()?;
+    prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = LocalCredentialStore::open_with_config(
-        directory.join("credentials.v1.json"),
-        settings.registry,
-    )
-    .map_err(failure)?;
+    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
     // Reserve a new protected output before changing durable state. Never overwrite.
     let mut file = private_output(&output).map_err(failure)?;
     let now = SystemClock.unix_seconds();
@@ -97,7 +103,7 @@ pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
         }
     };
     file.write_all(outcome.evidence.expose_bytes()).and_then(|()| file.write_all(b"\n")).and_then(|()| file.sync_all())
-        .map_err(|_| RunError::Authentication("credential committed but token output failed; run auth recover-owner with a new output path".into()))?;
+        .map_err(|_| RunError::Authentication("credential committed but token output failed; run nessa auth recover-owner --local with a new output path".into()))?;
     if let Some(parent) = output.parent() {
         nessa_local_storage::sync_directory(parent).map_err(failure)?;
     }
@@ -181,7 +187,10 @@ fn expiry_option(args: &[String]) -> Result<Option<u64>, RunError> {
         .transpose()
 }
 
-fn provision_command(args: &[String]) -> Result<(), RunError> {
+fn provision_command(
+    args: &[String],
+    registry_context: RegistryOpenContext,
+) -> Result<(), RunError> {
     let args = &args[2..];
     validate_options(args, &["--surface-id", "--grants", "--expires-at"])?;
     let surface =
@@ -194,12 +203,9 @@ fn provision_command(args: &[String]) -> Result<(), RunError> {
     let grants = option_value(args, "--grants")?.unwrap_or(defaults);
     validate_grants(grants)?;
     let directory = Environment::auth_directory_from_system()?;
+    prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
-    let store = LocalCredentialStore::open_with_config(
-        directory.join("credentials.v1.json"),
-        settings.registry,
-    )
-    .map_err(failure)?;
+    let store = credential_registry::open(&directory, settings.registry, registry_context)?;
     provision(
         &store,
         &directory,
@@ -249,10 +255,7 @@ fn provision(
             return Err(failure(error));
         }
     };
-    let nessa_auth::application::credential_admin::IssueCredentialOutcome::Issued {
-        evidence, ..
-    } = outcome
-    else {
+    let IssueCredentialOutcome::Issued { evidence, .. } = outcome else {
         return Err(failure(
             "surface credential already issued; secret unavailable",
         ));
@@ -281,7 +284,7 @@ fn parse(args: &[String]) -> Result<(bool, PathBuf), RunError> {
             Ok((operation == "recover-owner", PathBuf::from(path)))
         }
         _ => Err(RunError::Authentication(
-            "usage: nessa-server auth <init|recover-owner> --owner-token-file <new-absolute-path>"
+            "usage: nessa auth <init|recover-owner> --local --owner-token-file <new-absolute-path>"
                 .into(),
         )),
     }
@@ -291,6 +294,10 @@ fn private_output(path: &Path) -> std::io::Result<File> {
     nessa_local_storage::open(path, nessa_local_storage::OpenMode::CreateNew)
 }
 
+fn prepare_auth_directory(path: &Path) -> Result<(), RunError> {
+    nessa_local_storage::create_directory(path).map_err(failure)
+}
+
 fn failure(error: impl std::fmt::Display) -> RunError {
     RunError::Authentication(error.to_string())
 }
@@ -298,6 +305,18 @@ fn failure(error: impl std::fmt::Display) -> RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_run_prepares_a_private_auth_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let auth = temporary.path().join("data/dev/auth");
+
+        prepare_auth_directory(&auth).unwrap();
+
+        nessa_local_storage::verify_directory(&auth).unwrap();
+        LocalCredentialStore::open(&auth, "credentials.v1.json").unwrap();
+    }
+
     #[test]
     fn only_explicit_offline_commands_and_absolute_output_are_accepted() {
         let parse_args =

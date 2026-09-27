@@ -165,11 +165,3 @@ export function assertHealthResult(value: unknown): import("./types.js").HealthR
   }
   return value as unknown as import("./types.js").HealthResult
 }
-
-/** Validate a conversation.echo result payload. */
-export function assertEchoResult(value: unknown): import("./types.js").EchoResult {
-  if (!isRecord(value) || !isNonEmptyString(value.text)) {
-    throw new Error("echo response is not a valid EchoResult")
-  }
-  return value as unknown as import("./types.js").EchoResult
-}

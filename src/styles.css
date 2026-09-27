@@ -212,15 +212,22 @@ body {
   min-width: 0;
 }
 
-.nessa-panel [data-slot="chat-tab"] span:has([data-slot="random-avatar"]) {
+.nessa-panel [data-slot="chat-tab"] span:has([data-slot="random-avatar"]),
+.nessa-panel [data-slot="chat-tab"] span:has(> .nessa-messages-icon) {
   width: 1.25rem;
   height: 1.25rem;
 }
 
 .nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"],
-.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"] svg {
+.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"] svg,
+.nessa-panel [data-slot="chat-tab"] .nessa-messages-icon {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+/* Square, so it is never drawn into a slot of another shape. */
+.nessa-messages-icon {
+  flex: none;
 }
 
 .nessa-panel[data-compositor="layout"] [data-slot="chat-tab-loading"] {
@@ -232,6 +239,13 @@ body {
  * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
  * paint. The form is unwrapped so its radius cannot own a layer at the
  * panel origin; the row is the capsule.
+ *
+ * This box does not flex: the pill is the point of the panel and it keeps its
+ * height whatever else is happening. That is only safe because everything
+ * above the pill is bounded — the notices by the ceiling below, the queue badge
+ * and the delivery row by being a single 28px row each. Anything added here
+ * that can grow without a bound puts the pill back off the bottom of a short
+ * window, which is what `.nessa-composer-notices` exists to prevent.
  */
 .nessa-composer {
   flex-shrink: 0;
@@ -244,34 +258,467 @@ body {
 }
 
 /*
+ * The room the composer's notices may have, and what happens when they want
+ * more.
+ *
+ * Five producers write here and none excludes the others, so the worst case is
+ * five cards — well over 400px at the shipped 420px width, against a window
+ * whose configured minimum height is 320px (`src-tauri/tauri.conf.json`). The
+ * composer above does not shrink and the transcript's `flex-1` has already
+ * given up everything it has, so without a ceiling that column simply pushed
+ * the pill out of the window.
+ *
+ * A third of the panel, because the cap has to hold at the window's minimum
+ * height and still leave the transcript something at every size above it: at
+ * 320px that is ~106px, about one card and the top of the next, and the
+ * unfinished card is the only honest way a box with no resting scrollbar says
+ * there is more. The panel's height arrives from the host as a custom property
+ * (see `panel-frame.ts`), which is why the ceiling is written against it rather
+ * than as one number that is right at 900px and useless at 320px.
+ *
+ * Scrolling rather than dropping or collapsing: nothing here is redundant, and
+ * a cap that decided which notice to silence would be deciding it without
+ * knowing what any of them say. `overscroll-behavior` keeps a flick in this
+ * box from scrolling the transcript behind it.
+ *
+ * The box spans the composer's gutter and hands it straight back as padding, so
+ * the cards sit exactly where they did. What that buys is room on the right: a
+ * dismissed notice leaves by sliding towards it, and a clipping box whose edge
+ * is the card's own edge clips every pixel of that slide — the notice would
+ * fade on the spot. With the gutter inside the box the slide has the same 16px
+ * to cross that the panel's own frame used to give it.
+ */
+.nessa-composer-notices {
+  max-height: calc(var(--nessa-window-height, 100vh) / 3);
+  margin-inline: -16px;
+  padding-inline: 16px;
+  /* `hidden`, not the `auto` a scrolling y-axis would otherwise force on this
+     axis. The design system shortens a card's exit slide to fit the nearest
+     ancestor that scrolls horizontally, and this box is not one, so the slide
+     is measured against the window as before and clipped by the gutter above. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/*
+ * Before the host has said how big its window is.
+ *
+ * `100vh` is the right answer in a browser preview, where the viewport is the
+ * window. It is the wrong one in the app: the webview is sized to the display's
+ * work area and never smaller than the window, so on a 320px panel `100vh` is
+ * the screen and a third of the screen is taller than the whole panel — no cap
+ * at all for the frames before `windowSize()` resolves. The window's configured
+ * minimum is the honest floor to guess with, and the same repair the panel's
+ * own width already makes a few rules above.
+ */
+.nessa-panel[data-host="linux"] .nessa-composer-notices,
+.nessa-panel[data-host="macos"] .nessa-composer-notices {
+  max-height: calc(var(--nessa-window-height, 320px) / 3);
+}
+
+/* Nothing to say, no box: an empty strip must not leave a tab stop or an
+   announced group. The 8px between cards is each card's own margin, so an
+   empty box is already 0px tall; what this removes is the stop and the group. */
+.nessa-composer-notices:empty {
+  display: none;
+}
+
+/* The pill draws its own outline in the design system (`border-border` on
+   pill-composer), which is what the browser path renders. The panel draws the
+   capsule on the row instead (see the `layout` compositor rules below), so the
+   edge has to be dropped in both places. Over the panel's translucent surface
+   it read as a hard rectangle around a shape meant to float. Transparent
+   rather than `none`, so the 1px box stays and nothing reflows. */
+.nessa-composer [data-slot="pill-composer"] {
+  border-color: transparent;
+}
+/* The update tab stands in for the transcript, and the composer goes with it.
+   Stated rather than left to the preflight rule, because this element has
+   layout rules of its own above. */
+.nessa-composer[hidden] {
+  display: none;
+}
+
+/*
+ * The update tab: where the update is going, what the release said about it,
+ * and how far the download has got.
+ *
+ * It stands in for the transcript while it is the selected tab, so it takes the
+ * transcript's room and scrolls the same way. Text is selectable here for the
+ * same reason it is in a transcript — the version numbers are the first thing
+ * anybody reporting a problem is asked for.
+ *
+ * The tab is the room; the card below is the content. `auto` block margins
+ * centre that card rather than `justify-content`, because this box scrolls:
+ * centred flex content that outgrows its scroller has its top cut off and made
+ * unreachable, and auto margins simply collapse to nothing once the card is
+ * taller than the room.
+ */
+.nessa-update-tab {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 16px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/*
+ * The card the update is written on.
+ *
+ * The panel has a surface mode that is a 30% tint of `--background` over
+ * whatever is behind the window, and over a light desktop `--foreground` is a
+ * near-white on near-white — the screenshot that prompted this had everything
+ * but the one `--muted-foreground` line disappear. The answer is the one the
+ * rest of the panel already uses rather than a quieter colour: everything that
+ * must stay readable through that surface stands on its own opaque `--card` —
+ * the notice above the composer, the detail sheet, the composer row, the active
+ * tab pill. Muting the text instead would have cost the headline, which is the
+ * line the tab exists to show.
+ *
+ * Deliberately unpositioned and unpromoted: a `relative` card with a background
+ * and a radius is exactly what WebKitGTK fills with opaque white from the panel
+ * origin (see the composer above).
+ */
+.nessa-update-pane {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  /* Centred in the tab, and out of the way when the notes are long. */
+  margin-block: auto;
+  /* A floor, so a release with no notes is the same object as one with three
+     rather than a strip. The foot falls to the bottom of whichever it is. */
+  min-height: 176px;
+  padding: 16px 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+
+/* The download's own state, at the foot of the card: the bar and its line, or
+   the refusal and the way back in. Always in the same place, so the four things
+   this tab can say do not each rearrange it. */
+.nessa-update-foot {
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+/*
+ * The Messages tab: the conversation list laid straight into the tab, as the
+ * transcript is — the search field where the first message would sit, the rows
+ * below it, and no frame of its own. The list scrolls inside.
+ */
+.nessa-messages-tab {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 4px 12px 0;
+}
+
+.nessa-messages-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/*
+ * Except on clear, where there is no panel behind the list, only somebody's
+ * wallpaper, and rows of `--foreground` over it are not text. There the list
+ * stands on `--card` for the reason the update pane does (see above): a fill,
+ * not a frame, so it still reads as the tab's content rather than a box in it.
+ * Unpositioned and unpromoted for WebKitGTK, like the update pane.
+ */
+.nessa-panel[data-surface="clear"] .nessa-messages-pane {
+  margin-bottom: 12px;
+  padding: 8px 4px 4px;
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+
+/*
+ * The Messages search field is a quiet well rather than a bordered input: an
+ * outline at the top of the tab read as a form rather than as the list's own
+ * search. Focus changes the fill instead of drawing a ring, so the field
+ * still says it is taking keys without an outline appearing on click.
+ */
+.nessa-messages-pane [data-slot="conversation-history"] input[type="search"] {
+  border-color: transparent;
+  box-shadow: none;
+  background-color: color-mix(in oklab, var(--muted) 70%, transparent);
+}
+
+.nessa-messages-pane [data-slot="conversation-history"] input[type="search"]:focus,
+.nessa-messages-pane
+  [data-slot="conversation-history"]
+  input[type="search"]:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+  outline: none;
+  background-color: var(--muted);
+}
+
+/*
+ * Opens the Messages tab from the end of the strip, with the Messages icon —
+ * the tab it opens wears the same one. Drawn as the strip's own new-tab
+ * control is, but without its transition, which a layout compositor
+ * would leave behind (see the tab rules above).
+ */
+.nessa-messages-open {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.nessa-messages-open:hover,
+.nessa-messages-open[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.nessa-messages-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.nessa-messages-open .nessa-messages-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+}
+
+/* The tab's own glyph, where a conversation has its agent's avatar. A plain
+   mark: the update is not an agent and should not be given a face. */
+.nessa-update-tab-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nessa-chat-rim-4);
+}
+
+.nessa-update-versions {
+  margin: 0;
+  font-family: var(--nessa-font-mono);
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-headline {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+/* What the release calls itself, under the line that says what is happening.
+   Quieter than the headline on purpose: somebody watching this tab is watching
+   the download, and the release's own title is the context around it. */
+.nessa-update-release-title {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-notes {
+  display: grid;
+  gap: 9px;
+  margin: 13px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nessa-update-notes li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-notes li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--nessa-chat-rim-3);
+}
+
+/* Drawn, not omitted. Nothing fills the manifest's notes field yet, so this is
+   the state that ships first and a gap where the notes go reads as a bug. */
+.nessa-update-empty {
+  margin: 13px 0 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--card-foreground) 9%, transparent);
+}
+
+.nessa-update-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--nessa-chat-rim-1),
+    var(--nessa-chat-rim-2),
+    var(--nessa-chat-rim-3),
+    var(--nessa-chat-rim-4)
+  );
+  background-size: 220% 100%;
+  animation: nessa-update-drift 2.6s linear infinite;
+  transition: width var(--nessa-motion-duration-normal)
+    var(--nessa-motion-easing-standard);
+}
+
+@keyframes nessa-update-drift {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+/* No declared length, so there is no position to draw. A short band travelling
+   the track says "working" without claiming a fraction nobody has. */
+.nessa-update-fill[data-unmeasured] {
+  width: 38%;
+  animation:
+    nessa-update-drift 2.6s linear infinite,
+    nessa-update-sweep 1.6s var(--nessa-motion-easing-standard) infinite alternate;
+}
+
+@keyframes nessa-update-sweep {
+  from {
+    margin-left: 0;
+  }
+  to {
+    margin-left: 62%;
+  }
+}
+
+.nessa-update-progress-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 9px 0 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-percent {
+  font-family: var(--nessa-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A refused download. The bar is gone rather than stopped: a bar that has
+   halted is a bar somebody keeps watching. */
+.nessa-update-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.nessa-update-refused p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--card-foreground);
+}
+
+.nessa-update-retry {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--card-foreground);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color var(--nessa-motion-duration-fast)
+    var(--nessa-motion-easing-standard);
+}
+
+.nessa-update-retry:hover {
+  background: var(--accent);
+}
+
+.nessa-update-retry:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * The bar keeps its position and loses its travel. A measured download still
+   * says where it is — that is the information, not the movement — and an
+   * unmeasured one is left as a short static band rather than a full one,
+   * which would read as finished.
+   */
+  .nessa-update-fill {
+    animation: none;
+    transition: none;
+  }
+
+  .nessa-update-fill[data-unmeasured] {
+    animation: none;
+    margin-left: 0;
+  }
+}
+
+/*
  * Unwrap the form so `relative` + `bg-card` + radius cannot allocate a
  * layer at the panel origin. The row is the capsule. Submit still reaches
  * the form node (`requestSubmit`). While generating, the form owns a box
  * again so the traveling rim has a containing block the size of the pill.
  */
-[data-slot="pill-composer"] {
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer"] {
   display: contents;
 }
 
-[data-slot="pill-composer-row"] {
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer-row"] {
   padding: 6px;
   background-color: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 999px;
   color: var(--card-foreground);
 }
 
-[data-slot="pill-composer"][data-generating] {
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer"][data-generating] {
   display: flex;
   flex-direction: column;
   position: relative;
   padding: 6px;
   background-color: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 999px;
 }
 
-[data-slot="pill-composer"][data-generating] [data-slot="pill-composer-row"] {
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"][data-generating]
+  [data-slot="pill-composer-row"] {
   padding: 0;
   background: none;
   border: none;
@@ -369,4 +816,991 @@ body {
   -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
   -webkit-mask-clip: content-box, border-box;
   -webkit-mask-composite: xor;
+}
+
+/* A browser has no native desktop frost behind this transparent window.
+   Paint its canvas with the active theme instead of compositing dark tint
+   over the browser's default white canvas. Native hosts stay transparent. */
+.nessa-stage[data-host="browser"] {
+  background: var(--background);
+}
+
+/* A multiline editor is a rounded panel, not a tall ellipse. */
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"][data-multiline]
+  [data-slot="pill-composer-row"],
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"][data-generating][data-multiline] {
+  border-radius: var(--radius-3xl);
+}
+
+/* Keep the existing clear-window layout-compositor contract: the viewer
+   replaces the transcript in flow instead of adding a positioned layer. */
+.nessa-panel[data-compositor="layout"][data-surface="clear"] .nessa-transcript-region,
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="sheet"],
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="sheet-panel"] {
+  position: static;
+  transform: none !important;
+  box-shadow: none;
+}
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="sheet"] {
+  flex: 1;
+  min-height: 0;
+}
+.nessa-panel[data-compositor="layout"][data-surface="clear"]
+  .nessa-transcript-region:has([data-slot="sheet"])
+  > [role="log"],
+.nessa-panel[data-compositor="layout"][data-surface="clear"]
+  [data-slot="sheet-backdrop"] {
+  display: none;
+}
+
+[data-slot="pill-composer"]:not([data-multiline]) [data-slot="pill-composer-row"] {
+  align-items: center;
+}
+
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"]:has([data-slot="pill-composer-expand-control"]) {
+  display: flex;
+  position: static;
+}
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer-expand-control"] {
+  position: static;
+  align-self: flex-end;
+}
+/* `:not([hidden])` throughout: the composer is hidden while the update tab is
+   up, and an expanded composer left behind must not then claim the room the
+   update tab is drawn in — or un-hide itself by raising its own display. */
+.nessa-panel[data-compositor="layout"]:has(
+    .nessa-composer:not([hidden]) [data-slot="pill-composer"][data-expanded]
+  )
+  .nessa-transcript-region {
+  display: none;
+}
+.nessa-panel[data-compositor="layout"]
+  .nessa-composer:not([hidden]):has([data-expanded]) {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer"][data-expanded] {
+  position: static;
+  flex: 1;
+}
+/* Anchor the empty hint to the exact same content origin as the first line. */
+[data-slot="chat-composer-markdown-editor"] [data-empty="true"]::before {
+  top: var(--spacing);
+  left: var(--spacing);
+}
+
+/* Expanded composer covers these controls; hide them from pointer and keyboard
+   access until the built-in Minimize/Escape action restores the compact form. */
+.nessa-panel:has(.nessa-composer:not([hidden]) [data-slot="pill-composer"][data-expanded])
+  .nessa-transcript-region,
+.nessa-panel:has(.nessa-composer:not([hidden]) [data-slot="pill-composer"][data-expanded])
+  .nessa-chrome {
+  visibility: hidden;
+}
+
+/* Detail sheets share the pasted-text viewer surface and float instead of ending in a
+   full-width square edge. Never use foreground as a scrim: it is white
+   in dark mode and turns the entire transcript into a gray wash. */
+.nessa-detail-sheet {
+  padding: calc(var(--spacing) * 3);
+}
+/* Keep click-to-dismiss without tinting the area outside the viewer. */
+.nessa-detail-sheet [data-slot="sheet-backdrop"] {
+  background: transparent;
+}
+.nessa-detail-sheet [data-slot="sheet-panel"] {
+  border-radius: var(--radius-3xl);
+  background: var(--card);
+  box-shadow: none;
+}
+/* A sheet holding one tool call is still a sheet. Without a floor it rises
+   barely past its own handle and reads as a torn strip rather than a surface
+   that was opened; the cap keeps a short panel from being swallowed by it. */
+.nessa-detail-sheet [data-slot="sheet-panel"][data-expanded="false"] {
+  min-height: min(18rem, 45%);
+}
+/* Detail content must cover the transcript in both clear and frosted windows.
+   Native vibrancy belongs behind the window, not between two layers of text. */
+.nessa-pasted-pill:hover,
+.nessa-pasted-pill:active {
+  color: inherit;
+  background: transparent;
+  text-decoration: underline;
+}
+
+/* File-drop feedback uses the same spectrum as the composer rim. The inset
+   ring stays inside the panel and never intercepts the dropped files. */
+.nessa-panel[data-dragging="true"],
+.nessa-panel[data-content-dragging="true"] {
+  position: relative;
+}
+.nessa-panel[data-dragging="true"]::after,
+.nessa-panel[data-content-dragging="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 2.5px;
+  background: conic-gradient(
+    var(--nessa-chat-rim-2),
+    var(--nessa-chat-rim-3),
+    var(--nessa-chat-rim-4),
+    var(--nessa-chat-rim-2)
+  );
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-clip: content-box, border-box;
+  -webkit-mask-composite: xor;
+}
+
+/* Composer controls use the same soft fill for keyboard focus as hover,
+   avoiding persistent outer rings after a menu or native picker closes. */
+.nessa-composer .nessa-composer-control:focus-visible {
+  outline: none;
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.nessa-browser-login {
+  height: 100%;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--background);
+  color: var(--foreground);
+}
+.nessa-browser-card {
+  width: min(100%, 380px);
+  display: grid;
+  gap: 12px;
+}
+.nessa-browser-card h1 {
+  font-size: 24px;
+  font-weight: 600;
+}
+.nessa-browser-card p {
+  font-size: 14px;
+}
+.nessa-browser-card input,
+.nessa-browser-card select,
+.nessa-browser-card button {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.nessa-browser-card input {
+  user-select: text;
+}
+.nessa-browser-card button[type="submit"] {
+  background: var(--foreground);
+  color: var(--background);
+}
+.nessa-browser-card [role="alert"] {
+  color: var(--destructive);
+}
+.nessa-browser-card :disabled {
+  opacity: 0.6;
+}
+
+/*
+ * First-run setup is always the light glass treatment.
+ *
+ * Setup sits on the morphing colour wash, and a pale pane over that wash is the
+ * look the product wants whatever the OS appearance is — a dark slab over the
+ * same pigments reads as a hole rather than glass. The design system switches
+ * its tokens with a `dark` class on the document, so a subtree cannot opt back
+ * out; these are the light values from its `:root`, re-declared for this one
+ * surface so its own components keep the contrast they were built for.
+ *
+ * Only the tokens setup actually paints with are listed. If the design system
+ * restyles its light palette, this block has to follow it.
+ */
+.nessa-setup-light {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.556 0 0);
+  color-scheme: light;
+  color: var(--foreground);
+}
+
+/*
+ * Setup's hero type and its arrival.
+ *
+ * The design system's scale tops out at 20px because it sizes UI chrome; a
+ * first-run title is not chrome, so it gets an explicit display size here
+ * rather than a level that was never meant to carry it. It still uses the
+ * system's own sans family and motion tokens.
+ *
+ * Content rises into place once when a step appears. Under a reduced-motion
+ * preference it simply is in place — the wash behind it stills for the same
+ * reason, so the whole surface agrees.
+ */
+.nessa-setup-title {
+  font-family: var(--nessa-font-sans);
+  font-size: 2rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  /*
+   * The shadow that keeps white type legible wherever the wash's pigments
+   * happen to be. A text shadow rather than a `drop-shadow` filter: it is part
+   * of the glyphs' own paint, so it inherits into the reveal's pieces and rides
+   * along with their opacity and transform without anything having to animate
+   * a filter.
+   */
+  text-shadow:
+    0 1px 3px rgb(0 0 0 / 0.9),
+    0 2px 20px rgb(0 0 0 / 0.5);
+}
+
+@keyframes nessa-setup-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.nessa-setup-arrive {
+  animation: nessa-setup-arrive var(--nessa-motion-duration-slow)
+    var(--nessa-motion-easing-arrival) both;
+}
+
+/* Each child lands just after the one above it. */
+.nessa-setup-arrive:nth-child(2) {
+  animation-delay: 70ms;
+}
+.nessa-setup-arrive:nth-child(3) {
+  animation-delay: 140ms;
+}
+
+/*
+ * The first step waits for the box to finish opening, so nothing is legible
+ * through the bloom. Later steps do not: their content replaces content that
+ * was already on screen, and a person who has pressed a button should not wait
+ * a second to see the result.
+ */
+/*
+ * The first step, resolving a word at a time.
+ *
+ * `--nessa-word` is each piece's place in the order, set where the markup
+ * knows it; the delay it turns into lives here, so the pace of the line is one
+ * number in one file. A piece that does not set it is simply first.
+ */
+.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
+.nessa-setup-window[data-step="welcome"] .nessa-setup-word {
+  /*
+   * Promoted for the duration, and animating only what the compositor can run
+   * by itself. The reveal used to blur each piece and carry a two-layer drop
+   * shadow in the same filter; WebKit repaints an animated filter on the main
+   * thread every frame, and the page is at its busiest exactly then — the
+   * gateway, the readiness ask and the first render all land as the line
+   * starts — so the line stalled partway through "Nessa" and then jumped.
+   * Opacity and transform keep moving however busy the page is.
+   */
+  will-change: opacity, transform;
+  animation-name: nessa-setup-focus;
+  animation-duration: 900ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: both;
+  /* Far shorter than the duration above, so each piece is still resolving
+     when the next begins: what is seen is one movement crossing the line
+     rather than pieces arriving one after another. */
+  animation-delay: calc(var(--nessa-reveal-content) + var(--nessa-word, 0) * 42ms);
+}
+
+/*
+ * A piece has to be its own box to be scaled, since inline boxes
+ * cannot be. It keeps its own whitespace: the split falls wherever it falls,
+ * and a piece beginning with a space has to still be a space wide, or the line
+ * closes up as it resolves.
+ *
+ * The pieces are laid out as ordinary inline boxes, not as flex children. A
+ * row with a gap puts that gap between every piece, which spaces out the
+ * inside of the words themselves.
+ */
+.nessa-setup-word {
+  display: inline-block;
+  white-space: pre;
+}
+
+/*
+ * The first step resolves out of the panel rather than arriving on it.
+ *
+ * It is the one thing here that has not been on screen in some form already,
+ * and everything it follows has been a thing coming into focus — so it does
+ * the same. It condenses: faint and slightly too large, settling into place
+ * where it already stands. No blur — see the timing rule above for why the
+ * softness went.
+ *
+ * Deliberately no travel. Sliding up from below says the words came from
+ * somewhere off-panel and were placed here, which is a different claim from
+ * the one the whole opening has been making — that all of this was already
+ * present and is only now in focus.
+ *
+ * Later steps keep the plain arrival. They replace content that was already
+ * there, and dressing that up would read as the window reopening.
+ */
+@keyframes nessa-setup-focus {
+  from {
+    opacity: 0;
+    /* Neighbouring pieces differ less than whole words did; a large delta
+       across a line resolving in pieces reads as a ripple of mismatched
+       sizes rather than as one thing coming into focus. */
+    transform: scale(1.06);
+  }
+  /* Legible before it has finished settling, so the last of the movement is
+     something you watch rather than something you wait for. */
+  62% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * Nothing above this line may outrank it.
+ *
+ * `animation: none` only wins where it is at least as specific as the rule that
+ * set the animation, and the welcome step's rules are scoped through
+ * `.nessa-setup-window[data-step="welcome"]` — three selectors against one.
+ * The override lost, and a 900ms blur-and-scale ran on the first screen of
+ * every launch for someone who had asked for no movement at all. So the scoped
+ * selectors are repeated here at their own specificity; ties go to the later
+ * rule, which is this one.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nessa-setup-arrive,
+  .nessa-setup-word,
+  .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
+  .nessa-setup-window[data-step="welcome"] .nessa-setup-word,
+  .nessa-setup-chrome,
+  .nessa-setup-control {
+    animation: none;
+    /* The promotion was for the duration of an animation that is not running. */
+    will-change: auto;
+  }
+}
+
+/*
+ * Setup's chrome: the way out, and the way to make it be quiet.
+ *
+ * It arrives once the light has filled the window, not before. Shown over the
+ * floating glow, two buttons hanging in empty space gave away the shape before
+ * the light did and read as a window waiting to load. The opening is short
+ * enough to wait out, Escape leaves it from the first frame, and under a
+ * reduced-motion preference there is no opening and these are simply there.
+ *
+ * It belongs to the window rather than to the wash, so it keeps its own timing
+ * and is not re-mounted by every step.
+ */
+.nessa-setup-chrome {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  animation: nessa-setup-settled 320ms var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom)) both;
+}
+
+/*
+ * Quiet, but not invisible.
+ *
+ * At 55% white over a wash whose lighter stops are near-white this measured
+ * about 1.1:1 — decorative rather than legible. The mark now carries its own
+ * dark backing so its contrast does not depend on which pigment happens to be
+ * travelling underneath it.
+ */
+.nessa-setup-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: rgb(10 8 14 / 0.55);
+  color: rgb(255 255 255 / 0.92);
+  outline: none;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.nessa-setup-control:hover {
+  background: rgb(10 8 14 / 0.78);
+  color: #fff;
+}
+
+/*
+ * Two rings, dark inside light. One ring in one colour is only ever visible
+ * over the half of this wash it happens to contrast with; a pair is visible
+ * over either.
+ */
+.nessa-setup-control:focus-visible {
+  color: #fff;
+  box-shadow:
+    0 0 0 2px rgb(8 6 12 / 0.9),
+    0 0 0 4px rgb(255 255 255 / 0.95);
+}
+
+/*
+ * A shortcut drawn as the keys themselves.
+ *
+ * Written as text a shortcut is a string to decode; drawn as caps it is a
+ * thing to press, which is the point of the step that teaches it. The cap is
+ * line art rather than a rendered key: two concentric rounded outlines — the
+ * shell and the moulded top face — with a heavier bottom edge standing in for
+ * the front wall seen edge on. Nothing here is opaque, so the wash behind
+ * keeps travelling through the keys and they belong to the surface rather
+ * than sitting on it.
+ *
+ * White, because setup's own pigments are already saturated: a second hue over
+ * them competes, while white line art reads at every point of the wash's cycle.
+ */
+.nessa-keycap {
+  position: relative;
+  border: 1.5px solid rgb(255 255 255 / 0.85);
+  border-bottom-width: 3px;
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 0.12);
+  color: #fff;
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.9),
+    0 2px 12px rgb(0 0 0 / 0.5);
+}
+
+/* The top face, inset from the shell — what makes it a cap and not a chip. It
+   sits higher than it is deep, which is where the front wall comes from. */
+.nessa-keycap::before {
+  content: "";
+  position: absolute;
+  inset: 3px 3px 5px;
+  border: 1px solid rgb(255 255 255 / 0.4);
+  border-radius: 0.45rem;
+  pointer-events: none;
+}
+
+/*
+ * A cap with its own key down.
+ *
+ * This answers someone pressing the chord one key at a time, which is most
+ * people the first time: holding Command and hunting for Shift is told
+ * nothing by a surface that only reacts to the finished accelerator, and what
+ * they need to know at that moment is that they have started correctly.
+ *
+ * It is a transition rather than an animation, because it has to be able to
+ * go back — a key is let go as often as it is pressed.
+ */
+.nessa-keycap {
+  transition:
+    background-color 90ms ease-out,
+    border-color 90ms ease-out,
+    translate 90ms ease-out;
+}
+
+.nessa-keycap[data-held] {
+  border-color: rgb(255 255 255 / 0.95);
+  background: rgb(255 255 255 / 0.22);
+  /* Down by the depth of its own front wall, as a real one would be. */
+  translate: 0 2px;
+}
+
+/*
+ * A cap being pressed.
+ *
+ * The press is a flash, not a state. A cap that stays lit after the fact is
+ * claiming a key is down when it is not, and with three of them lit at once
+ * the panel reads as a diagram of the shortcut rather than as keys answering
+ * a person — which also leaves nothing for an actual press to say. What the
+ * lesson has advanced is told by the line above them, which changes.
+ */
+.nessa-keycap[data-pressed="shown"] {
+  animation: nessa-keycap-press 280ms var(--nessa-motion-easing-arrival);
+}
+
+/*
+ * The second press runs the same motion under a second name. An animation
+ * restarts when its *name* changes and not when some other attribute does, so
+ * one rule would play once and leave the second press — half the lesson —
+ * with no acknowledgement at all.
+ */
+.nessa-keycap[data-pressed="hidden"] {
+  animation: nessa-keycap-press-again 280ms var(--nessa-motion-easing-arrival);
+}
+
+@keyframes nessa-keycap-press {
+  40% {
+    /* Bottomed out: the front wall is gone and the cap is flat on the board. */
+    translate: 0 3px;
+    border-bottom-width: 1.5px;
+    border-color: rgb(255 255 255 / 0.95);
+    background: rgb(255 255 255 / 0.34);
+  }
+}
+
+@keyframes nessa-keycap-press-again {
+  40% {
+    translate: 0 3px;
+    border-bottom-width: 1.5px;
+    border-color: rgb(255 255 255 / 0.95);
+    background: rgb(255 255 255 / 0.34);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nessa-keycap[data-pressed] {
+    animation: none;
+  }
+}
+
+/*
+ * The setup window, and the way it arrives.
+ *
+ * The window is a transparent sheet over the whole work area, so setup can dim
+ * what is behind it before anything else happens. What a person sees is the box
+ * drawn here, not the window.
+ *
+ * The opening has two beats. First the screen dims and the agent's colours
+ * gather into an orb that stays where it is and keeps moving — this is the
+ * part that has to be given time, because it is the only moment the product
+ * has a face before it has an interface. Only then does the box arrive, at
+ * full size and soft edged, and resolve. The box is never uncovered by a
+ * growing circle: a shape that wipes itself in is a transition, and this is
+ * meant to read as one thing becoming another.
+ *
+ * Under a reduced-motion preference none of this runs: the dim and the box are
+ * simply there, which is the same end state the animation arrives at.
+ */
+/*
+ * The reveal's timeline, in one place.
+ *
+ * Every stage below is expressed against these, so the whole opening can be
+ * retimed — or cut short — without touching a keyframe. `content` is the sum
+ * of the three stages before it, which is when the panel has settled and its
+ * contents may start to arrive.
+ */
+.nessa-setup-sheet {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  /*
+   * The seed is the knob. It is the only stage with nothing to do but be
+   * watched, so it is the one that decides whether the opening feels unhurried
+   * or merely slow — and at this length the chime very nearly ends as the
+   * first words settle, which is the whole reason for the sound being there.
+   */
+  --nessa-reveal-seed: 2600ms;
+  --nessa-reveal-bloom: 760ms;
+  --nessa-reveal-settle: 300ms;
+  /* Derived, not chosen: content arrives when the panel has settled, whatever
+     the stages above are set to. */
+  --nessa-reveal-content: calc(
+    var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) + var(--nessa-reveal-settle)
+  );
+  /* The palette the seed is lit with. It is the panel's own, so the glow that
+     opens the window and the window's background are one colour scheme. */
+  --nessa-reveal-glow-cool: 150 116 214;
+  --nessa-reveal-glow-warm: 226 148 92;
+}
+
+/*
+ * The dim belongs to the arrival, not to setup.
+ *
+ * It exists to clear the desktop out of the way while there is nothing to look
+ * at but a light, and to make that light the only lit thing on the screen. Once
+ * the panel is there it has done its job: holding it for the rest of setup
+ * would leave a grey cast over everything the person is about to go back to,
+ * for no reason, and setup is a window — it does not need the room darkened to
+ * be read.
+ */
+.nessa-setup-dim {
+  position: absolute;
+  inset: 0;
+  /*
+   * A wash and nothing else. `backdrop-filter` here is the same mistake the
+   * panel documents above: on a transparent, undecorated macOS window it does
+   * not sample the behind-window content 1:1, and it stops updating when the
+   * window loses focus — so what it had sampled at some earlier moment stayed
+   * frozen on screen, which is why reopening setup left the desktop looking
+   * permanently frosted while a fresh launch looked right.
+   */
+  background: rgb(0 0 0 / 0.55);
+  animation: nessa-setup-dim
+    calc(
+      var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) + var(--nessa-reveal-settle)
+    )
+    var(--nessa-motion-easing-standard) both;
+}
+
+@keyframes nessa-setup-dim {
+  from {
+    opacity: 0;
+  }
+  /* Down within the first half-second, while the light is still gathering. */
+  17% {
+    opacity: 1;
+  }
+  /* Held for the whole of that, and lifted as the panel fills. */
+  58% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/*
+ * The reveal: a light wakes in an empty panel and fills it.
+ *
+ * The panel is the vessel and it exists first. The light lives inside it,
+ * clipped by its bounds, and grows until it has flooded them — so what is felt
+ * is a container filling, not a form being inflated until it happens to be the
+ * window. A round thing growing inside a square reaches the edges before the
+ * corners, which is what filling looks like.
+ *
+ * The colour is the panel's own wash from the first frame, so nothing
+ * crossfades into anything unrelated: the light *is* the background, seen
+ * before it has spread.
+ */
+@property --nessa-orb-scale {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.3;
+}
+
+/*
+ * How large the wash is drawn, independent of the light carrying it.
+ *
+ * Pinning it to the panel exactly would stop the zoom, but it would also make
+ * a small light a narrow crop of the gradient's middle — and the middle of a
+ * gradient is very nearly one flat colour, which is what makes an opening look
+ * dead. These hold the wash tighter than the inverse while the light is small,
+ * so real colour travels across it, and relax to the exact inverse as it
+ * spreads.
+ */
+@property --nessa-orb-wash {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 2.1;
+}
+
+/*
+ * The vessel. It is nothing at all while the light is gathering and while it
+ * spreads: the light floats free on the dimmed screen, and the only sign of a
+ * shape is where its spread is cut off at the corners. The panel's own backing
+ * and shadow come up once the light has reached its edges, so the light is seen
+ * to fill a shape and then become it. An empty dark panel shown first, waiting
+ * to be filled, read as a loading placeholder.
+ */
+.nessa-setup-window {
+  position: relative;
+  width: min(560px, 92vw);
+  /*
+   * A floor and a ceiling rather than a fixed height. Fixed, with nothing
+   * inside it scrolling, the agent picker's list and its Continue button were
+   * simply cut off at a large text size or a high UI scale — and a Continue
+   * button that cannot be reached is a setup that cannot be finished. The step
+   * column and the picker pane scroll; the window keeps its proportions until
+   * there is more content than screen.
+   */
+  min-height: min(560px, 82vh);
+  max-height: 82vh;
+  /* A column rather than a percentage-height box. With the height no longer
+     fixed there is nothing for a child's `height: 100%` to resolve against, and
+     the wash collapsed to nothing; as a flex item it is given the room that is
+     left instead, and can be told it may shrink. */
+  display: flex;
+  flex-direction: column;
+  /* Clips the light to the vessel's own corners; the layers inside scroll. */
+  overflow: hidden;
+  border-radius: 22px;
+  animation: nessa-setup-vessel
+    calc(var(--nessa-reveal-bloom) * 0.45 + var(--nessa-reveal-settle))
+    var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) * 0.55) both;
+}
+
+@keyframes nessa-setup-vessel {
+  from {
+    background: rgb(12 10 16 / 0);
+    box-shadow: none;
+  }
+  to {
+    background: rgb(12 10 16 / 0.55);
+    box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
+  }
+}
+
+/* The light itself, inside the vessel and cut off by it. */
+.nessa-setup-orb {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* The wash inside is drawn larger than this box on purpose, so this is what
+     cuts it to the light's own shape. Without it the wash simply hangs out as
+     a soft rectangle, which is not a light at all. */
+  overflow: hidden;
+  scale: var(--nessa-orb-scale);
+  border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
+  /* It stays soft the whole way. The panel's edge is what gives the filled
+     colour its shape, so the light never needs an edge of its own. */
+  filter: blur(34px);
+  box-shadow:
+    0 0 90px 8px rgb(var(--nessa-reveal-glow-cool) / 0.34),
+    0 0 170px 34px rgb(var(--nessa-reveal-glow-warm) / 0.17);
+  animation:
+    /* Linear, because the drift itself is what should be felt rather than an
+       easing curve pushing it about. */
+    nessa-setup-seed var(--nessa-reveal-seed) linear both,
+    /* Leaves without hurry, arrives without stopping dead. */ nessa-setup-fill
+      var(--nessa-reveal-bloom) cubic-bezier(0.34, 0.16, 0.2, 1) var(--nessa-reveal-seed)
+      forwards;
+}
+
+/*
+ * Stage one. The light breathes and changes shape without really growing, so
+ * the silhouette reads as organic rather than as something being inflated.
+ */
+@keyframes nessa-setup-seed {
+  0% {
+    opacity: 0;
+    --nessa-orb-scale: 0.22;
+    --nessa-orb-wash: 2.86;
+    border-radius: 54% 46% 48% 52% / 51% 47% 53% 49%;
+  }
+  26% {
+    opacity: 1;
+    --nessa-orb-scale: 0.3;
+    --nessa-orb-wash: 2.1;
+  }
+  /*
+   * Two shallow waypoints rather than a circuit of extreme ones. At this size,
+   * under this much blur, a large swing in the corners does not read as a
+   * shape changing — it reads as a small light twitching.
+   */
+  50% {
+    --nessa-orb-scale: 0.32;
+    --nessa-orb-wash: 1.98;
+    border-radius: 47% 53% 55% 45% / 46% 54% 46% 54%;
+  }
+  78% {
+    --nessa-orb-scale: 0.31;
+    --nessa-orb-wash: 2.03;
+    border-radius: 56% 44% 45% 55% / 57% 43% 57% 43%;
+  }
+  100% {
+    opacity: 1;
+    --nessa-orb-scale: 0.33;
+    --nessa-orb-wash: 1.92;
+    border-radius: 51% 49% 49% 51% / 52% 48% 52% 48%;
+  }
+}
+
+/*
+ * Stage two. It overshoots the panel rather than landing on it, because a
+ * light that stops exactly at the corners has been fitted to them; one that
+ * carries past has filled them. The wash ends at the inverse of that overshoot
+ * so the colour is still exactly panel-sized underneath.
+ */
+@keyframes nessa-setup-fill {
+  from {
+    opacity: 1;
+    --nessa-orb-scale: 0.33;
+    --nessa-orb-wash: 1.92;
+    border-radius: 51% 49% 49% 51% / 52% 48% 52% 48%;
+    box-shadow:
+      0 0 90px 8px rgb(var(--nessa-reveal-glow-cool) / 0.34),
+      0 0 170px 34px rgb(var(--nessa-reveal-glow-warm) / 0.17);
+  }
+  78% {
+    opacity: 1;
+  }
+  to {
+    /* Gone, onto the panel's own wash underneath — which is the same wash, so
+       there is nothing to see in the change. */
+    opacity: 0;
+    --nessa-orb-scale: 1.3;
+    --nessa-orb-wash: 0.77;
+    border-radius: 34% 66% 62% 38% / 44% 36% 64% 56%;
+    box-shadow:
+      0 0 0 0 rgb(var(--nessa-reveal-glow-cool) / 0),
+      0 0 0 0 rgb(var(--nessa-reveal-glow-warm) / 0);
+  }
+}
+
+/* The wash: the panel's colour, held under the light rather than carried by
+   it. A wash that grows with its container reads as magnification. */
+.nessa-setup-orb-wash {
+  position: absolute;
+  inset: 0;
+  scale: var(--nessa-orb-wash);
+}
+
+/*
+ * The panel's settled background, which comes up under the light as it floods
+ * so that what is left when the light goes is already there.
+ */
+.nessa-setup-stage {
+  /* Takes the room the window has left, and may shrink below its content so
+     the step inside it is the thing that scrolls. */
+  flex: 1 1 auto;
+  min-height: 0;
+  animation: nessa-setup-settled 520ms var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) + 300ms) both;
+}
+
+@keyframes nessa-setup-settled {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nessa-setup-dim,
+  .nessa-setup-window,
+  .nessa-setup-orb,
+  .nessa-setup-orb-wash,
+  .nessa-setup-stage,
+  .nessa-setup-word,
+  .nessa-setup-arrive,
+  .nessa-setup-chrome,
+  .nessa-setup-control {
+    animation: none;
+  }
+  /* The final composition, with none of the movement that arrives at it. */
+  .nessa-setup-orb {
+    display: none;
+  }
+  /*
+   * Every end state the cancelled keyframe was carrying, not just the shadow.
+   * The dark vessel fill existed only inside `nessa-setup-vessel`, so turning
+   * that animation off took the window's backing with it — leaving the light
+   * type over nothing but the desktop, its worst-case background for contrast.
+   */
+  .nessa-setup-window {
+    background: rgb(12 10 16 / 0.55);
+    box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
+  }
+}
+
+/*
+ * An upload, drawn on the edge of the tile it belongs to.
+ *
+ * The file is the thing being looked at, so the file stays visible: the
+ * progress goes around it rather than over it. A spinner in the middle covered
+ * the very thumbnail somebody attached to check they had picked the right one,
+ * and said no more than the edge says.
+ *
+ * The band is the same two-layer mask the panel's edge reveal uses — an inner
+ * box clipped to content, composited away from the border box, leaving a ring
+ * exactly `padding` thick — so the light sits on the tile's own outline
+ * whatever radius the design system gives it.
+ *
+ * While it uploads the band carries the Nessa rim spectrum and turns, the same
+ * light the composer's rim works by. When the gateway has it, the band becomes
+ * one calm green and goes: it is an answer, not a state to live in, and the
+ * tile it leaves behind is the plain tile of a file that is ready. Removing it
+ * is `animationend`'s to say, so what is on screen and what React holds cannot
+ * disagree.
+ */
+.nessa-upload-ring {
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-clip: content-box, border-box;
+  -webkit-mask-composite: xor;
+}
+
+/* Wider than the tile and square, so the sweep's centre is the tile's centre
+   and no corner of the band is ever left unlit as it comes round. */
+.nessa-upload-ring[data-state="uploading"]::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from 0turn,
+    transparent 0turn,
+    var(--nessa-chat-rim-1) 0.12turn,
+    var(--nessa-chat-rim-3) 0.22turn,
+    var(--nessa-chat-rim-4) 0.3turn,
+    transparent 0.42turn,
+    transparent 1turn
+  );
+  animation: nessa-upload-turn 1.4s linear infinite;
+}
+
+.nessa-upload-ring[data-state="settled"] {
+  background: var(--nessa-notification-success);
+  animation: nessa-upload-settled 900ms var(--nessa-motion-easing-standard) forwards;
+}
+
+@keyframes nessa-upload-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes nessa-upload-settled {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * The band stops travelling and stays lit: that it is uploading is the
+   * information, and the movement only carried it. The green keeps its
+   * animation — shorter, and with nothing to watch — because leaving is what
+   * that animation is for, and `animationend` is what takes the band away.
+   */
+  .nessa-upload-ring[data-state="uploading"]::before {
+    animation: none;
+    background: var(--nessa-chat-rim-3);
+  }
+  .nessa-upload-ring[data-state="settled"] {
+    animation-duration: 240ms;
+  }
 }

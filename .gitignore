@@ -8,7 +8,8 @@ coverage/
 *.tsbuildinfo
 
 # --- Rust (Cargo workspace: nessa-server + src-tauri) ---
-/target/
+# Match both a build directory and a symlink to a shared build directory.
+/target
 src-tauri/target/
 
 # --- Tauri generated ---
@@ -30,8 +31,14 @@ Thumbs.db
 
 # Claude Code local worktrees (full repo copies for agent sessions)
 .claude/worktrees/
+# Per-machine dev-server config for the agent's browser preview. The skills
+# beside it are shared and stay tracked.
+.claude/launch.json
 
 # --- Project-specific ---
+
+# Local review notes and generated walkthroughs.
+scratchpad/
 
 # Rasterised icon intermediates: regenerate with scripts/render-icon.mjs
 src-tauri/icons/nessa-avatar.png
@@ -44,3 +51,6 @@ src-tauri/icons/nessa-avatar.png
 # Rebuild with pnpm client:docs or client:docs:json.
 docs/generated/client-api/
 docs/generated/client-api.json
+
+# Generated bundled gateway and provider runtime
+src-tauri/runtime/

@@ -326,7 +326,16 @@ or batches at checkpoints rather than reuse a connection-wide permission.
 
 The **registry** is the private file containing access records: identities,
 memberships, token expiry times, permissions, and revocations. It also records
-issuance requests so retries do not accidentally create another token.
+issuance requests so retries do not accidentally create another token, and an
+append-only list of **transitions**: for every token created or revoked, what it
+looked like before and after, why it changed (a deliberate revoke, a replacement
+during surface provisioning, a displacement during owner recovery, and so on),
+who caused it, and which request it belonged to. A transition is saved in the
+same write as the change it describes, so the file never says a token is revoked
+without also saying why. The file format is schema 2; files from before this
+list existed are not read, because the project is pre-alpha and keeps no
+compatibility with earlier registries. The reasoning is in
+[credential transition audit](../../design/auth/credential-transition-audit.md).
 
 A **committed change** means the server has finished saving a change to that file
 and received confirmation from the operating system that the write was synced to
@@ -370,7 +379,8 @@ committed state usable. The store does not automatically repeat the mutation.
 If replacement succeeds but directory sync fails, the store makes one recovery
 attempt: reopen the private registry, compare all bytes with the expected state,
 validate it, sync the file, and sync its directory. This includes the mutation's
-receipt and revision, so a matching request ID alone is not enough to prove success.
+receipt, revision, and transitions, so a matching request ID alone is not enough
+to prove success.
 If these checks and syncs succeed, the store publishes the new state once. If they
 fail, authentication and access checks stop until the store can be safely reopened.
 A readable file alone does not prove that a failed sync has been resolved.

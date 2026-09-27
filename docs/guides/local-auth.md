@@ -1,16 +1,92 @@
 # Use local authentication
 
+## Develop on this machine
+
+For a developer running the desktop app, there is one command:
+
+```sh
+just start
+```
+
+`just start` and `just server` run `nessa server --provision-local`. Before
+binding the port, that creates what the local namespace is missing: the
+credential registry and an owner credential at `<root>/owner.token` if there is
+no registry, and the panel's own credential at
+`auth/surfaces/nessa-panel.token` if that file is absent. Both checks are
+guards. An existing registry is never re-initialized and an existing surface
+credential is never rotated, so restarting the server cannot invalidate a token
+in use. If either step fails, the server reports which step and why, and exits
+without serving.
+
+Credentials make the gateway reachable; they do not give it an agent. So the
+same two recipes first run `node scripts/dev-agent-config.mjs`, which writes the
+`agents` section of `$HOME/.nessa/dev/config.json` from this checkout — the
+server is not allowed to know what a git checkout is, so the checkout is what
+says where each ACP harness, the model catalog, Node and the `nessa-mcp` build
+are. Every agent whose harness is installed is configured, not Claude alone, so
+a checkout with only the Codex harness gets a Codex gateway. It is a guard in
+exactly the same sense: an `agents` section that already exists is left
+untouched, and a `config.json` that does not parse is reported rather than
+replaced. The `agent` section an earlier version of the script wrote is retired
+when the new one is written, because the server refuses to start on a file that
+still has it. Anything it cannot resolve — most often a clone where
+`(cd crates/nessa-sdk/harnesses/claude-acp && npm ci --omit=dev)` has not been
+run yet — is printed with the command that fixes it, and the gateway still
+starts, answering `conversations_not_configured` for chat. See
+[gateway chat](gateway-chat.md) for the section's fields.
+
+Everything below is the deliberate path, and the only path for a server you
+operate: plain `nessa server` provisions nothing.
+
 ## Create owner access
 
 Build with Rust 1.89 or newer, then initialize once:
 
 ```sh
 cargo build -p nessa-server
-target/debug/nessa-server auth init --owner-token-file "$HOME/nessa-owner.token"
-pnpm server:run
+target/debug/nessa auth init --local
+target/debug/nessa server
 ```
 
-Use a new absolute path for the token file. The command writes it with mode
+The executable is `nessa`; the Rust package remains `nessa-server`. Install it on
+PATH with `cargo install --path crates/nessa-server --bin nessa --locked`.
+Run `nessa --help` for the command surface. `nessa server` starts the gateway;
+calling `nessa` with no arguments displays help.
+
+`auth init --local` is one-time offline bootstrap. It creates the gateway identity,
+owner credential and panel credential before the gateway exists. The default
+owner output is `<namespace>/auth/surfaces/nessa-cli.token`, used by the CLI.
+An explicit `--owner-token-file /absolute/new.token` selects a different output;
+then supply that path to online commands with `--credential-file`.
+Do not run init for each browser login. Local registry commands still require
+the gateway to be stopped. Cloud authentication is not implemented: `--cloud`
+returns an error without provisioning local state.
+
+With the gateway running, use a second terminal:
+
+```sh
+nessa doctor
+nessa auth token | pbcopy  # macOS: paste into the browser sign-in form
+```
+
+`auth token` authenticates as a CLI surface over `/session` and requests a new
+browser credential from the gateway. It never opens the live registry. Each
+invocation creates a distinct member principal with only `server.read` and
+`conversation.write` on the authenticated gateway and organization. Tokens have no expiry by default, capped by the CLI credential's expiry.
+Use `nessa auth token --ttl 12h` (positive `s`, `m`, `h`, or `d` duration)
+for temporary access, or `--no-expiry` to state the default explicitly. Only the secret goes to stdout;
+request and credential IDs go to stderr. Issuance is never automatically retried.
+If delivery is uncertain or output fails, inspect/revoke the recorded credential
+using the administrative commands below before issuing again.
+
+`doctor` checks configuration loading, private credential access, authenticated
+connection and authorized health. It writes JSON to stdout and returns nonzero
+on failure. Diagnostics do not include credentials. Online commands default to
+local mode; `--local` is optional. They use the same `NESSA_*` namespace, stage,
+host and port as the server, and cannot send local credentials to remote hosts.
+Use `--credential-file /absolute/path` for an existing owner credential.
+
+When specifying an output, use a new absolute path for the token file. The command writes it with mode
 `0600` on Unix or a protected Windows ACL and prints only metadata. Treat the file as a password. Owner and ordinary credentials have no expiry by default. Set `--expires-at UNIX_SECONDS`
 on offline commands, or `expiresAt` on issuance, when you want temporary access.
 Explicit expiry must be in the future. There is no 24-hour or 30-day lifetime cap.
@@ -22,12 +98,28 @@ segment and an unset instance segment are omitted. Explicit instances isolate
 production auth too. Data roots must be absolute and instance names safe path
 segments.
 
+If the registry cannot be trusted, every local command and server startup names
+the exact file and a structural fault, leaves its bytes unchanged, and writes a
+separate refusal record under
+`<namespace>/auth/audit/credential-registry-refusals`. Restore a verified backup
+to the named registry path before retrying. Keep the rejected file as evidence.
+For a private-storage refusal, a verified registry may instead have its
+current-user ownership, single regular-file link, and private permissions
+restored in place (`0600` for the file and `0700` for its directories on Unix).
+If no trustworthy backup exists, the last resort is to move that file to secure
+evidence storage and run `nessa auth init --local` with a new absolute token
+path. That operation is a new identity boundary: it creates new gateway,
+organization, and credential identities, invalidates every old token, and can
+orphan access to conversations associated with the old identity. It does not
+repair or preserve the old registry. A refusal-audit sink failure is reported
+after the original registry fault and never authorizes startup.
+
 The gateway serves authenticated WebSocket sessions at `/session`. The panel uses
 this protocol and automatically loads its own credential through the native host.
 `auth init` assigns it a distinct principal and private file at
 `auth/surfaces/nessa-panel.token`, with all currently implemented permissions:
 `server.read`, `conversation.write`, and `credential.manage`.
-Use `auth init --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
+Use `auth init --local --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
 to restrict initial chat access. Client metadata never grants permissions.
 
 ## Mint a restricted token
@@ -35,7 +127,7 @@ to restrict initial chat access. Client metadata never grants permissions.
 First list credentials to obtain your organization and gateway IDs:
 
 ```sh
-pnpm auth:cli list --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token"
+pnpm auth:cli list --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token"
 ```
 
 Save this request as an absolute-path JSON file. Replace `ORG_ID`, `GATEWAY_ID`,
@@ -65,7 +157,7 @@ it does not grant authority.
 ```
 
 ```sh
-pnpm auth:cli issue --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token" --input /absolute/issue.json --out /absolute/terminal.token
+pnpm auth:cli issue --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token" --input /absolute/issue.json --out /absolute/terminal.token
 ```
 
 The output path must be new. The CLI writes the secret privately and prints its
@@ -81,7 +173,7 @@ while reusing its request ID fails.
 ## Revoke a token
 
 ```sh
-pnpm auth:cli revoke CREDENTIAL_ID --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token"
+pnpm auth:cli revoke CREDENTIAL_ID --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token"
 ```
 
 Revocation persists across restarts. Attached idle clients close on their next
@@ -93,8 +185,8 @@ transport bytes cannot be recalled.
 Stop the server, then use a new token path:
 
 ```sh
-target/debug/nessa-server auth recover-owner --owner-token-file "$HOME/nessa-owner-next.token"
-pnpm server:run
+target/debug/nessa auth recover-owner --local --owner-token-file "$HOME/nessa-owner-next.token"
+target/debug/nessa server
 ```
 
 Recovery keeps the same gateway and organization and revokes previous
@@ -118,8 +210,8 @@ authorization boundaries, and platform limits.
 Stop the gateway, then provision or replace the credential assigned to a surface:
 
 ```sh
-target/debug/nessa-server auth provision-surface --surface-id terminal --grants server.read
-target/debug/nessa-server auth provision-surface --surface-id nessa-panel --grants server.read,conversation.write,credential.manage
+target/debug/nessa auth provision-surface --local --surface-id terminal --grants server.read
+target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.write,credential.manage
 ```
 
 Each surface has a distinct principal, membership, and token. Reprovisioning revokes
@@ -159,7 +251,9 @@ capacity or change a conflicting command deliberately rather than blindly retryi
 ## Configure limits without rebuilding
 
 Create `config.json` beside the namespace's `auth` directory. For default local
-development this is `$HOME/.nessa/dev/config.json`. For an explicit instance it is
+development this is `$HOME/.nessa/dev/config.json` — the same file the dev loop
+writes an `agents` section into; `registry` and `session` are never written there
+and are yours alone. For an explicit instance it is
 `<root>/<stage>/instances/<instance>/config.json`; omit the `prod` stage segment.
 Create this file with the same private permissions as credential files: current OS
 user ownership, a single link, and mode `0600` on Unix or a private DACL on Windows.
@@ -262,3 +356,83 @@ raise configured limits deliberately if necessary, never delete registry records
 to unblock a mutation. Keep the original request ID for explicit retries, including
 revoke retries, to avoid consuming additional receipts. See the review for the
 full retention decision and typed failure handling.
+
+## Run Nessa in a browser
+
+Browser sign-in uses an opaque server session cookie. HTTPS uses the
+`__Host-nessa-session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, and
+host-only scope. Numeric loopback HTTP in dev/CI uses the separate
+`nessa-local-session` cookie with the same attributes except `Secure`. Sessions
+expire after 30 days of inactivity. Current credential expiry, revocation,
+membership, grants, and policy are resolved independently on every admission.
+While the browser is visible, it checks every five minutes and on focus;
+the server extends the idle deadline at most once per hour and refreshes the cookie.
+Refresh, browser restart, and gateway restart reconnect without entering a token again. Sign-out revokes that session on the server and
+clears its cookie. Submitted access tokens are never stored in localStorage,
+sessionStorage, Redux, or URLs. The server retains only the verified credential
+ID, bound origin, and idle-lifetime evidence, not the submitted token or copied
+identity claims. Sessions are bounded to 128 per gateway and persisted in the private namespace
+file `auth/browser-sessions.jsonl`. Its append-only journal retains typed transition
+causes (including credential revocation/expiry, inactive membership, identity
+mismatch, and invalid credential state), honest
+automatic or caller attribution, and before/after state; it contains no submitted access tokens.
+A record states the instant its transitions happened, and nothing in the file
+can vouch for that instant. At startup, after replay, any surviving session
+whose renewal claims to be more than an hour ahead of the clock is removed and
+that removal is journalled with the cause `FutureRenewal` and no initiator. A
+forged or clock-damaged journal therefore cannot extend a session past the next
+startup, and a backwards clock step costs one sign-in rather than refusing to
+open the store or leaving it unable to record a sign-out. A forged *expiry*
+remains possible; it grants nothing beyond what truncating the private,
+exclusively locked journal already would.
+Storage failure rejects the transition and makes the store unavailable until
+restart; corrupt journals fail startup. Journal reads, writes, and flushes run on
+the server's blocking pool and browser authentication deadlines cover the complete
+storage and identity operation. The journal has a 64 MiB total bound, checked
+before replay and before every append. Reaching the bound fails further session
+transitions without discarding historical audit evidence or growing the file. To
+rotate it, stop the gateway, move the journal to private archival storage, and
+restart; browsers then sign in once to create a new journal. Do not truncate a live
+journal or discard the archive.
+Existing in-memory sessions need one sign-in after upgrading. Existing finite
+tokens keep their original expiry; generate a new token for ongoing access.
+Revocation and permission changes
+continue to apply to every connection and operation.
+
+For local development, run the gateway with `NESSA_STAGE=dev` (what a debug
+build defaults to; a release binary defaults to `prod`, the stage the packaged
+app registers its gateway under),
+then run `pnpm dev` and open `http://127.0.0.1:1420`. No certificate is needed.
+Both the gateway and frontend must use dev or CI stage for HTTP sign-in.
+Only numeric loopback (`127.0.0.1` or `[::1]`) permits HTTP/WS; `localhost`, LAN
+addresses, and alpha/prod stages do not. The server independently enforces this
+policy; a frontend stage setting cannot enable it on a production gateway.
+
+For HTTPS, start the current server build, then run the browser UI with a certificate your
+browser trusts (for example, a localhost certificate issued by your development CA):
+
+```sh
+NESSA_BROWSER_TLS_CERT=/absolute/localhost.pem \
+NESSA_BROWSER_TLS_KEY=/absolute/localhost-key.pem \
+pnpm exec vite --host 127.0.0.1 --port 1443
+```
+
+Open `https://127.0.0.1:1443`. The certificate must cover `127.0.0.1`. Vite forwards
+`/browser` HTTP and WebSocket requests to the dev gateway on port 7421; set
+`NESSA_BROWSER_GATEWAY_URL` to target a different test gateway. The browser uses
+HTTPS/WSS on this URL, or HTTP/WS for loopback development; the proxy's upstream
+hop is local loopback HTTP. Native
+Tauri development retains its existing HTTP dev server. This does not add a
+remote gateway deployment or install a trusted CA automatically.
+
+Provision a dedicated browser surface token using the offline surface command
+above with `--surface-id nessa-browser --grants server.read,conversation.write`.
+Its token file is `auth/surfaces/nessa-browser.token` under the selected namespace.
+Provisioning is an offline command: follow the existing gateway-stop requirement.
+Enter that token once. Do not use the owner token for normal browser sessions.
+
+Browser endpoints require a trusted loopback Origin and a custom request header;
+the session is bound to the exact origin that signed in. No CORS access is enabled.
+Cookie authentication is accepted only on `/browser/session`; native `/session`
+continues to require explicit credential evidence. Sign-out closes all sockets
+using that browser session on the next state check, without cancelling agents.

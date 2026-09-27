@@ -5,8 +5,6 @@
 export type {
   ClientInfo,
   ClientRole,
-  EchoParams,
-  EchoResult,
   EventFrame,
   GatewayError,
   HealthResult,

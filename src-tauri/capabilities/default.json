@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the floating Nessa window is allowed to ask the host for.",
+  "description": "What every Nessa window is allowed to ask the host for.",
   "windows": [
-    "main"
+    "main",
+    "setup"
   ],
   "permissions": [
     "core:default",

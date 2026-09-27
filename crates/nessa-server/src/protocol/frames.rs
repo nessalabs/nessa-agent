@@ -1,6 +1,7 @@
 //! Wire frame envelopes from `protocol/schemas/v1/frames.json`.
 
 use super::generated_types::GatewayError;
+use super::json::unique_value;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -13,6 +14,19 @@ pub struct RequestFrame {
     pub id: String,
     pub method: String,
     pub params: Value,
+}
+
+impl RequestFrame {
+    /// Decode one client frame from its wire text.
+    ///
+    /// `params` stays an untyped value until the method that owns it decodes it,
+    /// so a policy-bearing name repeated in the original JSON would otherwise be
+    /// collapsed to one value before anything could object. Decoding rejects
+    /// repeated names at every depth, which is why no client text reaches
+    /// dispatch — or error correlation — through `serde_json::from_str`.
+    pub fn decode(text: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(unique_value(text)?)
+    }
 }
 
 /// Server → client RPC reply (`type: "res"`).
@@ -62,6 +76,16 @@ impl ResponseFrame {
 
     /// Failed RPC reply with a gateway error code and message.
     pub fn failure(request_id: &str, code: &str, message: &str) -> Self {
+        Self::failure_with_details(request_id, code, message, None)
+    }
+
+    /// Failed RPC reply with optional typed method-specific details.
+    pub fn failure_with_details(
+        request_id: &str,
+        code: &str,
+        message: &str,
+        details: Option<Value>,
+    ) -> Self {
         Self {
             kind: "res",
             id: request_id.to_string(),
@@ -70,7 +94,7 @@ impl ResponseFrame {
             error: Some(GatewayError {
                 code: code.to_string(),
                 message: message.to_string(),
-                details: None,
+                details,
             }),
         }
     }

@@ -206,6 +206,648 @@ export interface SessionTermination {
   /** Optional server delay hint in milliseconds, bounded to 60,000. */
   retryAfterMs?: number
 }
+/** Current invocation status, including unresolved interrupted history. */
+export const ConversationMessageStatus = {
+  Queued: "queued",
+  Running: "running",
+  Completed: "completed",
+  Cancelled: "cancelled",
+  Failed: "failed",
+  Injected: "injected",
+  Unresolved: "unresolved",
+} as const
+export type ConversationMessageStatus =
+  (typeof ConversationMessageStatus)[keyof typeof ConversationMessageStatus]
+/** How an admitted input waits for dispatch. */
+export const ConversationPendingMode = { Queued: "queued", Steering: "steering" } as const
+export type ConversationPendingMode =
+  (typeof ConversationPendingMode)[keyof typeof ConversationPendingMode]
+/** How the gateway accepted or recovered this submission. */
+export const ConversationDisposition = {
+  Queued: "queued",
+  Injected: "injected",
+  Settled: "settled",
+} as const
+export type ConversationDisposition =
+  (typeof ConversationDisposition)[keyof typeof ConversationDisposition]
+/** Current provider attachment state. This is presentation state and grants no operation authority. */
+export const ConversationLifecyclePhase = {
+  Absent: "absent",
+  Starting: "starting",
+  Attached: "attached",
+  Failed: "failed",
+} as const
+export type ConversationLifecyclePhase =
+  (typeof ConversationLifecyclePhase)[keyof typeof ConversationLifecyclePhase]
+/** Stable category for a provider attachment failure. */
+export const ConversationStartupFailureCode = {
+  Audit: "audit",
+  Provider: "provider",
+  Storage: "storage",
+  Cleanup: "cleanup",
+} as const
+export type ConversationStartupFailureCode =
+  (typeof ConversationStartupFailureCode)[keyof typeof ConversationStartupFailureCode]
+/** Bounded presentation of the latest provider attachment failure. It carries no admission or cleanup authority. */
+export interface ConversationStartupFailure {
+  /** Stable failure category. */
+  code: ConversationStartupFailureCode
+  /** Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound. */
+  message: string
+}
+/** Bounded late failure to acknowledge mandatory attachment audit evidence. It carries no lifecycle authority. */
+export interface ConversationAttachmentEvidenceFailure {
+  /** Mandatory attachment audit was not acknowledged. */
+  code: "audit"
+  /** Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound. */
+  message: string
+}
+/** Current provider attachment lifecycle for this conversation. */
+export interface ConversationLifecycle {
+  /** Current provider attachment phase. */
+  phase: ConversationLifecyclePhase
+  /** Present exactly when phase is failed. */
+  failure?: ConversationStartupFailure
+  /** Late mandatory attachment-audit failure retained independently of the current phase. It grants no lifecycle authority. */
+  evidenceFailure?: ConversationAttachmentEvidenceFailure
+}
+/** Whether Nessa can deliver a deny choice offered by a provider permission review. */
+export const PermissionDenialSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedForOfferedPermissionReviews: "supported_for_offered_permission_reviews",
+} as const
+export type PermissionDenialSupport =
+  (typeof PermissionDenialSupport)[keyof typeof PermissionDenialSupport]
+/** Whether suppression of user-configured provider hooks has been verified. */
+export const NativeHookSuppressionSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedForUserConfiguredHooks: "supported_for_user_configured_hooks",
+} as const
+export type NativeHookSuppressionSupport =
+  (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
+/** Whether Nessa reports provider compaction with invocation correlation. */
+export const CompactionReportingSupport = {
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedWithInvocationCorrelation: "supported_with_invocation_correlation",
+} as const
+export type CompactionReportingSupport =
+  (typeof CompactionReportingSupport)[keyof typeof CompactionReportingSupport]
+/** Whether Nessa reports a provider model switch after validation. */
+export const ModelSwitchReportingSupport = {
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedAfterValidatedSwitch: "supported_after_validated_switch",
+} as const
+export type ModelSwitchReportingSupport =
+  (typeof ModelSwitchReportingSupport)[keyof typeof ModelSwitchReportingSupport]
+/** Whether Nessa supports an explicit nonterminal defer outcome for a permission review. */
+export const PermissionDeferralSupport = {
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedWithNonterminalOutcome: "supported_with_nonterminal_outcome",
+} as const
+export type PermissionDeferralSupport =
+  (typeof PermissionDeferralSupport)[keyof typeof PermissionDeferralSupport]
+/** Whether the provider binding forwards one correlated elicitation round trip. */
+export const ElicitationForwardingSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedWithCorrelatedRoundTrip: "supported_with_correlated_round_trip",
+} as const
+export type ElicitationForwardingSupport =
+  (typeof ElicitationForwardingSupport)[keyof typeof ElicitationForwardingSupport]
+/** Whether a configured Nessa policy can deny a tool held at a permission gate. */
+export const PreToolPolicySupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedAtPermissionGate: "supported_at_permission_gate",
+} as const
+export type PreToolPolicySupport =
+  (typeof PreToolPolicySupport)[keyof typeof PreToolPolicySupport]
+/** Whether a Nessa policy can end its correlated current invocation. */
+export const PolicyEndTurnSupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedForCurrentInvocation: "supported_for_current_invocation",
+} as const
+export type PolicyEndTurnSupport =
+  (typeof PolicyEndTurnSupport)[keyof typeof PolicyEndTurnSupport]
+/** Whether a Nessa policy can close its correlated provider session. */
+export const PolicyCloseSessionSupport = {
+  Unknown: "unknown",
+  UnsupportedNotImplemented: "unsupported_not_implemented",
+  SupportedForSession: "supported_for_session",
+} as const
+export type PolicyCloseSessionSupport =
+  (typeof PolicyCloseSessionSupport)[keyof typeof PolicyCloseSessionSupport]
+/** Whether the negotiated agent can ask and receive a correlated answer through Nessa. */
+export const IncomingElicitationSupport = {
+  Unknown: "unknown",
+  Unsupported: "unsupported",
+  SupportedWithCorrelatedRoundTrip: "supported_with_correlated_round_trip",
+} as const
+export type IncomingElicitationSupport =
+  (typeof IncomingElicitationSupport)[keyof typeof IncomingElicitationSupport]
+/** Scoped provider transport facts and effective Nessa policy integration support. */
+export interface ConversationAgentFeatures {
+  /** Scoped delivery support for a rejecting option offered by a provider review. */
+  permissionDenial: PermissionDenialSupport
+  /** Verified suppression state for user-configured provider hooks. */
+  nativeHookSuppression: NativeHookSuppressionSupport
+  /** Effective Nessa support for correlated compaction reporting. */
+  compactionReporting: CompactionReportingSupport
+  /** Effective Nessa support for validated model-switch reporting. */
+  modelSwitchReporting: ModelSwitchReportingSupport
+  /** Effective Nessa support for an explicit nonterminal permission defer outcome. */
+  permissionDeferral: PermissionDeferralSupport
+  /** Provider forwarding support for a correlated elicitation round trip. */
+  elicitationForwarding: ElicitationForwardingSupport
+  /** Effective Nessa support for enforcing configured policy before a held tool runs. */
+  preToolPolicy: PreToolPolicySupport
+  /** Effective Nessa support for ending a current invocation from policy. */
+  policyEndTurn: PolicyEndTurnSupport
+  /** Effective Nessa support for closing a provider session from policy. */
+  policyCloseSession: PolicyCloseSessionSupport
+  /** Effective Nessa support for receiving and resolving incoming elicitation. */
+  incomingElicitation: IncomingElicitationSupport
+}
+/** Operations supported by this configured agent. */
+export interface ConversationCapabilities {
+  /** Can queue input at invocation boundaries. */
+  queue: boolean
+  /** Can submit supported steering input. */
+  steer: boolean
+  /** Can restore the provider context. */
+  resume: boolean
+  /** Can review provider permission requests. */
+  permissions: boolean
+  /** The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none. */
+  imageInput: boolean
+  /** Scoped transport and effective application support for agent features. */
+  agentFeatures: ConversationAgentFeatures
+}
+/** One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message. */
+export interface ImageAttachment {
+  /** SHA-256 of the image bytes: `sha256:` and 64 lowercase hexadecimal digits. */
+  digest: string
+  /** Image encoding. */
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+  /** Image length in bytes, at most 5 MiB. */
+  size: number
+}
+/** One file a message points the agent at. The gateway, the agent and the panel run on one machine, so the path travels and the bytes never do; the agent opens the file itself, with the reader's approval, or does not open it at all. */
+export interface LinkedFile {
+  /** Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown — the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's. */
+  path: string
+}
+/** Ask to upload one file into a conversation. Repeating it for bytes the conversation already holds needs no upload. */
+export interface AttachmentBeginParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it. */
+  digest: string
+  /** Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower. */
+  mimeType: string
+  /** Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long. */
+  size: number
+}
+/** Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape. */
+export interface AttachmentBeginResult {
+  /** The action this answers. */
+  requestId: string
+  /** `stored` needs nothing further; `upload_required` carries a ticket. */
+  state: "stored" | "upload_required"
+  /** Secret single-use upload ticket, sent as the `x-nessa-upload-ticket` header of one `PUT /attachments`. Null when stored. Do not log it. */
+  ticket: string | null
+  /** Unix milliseconds after which the ticket is refused. Null when stored. */
+  expiresAtMs: number | null
+  /** When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required. */
+  digest: string | null
+  /** When stored: media type of what the conversation holds. Null when an upload is required. */
+  mimeType: string | null
+  /** When stored: length in bytes of what the conversation holds. Null when an upload is required. */
+  size: number | null
+}
+/** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
+export interface ConversationMessage {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** User input text; empty for a message of images alone. */
+  userText: string
+  /** Images the user sent with this turn, in attachment order. */
+  attachments: ImageAttachment[]
+  /** Files the user pointed this turn at, in attachment order. No bytes were ever carried for them. */
+  files: LinkedFile[]
+  /** Current invocation state. */
+  status: ConversationMessageStatus
+  /** Bounded diagnostic for this invocation. */
+  error?: string
+  /** Execution that consumed this injected steering input; its shared reply answers this input. */
+  steeringTarget?: string
+  /** Provider observations in execution order; offsets address the retained SDK event sequence. */
+  parts: ConversationPart[]
+  /** Target event count when steering was admitted locally; does not imply provider consumption timing. */
+  steeringOffset?: number
+}
+/** A waiting input that may be removed before dispatch. */
+export interface ConversationPending {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Waiting user input; empty for a message of images alone. */
+  text: string
+  /** Images waiting with this input, in attachment order. */
+  attachments: ImageAttachment[]
+  /** Files the waiting input points at, in attachment order. */
+  files: LinkedFile[]
+  /** Queue or steering admission. */
+  mode: ConversationPendingMode
+}
+/** An exact option offered by the provider. */
+export interface ConversationPermissionOption {
+  /** Opaque offered option identifier. */
+  id: string
+  /** Provider label for this option. */
+  label: string
+}
+/** A pending review with its complete offered choices. */
+export interface ConversationPermission {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Permission identity within the execution. */
+  permissionId: string
+  /** Tool being reviewed. */
+  toolId: string
+  /** Provider tool title. */
+  title: string
+  /** Complete offered choices; never silently shortened. */
+  options: ConversationPermissionOption[]
+  /** Exact reviewed tool name. */
+  toolName: string
+  /** Exact original JSON input reviewed by the user; never truncated. */
+  argumentsJson: string
+}
+/** Bounded presentation of an observed tool call. */
+export interface ConversationTool {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Tool call identity within the execution. */
+  toolId: string
+  /** Provider tool title. */
+  title: string
+  /** What the call does, as the provider categorised it. Empty until the provider has said, which is why a panel counts kinds it knows rather than assuming the rest are reads. */
+  kind:
+    | ""
+    | "read"
+    | "edit"
+    | "search"
+    | "fetch"
+    | "execute"
+    | "think"
+    | "delete"
+    | "move"
+    | "switch_mode"
+    | "other"
+  /** Current provider tool status. */
+  status: string
+  /** Bounded provider-observed tool output and file changes; omitted content is marked. */
+  details: string
+  /** Exact tool arguments observed through a permission request, or empty when unavailable. */
+  input: string
+}
+/** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
+export interface ConversationView {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Opaque revision; compare for equality, never numeric ordering. */
+  revision: string
+  /** Recent turns with current streamed output. */
+  messages: ConversationMessage[]
+  /** Current removable queue entries. */
+  pending: ConversationPending[]
+  /** Actionable permission reviews. */
+  permissions: ConversationPermission[]
+  /** Recent tool states. */
+  tools: ConversationTool[]
+  /** Agent operation support. */
+  capabilities: ConversationCapabilities
+  /** Current provider attachment lifecycle. */
+  lifecycle: ConversationLifecycle
+  /** Some non-actionable history or text was omitted to bound this response. */
+  truncated: boolean
+  /** Why pending review choices cannot safely be shown; do not offer inferred choices. */
+  permissionViewError?: string
+  /** All currently pending execution IDs are represented, so an exact reorder may be attempted. */
+  queueComplete: boolean
+  /** Configured provider, model and working directory for this conversation. */
+  runtime?: ConversationRuntime
+  /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
+  title: string | null
+  /** Questions the agent is waiting on, oldest first. */
+  questions: ConversationQuestion[]
+}
+/** Idempotently create or reopen one named conversation. */
+export interface ConversationCreateParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with. */
+  agent?: string
+}
+/** Conversation ready for read and admission. */
+export interface ConversationCreateResult {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+}
+/** Read the current bounded projection. */
+export interface ConversationReadParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+}
+/** Which of the caller's conversations to list: those not archived, unless archived ones are asked for. */
+export interface ConversationListParams {
+  /** List only archived conversations when true; only unarchived ones when false or absent. */
+  archived?: boolean
+}
+/** One conversation as a list row: what it is called, the last thing said in it, and when. Read from stored summaries and live state; listing never opens or resumes a provider. */
+export interface ConversationSummary {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record. */
+  title: string | null
+  /** The last thing said in the conversation, as one line of plain text, or null when there is none on record. */
+  preview: string | null
+  /** When the conversation was created, in Unix milliseconds, as its creator requested it. */
+  createdAtMs: number
+  /** When something was last said in the conversation, in Unix milliseconds; the creation time until then. */
+  updatedAtMs: number
+  /** The conversation is open on this gateway and an invocation is in progress. */
+  running: boolean
+  /** Somebody archived the conversation and nothing has been said in it since. */
+  archived: boolean
+}
+/** Conversations the authenticated caller owns, newest first, at most 500, and whether that is all of them. */
+export interface ConversationListResult {
+  /** The caller's conversations, most recently updated first. Ownership is applied before the bound, so another principal's conversations never take a place in it. */
+  conversations: ConversationSummary[]
+  /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or when a stored record or summary of the caller's own cannot be read back, which lasts until an operator repairs it. Nobody else's conversations are read to answer a list, so nobody else's damage makes it false. A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
+  complete: boolean
+}
+/** Submit one input; execution and request IDs stay fixed across retries. */
+export interface ConversationSendParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. May be blank only when attachments are present. */
+  text: string
+  /** Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone. */
+  attachments: ImageAttachment[]
+  /** Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none. */
+  files: LinkedFile[]
+}
+/** Remove an input that has not dispatched. */
+export interface ConversationRemoveParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+}
+/** Whether a failed permission answer left the domain review pending, consumed it, or could not prove either state. */
+export const ConversationPermissionSelectionState = {
+  Pending: "pending",
+  Consumed: "consumed",
+  Unknown: "unknown",
+} as const
+export type ConversationPermissionSelectionState =
+  (typeof ConversationPermissionSelectionState)[keyof typeof ConversationPermissionSelectionState]
+/** Typed review state attached to a failed conversation.answer response. This state is independent of the diagnostic error code. */
+export interface ConversationPermissionAnswerErrorDetails {
+  /** Authoritative knowledge of whether the reviewed option was selected. */
+  selectionState: ConversationPermissionSelectionState
+}
+/** Choose one option from the exact pending permission. */
+export interface ConversationAnswerParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Pending permission identity. */
+  permissionId: string
+  /** Exact provider-offered option identity. */
+  optionId: string
+}
+/** Cancel one permission review with a caller reason. */
+export interface ConversationCancelParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Pending permission identity. */
+  permissionId: string
+  /** Reason recorded with authenticated caller attribution. */
+  reason: string
+}
+/** Close the live provider context while retaining conversation history. */
+export interface ConversationCloseParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** Archive or unarchive a conversation: whether conversation.list shows it by default. Nothing is stopped or removed, and a new message unarchives it. */
+export interface ConversationArchiveParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** Delete a conversation permanently: stop it, ask its agent to delete the agent's own session, record who deleted it, and erase its history, uploads and summary. Audit evidence is retained. The identity is never reused: its owner's later commands on it answer conversation_deleted, except deleting it again, and anyone else is told conversation_not_found. A repeat of the deciding request — the same principal, surface and requestId — is answered applied true, any other delete by its owner applied false; either repeat first carries on an erasure that has not finished. conversation_erasure_incomplete and audit_unavailable mean the conversation is deleted and its erasure did not finish; deleting again, and each gateway start, tries again. Any other error from a delete means only that it is not known whether the conversation was deleted: list it, or delete again. */
+export interface ConversationDeleteParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** Stable acknowledgement of one submitted input. */
+export interface ConversationReceipt {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Accepted or recovered submission state. */
+  disposition: ConversationDisposition
+}
+/** Acknowledgement for a control action. */
+export interface ConversationMutationResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Whether the requested change was applied or already acknowledged. */
+  applied: boolean
+}
+/** Atomically replace the complete waiting order. All current waiting execution IDs must appear once; steering retains priority over ordinary queued input. */
+export interface ConversationReorderParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Identity of this deliberate control action; an uncertain acknowledgement requires a fresh read, not replay. */
+  requestId: string
+  /** Exact desired full waiting order, including steering inputs. Running invocations are excluded. */
+  executionIds: string[]
+}
+/** Applied or unchanged order, or a rejected stale queue/steering-priority conflict. Rejections leave the queue unchanged. */
+export const ConversationReorderOutcome = {
+  Applied: "applied",
+  Unchanged: "unchanged",
+  QueueChanged: "queue_changed",
+  PriorityConflict: "priority_conflict",
+} as const
+export type ConversationReorderOutcome =
+  (typeof ConversationReorderOutcome)[keyof typeof ConversationReorderOutcome]
+/** Acknowledgement of one atomic queue reorder control. */
+export interface ConversationReorderResult {
+  /** Identity of this deliberate control action; an uncertain acknowledgement requires a fresh read, not replay. */
+  requestId: string
+  /** Whether the whole requested order was accepted. */
+  outcome: ConversationReorderOutcome
+}
+/** Runtime configuration selected by the gateway composition for this conversation. */
+export interface ConversationRuntime {
+  /** Configured model identifier. */
+  model: string
+  /** Configured agent provider name. */
+  provider: string
+  /** Working directory on the gateway host, not the client filesystem. */
+  workspace: string
+}
+/** One ordered observation fragment in a bounded execution projection; offsets may have gaps. */
+export interface ConversationPart {
+  /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
+  offset: number
+  /** Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice. */
+  kind: "text" | "thought" | "tool" | "local_notice"
+  /** Exact text fragment for text, thought, or local notice observations; empty for tool observations. */
+  text: string
+  /** Owning tool identity for a tool observation; empty otherwise. */
+  toolId: string
+  /** Stable execution-scoped declined-review identity for a local notice; empty otherwise. */
+  noticeId: string
+  /** Opaque provider message identity; only fragments with the same identity may be combined. */
+  messageId?: string
+}
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. */
+export const ConversationErrorCode = {
+  AgentNotConfigured: "agent_not_configured",
+  AgentUnsupported: "agent_unsupported",
+  ConversationsNotConfigured: "conversations_not_configured",
+  UnknownMethod: "unknown_method",
+  InvalidRequest: "invalid_request",
+  ConversationNotFound: "conversation_not_found",
+  ConversationCapacity: "conversation_capacity",
+  ConversationClosed: "conversation_closed",
+  ConversationConfigurationChanged: "conversation_configuration_changed",
+  ConversationStateUnreadable: "conversation_state_unreadable",
+  ConversationStorageUnavailable: "conversation_storage_unavailable",
+  TemporarilyUnavailable: "temporarily_unavailable",
+  AuditUnavailable: "audit_unavailable",
+  SubmissionConflict: "submission_conflict",
+  SubmissionUnresolved: "submission_unresolved",
+  StalePermission: "stale_permission",
+  AgentStartupDeadline: "agent_startup_deadline",
+  AgentOperationFailed: "agent_operation_failed",
+  ImageInputUnsupported: "image_input_unsupported",
+  AttachmentNotFound: "attachment_not_found",
+  AttachmentUnavailable: "attachment_unavailable",
+  AttachmentCapacity: "attachment_capacity",
+  AttachmentStorageUnavailable: "attachment_storage_unavailable",
+  AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
+  ConversationDeleted: "conversation_deleted",
+  ConversationErasureIncomplete: "conversation_erasure_incomplete",
+} as const
+export type ConversationErrorCode =
+  (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
+/** One answer a question offers: the value recorded, and the label read. */
+export interface ConversationAnswerOption {
+  /** Exact value recorded when this option is chosen. */
+  value: string
+  /** Text shown to whoever answers. */
+  label: string
+  /** Secondary text, where the agent supplied any. */
+  description?: string | null
+}
+/** One question, and what may be answered to it. */
+export interface ConversationAsked {
+  /** Key the answer is correlated back under. */
+  key: string
+  /** What is being asked. */
+  prompt: string
+  /** Short label for the question, where the agent supplied one. */
+  header?: string | null
+  /** Whether several options may be chosen rather than one. */
+  multiSelect: boolean
+  /** Whether an answer in the answerer's own words is accepted. */
+  freeText: boolean
+  /** Whether an answer must choose at least one of this question's options; own words alone do not satisfy it. Declining the whole ask is still possible. */
+  required: boolean
+  /** What may be chosen, in the order the agent offered it. */
+  options: ConversationAnswerOption[]
+}
+/** A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back. */
+export interface ConversationQuestion {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Identity the answer names. */
+  questionId: string
+  /** The agent's own framing of why it is asking. */
+  message: string
+  /** What is being asked, in the order the agent asked it. */
+  questions: ConversationAsked[]
+}
+/** What was chosen for one question. Both parts may be absent, which is how a question is skipped. */
+export interface ConversationQuestionChoice {
+  /** The question this answers. */
+  key: string
+  /** Option values chosen, which the question must have offered. */
+  values: string[]
+  /** Words of the answerer's own, only where the question invited them. */
+  ownWords?: string | null
+}
+/** Answer one question the agent asked, or decline to answer it. */
+export interface ConversationAnswerQuestionParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** The ask being answered. */
+  questionId: string
+  /** What was chosen. Null declines the question, which is an answer the agent is told. */
+  choices?: ConversationQuestionChoice[] | null
+}
+/** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
+export const bounds = {
+  maxImageBytes: 5242880,
+  imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  maxMessageImages: 10,
+  maxMessageImageBytes: 10485760,
+  maxUploadBytes: 67108864,
+  maxMessageFiles: 10,
+  maxFilePathBytes: 4096,
+  filePathPattern:
+    "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
+  conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+  maxConversationTitleBytes: 256,
+  maxConversationPreviewBytes: 512,
+  maxListedConversations: 500,
+} as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
@@ -213,6 +855,20 @@ export const ProductMethod = {
   CredentialIssue: "credential.issue",
   CredentialList: "credential.list",
   CredentialRevoke: "credential.revoke",
-  ConversationEcho: "conversation.echo",
+  ConversationCreate: "conversation.create",
+  ConversationRead: "conversation.read",
+  ConversationList: "conversation.list",
+  ConversationSend: "conversation.send",
+  ConversationSteer: "conversation.steer",
+  ConversationRemove: "conversation.remove",
+  ConversationAnswer: "conversation.answer",
+  ConversationAnswerQuestion: "conversation.answerQuestion",
+  ConversationCancel: "conversation.cancel",
+  ConversationClose: "conversation.close",
+  ConversationArchive: "conversation.archive",
+  ConversationUnarchive: "conversation.unarchive",
+  ConversationDelete: "conversation.delete",
+  ConversationReorder: "conversation.reorder",
+  AttachmentBegin: "attachment.begin",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const

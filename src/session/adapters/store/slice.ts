@@ -7,9 +7,18 @@ const sessionSlice = createSlice({
   name: "session",
   initialState: initialSessionState(),
   reducers: {
+    retrySession(state) {
+      state.retryRequest += 1
+    },
     sessionConnecting(state) {
       state.phase = "connecting"
       state.detail = "Connecting to the local server…"
+      state.hello = null
+      state.health = null
+    },
+    sessionReconnecting(state) {
+      state.phase = "reconnecting"
+      state.detail = "Reconnecting to the local server…"
       state.hello = null
       state.health = null
     },
@@ -31,17 +40,16 @@ const sessionSlice = createSlice({
       state.hello = null
       state.health = null
     },
-    sessionDisconnected(state) {
-      state.phase = "error"
-      state.detail = "Disconnected from the server. Run just server."
-      state.hello = null
-      state.health = null
-    },
   },
 })
 
-export const { sessionConnecting, sessionReady, sessionError, sessionDisconnected } =
-  sessionSlice.actions
+export const {
+  retrySession,
+  sessionConnecting,
+  sessionReconnecting,
+  sessionReady,
+  sessionError,
+} = sessionSlice.actions
 
 export const sessionReducer = sessionSlice.reducer
 

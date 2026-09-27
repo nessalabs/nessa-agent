@@ -15,6 +15,7 @@
 //! - `identifiers`: opaque, bounded IDs and action names. No provider ID format.
 //! - `models`: ownership, membership, lifetime, and revocation invariants.
 //! - `auth_context`: stable identity selectors after application verification.
+//! - `transition`: evidence of one lifecycle change (before, after, cause, initiator).
 //! - `error`: validation failures without raw credential secrets.
 //!
 //! This module imports neither serde nor application DTOs. Time values are Unix
@@ -23,6 +24,7 @@ mod auth_context;
 mod error;
 mod identifiers;
 mod models;
+mod transition;
 
 pub use auth_context::AuthContext;
 pub use error::DomainError;
@@ -32,4 +34,8 @@ pub use identifiers::{
 pub use models::{
     Credential, Grant, Membership, MembershipRole, MembershipStatus, Organization, Principal,
     PrincipalKind, Resource,
+};
+pub use transition::{
+    CredentialLifecycle, CredentialTransition, Initiator, IssuanceCause, RevocationCause,
+    Supersession, TransitionCause,
 };

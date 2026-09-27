@@ -32,16 +32,24 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
     let center = NSNotificationCenter::defaultCenter();
 
     for (notification, event) in [
-        (unsafe { NSWindowWillStartLiveResizeNotification }, host::RESIZE_STARTED),
-        (unsafe { NSWindowDidEndLiveResizeNotification }, host::RESIZE_ENDED),
+        (
+            unsafe { NSWindowWillStartLiveResizeNotification },
+            host::RESIZE_STARTED,
+        ),
+        (
+            unsafe { NSWindowDidEndLiveResizeNotification },
+            host::RESIZE_ENDED,
+        ),
     ] {
         let target = window.clone();
-        let block = block2::RcBlock::new(move |_: core::ptr::NonNull<objc2_foundation::NSNotification>| {
-            // Nothing downstream can recover from the glow missing an edge of
-            // the drag, and the alternative is a panic inside an AppKit
-            // callback, so a failed emit is dropped.
-            let _ = target.emit(event, ());
-        });
+        let block = block2::RcBlock::new(
+            move |_: core::ptr::NonNull<objc2_foundation::NSNotification>| {
+                // Nothing downstream can recover from the glow missing an edge of
+                // the drag, and the alternative is a panic inside an AppKit
+                // callback, so a failed emit is dropped.
+                let _ = target.emit(event, ());
+            },
+        );
         // AppKit posts on the main thread, which is where the notification is
         // observed from, so no queue is asked for.
         let token = unsafe {

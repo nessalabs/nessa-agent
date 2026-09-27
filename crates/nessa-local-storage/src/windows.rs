@@ -1,13 +1,18 @@
 //! Win32 handles bind validation and I/O to the same object. Creation supplies a
 //! protected DACL atomically; chmod and post-creation ACL repair are not used.
+//! Validated drive-absolute paths use normalized extended-length Win32 spelling.
+//! Device namespaces, reserved names, and trailing-dot/space ambiguities are
+//! rejected before conversion; long paths retain the same handle/ACL checks.
 use super::*;
 use std::{
-    ffi::c_void,
+    ffi::{c_void, OsStr},
+    fs,
     mem::{size_of, zeroed},
     os::windows::{
         ffi::OsStrExt,
         io::{AsRawHandle, FromRawHandle},
     },
+    path::{Component, PathBuf, Prefix},
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
@@ -15,6 +20,10 @@ use windows_sys::Win32::{
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
     System::Threading::*,
+};
+mod retained_directory;
+pub(crate) use retained_directory::{
+    validate_native_name, RetainedDirectory, RetainedDirectoryEntries,
 };
 
 struct LocalAllocation(*mut c_void);
@@ -95,16 +104,18 @@ fn check(result: i32) -> io::Result<()> {
 }
 fn wide(path: &Path) -> io::Result<Vec<u16>> {
     if !path.is_absolute()
-        || !matches!(path.components().next(), Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
+        || !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_)))
     {
         return Err(unsafe_file());
     }
     let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     // Reject alternate data streams and device namespaces, as well as NULs.
     if wide.contains(&0)
-        || path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+        || path.components().any(|component| match component {
+            Component::ParentDir => true,
+            Component::Normal(name) => ambiguous_component(name),
+            _ => false,
+        })
         || path
             .as_os_str()
             .to_string_lossy()
@@ -113,7 +124,50 @@ fn wide(path: &Path) -> io::Result<Vec<u16>> {
     {
         return Err(unsafe_file());
     }
-    Ok(wide.into_iter().chain(Some(0)).collect())
+    // Win32's ordinary spelling has a total MAX_PATH limit even when each
+    // component is valid. Normalize separators and dot components before using
+    // the extended namespace, where Win32 no longer performs that normalization.
+    // Only validated drive-absolute paths reach this conversion; callers cannot
+    // supply device/UNC namespaces or alternate data streams through it.
+    let normalized: PathBuf = path.components().collect();
+    Ok(r"\\?\"
+        .encode_utf16()
+        .chain(normalized.as_os_str().encode_wide().map(|unit| {
+            if unit == u16::from(b'/') {
+                u16::from(b'\\')
+            } else {
+                unit
+            }
+        }))
+        .chain(Some(0))
+        .collect())
+}
+// DOS device names remain reserved with an extension. Verbatim paths must not
+// turn a previously device-resolved spelling into a newly created regular file.
+fn ambiguous_component(name: &OsStr) -> bool {
+    if name
+        .encode_wide()
+        .last()
+        .is_some_and(|unit| unit == u16::from(b'.') || unit == u16::from(b' '))
+    {
+        return true;
+    }
+    let text = name.to_string_lossy();
+    let stem = text
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ');
+    ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+        || stem.get(..3).is_some_and(|prefix| {
+            (prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT"))
+                && matches!(
+                    &stem[3..],
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+        })
 }
 fn information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
     unsafe {
@@ -247,6 +301,13 @@ pub fn verify_file(file: &File) -> io::Result<()> {
     verify_acl(file)
 }
 pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
+    open_with_additional_access(path, mode, 0)
+}
+fn open_with_additional_access(
+    path: &Path,
+    mode: OpenMode,
+    additional_access: u32,
+) -> io::Result<File> {
     check_parents(path)?;
     let user = User::current()?;
     let descriptor = user.descriptor(false)?;
@@ -256,19 +317,23 @@ pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
         bInheritHandle: 0,
     };
     let access = GENERIC_READ
-        | if matches!(mode, OpenMode::Read) {
+        | additional_access
+        | if matches!(mode, OpenMode::Read | OpenMode::ReadNonblocking) {
             0
         } else {
             GENERIC_WRITE
         };
     let disposition = match mode {
-        OpenMode::Read | OpenMode::ReadWrite => OPEN_EXISTING,
+        OpenMode::Read | OpenMode::ReadNonblocking | OpenMode::ReadWrite => OPEN_EXISTING,
         OpenMode::OpenOrCreate => OPEN_ALWAYS,
         OpenMode::CreateNew => CREATE_NEW,
     };
     let file = raw_open(path, access, disposition, &attributes)?;
     verify_file(&file)?;
     Ok(file)
+}
+pub fn open_temporary(path: &Path) -> io::Result<File> {
+    open_with_additional_access(path, OpenMode::CreateNew, DELETE)
 }
 pub fn verify_directory(path: &Path) -> io::Result<()> {
     check_parents(path)?;
@@ -304,10 +369,95 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
     }
     verify_directory(path)
 }
+pub fn create_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    create_directory(&root.join(relative))
+}
+pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<File> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    open(&root.join(relative), mode)
+}
+pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    open_temporary(&root.join(relative))
+}
 /// Windows does not expose Unix directory fsync semantics. Files are flushed
 /// before publication; replacement requests the platform's write-through move.
 pub fn sync_directory(_: &Path) -> io::Result<()> {
     Ok(())
+}
+/// Remove a file named relative to an already-private root.
+///
+/// Windows has no `unlinkat`, so this verifies the root and the path's parents
+/// the way every other entry point here does and then removes by path.
+pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    let path = beneath(root, relative)?;
+    check_parents(&path)?;
+    fs::remove_file(path)
+}
+
+/// Mark the already-open reservation for deletion instead of resolving its
+/// path again. The handle remains bound to the file even if an ancestor name is
+/// concurrently replaced, so cleanup cannot delete an outside same-name file.
+pub fn remove_reserved_beneath(file: &File, _: &Path, _: &Path) -> io::Result<()> {
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    unsafe {
+        check(SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        ))
+    }
+}
+
+/// Remove an empty directory named relative to an already-private root.
+pub fn remove_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    let path = beneath(root, relative)?;
+    check_parents(&path)?;
+    fs::remove_dir(path)
+}
+
+/// The absolute path of `relative`, once it is a name and the root is private.
+fn beneath(root: &Path, relative: &Path) -> io::Result<PathBuf> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    Ok(root.join(relative))
+}
+
+pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    if relative.as_os_str().is_empty() {
+        verify_directory(root)
+    } else {
+        verify_directory(&root.join(relative))
+    }
 }
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     check_parents(from)?;
@@ -320,11 +470,151 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
         ))
     }
 }
+/// Publish `from` under the unused name `to`, never replacing an existing one.
+///
+/// The move omits `MOVEFILE_REPLACE_EXISTING`, so a taken destination fails
+/// with `AlreadyExists` instead of overwriting another owner's record.
+pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
+    check_parents(from)?;
+    check_parents(to)?;
+    unsafe {
+        check(MoveFileExW(
+            wide(from)?.as_ptr(),
+            wide(to)?.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        ))
+    }
+}
+pub fn publish_new_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    if from.components().next().is_none()
+        || to.components().next().is_none()
+        || from
+            .components()
+            .chain(to.components())
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    publish_new(&root.join(from), &root.join(to))
+}
+pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    if from.components().next().is_none()
+        || to.components().next().is_none()
+        || from
+            .components()
+            .chain(to.components())
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    replace(&root.join(from), &root.join(to))
+}
 
+/// Windows repairs nothing; see [`crate::find_shared_read`].
+pub(crate) fn open_shared_read(_: &Path, _: SharedReadKind) -> io::Result<Option<(File, u32)>> {
+    Err(unsafe_file())
+}
+pub(crate) fn tighten(_: &File, _: u32) -> io::Result<()> {
+    Err(unsafe_file())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::windows::fs::symlink_file;
+    use crate::{create_private_directory_tree_beneath, PrivateTempFile};
+    use std::{
+        io::{Read, Write},
+        os::windows::fs::symlink_file,
+    };
+
+    #[test]
+    fn win32_paths_use_normalized_extended_spelling_without_namespace_bypasses() {
+        let actual = wide(Path::new(r"C:/private/./session.jsonl")).unwrap();
+        assert_eq!(
+            String::from_utf16(&actual[..actual.len() - 1]).unwrap(),
+            r"\\?\C:\private\session.jsonl"
+        );
+        assert_eq!(actual.last(), Some(&0));
+        for invalid in [
+            r"C:\private\NUL.txt",
+            r"C:\private\com1",
+            r"C:\private\lpt¹.log",
+            r"C:\private\CONOUT$",
+            r"C:\private.\file",
+            r"C:\private\file ",
+            r"relative",
+            r"C:relative",
+            r"C:\private\..\other",
+            r"C:\private\file:stream",
+            r"\\server\share\file",
+            r"\\?\C:\private\file",
+            r"\\.\NUL",
+            "C:\\private\\nul\0",
+        ] {
+            assert!(wide(Path::new(invalid)).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn long_absolute_paths_support_private_creation_open_and_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("a".repeat(120)).join("b".repeat(120));
+        assert!(directory.as_os_str().encode_wide().count() > 260);
+        create_directory(&directory).unwrap();
+        verify_directory(&directory).unwrap();
+        let from = directory.join("s".repeat(213));
+        let to = directory.join("t".repeat(213));
+        let mut source = open(&from, OpenMode::CreateNew).unwrap();
+        source.write_all(b"replacement").unwrap();
+        source.sync_all().unwrap();
+        drop(source);
+        drop(open(&to, OpenMode::CreateNew).unwrap());
+        replace(&from, &to).unwrap();
+        let mut restored = open(&to, OpenMode::Read).unwrap();
+        let mut contents = String::new();
+        restored.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "replacement");
+        assert_eq!(
+            open(&from, OpenMode::Read).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn private_temporary_drop_has_the_capability_to_remove_its_reservation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit")).unwrap();
+
+        let reserved = PrivateTempFile::new_beneath(&root, Path::new("audit")).unwrap();
+        assert_eq!(fs::read_dir(root.join("audit")).unwrap().count(), 1);
+        drop(reserved);
+
+        assert_eq!(fs::read_dir(root.join("audit")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn failed_private_publication_cleans_its_reservation_without_replacing_the_winner() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit")).unwrap();
+        let destination = Path::new("audit/record.json");
+        let mut winner = PrivateTempFile::new_beneath(&root, Path::new("audit")).unwrap();
+        winner.as_file_mut().write_all(b"winner").unwrap();
+        winner.publish_new_beneath(destination).unwrap();
+        let mut loser = PrivateTempFile::new_beneath(&root, Path::new("audit")).unwrap();
+        loser.as_file_mut().write_all(b"loser").unwrap();
+
+        let error = loser.publish_new_beneath(destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(root.join(destination)).unwrap(), b"winner");
+        assert_eq!(fs::read_dir(root.join("audit")).unwrap().count(), 1);
+    }
+
     fn replace_acl(file: &File, sddl: &str) {
         unsafe {
             let text: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();

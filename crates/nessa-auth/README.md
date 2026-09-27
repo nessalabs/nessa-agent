@@ -24,11 +24,16 @@ Composition → verifier + access reader + clock → AuthenticateSession
 
 - `domain/`: private-field IDs and models, memberships, exact grants, credential
   lifetime/revocation invariants, and AuthContext. No serde or runtime imports.
+  `Credential` produces a `CredentialTransition` (before, after, cause,
+  initiator, time) for every issuance, explicit revocation, and automatic
+  supersession; nothing assembles that evidence after the fact.
 - `application/dto.rs`: serializable boundary data. Parsing is not authentication.
 - `application/mapping.rs`: `TryFrom` validation into domain objects. Mapping an
   admin membership does not authorize storing it; that belongs in a trusted use case.
 - `application/ports.rs`: object-safe asynchronous verification/state ports,
   an absolute-time clock, and a policy evaluator contract. No runtime is required.
+- `application/credential_registry.rs`: typed, secret-free refusal evidence and
+  the audit port used when registry bytes cannot be trusted.
 - `application/session.rs`: verify evidence, load one committed access snapshot,
   check IDs/audience/membership/time, then construct a context with bounded expiry.
 - `application/authorization.rs`: re-read current state and check lifetime/linkage
@@ -47,6 +52,43 @@ checked-in Cedar profile explicitly defines the initial Nessa action vocabulary.
 or displayed by the crate. Its explicit byte accessor is for trusted adapters;
 it is not a memory-zeroization guarantee. DTOs contain metadata, never secrets.
 External identity DTOs are untrusted data, not a mechanism for minting AuthContext.
+
+## Lifecycle evidence is committed with the state
+
+The local registry file keeps an append-only `transitions` list next to the
+credentials and receipts. A mutation appends its transitions in the same atomic
+write as the state change, so a failed write is a failed commit and there is no
+"committed but unaudited" state to reconcile. `validate_registry` applies one
+rule to that list before every write and on every reopen: each record satisfies
+the domain, chains from the previous state of its credential, and ends at the
+lifecycle the registry actually stores. A file edited by hand fails the same
+way a bad live write would.
+
+Causes are exactly the commands that exist: bootstrap, admin issue, surface
+provisioning, owner recovery, explicit revocation, and supersession by
+provisioning or by owner recovery. Expiry is not a cause; nothing happens at
+expiry and the instant is already in the issuance record. Automatic
+revocations carry the initiator of the command that triggered them, and their
+cause says they were automatic. The registry file is schema 2; earlier files
+are not read, because the project is pre-alpha and carries no registry
+compatibility.
+
+Issue, bootstrap, and revoke results carry their committed transitions, and the
+`CredentialTransitionReader` port lists them per organization. See
+[credential transition audit](../../docs/design/auth/credential-transition-audit.md)
+for the decisions.
+
+Opening an invalid registry authority file is a separate audited event because
+no registry state can be trusted enough to append evidence to it. The local
+adapter reports the exact path, the registry-or-lock role, and a bounded
+structural fault without including rejected values. The application derives a
+role-specific preserved transition and records it with cause and the known
+initiator in a private sibling audit directory. Audit failure remains visible
+beside the original refusal. Neither path edits or deletes the registry.
+The local refusal sink addresses every directory and record beneath the verified
+auth root and refuses symbolic-link ancestry. Unix syncs each parent after
+creating its child; Windows revalidates the tree, flushes the record file, and
+uses a write-through move because it has no directory-fsync equivalent.
 
 ## Authentication is not ongoing authorization
 
@@ -81,7 +123,7 @@ Independent changes can target these modules after agreeing on their ports:
 | Work | Owns | Depends on |
 | --- | --- | --- |
 | Local verifier/store (implemented) | `adapters/local/` | Evidence verification, durable lifecycle and coherent snapshots |
-| Credential lifecycle (implemented) | `application/credential_admin.rs` and `adapters/local/` | Durable issuance, idempotent retries, revocation, and owner recovery |
+| Credential lifecycle (implemented) | `application/credential_admin.rs` and `adapters/local/` | Durable issuance, idempotent retries, revocation, owner recovery, and committed transition evidence |
 | Policy evolution | Existing `adapters/cedar/` | Nessa-authored policies and authoritative resource inputs |
 | Gateway integration (implemented) | `nessa-server/src/product/` | Verified session, current-state policy checks and bounded socket lifetime |
 | Hosted identity | Future managed adapter | Verified binding mapping and authority/freshness rules |

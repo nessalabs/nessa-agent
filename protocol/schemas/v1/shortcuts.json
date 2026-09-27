@@ -8,7 +8,9 @@
         "panel.summon",
         "panel.newTab",
         "panel.closeTab",
-        "panel.activateTab"
+        "panel.activateTab",
+        "panel.previousTab",
+        "panel.nextTab"
       ],
       "description": "Action identifiers supported by server-owned keyboard bindings."
     },

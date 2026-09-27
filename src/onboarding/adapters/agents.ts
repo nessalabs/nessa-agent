@@ -1,0 +1,92 @@
+import { AGENT_CHOICES } from "../model/onboarding"
+import type { AgentId, AgentReadiness, AgentReadinessReport } from "../model/onboarding"
+import type { AgentReadinessAnswer, AgentReadinessSource } from "../application/ports"
+
+/** The gateway's pre-authentication surface, relative to wherever it answers. */
+const AGENTS_PATH = "/onboarding/agents"
+
+/** What the gateway says about one agent. Unknown states are not trusted.
+ *
+ * `not-supported` and `unknown` are deliberately not accepted here: the first
+ * is a fact about Nessa's own listing and the second is the absence of an
+ * answer. Neither is something a runtime gets to assert. */
+const REPORTABLE = ["ready", "needs-authentication", "not-installed", "not-configured"]
+function known(value: unknown): AgentReadiness | undefined {
+  return typeof value === "string" && REPORTABLE.includes(value)
+    ? (value as AgentReadiness)
+    : undefined
+}
+
+/** Which agent the gateway is talking about, if it is one Nessa lists.
+ *
+ * Read off the listing rather than written out again, so adding an agent there
+ * is what adds it here. The report is keyed by agent, and a key is a name only
+ * if it is one of ours: left as any string the gateway sent, `id: "constructor"`
+ * wrote a property onto the report that shadowed the one every object already
+ * has, and `id: "__proto__"` was swallowed by the prototype setter instead of
+ * being stored — so the report neither held what arrived nor said it had not. */
+function listed(value: unknown): AgentId | undefined {
+  return AGENT_CHOICES.find((choice) => choice.id === value)?.id
+}
+
+function readReport(body: unknown): AgentReadinessReport | undefined {
+  const agents = (body as { agents?: unknown })?.agents
+  if (!Array.isArray(agents)) return undefined
+  const report: Partial<Record<AgentId, AgentReadiness>> = {}
+  for (const entry of agents) {
+    const id = listed((entry as { id?: unknown })?.id)
+    const readiness = known((entry as { readiness?: unknown })?.readiness)
+    if (id && readiness) report[id] = readiness
+  }
+  return report
+}
+
+/**
+ * Ask the gateway which agents could actually start here, over HTTP.
+ *
+ * This is the one thing setup asks before authenticating, because it is asked
+ * *while* setting up — there is no session yet and nothing to authenticate
+ * with. The gateway answers it unauthenticated for that reason.
+ *
+ * Where it answers is configuration, not a constant: `baseUrl` comes from the
+ * environment seam so this file never reads `import.meta.env` and never has to
+ * know a port number. An empty base means this page's own origin, which is how
+ * a browser preview reaches the gateway through the dev server's proxy.
+ *
+ * Not getting an answer is reported as not getting an answer. A gateway that is
+ * not running is a thing the person can fix, and saying "not available" about
+ * the agent instead hid that from them.
+ */
+export function httpAgentReadiness({
+  baseUrl,
+  fetch = globalThis.fetch,
+}: {
+  /** Where the gateway answers, with no trailing slash. "" is this origin. */
+  baseUrl: string
+  /** Injected for tests; the page's own `fetch` otherwise. */
+  fetch?: typeof globalThis.fetch
+}): AgentReadinessSource {
+  const url = `${baseUrl}${AGENTS_PATH}`
+  return {
+    async read(): Promise<AgentReadinessAnswer> {
+      let response: Response
+      try {
+        response = await fetch(url, { headers: { accept: "application/json" } })
+      } catch {
+        return { ok: false, reason: "unreachable" }
+      }
+      // A refusal is as good as silence here: the gateway is up but has no
+      // answer to give, and there is nothing for setup to tell apart.
+      if (!response.ok) return { ok: false, reason: "unreachable" }
+      let body: unknown
+      try {
+        body = await response.json()
+      } catch {
+        return { ok: false, reason: "unreadable" }
+      }
+      const agents = readReport(body)
+      if (!agents) return { ok: false, reason: "unreadable" }
+      return { ok: true, agents }
+    },
+  }
+}

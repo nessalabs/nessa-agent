@@ -1,11 +1,13 @@
 /** Real Rust gateway + NessaClient lifecycle, isolated in a temporary local data root. */
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
 import { once } from "node:events"
 import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -16,22 +18,32 @@ import { createServer } from "node:net"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { WebSocket, WebSocketServer } from "ws"
-import { NessaClient, NessaMutationError, NessaRpcError } from "@nessa/client"
+import { cargoTargetDirectory } from "./cargo-target.mjs"
+import {
+  NessaClient,
+  NessaClientConfig,
+  NessaConnectionClosedError,
+  NessaEndpointDiscoveryError,
+  NessaMutationError,
+  NessaRpcError,
+} from "@nessa/client"
 import { windowsPrivateFile } from "../packages/nessa-client/src/transport/windows-private-file.js"
 
 globalThis.WebSocket = WebSocket
 const root = fileURLToPath(new URL("../", import.meta.url))
-const directory = mkdtempSync(join(tmpdir(), "nessa-auth-e2e-"))
+const directory = realpathSync(mkdtempSync(join(tmpdir(), "nessa-auth-e2e-")))
 const binary = join(
-  root,
-  process.platform === "win32"
-    ? "target/debug/nessa-server.exe"
-    : "target/debug/nessa-server",
+  cargoTargetDirectory(root),
+  "debug",
+  process.platform === "win32" ? "nessa.exe" : "nessa",
 )
-const listener = createServer().listen(0, "127.0.0.1")
-await once(listener, "listening")
-const port = listener.address().port
-await new Promise((resolve) => listener.close(resolve))
+let port
+do {
+  const listener = createServer().listen(0, "127.0.0.1")
+  await once(listener, "listening")
+  port = listener.address().port
+  await new Promise((resolve) => listener.close(resolve))
+} while (`ws://127.0.0.1:${port}` === NessaClient.defaultUrl)
 const env = {
   ...process.env,
   NESSA_DATA_DIR: join(directory, "data"),
@@ -42,6 +54,8 @@ const env = {
 }
 process.env.NESSA_DATA_DIR = env.NESSA_DATA_DIR
 process.env.NESSA_INSTANCE = env.NESSA_INSTANCE
+const inheritedClientPort = process.env.NESSA_PORT
+delete process.env.NESSA_PORT
 const url = `ws://127.0.0.1:${port}`
 let server
 const clients = []
@@ -70,7 +84,11 @@ async function stop() {
   await exited
 }
 async function start() {
-  server = spawn(binary, [], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] })
+  server = spawn(binary, ["server"], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
   server.stdout.on("data", (bytes) => {
     logs += bytes.toString()
   })
@@ -109,10 +127,14 @@ async function expectClose(client, action, expectedReason) {
   }
 }
 try {
-  const init = spawnSync(binary, ["auth", "init", "--owner-token-file", ownerPath], {
-    env,
-    encoding: "utf8",
-  })
+  const init = spawnSync(
+    binary,
+    ["auth", "init", "--local", "--owner-token-file", ownerPath],
+    {
+      env,
+      encoding: "utf8",
+    },
+  )
   assert.equal(init.status, 0, init.stderr)
   const ownerSecret = readFileSync(ownerPath, "utf8").trim()
   if (process.platform !== "win32") assert.equal(statSync(ownerPath).mode & 0o777, 0o600)
@@ -120,15 +142,19 @@ try {
   const duplicatePath = join(directory, "duplicate-owner.token")
   const duplicateInit = spawnSync(
     binary,
-    ["auth", "init", "--owner-token-file", duplicatePath],
+    ["auth", "init", "--local", "--owner-token-file", duplicatePath],
     { env, encoding: "utf8" },
   )
   assert.notEqual(duplicateInit.status, 0)
   assert.equal(existsSync(duplicatePath), false)
-  const overwrite = spawnSync(binary, ["auth", "init", "--owner-token-file", ownerPath], {
-    env,
-    encoding: "utf8",
-  })
+  const overwrite = spawnSync(
+    binary,
+    ["auth", "init", "--local", "--owner-token-file", ownerPath],
+    {
+      env,
+      encoding: "utf8",
+    },
+  )
   assert.notEqual(overwrite.status, 0)
   assert.equal(readFileSync(ownerPath, "utf8").trim(), ownerSecret)
   const configPath = join(env.NESSA_DATA_DIR, "ci", "instances", "e2e", "config.json")
@@ -150,6 +176,7 @@ try {
     [
       "auth",
       "recover-owner",
+      "--local",
       "--owner-token-file",
       join(directory, "invalid-config.token"),
     ],
@@ -179,7 +206,13 @@ try {
   )
   const locked = spawnSync(
     binary,
-    ["auth", "recover-owner", "--owner-token-file", join(directory, "blocked.token")],
+    [
+      "auth",
+      "recover-owner",
+      "--local",
+      "--owner-token-file",
+      join(directory, "blocked.token"),
+    ],
     { env, encoding: "utf8" },
   )
   assert.notEqual(locked.status, 0)
@@ -187,8 +220,117 @@ try {
   assert.deepEqual(await owner.auth.session(), owner.productSession)
   const identity = owner.productSession
   assert.equal(identity.expiresAt, null)
+
+  // Exercise the browser proxy's loopback upstream, including route isolation.
+  // Real-browser TLS/cookie handling is separate from this gateway contract test.
+  for (const browserOrigin of ["https://127.0.0.1:1443", "http://127.0.0.1:1420"]) {
+    const browserRequest = (path, cookie, token, origin = browserOrigin) =>
+      fetch(`http://127.0.0.1:${port}/browser/${path}`, {
+        method: "POST",
+        headers: {
+          Origin: origin,
+          "X-Nessa-Browser": "1",
+          "Content-Type": "application/json",
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        ...(token === undefined ? {} : { body: JSON.stringify({ token }) }),
+        signal: AbortSignal.timeout(5000),
+      })
+    assert.equal((await browserRequest("login", undefined, "invalid")).status, 401)
+    const browserLogin = await browserRequest("login", undefined, ownerSecret)
+    assert.equal(browserLogin.status, 204)
+    const setCookie = browserLogin.headers.get("set-cookie")
+    for (const flag of ["HttpOnly", "SameSite=Strict", "Path=/"])
+      assert.ok(setCookie.includes(flag))
+    assert.equal(setCookie.includes("Secure"), browserOrigin.startsWith("https:"))
+    assert.ok(!setCookie.includes(ownerSecret))
+    const browserCookie = setCookie.split(";")[0]
+    assert.equal((await browserRequest("check", browserCookie)).status, 204)
+    assert.equal(
+      (await browserRequest("check", browserCookie, undefined, "https://localhost:1443"))
+        .status,
+      401,
+    )
+    async function browserHandshake(path) {
+      const socket = new WebSocket(`${url}${path}`, {
+        headers: { Origin: browserOrigin, Cookie: browserCookie },
+        handshakeTimeout: 5000,
+      })
+      const closed = once(socket, "close")
+      const [challenge] = await once(socket, "message")
+      const response = once(socket, "message")
+      socket.send(
+        JSON.stringify({
+          type: "req",
+          id: "browser-auth",
+          method: "session.authenticate",
+          params: {
+            minVersion: 1,
+            maxVersion: 1,
+            nonce: JSON.parse(challenge.toString()).payload.nonce,
+            credential: "",
+            client: { id: "browser-smoke" },
+          },
+        }),
+      )
+      const [message] = await response
+      return { socket, closed, response: JSON.parse(message.toString()) }
+    }
+    const nativeCookie = await browserHandshake("/session")
+    assert.equal(nativeCookie.response.error.code, "unauthorized")
+    await nativeCookie.closed
+    const browserSocket = await browserHandshake("/browser/session")
+    assert.equal(browserSocket.response.ok, true)
+    assert.equal(browserSocket.response.payload.principalId, identity.principalId)
+    const browserHealth = once(browserSocket.socket, "message")
+    browserSocket.socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "browser-health",
+        method: "server.health",
+        params: {},
+      }),
+    )
+    assert.equal(JSON.parse((await browserHealth)[0].toString()).ok, true)
+    assert.equal((await browserRequest("logout", browserCookie)).status, 204)
+    await Promise.race([
+      browserSocket.closed,
+      sleep(5000).then(() => {
+        throw new Error("browser socket survived logout")
+      }),
+    ])
+    assert.equal((await browserRequest("check", browserCookie)).status, 401)
+    assert.equal((await owner.server.health()).ok, true)
+  }
+  const discoveredOptions = { ...options }
+  delete discoveredOptions.url
+  assert.equal(Object.hasOwn(discoveredOptions, "url"), false)
+  assert.equal(discoveredOptions.stage, "ci")
+  assert.equal(process.env.NESSA_PORT, undefined)
+  assert.notEqual(url, NessaClient.defaultUrl)
+  const endpointPath = join(
+    env.NESSA_DATA_DIR,
+    "ci",
+    "instances",
+    env.NESSA_INSTANCE,
+    "logs",
+    "gateway-endpoint.json",
+  )
+  const publishedEndpoint = readFileSync(endpointPath, "utf8")
+  const endpointRecord = JSON.parse(publishedEndpoint)
+  assert.equal(endpointRecord.webSocketUrl, url)
+  const panelCredentialPath = join(
+    env.NESSA_DATA_DIR,
+    "ci",
+    "instances",
+    env.NESSA_INSTANCE,
+    "auth",
+    "surfaces",
+    "nessa-panel.token",
+  )
+  const panelSecret = readFileSync(panelCredentialPath, "utf8").trim()
   const chat = await NessaClient.connect({
-    ...options,
+    ...discoveredOptions,
     profile: "product",
     client: { ...options.client, id: "nessa-panel" },
   })
@@ -197,7 +339,100 @@ try {
   assert.notEqual(chat.productSession.credentialId, identity.credentialId)
   assert.notEqual(chat.productSession.principalId, identity.principalId)
   assert.equal((await chat.server.health()).ok, true)
-  assert.deepEqual(await chat.conversation.echo("local chat"), { text: "local chat" })
+
+  const endpointMode =
+    process.platform === "win32" ? undefined : statSync(endpointPath).mode & 0o777
+  const staleEndpointInstance =
+    endpointRecord.endpointInstance === "38baa4b2-bd37-45fa-aeda-d7b04059da21"
+      ? "5485b918-1eeb-4a4a-ad1d-9fdc70dfa231"
+      : "38baa4b2-bd37-45fa-aeda-d7b04059da21"
+  assert.notEqual(staleEndpointInstance, endpointRecord.endpointInstance)
+  const RealWebSocket = globalThis.WebSocket
+  const realFetch = globalThis.fetch
+  let completedHealth
+  let credentialReads = 0
+  let healthRequests = 0
+  let socketAdmissions = 0
+  try {
+    writeFileSync(
+      endpointPath,
+      JSON.stringify({ ...endpointRecord, endpointInstance: staleEndpointInstance }),
+      { mode: endpointMode },
+    )
+    globalThis.fetch = async (input, init) => {
+      const response = await realFetch(input, init)
+      if (String(input) === `http://127.0.0.1:${port}/health`) {
+        healthRequests += 1
+        completedHealth = {
+          status: response.status,
+          endpointInstance: response.headers.get("x-nessa-endpoint-instance"),
+          endpointProcessId: response.headers.get("x-nessa-endpoint-process-id"),
+          runtimeFingerprint: response.headers.get("x-nessa-runtime-fingerprint"),
+          serviceGeneration: response.headers.get("x-nessa-service-generation"),
+          runtimeInstance: response.headers.get("x-nessa-runtime-instance"),
+          runtimeProcessId: response.headers.get("x-nessa-process-id"),
+        }
+      }
+      return response
+    }
+    globalThis.WebSocket = new Proxy(RealWebSocket, {
+      construct(target, argumentsList, newTarget) {
+        socketAdmissions += 1
+        return Reflect.construct(target, argumentsList, newTarget)
+      },
+    })
+    await assert.rejects(
+      async () => {
+        const unexpected = await NessaClient.connect({
+          ...discoveredOptions,
+          profile: "product",
+          client: { ...options.client, id: "stale-endpoint-probe" },
+          credentialSource: {
+            async load() {
+              credentialReads += 1
+              return ownerSecret
+            },
+          },
+          config: new NessaClientConfig({
+            retry: { maxAttempts: 1 },
+            reconnect: { enabled: false, maxAttempts: 1 },
+            requestTimeoutMs: 2_000,
+          }),
+        })
+        unexpected.close()
+      },
+      (error) => error instanceof NessaEndpointDiscoveryError,
+    )
+    assert.equal(healthRequests, 1)
+    assert.deepEqual(completedHealth, {
+      status: 200,
+      endpointInstance: endpointRecord.endpointInstance,
+      endpointProcessId: String(endpointRecord.processId),
+      runtimeFingerprint: endpointRecord.runtimeFingerprint ?? null,
+      serviceGeneration: endpointRecord.serviceGeneration ?? null,
+      runtimeInstance: endpointRecord.runtimeInstance ?? null,
+      runtimeProcessId:
+        endpointRecord.runtimeProcessId === undefined
+          ? null
+          : String(endpointRecord.runtimeProcessId),
+    })
+    assert.notEqual(completedHealth.endpointInstance, staleEndpointInstance)
+    assert.equal(credentialReads, 0)
+    assert.equal(socketAdmissions, 0)
+  } finally {
+    globalThis.fetch = realFetch
+    globalThis.WebSocket = RealWebSocket
+    writeFileSync(endpointPath, publishedEndpoint, { mode: endpointMode })
+  }
+  assert.equal(readFileSync(endpointPath, "utf8"), publishedEndpoint)
+  if (endpointMode !== undefined)
+    assert.equal(statSync(endpointPath).mode & 0o777, endpointMode)
+  // This smoke server is configured with no conversations at all, which is its
+  // own answer and not "the agent you asked for is missing".
+  await assert.rejects(
+    chat.conversation.read(randomUUID()),
+    (error) => error.code === "conversations_not_configured",
+  )
   assert.ok((await chat.credentials.list()).credentials.length >= 2)
   const request = {
     requestId: "reader-issue",
@@ -291,7 +526,7 @@ try {
   assert.equal((await permanentClient.server.health()).ok, true)
   assert.equal((await reader.server.health()).ok, true)
   await assert.rejects(
-    reader.conversation.echo("denied"),
+    reader.conversation.read(randomUUID()),
     (error) => error.code === "forbidden",
   )
   await assert.rejects(
@@ -483,7 +718,7 @@ try {
   )
   const registryPath = join(directory, "data/ci/instances/e2e/auth/credentials.v1.json")
   const registry = readFileSync(registryPath, "utf8")
-  for (const secret of [ownerSecret, issued.secret, expiring.secret]) {
+  for (const secret of [ownerSecret, panelSecret, issued.secret, expiring.secret]) {
     assert.ok(!registry.includes(secret))
     assert.ok(!logs.includes(secret))
   }
@@ -491,31 +726,162 @@ try {
   const recoveredPath = join(directory, "recovered.token")
   const recovery = spawnSync(
     binary,
-    ["auth", "recover-owner", "--owner-token-file", recoveredPath],
+    ["auth", "recover-owner", "--local", "--owner-token-file", recoveredPath],
     { env, encoding: "utf8" },
   )
   assert.equal(recovery.status, 0, recovery.stderr)
   await start()
   await assert.rejects(connect(ownerSecret))
-  const recovered = await connect(readFileSync(recoveredPath, "utf8").trim())
+  let recovered = await connect(readFileSync(recoveredPath, "utf8").trim())
   assert.equal(recovered.productSession.organizationId, identity.organizationId)
   assert.equal((await recovered.server.health()).ok, true)
+  // The public executable is also an authenticated client surface.
+  const doctor = spawnSync(binary, ["doctor", "--credential-file", recoveredPath], {
+    env,
+    encoding: "utf8",
+  })
+  assert.equal(doctor.status, 0, doctor.stderr)
+  assert.equal(JSON.parse(doctor.stdout).healthy, true)
+  const missingDoctor = spawnSync(
+    binary,
+    ["doctor", "--credential-file", join(directory, "missing.token")],
+    { env, encoding: "utf8" },
+  )
+  assert.notEqual(missingDoctor.status, 0)
+  assert.equal(JSON.parse(missingDoctor.stdout).authenticated, false)
+  const tokenCommand = spawnSync(
+    binary,
+    ["auth", "token", "--credential-file", recoveredPath],
+    { env, encoding: "utf8" },
+  )
+  assert.equal(tokenCommand.status, 0, tokenCommand.stderr)
+  const browserToken = tokenCommand.stdout.trim()
+  assert.ok(browserToken.length > 20)
+  assert.ok(!tokenCommand.stderr.includes(browserToken))
+  const browserClient = await connect(browserToken)
+  const browserCredentialId = browserClient.productSession.credentialId
+  assert.deepEqual(browserClient.productSession.grants.map((g) => g.action).sort(), [
+    "conversation.write",
+    "server.read",
+  ])
+  assert.notEqual(
+    browserClient.productSession.principalId,
+    recovered.productSession.principalId,
+  )
+  assert.equal(browserClient.productSession.expiresAt, null)
+  const browserTokenFile = join(directory, "cli-browser.token")
+  if (process.platform === "win32") {
+    await windowsPrivateFile("reserve", browserTokenFile)
+    await windowsPrivateFile("write", browserTokenFile, browserToken)
+  } else writeFileSync(browserTokenFile, browserToken, { mode: 0o600 })
+  const deniedToken = spawnSync(
+    binary,
+    ["auth", "token", "--credential-file", browserTokenFile],
+    { env, encoding: "utf8" },
+  )
+  assert.notEqual(deniedToken.status, 0)
+  assert.equal(deniedToken.stdout, "")
+  assert.ok(!deniedToken.stderr.includes(browserToken))
+  const browserSignIn = await fetch(`http://127.0.0.1:${port}/browser/login`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:1420",
+      "X-Nessa-Browser": "1",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ token: browserToken }),
+  })
+  assert.equal(browserSignIn.status, 204)
+  const persistedCookie = browserSignIn.headers.get("set-cookie").split(";")[0]
+  await stop()
+  await start()
+  const restoredBrowser = await fetch(`http://127.0.0.1:${port}/browser/check`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:1420",
+      "X-Nessa-Browser": "1",
+      Cookie: persistedCookie,
+    },
+  })
+  assert.equal(restoredBrowser.status, 204)
+  assert.ok(restoredBrowser.headers.get("set-cookie").includes("Max-Age="))
+  recovered = await connect(readFileSync(recoveredPath, "utf8").trim())
+
+  await recovered.credentials.revoke(browserCredentialId, "cli-token-revoke")
+  await assert.rejects(connect(browserToken))
+  const revokedBrowser = await fetch(`http://127.0.0.1:${port}/browser/check`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:1420",
+      "X-Nessa-Browser": "1",
+      Cookie: persistedCookie,
+    },
+  })
+  assert.equal(revokedBrowser.status, 401)
+  const ttlCommand = spawnSync(
+    binary,
+    ["auth", "token", "--ttl", "12h", "--credential-file", recoveredPath],
+    { env, encoding: "utf8" },
+  )
+  assert.equal(ttlCommand.status, 0, ttlCommand.stderr)
+  const ttlClient = await connect(ttlCommand.stdout.trim())
+  assert.ok(ttlClient.productSession.expiresAt > Math.floor(Date.now() / 1000) + 43000)
+  assert.ok(ttlClient.productSession.expiresAt <= Math.floor(Date.now() / 1000) + 43200)
+
+  const cloud = spawnSync(binary, ["auth", "init", "--cloud"], { env, encoding: "utf8" })
+  assert.notEqual(cloud.status, 0)
+  const defaultInit = spawnSync(binary, ["auth", "init", "--local"], {
+    env: { ...env, NESSA_INSTANCE: "cli-default" },
+    encoding: "utf8",
+  })
+  assert.equal(defaultInit.status, 0, defaultInit.stderr)
+  assert.ok(
+    existsSync(
+      join(
+        env.NESSA_DATA_DIR,
+        "ci",
+        "instances",
+        "cli-default",
+        "auth",
+        "surfaces",
+        "nessa-cli.token",
+      ),
+    ),
+  )
   await expectClose(
     recovered,
     async () => {
-      const revoked = await recovered.credentials.revoke(
-        recovered.productSession.credentialId,
-        "revoke-self",
-      )
-      assert.equal(revoked.credentialId, recovered.productSession.credentialId)
+      // Self-revocation races its own acknowledgement: the gateway answers the
+      // mutation and closes the socket it just revoked, and either order is
+      // correct. Accept the answer when it arrives first and the matching close
+      // when it does; anything else is a real failure. The close itself is still
+      // asserted by expectClose.
+      try {
+        const revoked = await recovered.credentials.revoke(
+          recovered.productSession.credentialId,
+          "revoke-self",
+        )
+        assert.equal(revoked.credentialId, recovered.productSession.credentialId)
+      } catch (error) {
+        assert.ok(
+          error instanceof NessaMutationError &&
+            error.requestId === "revoke-self" &&
+            error.cause instanceof NessaConnectionClosedError &&
+            error.cause.closeReason === "credential_revoked" &&
+            error.cause.retryable === false,
+          `self-revocation must be acknowledged or closed by its own revocation: ${error}`,
+        )
+      }
     },
     "credential_revoked",
   )
   console.log(
-    "auth e2e passed: bootstrap, issue/retry, isolation, denial, idle revocation/expiry, restart, recovery, session isolation, shared-credential revocation, self-revocation acknowledgement, unauthenticated bypass rejection, typed administration denial, identity/restriction snapshots, lost issuance response and durable explicit retry",
+    "auth e2e passed: published endpoint discovery, stale identity refusal before credentials, bootstrap, issue/retry, isolation, denial, idle revocation/expiry, restart, recovery, session isolation, shared-credential revocation, self-revocation acknowledgement, unauthenticated bypass rejection, typed administration denial, identity/restriction snapshots, lost issuance response and durable explicit retry",
   )
 } finally {
   for (const client of clients) client.close()
   await stop()
   rmSync(directory, { recursive: true, force: true })
+  if (inheritedClientPort === undefined) delete process.env.NESSA_PORT
+  else process.env.NESSA_PORT = inheritedClientPort
 }

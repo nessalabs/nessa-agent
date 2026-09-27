@@ -1,42 +1,373 @@
 use super::*;
 use std::{
+    ffi::CString,
     fs::{self, OpenOptions},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+        io::{AsRawFd, FromRawFd},
+    },
+    path::Component,
+};
+mod retained_directory;
+pub(crate) use retained_directory::{
+    validate_native_name, RetainedDirectory, RetainedDirectoryEntries,
 };
 pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .write(!matches!(mode, OpenMode::Read))
+        .write(!matches!(mode, OpenMode::Read | OpenMode::ReadNonblocking))
         .create(matches!(mode, OpenMode::OpenOrCreate))
         .create_new(matches!(mode, OpenMode::CreateNew))
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW);
+        .custom_flags(
+            libc::O_NOFOLLOW
+                | if matches!(mode, OpenMode::ReadNonblocking) {
+                    libc::O_NONBLOCK
+                } else {
+                    0
+                },
+        );
     let file = options.open(path)?;
     verify_file(&file)?;
     Ok(file)
 }
+pub fn open_temporary(path: &Path) -> io::Result<File> {
+    open(path, OpenMode::CreateNew)
+}
+pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<File> {
+    let (parent, leaf) = open_parent_beneath(root, relative)?;
+    let mut flags = libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    flags |= match mode {
+        OpenMode::Read => libc::O_RDONLY,
+        OpenMode::ReadNonblocking => libc::O_RDONLY | libc::O_NONBLOCK,
+        OpenMode::ReadWrite => libc::O_RDWR,
+        OpenMode::OpenOrCreate => libc::O_RDWR | libc::O_CREAT,
+        OpenMode::CreateNew => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+    };
+    let descriptor = unsafe { libc::openat(parent.as_raw_fd(), leaf.as_ptr(), flags, 0o600) };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    verify_file(&file)?;
+    Ok(file)
+}
+pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> {
+    open_beneath(root, relative, OpenMode::CreateNew)
+}
 pub fn verify_file(file: &File) -> io::Result<()> {
+    if private_regular_file_metadata(file)?.nlink() != 1 {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
+fn verify_identity_candidate(file: &File) -> io::Result<()> {
+    // An already-open identity witness may have no name after unlink;
+    // multiple names remain unsafe because they defeat name ownership.
+    if private_regular_file_metadata(file)?.nlink() > 1 {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
+fn private_regular_file_metadata(file: &File) -> io::Result<fs::Metadata> {
     let metadata = file.metadata()?;
     if !metadata.is_file()
-        || metadata.nlink() != 1
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o077 != 0
     {
         return Err(unsafe_file());
     }
-    Ok(())
+    Ok(metadata)
 }
 pub fn verify_directory(path: &Path) -> io::Result<()> {
     let directory = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
         .open(path)?;
+    verify_directory_file(&directory)
+}
+fn verify_directory_file(directory: &File) -> io::Result<()> {
     let metadata = directory.metadata()?;
-    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o022 != 0 {
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
         return Err(unsafe_file());
     }
-    directory.set_permissions(fs::Permissions::from_mode(0o700))
+    Ok(())
+}
+fn verify_locator_directory_file(directory: &File) -> io::Result<()> {
+    let metadata = directory.metadata()?;
+    let owner = metadata.uid();
+    if !metadata.is_dir()
+        || (owner != 0 && owner != unsafe { libc::geteuid() })
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(unsafe_file());
+    }
+    Ok(())
+}
+fn relative_components(relative: &Path) -> io::Result<Vec<CString>> {
+    let components = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => CString::new(name.as_bytes()).map_err(|_| unsafe_file()),
+            _ => Err(unsafe_file()),
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if components.is_empty() {
+        return Err(unsafe_file());
+    }
+    Ok(components)
+}
+fn open_root(root: &Path) -> io::Result<File> {
+    let root = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(root)?;
+    verify_directory_file(&root)?;
+    Ok(root)
+}
+fn open_child_directory(parent: &File, component: &CString) -> io::Result<File> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            component.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let child = unsafe { File::from_raw_fd(descriptor) };
+    verify_directory_file(&child)?;
+    Ok(child)
+}
+fn open_child_locator_directory(parent: &File, component: &CString) -> io::Result<File> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            component.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let child = unsafe { File::from_raw_fd(descriptor) };
+    verify_locator_directory_file(&child)?;
+    Ok(child)
+}
+
+/// Create an absolute private leaf without requiring system locator ancestry
+/// such as `/Users` and `Application Support` to use private modes.
+pub fn create_private_directory_path(path: &Path) -> io::Result<()> {
+    create_private_directory_path_with(path, open_child_locator_directory, File::sync_all)
+}
+
+fn create_private_directory_path_with(
+    path: &Path,
+    mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
+    mut sync: impl FnMut(&File) -> io::Result<()>,
+) -> io::Result<()> {
+    create_private_directory_path_transaction_with(path, &mut open_child, &mut sync, || Ok(()))
+}
+
+pub(crate) fn create_private_directory_path_and_then<T>(
+    path: &Path,
+    finish: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    create_private_directory_path_transaction_with(
+        path,
+        open_child_locator_directory,
+        File::sync_all,
+        finish,
+    )
+}
+
+fn create_private_directory_path_transaction_with<T>(
+    path: &Path,
+    mut open_child: impl FnMut(&File, &CString) -> io::Result<File>,
+    mut sync: impl FnMut(&File) -> io::Result<()>,
+    finish: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    if !path.is_absolute() {
+        return Err(unsafe_file());
+    }
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::RootDir => None,
+            Component::Normal(name) => {
+                Some(CString::new(name.as_bytes()).map_err(|_| unsafe_file()))
+            }
+            _ => Some(Err(unsafe_file())),
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if components.is_empty() {
+        return Err(unsafe_file());
+    }
+    let mut parent = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(Path::new("/"))?;
+    verify_locator_directory_file(&parent)?;
+    let mut created = Vec::new();
+    let result = (|| {
+        for (index, component) in components.iter().enumerate() {
+            let last = index + 1 == components.len();
+            let (child, was_created) = match open_child(&parent, component) {
+                Ok(child) => (child, false),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if unsafe { libc::mkdirat(parent.as_raw_fd(), component.as_ptr(), 0o700) } != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let (device, inode) = directory_identity_at(&parent, component)?;
+                    created.push(CreatedPrivateDirectory {
+                        parent: parent.try_clone()?,
+                        name: component.clone(),
+                        device,
+                        inode,
+                        directory: None,
+                    });
+                    let child = open_child(&parent, component)?;
+                    (child, true)
+                }
+                Err(error) => return Err(error),
+            };
+            if was_created {
+                let metadata = child.metadata()?;
+                let created = created.last_mut().expect("created directory identity");
+                if metadata.dev() != created.device || metadata.ino() != created.inode {
+                    return Err(unsafe_file());
+                }
+                created.directory = Some(child.try_clone()?);
+                sync(&parent)?;
+            }
+            if last {
+                verify_directory_file(&child)?;
+            }
+            parent = child;
+        }
+        sync(&parent)?;
+        finish()
+    })();
+    let Err(primary) = result else {
+        return result;
+    };
+    let cleanup_failures = rollback_created_directories(created);
+    if cleanup_failures.is_empty() {
+        Err(primary)
+    } else {
+        Err(io::Error::new(
+            primary.kind(),
+            format!(
+                "{primary}; private directory rollback failed: {}",
+                cleanup_failures.join("; ")
+            ),
+        ))
+    }
+}
+
+struct CreatedPrivateDirectory {
+    parent: File,
+    name: CString,
+    device: u64,
+    inode: u64,
+    directory: Option<File>,
+}
+
+fn directory_identity_at(parent: &File, name: &CString) -> io::Result<(u64, u64)> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(unsafe_file());
+    }
+    #[cfg(target_vendor = "apple")]
+    let device = stat.st_dev as u64;
+    #[cfg(target_os = "linux")]
+    let device = stat.st_dev;
+    Ok((device, stat.st_ino))
+}
+
+fn rollback_created_directories(created: Vec<CreatedPrivateDirectory>) -> Vec<String> {
+    let mut failures = Vec::new();
+    for created in created.into_iter().rev() {
+        let Some(original) = created.directory.as_ref() else {
+            failures.push(
+                "created private directory identity was not retained; preserved before rollback"
+                    .into(),
+            );
+            continue;
+        };
+        let original_metadata = match original.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        };
+        if original_metadata.dev() != created.device || original_metadata.ino() != created.inode {
+            failures
+                .push("retained created private directory identity changed before rollback".into());
+            continue;
+        }
+        let current = match open_child_locator_directory(&created.parent, &created.name) {
+            Ok(current) => current,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        };
+        let metadata = match current.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        };
+        if metadata.dev() != created.device || metadata.ino() != created.inode {
+            failures.push("created private directory was replaced before rollback".into());
+            continue;
+        }
+        drop(current);
+        if unsafe {
+            libc::unlinkat(
+                created.parent.as_raw_fd(),
+                created.name.as_ptr(),
+                libc::AT_REMOVEDIR,
+            )
+        } != 0
+        {
+            failures.push(io::Error::last_os_error().to_string());
+            continue;
+        }
+        if let Err(error) = created.parent.sync_all() {
+            failures.push(error.to_string());
+        }
+    }
+    failures
+}
+fn open_parent_beneath(root: &Path, relative: &Path) -> io::Result<(File, CString)> {
+    let mut components = relative_components(relative)?;
+    let leaf = components.pop().ok_or_else(unsafe_file)?;
+    let mut parent = open_root(root)?;
+    for component in components {
+        parent = open_child_directory(&parent, &component)?;
+    }
+    Ok((parent, leaf))
 }
 pub fn create_directory(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
@@ -45,9 +376,412 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
         .create(path)?;
     verify_directory(path)
 }
+/// Create a private relative directory tree beneath an already-private root.
+///
+/// Each component is opened relative to the verified parent handle, so a
+/// symbolic link cannot redirect creation outside `root`.
+pub fn create_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    let components = relative_components(relative)?;
+    let mut parent = open_root(root)?;
+    for component in components {
+        let created = unsafe { libc::mkdirat(parent.as_raw_fd(), component.as_ptr(), 0o700) };
+        if created != 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+        }
+        parent = open_child_directory(&parent, &component)?;
+    }
+    Ok(())
+}
+/// Remove a file named relative to an already-private root.
+///
+/// The leaf is unlinked through a handle on its parent, opened one verified
+/// component at a time, so no symbolic link along the way can send the removal
+/// somewhere else. `fs::remove_file` resolves the whole path in the kernel and
+/// has no such anchor; a link planted at any directory above the leaf makes it
+/// delete a file outside `root`.
+pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    unlink_beneath(root, relative, 0)
+}
+
+pub fn remove_reserved_beneath(_: &File, root: &Path, relative: &Path) -> io::Result<()> {
+    remove_file_beneath(root, relative)
+}
+
+/// Remove an empty directory named relative to an already-private root.
+///
+/// The counterpart of [`remove_file_beneath`], and empty for the same reason
+/// `rmdir` is: a directory with anything in it is one somebody still wants.
+pub fn remove_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    unlink_beneath(root, relative, libc::AT_REMOVEDIR)
+}
+
+fn unlink_beneath(root: &Path, relative: &Path, flags: i32) -> io::Result<()> {
+    let (parent, leaf) = open_parent_beneath(root, relative)?;
+    let removed = unsafe { libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), flags) };
+    if removed != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    let directory = if relative.as_os_str().is_empty() {
+        open_root(root)?
+    } else {
+        let mut directory = open_root(root)?;
+        for component in relative_components(relative)? {
+            directory = open_child_directory(&directory, &component)?;
+        }
+        directory
+    };
+    directory.sync_all()
+}
 pub fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
+}
+/// Publish `from` under the unused name `to`, never replacing an existing one.
+///
+/// A rename that refuses to replace: one call, and afterwards `to` is the file
+/// and `from` is gone. `AlreadyExists` when `to` is taken, so an interrupted or
+/// repeated publish cannot overwrite a record another owner already published.
+///
+/// It is a rename rather than a link because a record has to be readable the
+/// instant it exists. Linking the destination and unlinking the temporary
+/// afterwards left a moment — two calls wide, and as long as the scheduler
+/// cared to make it — when the name existed with two links, and
+/// [`verify_file`] refuses a file with two links as unsafe. Every reader of
+/// that name in that moment was told the record could not be read, including
+/// the one reader who most needs it: a writer that lost the race for the name
+/// and reads the winner's record back to check they agree. There is nothing for
+/// such a reader to wait for and no way for it to tell a busy machine from a
+/// tampered file, so the moment is removed instead of tolerated.
+///
+/// `RENAME_EXCL` and `RENAME_NOREPLACE` are the same guarantee under the two
+/// kernels' names for it. Not every filesystem implements either: SMB and AFP
+/// mounts answer `ENOTSUP`, and NFS, eCryptfs and many FUSE mounts answer
+/// `EINVAL` or `EOPNOTSUPP`. That is the one failure here a person could
+/// actually act on — move the data to a local volume — and the errno alone
+/// does not say so, so it is named. There is deliberately no fallback to the
+/// link-and-unlink this replaced: it would silently reopen the gap above on
+/// exactly the volumes where a network round trip makes it widest.
+///
+/// # Errors
+///
+/// `AlreadyExists` when `to` is taken, [`io::ErrorKind::Unsupported`] with a
+/// sentence naming the volume when the filesystem has no exclusive rename, and
+/// any other platform failure unchanged.
+pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
+    let source = CString::new(from.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    let destination = CString::new(to.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    #[cfg(target_vendor = "apple")]
+    let renamed =
+        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(target_os = "linux")]
+    let renamed = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed != 0 {
+        let error = io::Error::last_os_error();
+        // Compared rather than matched: Linux defines `ENOTSUP` and
+        // `EOPNOTSUPP` as the same number and macOS does not, so as patterns
+        // they are an unreachable arm on one platform and two necessary arms on
+        // the other. This says what it means on both.
+        let unsupported = error.raw_os_error().is_some_and(|code| {
+            code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+        });
+        return Err(if unsupported {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the filesystem holding {} cannot publish a file without replacing one; \
+                     local data has to live on a volume that can, not a network or FUSE mount",
+                    to.display()
+                ),
+            )
+        } else {
+            error
+        });
+    }
+    Ok(())
+}
+
+pub fn publish_new_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    let (from_parent, from_leaf) = open_parent_beneath(root, from)?;
+    let (to_parent, to_leaf) = open_parent_beneath(root, to)?;
+    #[cfg(target_vendor = "apple")]
+    let renamed = unsafe {
+        libc::renameatx_np(
+            from_parent.as_raw_fd(),
+            from_leaf.as_ptr(),
+            to_parent.as_raw_fd(),
+            to_leaf.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let renamed = unsafe {
+        libc::renameat2(
+            from_parent.as_raw_fd(),
+            from_leaf.as_ptr(),
+            to_parent.as_raw_fd(),
+            to_leaf.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed != 0 {
+        let error = io::Error::last_os_error();
+        let unsupported = error.raw_os_error().is_some_and(|code| {
+            code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+        });
+        return Err(if unsupported {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the filesystem holding {} cannot publish a file without replacing one; local data has to live on a volume that can, not a network or FUSE mount",
+                    root.join(to).display()
+                ),
+            )
+        } else {
+            error
+        });
+    }
+    Ok(())
+}
+pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    let (from_parent, from_leaf) = open_parent_beneath(root, from)?;
+    let (to_parent, to_leaf) = open_parent_beneath(root, to)?;
+    let result = unsafe {
+        libc::renameat(
+            from_parent.as_raw_fd(),
+            from_leaf.as_ptr(),
+            to_parent.as_raw_fd(),
+            to_leaf.as_ptr(),
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// See [`crate::find_shared_read`]. The checks and the later `fchmod` use one
+/// descriptor opened without following a final symlink.
+pub(crate) fn open_shared_read(
+    path: &Path,
+    kind: SharedReadKind,
+) -> io::Result<Option<(File, u32)>> {
+    let directory = matches!(kind, SharedReadKind::Directory);
+    let object = OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 },
+        )
+        .open(path)?;
+    let metadata = object.metadata()?;
+    let mode = metadata.mode() & 0o7777;
+    let expected_kind = if directory {
+        metadata.is_dir()
+    } else {
+        metadata.is_file() && metadata.nlink() == 1
+    };
+    if !expected_kind || metadata.uid() != unsafe { libc::geteuid() } || mode & 0o022 != 0 {
+        return Err(unsafe_file());
+    }
+    if mode & 0o077 == 0 {
+        return Ok(None);
+    }
+    Ok(Some((object, mode)))
+}
+pub(crate) fn tighten(object: &File, mode: u32) -> io::Result<()> {
+    if unsafe { libc::fchmod(object.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn created_directory(parent_path: &Path, name: &str) -> CreatedPrivateDirectory {
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(parent_path)
+            .unwrap();
+        let name = CString::new(name).unwrap();
+        let child = open_child_locator_directory(&parent, &name).unwrap();
+        let metadata = child.metadata().unwrap();
+        CreatedPrivateDirectory {
+            parent,
+            name,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            directory: Some(child),
+        }
+    }
+
+    #[test]
+    fn rollback_preserves_a_replacement_at_the_created_name() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let child = root.path().join("child");
+        create_directory(&child).unwrap();
+        let created = created_directory(root.path(), "child");
+        fs::rename(&child, root.path().join("original-child")).unwrap();
+        create_directory(&child).unwrap();
+
+        let failures = rollback_created_directories(vec![created]);
+        assert_eq!(
+            failures,
+            ["created private directory was replaced before rollback"]
+        );
+        assert!(child.is_dir());
+    }
+
+    #[test]
+    fn sync_failure_rolls_back_the_exact_new_leaf() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = root.path().join("private-root");
+        let child = private_root.join("child");
+        let mut syncs = 0;
+        let error =
+            create_private_directory_path_with(&child, open_child_locator_directory, |_| {
+                syncs += 1;
+                if syncs == 2 {
+                    Err(io::Error::other("injected sync failure"))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected sync failure");
+        assert!(!child.exists());
+        assert!(!private_root.exists());
+    }
+
+    #[test]
+    fn reopen_failure_after_creation_preserves_the_unretained_leaf() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = root.path().join("private-root");
+        let child = private_root.join("child");
+        let mut target_opens = 0;
+        let error = create_private_directory_path_with(
+            &child,
+            |parent, name| {
+                if name.as_bytes() == b"child" {
+                    target_opens += 1;
+                    if target_opens == 2 {
+                        return Err(io::Error::other("injected reopen failure"));
+                    }
+                }
+                open_child_locator_directory(parent, name)
+            },
+            File::sync_all,
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("injected reopen failure"));
+        assert!(message.contains("created private directory identity was not retained"));
+        assert!(message.contains("private directory rollback failed"));
+        assert!(child.is_dir());
+        assert!(private_root.is_dir());
+    }
+
+    #[test]
+    fn retained_open_failure_rolls_back_root_and_child_as_one_transaction() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        let directory = private_root.join("journal");
+
+        let error = create_private_directory_path_and_then(&directory, || {
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected retained-open failure");
+        assert!(!directory.exists());
+        assert!(!private_root.exists());
+    }
+
+    #[test]
+    fn retained_open_failure_preserves_a_preexisting_private_root() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        create_directory(&private_root).unwrap();
+        let directory = private_root.join("journal");
+
+        create_private_directory_path_and_then(&directory, || {
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert!(private_root.is_dir());
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn retained_open_failure_preserves_replacement_and_reports_cleanup_failure() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        let directory = private_root.join("journal");
+        let original = private_root.join("original-journal");
+
+        let error = create_private_directory_path_and_then(&directory, || {
+            fs::rename(&directory, &original)?;
+            create_directory(&directory)?;
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert!(directory.is_dir());
+        let message = error.to_string();
+        assert!(message.contains("injected retained-open failure"));
+        assert!(message.contains("created private directory was replaced before rollback"));
+        assert!(message.contains("private directory rollback failed"));
+    }
+
+    #[test]
+    fn retained_open_failure_preserves_nonempty_tree_and_combines_diagnostics() {
+        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let private_root = parent.path().join("private-root");
+        let directory = private_root.join("journal");
+        let occupant = directory.join("record");
+
+        let error = create_private_directory_path_and_then(&directory, || {
+            fs::write(&occupant, b"occupied")?;
+            Err::<(), _>(io::Error::other("injected retained-open failure"))
+        })
+        .unwrap_err();
+
+        assert!(occupant.is_file());
+        let message = error.to_string();
+        assert!(message.contains("injected retained-open failure"));
+        assert!(message.contains("private directory rollback failed"));
+    }
+
+    #[test]
+    fn rollback_reports_a_created_directory_that_became_nonempty() {
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let child = root.path().join("child");
+        create_directory(&child).unwrap();
+        let created = created_directory(root.path(), "child");
+        fs::write(child.join("later"), b"occupied").unwrap();
+
+        let failures = rollback_created_directories(vec![created]);
+        assert_eq!(failures.len(), 1);
+        assert!(child.join("later").is_file());
+    }
 }

@@ -38,15 +38,40 @@ an `clock: Arc<dyn Clock>` and supplies the default monotonic implementation.
 `CompositionRoot` constructs the dependencies and passes them to
 `AppState::with_dependencies`. State clones share the injected clock. Separate
 states can have independent clocks, including deterministic test adapters.
-`AppState::from_environment` remains a compatibility constructor for existing
-callers. Auth, hello, and routing behavior are unchanged.
+`AppState::from_environment` is the environment-driven composition entry point;
+`with_dependencies` is the explicit constructor used for adapter substitution.
 
-This server pattern complements Tauri's existing `platform::current()` host
-injection; it does not add a second host abstraction. Dependencies are scoped to
+This server pattern complements the desktop host's own composition root; it does
+not add a second host abstraction. Dependencies are scoped to
 one server/application, not a static process-wide registry. Rust ownership/Arc
 controls adapter lifetime. Future background adapters must expose explicit
 startup/shutdown owned by composition; dropping a pointer is not a substitute
 for draining writes or stopping workers.
+
+## Rust desktop host
+
+`src-tauri/src/composition.rs` holds `HostDependencies`: the settings store, the
+shortcut store, the surface credential, the agent credential writer, the
+credential-save audit, the independent `CredentialSaveTargets` authority, the
+registered gateway, and the release source. The target authority derives the
+canonical destination from the durable namespace; the save use case compares
+the writer's complete claimed target against it before correlation allocation,
+intent audit, or keychain effect. Effectful dependencies are host-owned traits
+with substitutes in tests;
+the gateway is the concrete `Gateway`, whose own `GatewayHost` is the trait, so
+its substitution happens one level down. `main`'s `setup`
+assembles it once, keeps it to hand the pieces down (`tray::create`,
+`updater::check_in_background`), and manages it so a `#[tauri::command]` can
+declare `State<'_, HostDependencies>` and be given it. `platform::current()`
+remains the compile-time injection for OS-shaped window behaviour.
+
+Resolution happens at entry points; logic takes explicit parameters. A handler
+the framework calls with only an `&AppHandle` either captured the bundle when it
+was built (the tray menu) or resolves it once at the top (the exit event) and
+passes what it found downwards. Nothing under an entry point calls `try_state`
+for a dependency. Managed state remains the right home for live objects — menu
+items, registration slots, the settings snapshot a launch was sized from — which
+are not outside things and have no substitute to write.
 
 ## Adding another backend
 
@@ -74,6 +99,11 @@ verification/administration ports. Product policy enforcement stays in Nessa.
 See [identity and tenancy](auth/identity-tenancy-and-cloud.md) for migration boundaries.
 
 ## Checks for contributors and agents
+
+Apply the [repository-wide organization gate](../../CODING_STANDARDS.md#organization-across-the-repository)
+to dependency changes too: put ports with their consuming application feature,
+adapters with their boundary, wiring in composition, and substitution tests with
+the feature they exercise. Update module maps and guidance when seams move.
 
 - Concrete backend construction belongs at composition or in its adapter factory.
 - Feature effects use application-owned ports, not global getters or string lookup.
@@ -112,7 +142,7 @@ build inputs, not server security controls or runtime deployment secrets.
 Rust real-server fixture:
 
 ```sh
-NESSA_STAGE=ci NESSA_UPTIME_BACKEND=fixed NESSA_UPTIME_FIXED_MS=123 cargo run -p nessa-server
+NESSA_STAGE=ci NESSA_UPTIME_BACKEND=fixed NESSA_UPTIME_FIXED_MS=123 cargo run -p nessa-server -- server
 ```
 
 The default is `NESSA_UPTIME_BACKEND=monotonic`. Fixed uptime is dev/CI-only,
@@ -141,3 +171,31 @@ admission mutex. Remote adapters must preserve coherent current snapshot reads a
 bounded provider work; a connection-wide cached permission is insufficient.
 Idle invalidation currently polls at one second; the registry's notification port
 is available for future integration. See [local setup](../adr/done/0010-local-authentication.md).
+
+## Gateway Agent integration
+
+Composition optionally loads the private namespace's `agents` configuration and
+constructs a provider for every agent it names — CredentialedClaudeProvider,
+CodexAcpProvider — alongside LocalFileStorage, LocalConversationStore and
+DurableExecutionAudit. Every configured agent is built, not only the one a
+creation that names none runs on, because a conversation records the agent it
+was created on and is reopened on that same agent. ProductRouteState shares ConversationService across sockets;
+tests inject providers and storage without a production test selector. Shared
+request permits outlive disconnected sockets, and controls have reserved capacity.
+One application-owned `AgentCredentialSource` is injected into Claude readiness
+and provider opening, so both consumers observe the same stage/instance keychain
+namespace; tests substitute that port without changing composition policy.
+The panel's ConversationEffects calls the existing authenticated NessaClient and
+reads bounded replacement views. See [gateway chat](../guides/gateway-chat.md).
+
+### Browser authentication composition
+
+`src/composition/browser.tsx` creates a dependency scope and store after the
+same-origin browser session API confirms sign-in. The HTTP adapter is injected
+with `fetch`; the SDK's explicit browser-cookie authentication uses WSS (or numeric-loopback WS in dev/CI) without
+loading a native credential source. The server's `browser_session` context owns
+session records and a storage port, with the private persistent journal adapter
+selected in composition. The domain owns idle deadlines; the injected browser
+renewal lifecycle checks visible sessions and tolerates temporary outages. HTTP adapters translate cookies to session IDs; verified identity
+then uses the existing product authorization and current-state checks. Neither
+React nor Redux retains an access token or session secret.

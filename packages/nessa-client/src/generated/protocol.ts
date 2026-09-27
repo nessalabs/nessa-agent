@@ -83,22 +83,6 @@ export interface HealthResult {
   uptimeMs: number
 }
 
-/** Text input for the authorized conversation echo round trip. */
-
-export interface EchoParams {
-  /** User draft text to echo back. */
-
-  text: string
-}
-
-/** Echoed input text; no model-generated reply is produced. */
-
-export interface EchoResult {
-  /** Echo of EchoParams.text. */
-
-  text: string
-}
-
 /** Versioned server-owned shortcut configuration included in the legacy handshake. */
 
 export interface ShortcutsDocument {
@@ -118,7 +102,13 @@ export interface ShortcutBinding {
   keys: string
   /** Action requested when the binding fires. */
 
-  action: "panel.summon" | "panel.newTab" | "panel.closeTab" | "panel.activateTab"
+  action:
+    | "panel.summon"
+    | "panel.newTab"
+    | "panel.closeTab"
+    | "panel.activateTab"
+    | "panel.previousTab"
+    | "panel.nextTab"
   /** Optional action-specific arguments. */
   args?: ShortcutArgs
   /** Context in which the binding applies. */
@@ -143,7 +133,12 @@ export interface ShortcutArgs {
 /** Action identifiers supported by server-owned keyboard bindings. */
 
 export type ShortcutAction =
-  "panel.summon" | "panel.newTab" | "panel.closeTab" | "panel.activateTab"
+  | "panel.summon"
+  | "panel.newTab"
+  | "panel.closeTab"
+  | "panel.activateTab"
+  | "panel.previousTab"
+  | "panel.nextTab"
 
 /** Contexts in which a shortcut binding applies. */
 
@@ -221,6 +216,8 @@ export const ShortcutAction = {
   PanelNewTab: "panel.newTab",
   PanelCloseTab: "panel.closeTab",
   PanelActivateTab: "panel.activateTab",
+  PanelPreviousTab: "panel.previousTab",
+  PanelNextTab: "panel.nextTab",
 } as const
 export const ShortcutScope = { Global: "global", Focused: "focused" } as const
 export const ShortcutSurface = {

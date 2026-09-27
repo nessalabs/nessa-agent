@@ -1,10 +1,13 @@
-import { realpathSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
+
+import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
+import { loadEnvironment } from "./src/env/environment"
 
 /**
  * Nessa UI is consumed as source, not as its published bundle.
@@ -37,11 +40,83 @@ try {
 // Tauri drives this dev server, so the port is fixed and the Rust sources are
 // left to cargo's own watcher.
 const host = process.env.TAURI_DEV_HOST
+// This dev server fronts the gateway of whichever stage this environment
+// selects — `dev` when it says nothing, which listens beside the port an
+// installed Nessa holds. One table decides that port: see src/env/gateway-ports.
+// Proxying `dev` regardless would send the browser to a socket nothing is on
+// as soon as the gateway beside it was started as anything else.
+// Parsed, not cast. `as Stage` asserted a shape TypeScript could not check, so
+// any string at all reached `gatewayOrigin` and a stage the server rejects
+// resolved to a port here.
+const stage = parseStage(process.env.NESSA_STAGE)
+// `NESSA_PORT` as well as the stage, because the server reads both and this
+// proxy is the browser's only way to it: overriding the port started a gateway
+// on one socket and left every request going to the other, which answers as a
+// gateway that is simply not there.
+const override = (process.env.NESSA_PORT ?? "").trim()
+const gatewayTarget =
+  process.env.NESSA_BROWSER_GATEWAY_URL ??
+  (override === "" ? gatewayOrigin(stage) : `http://127.0.0.1:${Number(override)}`)
+const tlsCert = process.env.NESSA_BROWSER_TLS_CERT
+const tlsKey = process.env.NESSA_BROWSER_TLS_KEY
+if (Boolean(tlsCert) !== Boolean(tlsKey))
+  throw new Error("Set both browser TLS certificate and key")
+
+// A packaged frontend is built before Cargo embeds it. Leave one small record
+// beside those assets so the host build can prove it is embedding UI for the
+// same stage, including when `dist/` came from an earlier command.
+let bundledStage: string | undefined
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "nessa-bundle-stage",
+      apply: "build",
+      configResolved(config) {
+        // `config.env` is Vite's final environment after `.env.<mode>`, process
+        // overrides, and DEV/PROD have been resolved. Passing those same values
+        // through the UI's sole parser makes the record describe what
+        // `import.meta.env` will make the application use.
+        bundledStage = loadEnvironment(config.env, config.env.DEV).stage
+      },
+      generateBundle() {
+        if (bundledStage === undefined)
+          throw new Error("Vite did not resolve a bundle stage")
+        this.emitFile({
+          type: "asset",
+          fileName: "nessa-stage.json",
+          source: `${JSON.stringify({ stage: bundledStage })}\n`,
+        })
+      },
+    },
+  ],
   clearScreen: false,
   server: {
+    https:
+      tlsCert && tlsKey
+        ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) }
+        : undefined,
+    proxy: {
+      "/browser": {
+        target: gatewayTarget,
+        ws: true,
+      },
+      // The gateway's pre-authentication surface, which setup asks before it
+      // has a session. Proxied so a browser preview reaches it on its own
+      // origin; the packaged app talks to the gateway directly.
+      "/onboarding": {
+        target: gatewayTarget,
+      },
+      // Where attachment bytes are uploaded. A browser preview derives the
+      // upload origin from its proxied session, so the upload goes through here
+      // too and stays same-origin; the packaged app uploads to the gateway
+      // directly.
+      "/attachments": {
+        target: gatewayTarget,
+      },
+    },
     port: 1420,
     strictPort: true,
     // WebKitGTK resolves `localhost` to 127.0.0.1. Node's `true`/`false`
@@ -62,6 +137,19 @@ export default defineConfig({
         // validation tsconfigs forces a full reload on every install.
         "**/.vendor/nessa_ui/apps/**",
         "**/.vendor/nessa_ui/validation/**",
+        // Agent worktrees are checkouts of this repo living inside it, and
+        // something is usually building in one: generated client docs, a
+        // `dist`, a test run. Each written file reloaded the page, so a panel
+        // opened while another agent worked never finished painting — a blank
+        // window, and no sign of why. What happens in another checkout is not
+        // a change to this one.
+        //
+        // Anchored to this config's own directory rather than written as
+        // `**/.claude/worktrees/**`: a worktree is itself a checkout, its path
+        // contains that segment, and the loose pattern therefore matched the
+        // source of whichever checkout was running — turning HMR off for
+        // exactly the people who work in worktrees.
+        `${resolve(dirname(fileURLToPath(import.meta.url)), ".claude/worktrees")}/**`,
       ],
     },
     // The design system is a symlink that often lives outside this checkout
@@ -77,11 +165,12 @@ export default defineConfig({
         replacement: `${nessaUi}/composites/app-shell`,
       },
       { find: /^@nessa-ui\/react\//, replacement: `${nessaUi}/components/` },
-      // The package's own internal alias. Scoped to the two prefixes it
+      // The package's own internal alias. Scoped to the three prefixes it
       // actually uses rather than a bare `@`, which would also capture any
       // `@/…` this app later writes for itself.
       { find: /^@\/components\//, replacement: `${nessaUi}/components/` },
       { find: /^@\/lib\//, replacement: `${nessaUi}/lib/` },
+      { find: /^@\/provider\//, replacement: `${nessaUi}/provider/` },
     ],
     // The linked checkout carries its own React in devDependencies. Without
     // deduping, the app and the library each load a copy and every hook in the

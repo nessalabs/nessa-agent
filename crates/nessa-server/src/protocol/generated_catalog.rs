@@ -11,7 +11,6 @@
 
 /// RPC method names on `type: "req"` frames.
 pub mod method {
-    pub const CONVERSATION_ECHO: &str = "conversation.echo";
     pub const SERVER_HEALTH: &str = "server.health";
 }
 

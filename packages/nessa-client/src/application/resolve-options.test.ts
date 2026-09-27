@@ -81,3 +81,36 @@ describe("resolveConnectOptions", () => {
     }
   })
 })
+
+it("allows cookie WS only on numeric loopback in dev/ci and the browser route", () => {
+  for (const stage of ["dev", "ci", "alpha", "prod"] as const) {
+    for (const host of [
+      "127.0.0.1",
+      "[::1]",
+      "localhost",
+      "example.com",
+      "127.0.0.1.evil.example",
+    ]) {
+      for (const protocol of ["ws", "wss"]) {
+        const options = {
+          ...base,
+          stage,
+          auth: { browserCookie: true as const },
+          url: `${protocol}://${host}:1443/browser/session`,
+        }
+        if (
+          protocol === "wss" ||
+          (["dev", "ci"].includes(stage) && ["127.0.0.1", "[::1]"].includes(host))
+        )
+          expect(resolveConnectOptions(options, "").auth.credential).toBe("")
+        else expect(() => resolveConnectOptions(options, "")).toThrow()
+        expect(() =>
+          resolveConnectOptions(
+            { ...options, url: `${protocol}://${host}:1443/session` },
+            "",
+          ),
+        ).toThrow()
+      }
+    }
+  }
+})

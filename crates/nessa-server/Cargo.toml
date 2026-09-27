@@ -10,22 +10,67 @@ name = "nessa_server"
 path = "src/lib.rs"
 
 [[bin]]
-name = "nessa-server"
+name = "nessa"
 path = "src/main.rs"
 
 [dependencies]
+nessa-sdk = { path = "../nessa-sdk" }
+nessa-images = { path = "../nessa-images" }
+nessa-local-database = { path = "../nessa-local-database" }
 nessa-local-storage = { path = "../nessa-local-storage" }
+nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
+nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
+getrandom = "0.3"
+# Installing an agent's own runtime: fetch an archive, hash it, unpack one file.
+# `reqwest` is blocking here on purpose — see `agent_install::infrastructure`.
+# Response compression is deliberately absent: the archive's digest is taken
+# over the bytes on the wire, so a transport that silently decompressed them
+# would hash something the pin was never measured against.
+# Taken without a TLS backend, which `agent_install::infrastructure` then names
+# — the same way `tauri` and `tauri-plugin-updater` take it. The `rustls`
+# feature would name one instead, and name it for every crate in the build
+# graph that shares this dependency: cargo unifies features, so the agent
+# installer would be choosing the cryptography the desktop's updater ships
+# with, and pulling `aws-lc-sys` — a C and assembly build — into a gateway
+# that has no need of it.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider", "http2"] }
+# Only to name that backend. *ring* is the one this build already has, and the
+# one both Tauri crates install, so a workspace build holds a single
+# implementation rather than two.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10"
+subtle = "2.6"
+flate2 = "1"
+tar = "0.4"
+# Parsing a pinned archive URL, rather than matching on its spelling.
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+# Opening the gateway log without following a link where it should be.
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Nessa-owned agent API keys live in the login keychain. This crate is already
+# in the desktop dependency graph; naming it here exposes the typed Security
+# framework API without putting a secret in a subprocess argument.
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+security-framework = "3.7"
+security-framework-sys = "2.17"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["test-util"] }
+tokio = { version = "1", features = ["test-util", "io-util"] }
+# Only to build the pixels a substitute system decoder hands back. The image
+# library this workspace already compiles; nothing new is built.
+image = { version = "0.25.10", default-features = false }

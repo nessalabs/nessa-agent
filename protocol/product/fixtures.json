@@ -24,7 +24,9 @@
     "audienceId": "gateway",
     "expiresAt": 200,
     "grants": [],
-    "methods": ["server.health"]
+    "methods": [
+      "server.health"
+    ]
   },
   "CredentialRevokeParams": {
     "requestId": "revoke-1",
@@ -35,5 +37,207 @@
     "code": "gateway_overloaded",
     "retryable": true,
     "retryAfterMs": 1500
+  },
+  "ConversationCreateParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "create"
+  },
+  "ConversationSendParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "send",
+    "executionId": "execution",
+    "text": "Hello",
+    "attachments": [
+      {
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "mimeType": "image/png",
+        "size": 1
+      }
+    ],
+    "files": [
+      {
+        "path": "/Users/ada/notes/report.pdf"
+      }
+    ]
+  },
+  "AttachmentBeginParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "attach",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "mimeType": "image/png",
+    "size": 1
+  },
+  "AttachmentBeginResult": {
+    "requestId": "attach",
+    "state": "upload_required",
+    "ticket": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expiresAtMs": 1,
+    "digest": null,
+    "mimeType": null,
+    "size": null
+  },
+  "ConversationView": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "revision": "1",
+    "messages": [
+      {
+        "executionId": "execution-1",
+        "userText": "Prepare a deployment",
+        "attachments": [],
+        "files": [],
+        "status": "running",
+        "parts": []
+      }
+    ],
+    "pending": [],
+    "permissions": [],
+    "tools": [],
+    "capabilities": {
+      "queue": true,
+      "steer": false,
+      "resume": true,
+      "permissions": true,
+      "imageInput": false,
+      "agentFeatures": {
+        "permissionDenial": "supported_for_offered_permission_reviews",
+        "nativeHookSuppression": "unknown",
+        "compactionReporting": "unsupported_not_implemented",
+        "modelSwitchReporting": "unsupported_not_implemented",
+        "permissionDeferral": "unsupported_not_implemented",
+        "elicitationForwarding": "unknown",
+        "preToolPolicy": "unsupported_not_implemented",
+        "policyEndTurn": "unsupported_not_implemented",
+        "policyCloseSession": "unsupported_not_implemented",
+        "incomingElicitation": "supported_with_correlated_round_trip"
+      }
+    },
+    "lifecycle": {
+      "phase": "attached"
+    },
+    "truncated": false,
+    "queueComplete": true,
+    "title": "Flights to Lisbon",
+    "questions": [
+      {
+        "executionId": "execution-1",
+        "questionId": "1",
+        "message": "Which environment should I deploy to?",
+        "questions": [
+          {
+            "key": "question_0",
+            "prompt": "Which environment should I deploy to?",
+            "header": "Environment",
+            "multiSelect": false,
+            "freeText": true,
+            "required": true,
+            "options": [
+              {
+                "value": "staging",
+                "label": "Staging",
+                "description": "Safe to break"
+              },
+              {
+                "value": "production",
+                "label": "Production",
+                "description": null
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "ConversationReadParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001"
+  },
+  "ConversationListParams": { "archived": true },
+  "ConversationArchiveParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "archive-1"
+  },
+  "ConversationDeleteParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "delete-1"
+  },
+  "ConversationListResult": {
+    "conversations": [
+      {
+        "conversationId": "00000000-0000-4000-8000-000000000001",
+        "title": "Flights to Lisbon",
+        "preview": "Done. Confirmation K7Q2PX is in your inbox.",
+        "createdAtMs": 1790200000000,
+        "updatedAtMs": 1790200300000,
+        "running": false,
+        "archived": false
+      },
+      {
+        "conversationId": "00000000-0000-4000-8000-000000000002",
+        "title": null,
+        "preview": null,
+        "createdAtMs": 1790100000000,
+        "updatedAtMs": 1790100000000,
+        "running": false,
+        "archived": false
+      }
+    ],
+    "complete": true
+  },
+  "ConversationRemoveParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution"
+  },
+  "ConversationAnswerParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution",
+    "permissionId": "permission",
+    "optionId": "allow"
+  },
+  "ConversationCancelParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution",
+    "permissionId": "permission",
+    "reason": "User withdrew this review"
+  },
+  "ConversationCloseParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action"
+  },
+  "ConversationReceipt": {
+    "executionId": "execution",
+    "disposition": "queued"
+  },
+  "ConversationMutationResult": {
+    "requestId": "action",
+    "applied": true
+  },
+  "ConversationReorderParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "reorder-1",
+    "executionIds": [
+      "execution-2",
+      "execution-1"
+    ]
+  },
+  "ConversationReorderResult": {
+    "requestId": "reorder-1",
+    "outcome": "applied"
+  },
+  "ConversationAnswerQuestionParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution",
+    "questionId": "1",
+    "choices": [
+      {
+        "key": "question_0",
+        "values": [
+          "staging"
+        ],
+        "ownWords": null
+      }
+    ]
   }
 }

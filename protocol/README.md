@@ -9,9 +9,9 @@ HTTP `/health` reports process liveness only.
 | --- | --- |
 | [product/manifest.json](product/manifest.json) | Authenticated method and event catalog |
 | [product/v1.json](product/v1.json) | Session, credential, and termination payloads |
-| [manifest.json](manifest.json) | Shared health and echo method schemas |
+| [manifest.json](manifest.json) | Shared health method schema |
 | [schemas/v1/](schemas/v1/) | Shared payloads, frames, and shortcut documents |
-| [defaults/](defaults/) | Bundled shortcut defaults |
+| [defaults/](defaults/) | Bundled shortcut defaults, and the stage → gateway port table |
 | [fixtures/v1/](fixtures/v1/) | Validated shared wire examples |
 
 ```sh
@@ -29,8 +29,12 @@ or schema version bump is needed merely to change this repository's current cont
 | `session.authenticate` | Credential proof and nonce; returns verified session |
 | `auth.session` | Current authenticated metadata |
 | `server.health` | Authorized health read (`server.read`) |
-| `conversation.echo` | Temporary text round trip (`conversation.write`) |
+| `conversation.create`, `conversation.read`, `conversation.send`, `conversation.steer` | Conversation creation, projection reads, and input submission |
+| `conversation.list` | The caller's conversations, newest first, with title and last line said, at most 500, and `complete` saying whether that is all of them; archived ones only on request; opens no provider |
+| `conversation.archive`, `conversation.unarchive`, `conversation.delete` | Hide or restore a conversation in the list; delete permanently (history, uploads and summary erased, audit kept, identity never reused) |
+| `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
+| `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
 its request. Mutations separately carry a stable `requestId` for explicit retries.
@@ -39,6 +43,23 @@ Authentication challenges advertise a Unix-second deadline rounded up from
 millisecond wall time. A single monotonic timeout covers challenge delivery and
 authentication; expiry closes with retryable `handshake_timeout` (4006). Typed close reasons distinguish
 terminal authority failures from retryable transport or dependency failures.
+
+A conversation command can open or restore an agent, which the gateway spends a
+real budget on before it can answer at all.
+[defaults/agent-startup-budgets.json](defaults/agent-startup-budgets.json) is
+the one table for that: the gateway compiles it into what it spends, and the
+client into how long it waits. A client that gave up first deleted its request
+and dropped the typed answer when it arrived, so the caller learned nothing
+about a failure the gateway had described exactly.
+
+A conversation command the gateway dispatched and refused answers with a
+`ConversationErrorCode`. The typed code is the contract; the message text is not.
+Access and routing failures are answered by the session before a conversation
+command is dispatched and carry their own codes, so this is not every code a
+conversation request can receive. `agent_startup_deadline` means the agent was
+still starting when its budget expired, so nothing reached the provider and the
+same command is safe to repeat. `agent_not_configured` and `invalid_request`
+reject the command until their cause is addressed.
 
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from

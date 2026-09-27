@@ -8,6 +8,37 @@ describe("frontend environment", () => {
   it("defaults to the real backend", () => {
     expect(loadEnvironment({}).conversation.backend).toBe("local")
   })
+  it("sends a packaged build straight at the local gateway", () => {
+    const environment = loadEnvironment({})
+    expect(environment.gatewayBaseUrl).toBe("http://127.0.0.1:7420")
+    expect(environment.gatewayBaseUrlOverride).toBeUndefined()
+  })
+
+  it("points a packaged dev-stage build at the dev port, not the product one", () => {
+    expect(loadEnvironment({ VITE_NESSA_STAGE: "dev" }).gatewayBaseUrl).toBe(
+      "http://127.0.0.1:7421",
+    )
+  })
+
+  it("sends a development build at its own origin, where the proxy is", () => {
+    expect(loadEnvironment({}, true).gatewayBaseUrl).toBe("")
+  })
+
+  it("takes a configured gateway as an origin, without its path", () => {
+    const environment = loadEnvironment({
+      VITE_NESSA_GATEWAY_URL: "https://gateway.example:8443/ignored/",
+    })
+    expect(environment.gatewayBaseUrl).toBe("https://gateway.example:8443")
+    expect(environment.gatewayBaseUrlOverride).toBe("https://gateway.example:8443")
+  })
+
+  it.each(["127.0.0.1:7420", "ws://127.0.0.1:7420", "file:///tmp", "nonsense"])(
+    "rejects %s as a gateway URL",
+    (url) => {
+      expect(() => loadEnvironment({ VITE_NESSA_GATEWAY_URL: url })).toThrow()
+    },
+  )
+
   it.each(["prod", "alpha"])("rejects scenarios in %s", (stage) => {
     expect(() =>
       loadEnvironment(
@@ -53,7 +84,9 @@ describe("frontend environment", () => {
       ),
     })
     expect(dependencies.usesLocalSession).toBe(false)
-    const result = await makeStore(dependencies).dispatch(sendDraft({ text: "hello" }))
+    const result = await makeStore(dependencies).dispatch(
+      sendDraft({ content: [{ type: "text", text: "hello" }] }),
+    )
     expect(sendDraft.fulfilled.match(result)).toBe(scenario === "echo")
     expect(dependencies.session.get()).toBeNull()
   })

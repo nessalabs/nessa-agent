@@ -1,0 +1,135 @@
+use crate::application::agent_execution::sessions::storage::{
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+};
+use crate::domain::agent_execution::sessions::SessionId;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+#[derive(Default)]
+struct Entry {
+    leased: bool,
+    snapshot: Option<SessionSnapshot>,
+}
+
+/// Clones share snapshots and writer leases. Independent instances are isolated.
+/// Erasing a session clears its snapshot and keeps its lease entry, so the
+/// session stays excluded until the erasing lease is dropped.
+/// [`SessionStorage::open_existing`] opens only a session with an entry, and
+/// adds none.
+#[derive(Clone, Default)]
+pub struct InMemoryStorage {
+    entries: Arc<Mutex<HashMap<String, Entry>>>,
+}
+impl InMemoryStorage {
+    /// Creates an empty backend; clones share snapshots and exclusive leases.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+impl SessionStorage for InMemoryStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
+            let entry = entries.entry(id.as_str().to_owned()).or_default();
+            if entry.leased {
+                return Err(StorageError::Busy);
+            }
+            entry.leased = true;
+            Ok(Box::new(MemoryStore {
+                id,
+                entries: self.entries.clone(),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move {
+            let exists = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?
+                .contains_key(id.as_str());
+            if !exists {
+                return Ok(None);
+            }
+            self.open(id).await.map(Some)
+        })
+    }
+}
+struct MemoryStore {
+    id: SessionId,
+    entries: Arc<Mutex<HashMap<String, Entry>>>,
+}
+impl SessionStorageLease for MemoryStore {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        Box::pin(async move {
+            let entries = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
+            Ok(entries
+                .get(self.id.as_str())
+                .and_then(|entry| entry.snapshot.clone()))
+        })
+    }
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        let validation = if snapshot.id != self.id {
+            Err(StorageError::IdentityMismatch)
+        } else {
+            super::snapshot::validate(&snapshot)
+        };
+        if let Err(error) = validation {
+            snapshot.discard_rejected_errors();
+            return Box::pin(async move { Err(error) });
+        }
+        Box::pin(async move {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
+            let entry = entries
+                .get_mut(self.id.as_str())
+                .expect("leased entry exists");
+            if entry.snapshot.as_ref().is_some_and(|previous| {
+                !snapshot.queue_history.starts_with(&previous.queue_history)
+            }) {
+                return Err(StorageError::Corrupt(
+                    "saved queue history cannot be replaced or truncated".into(),
+                ));
+            }
+            entry.snapshot = Some(snapshot);
+            Ok(())
+        })
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
+            // The entry stays: it carries this lease's exclusion.
+            if let Some(entry) = entries.get_mut(self.id.as_str()) {
+                entry.snapshot = None;
+            }
+            Ok(())
+        })
+    }
+}
+impl Drop for MemoryStore {
+    fn drop(&mut self) {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = entries.get_mut(self.id.as_str()) {
+            entry.leased = false;
+        }
+    }
+}

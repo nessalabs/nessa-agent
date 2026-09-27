@@ -1,57 +1,74 @@
+import { textContent } from "../../model"
 import { describe, expect, it } from "vitest"
-
 import { emptyLocalTabs } from "../local-tabs"
+import { UNTITLED } from "../queries/roster"
 import {
   beginSend,
   closeConversation,
-  completeEcho,
   failSend,
   openConversation,
+  openListed,
   setActive,
   setDraft,
-  stopGenerating,
 } from "./index"
+const identity = {
+  conversationId: "c0",
+  executionId: "execution",
+  actionId: "action",
+  mode: "queued" as const,
+}
 
-describe("beginSend / completeEcho", () => {
-  it("appends a user turn then an echoed assistant reply", () => {
-    const pending = beginSend(emptyLocalTabs(), { text: "hey" })
-    const active = pending.conversations.find((item) => item.id === pending.activeId)!
-    expect(active.phase).toBe("thinking")
-    expect(active.draft).toBe("")
-    expect(active.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "sending" },
-    ])
-
-    const done = completeEcho(pending, pending.activeId, "hey")
-    const idle = done.conversations.find((item) => item.id === done.activeId)!
-    expect(idle.phase).toBe("idle")
-    expect(idle.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
-      { id: "t2", from: "assistant", text: "hey" },
-    ])
+describe("local submission evidence", () => {
+  it("preserves exact content and permits a second queued draft", () => {
+    const content = textContent("  code\n ")
+    const pending = beginSend(emptyLocalTabs(), { ...identity, content })
+    // Named by the gateway, not here: the view carries its title.
+    expect(pending.conversations[0]!.title).toBe("New chat")
+    expect(pending.conversations[0]!.turns[0]).toMatchObject({
+      from: "user",
+      content,
+      receipt: "sending",
+      executionId: "execution",
+      actionId: "action",
+    })
+    const second = beginSend(pending, {
+      ...identity,
+      executionId: "second",
+      actionId: "second-action",
+      content: textContent("next"),
+    })
+    expect(second.conversations[0]!.turns).toHaveLength(2)
   })
+  it("records uncertain delivery on the affected user turn without inventing assistant output", () => {
+    const pending = beginSend(emptyLocalTabs(), {
+      ...identity,
+      content: textContent("hello"),
+    })
+    const failed = failSend(pending, "c0", "execution", "offline", { kind: "uncertain" })
+    expect(failed.conversations[0]!.turns).toHaveLength(1)
+    expect(failed.conversations[0]!.turns[0]).toMatchObject({
+      receipt: "unknown",
+      error: "offline",
+    })
+  })
+  /** A send refused before admission: the message was not taken, so the draft is back. */
+  const refused = { kind: "refused", reupload: false } as const
 
-  it("no-ops an empty draft", () => {
+  it("returns to idle after confirmed rejection without offering unknown-delivery retry", () => {
+    const pending = beginSend(emptyLocalTabs(), {
+      ...identity,
+      content: textContent("hello"),
+    })
+    const failed = failSend(pending, "c0", "execution", "Agent not configured", refused)
+    expect(failed.conversations[0]!.phase).toBe("idle")
+    expect(failed.conversations[0]!.turns[0]).toMatchObject({
+      receipt: "failed",
+      error: "Agent not configured",
+    })
+  })
+  it("does not consume an empty draft", () => {
     const tabs = emptyLocalTabs()
-    expect(beginSend(tabs, { text: "  " })).toBe(tabs)
-  })
-
-  it("failSend returns to idle with a failure reply", () => {
-    const pending = beginSend(emptyLocalTabs(), { text: "hey" })
-    const failed = failSend(pending, pending.activeId, "not connected")
-    const active = failed.conversations.find((item) => item.id === failed.activeId)!
-    expect(active.phase).toBe("idle")
-    expect(active.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
-      { id: "t2", from: "assistant", text: "not connected" },
-    ])
-  })
-})
-
-describe("stopGenerating", () => {
-  it("is a no-op until stop RPCs exist", () => {
-    const drafted = setDraft(emptyLocalTabs(), { draft: "hello there" })
-    expect(stopGenerating(drafted)).toBe(drafted)
+    expect(beginSend(tabs, { ...identity, content: textContent(" ") })).toBe(tabs)
   })
 })
 
@@ -80,9 +97,42 @@ describe("openConversation / closeConversation", () => {
 describe("setActive / setDraft", () => {
   it("switches tabs and writes a draft on the open conversation", () => {
     const two = openConversation(emptyLocalTabs())
-    const drafted = setDraft(two, { draft: "note", id: "c0" })
+    const drafted = setDraft(two, { draft: textContent("note"), id: "c0" })
     expect(setActive(drafted, "c0").activeId).toBe("c0")
-    expect(drafted.conversations[0]!.draft).toBe("note")
+    expect(drafted.conversations[0]!.draft).toEqual(textContent("note"))
     expect(setActive(two, "missing")).toBe(two)
+  })
+})
+
+describe("openListed", () => {
+  const listed = {
+    serverConversationId: "0b8f1c2e-1111-4a4a-8b8b-000000000001",
+    title: "Flights to Lisbon",
+  }
+
+  it("reopens a listed conversation as a ready tab named by the list", () => {
+    const opened = openListed(emptyLocalTabs(), listed)
+    const tab = opened.conversations.find((item) => item.id === opened.activeId)!
+    expect(opened.conversations).toHaveLength(2)
+    expect(tab).toMatchObject({
+      title: "Flights to Lisbon",
+      serverConversationId: listed.serverConversationId,
+      serverReady: true,
+      turns: [],
+    })
+    expect(tab.titleEdited).toBeUndefined()
+  })
+
+  it("shows the tab that already holds it rather than opening a second", () => {
+    const once = openListed(emptyLocalTabs(), listed)
+    const elsewhere = setActive(once, "c0")
+    const twice = openListed(elsewhere, { ...listed, title: null })
+    expect(twice.conversations).toHaveLength(2)
+    expect(twice.activeId).toBe(once.activeId)
+  })
+
+  it("names a conversation the gateway has no title for as its list row does", () => {
+    const opened = openListed(emptyLocalTabs(), { ...listed, title: null })
+    expect(opened.conversations.at(-1)!.title).toBe(UNTITLED)
   })
 })

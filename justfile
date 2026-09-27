@@ -2,67 +2,108 @@
 # Windows recipes are written, not yet run on a Windows box.
 #
 #   just          list recipes
-#   just start    desktop app + local nessa-server
+#   just start    desktop app + local nessa server (dev; `just start prod` for another stage)
 #   just dev      desktop app in dev mode (falls back to the browser UI)
-#   just server   local nessa-server only
+#   just server   local nessa server only
 #   just web      UI in a browser only; window controls no-op
-#   just release fast  testing-shaped release (macOS .app / Linux .deb / Windows nsis)
-#   just release  shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
+#   just release prod fast  testing-shaped prod release (macOS .app / Linux .deb / Windows nsis)
+#   just release  shipping prod bundle (macOS .dmg / Linux .deb / Windows nsis)
+#   just release dev  shipping bundle whose UI and host both use dev
 
-#   just worktree create <name>  feature checkout sharing the build cache
+#   just worktree create <name>  feature checkout with isolated build output
+#   just worktree isolate        migrate this checkout from the old shared target
 #   just worktree list           list checkouts
 
 # cmd so Windows does not need Git's sh. Unix still uses sh.
 set windows-shell := ["cmd.exe", "/c"]
 
-# Tauri --bundles is per OS. `app` / `dmg` are macOS-only.
-fast-bundle := if os() == "macos" { "app" } else if os() == "windows" { "nsis" } else { "deb" }
-release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis" } else { "deb" }
+# Tauri --bundles is per OS. `app` / `dmg` are macOS-only. Linux names none:
+# a Linux build makes exactly the release's .deb and refuses a choice
+# (scripts/desktop/build-command.mjs).
+fast-bundles := if os() == "macos" { "--bundles app" } else if os() == "windows" { "--bundles nsis" } else { "" }
+release-bundles := if os() == "macos" { "--bundles dmg" } else if os() == "windows" { "--bundles nsis" } else { "" }
 
 # List recipes. Bare `just` is not `just dev`.
 [private]
 default:
     @just --list
 
-# Local nessa-server (stage=dev defaults: 127.0.0.1:7420, token=dev-token).
+# Local gateway (stage=dev, 127.0.0.1:7421). Creates the dev owner and chat
+# credentials on first run; existing ones are never replaced. An installed Nessa
+# keeps :7420 through its background service, so both can run at once.
 server:
     pnpm server:run
 
-# Desktop app + local nessa-server (always restarts :7420 so code changes load).
+# Desktop app + local nessa server (always restarts the dev port so code changes
+# load). It restarts a dev server this checkout started and nothing else — see
+# scripts/free-gateway-port.mjs for why a launchd service is not ours to kill.
 [unix]
-start:
+[positional-arguments]
+start stage="":
     #!/usr/bin/env bash
     set -euo pipefail
     set -m
+    # One stage, resolved once, given to both halves.
+    #
+    # The argument wins, then this environment, then `dev` — so `just start`,
+    # `just start prod`, and `NESSA_STAGE=ci just start` all say one thing. Both
+    # names are exported because the two halves read different ones: the server
+    # and host read `NESSA_STAGE` at run time, the UI is built against
+    # `VITE_NESSA_STAGE`. Setting only one is how a prod UI came to be pointed
+    # at a dev gateway, which the app refused — correctly, in a banner, beside a
+    # picker that span for ever.
+    # `"$1"`, not `{{stage}}`: just interpolates a recipe argument as text into
+    # this script, so a stage carrying a quote or a `$(…)` would be read as
+    # shell rather than as a name. Positional arguments are passed, not pasted.
+    stage="${1:-}"
+    if [[ -z "${stage}" ]]; then
+      stage="$(node -e 'import("./scripts/gateway-port.mjs").then(m => process.stdout.write(m.selectedStage()))')"
+    fi
+    export NESSA_STAGE="${stage}"
+    export VITE_NESSA_STAGE="${stage}"
+    # Everything that has to be true before a window is worth opening: the stage
+    # is real, the gateway has an agent to talk to, and the binary exists rather
+    # than being compiled while something waits on it.
+    # The port before any repair. `just start prod` on a machine with Nessa
+    # installed cannot succeed — its service holds the port — and preflight
+    # would otherwise have written to the installed app's own namespace on the
+    # way to that refusal. Nothing is repaired until there is somewhere to run.
+    node scripts/free-gateway-port.mjs "${stage}"
+    node scripts/preflight.mjs "${stage}"
+    # No argument on purpose, now that the stage is exported above: with one,
+    # this answers the stage's own port and `NESSA_PORT` is ignored, which
+    # started the server on one socket and polled another. Without one it reads
+    # the same environment the server will, override included.
+    port="$(node scripts/gateway-port.mjs)"
     server_pid=""
+    app_pid=""
+    # The app goes first, then the gateway it talks to: the other order leaves a
+    # window up with its server pulled out from under it, which is the state this
+    # cleanup exists to prevent.
+    #
+    # How a job and its subtree are stopped is one rule, shared with
+    # `scripts/run-dev-app.sh`, which is inside this same process tree.
+    source scripts/stop-job.sh
+    # Runs twice on a signal — once for the signal, once for the EXIT it causes —
+    # so each pid is forgotten as it is stopped. Otherwise the second pass
+    # announces stopping things that are already gone, and a pid that has since
+    # been reused would be signalled for nothing to do with us.
     cleanup() {
-      if [[ -n "${server_pid}" ]]; then
-        echo "→ stopping nessa-server (pid ${server_pid})"
-        kill -TERM -"${server_pid}" 2>/dev/null || kill -TERM "${server_pid}" 2>/dev/null || true
-        wait "${server_pid}" 2>/dev/null || true
-      fi
+      local app="${app_pid}" server="${server_pid}"
+      app_pid=""
+      server_pid=""
+      stop_job "the app" "${app}"
+      stop_job "nessa-server" "${server}"
     }
     trap cleanup EXIT INT TERM
 
-    if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-      echo "→ stopping existing nessa-server on :7420"
-      if command -v lsof >/dev/null 2>&1; then
-        lsof -tiTCP:7420 -sTCP:LISTEN | xargs kill -TERM 2>/dev/null || true
-      fi
-      for _ in $(seq 1 20); do
-        if ! curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-          break
-        fi
-        sleep 0.25
-      done
-    fi
 
     echo "→ starting nessa-server"
     pnpm server:run &
     server_pid=$!
     ready=0
     for _ in $(seq 1 120); do
-      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
+      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:${port}/health" >/dev/null; then
         ready=1
         break
       fi
@@ -75,12 +116,19 @@ start:
       sleep 0.5
     done
     if [[ "${ready}" -ne 1 ]]; then
-      echo "→ nessa-server did not become healthy on :7420"
+      echo "→ nessa-server did not become healthy on :${port}"
       exit 1
     fi
-    echo "→ nessa-server ready on :7420"
+    echo "→ nessa-server ready on :${port} (stage ${stage})"
 
-    just dev
+    # Started as a job rather than run in the foreground, so its process group is
+    # known and `cleanup` can take the whole subtree down. `wait` keeps this
+    # recipe blocking until the app exits, exactly as the foreground call did,
+    # and the trap fires either way round: quitting the app stops the gateway,
+    # and stopping this run stops the app.
+    just dev &
+    app_pid=$!
+    wait "${app_pid}"
 
 # UI in a browser only; window controls no-op.
 web:
@@ -97,32 +145,40 @@ dev:
     fi
     if ! pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
       echo "Linux native deps missing. On Debian/Ubuntu:"
-      echo "  sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot"
+      echo "  bash scripts/desktop/install-linux-build-deps.sh"
       exit 1
     fi
     if [[ -z "${WEBKIT_DISABLE_DMABUF_RENDERER:-}" && ! -e /dev/dri/card0 && ! -e /dev/dri/renderD128 ]]; then
       export WEBKIT_DISABLE_DMABUF_RENDERER=1
       export WEBKIT_DISABLE_COMPOSITING_MODE=1
     fi
-    exec pnpm app
+    exec bash scripts/run-dev-app.sh
 
 # Desktop app in dev mode (`tauri dev`).
 [macos]
+dev:
+    bash scripts/run-dev-app.sh
+
+# Desktop app in dev mode (`tauri dev`). cmd has no traps, so the app is not
+# taken down with this command the way it is on Unix; quit it from the tray.
 [windows]
 dev:
     pnpm app
 
-# Shipping bundle by default; `just release fast` builds with faster settings.
+# Shipping bundle by default; macOS builds seal and verify the completed bundle.
+# `just release prod fast` builds with faster settings.
 [unix]
-release mode="shipping":
-    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}pnpm exec tauri build --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+[positional-arguments]
+release stage="prod" mode="shipping":
+    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "$1" {{if mode == "fast" { fast-bundles } else { release-bundles }}}
 
-# Shipping bundle by default; `just release fast` builds with faster settings.
+# Shipping bundle by default; `just release prod fast` builds with faster settings.
 [windows]
-release mode="shipping":
-    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}pnpm exec tauri build --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+[positional-arguments]
+release stage="prod" mode="shipping":
+    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" {{if mode == "fast" { fast-bundles } else { release-bundles }}}
 
-# Manage feature worktrees: create <name>, list, remove <name>, or clean (requires Bash).
+# Manage feature worktrees: create <name>, isolate, list, remove <name>, or clean (requires Bash).
 [unix]
 [positional-arguments]
 worktree +args:

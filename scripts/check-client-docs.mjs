@@ -13,7 +13,7 @@ const exported = (name) =>
 
 for (const path of [
   "protocol/product/v1.json",
-  ...["common", "frames", "server", "conversation", "shortcuts"].map(
+  ...["common", "frames", "server", "shortcuts"].map(
     (name) => `protocol/schemas/v1/${name}.json`,
   ),
 ]) {

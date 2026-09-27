@@ -2,15 +2,49 @@
 use super::EnvironmentError;
 use std::path::{Path, PathBuf};
 
-/// Resolve the stage/instance namespace beneath an absolute data root.
-/// Explicit roots support isolated CI runs; default local data lives in ~/.nessa.
-/// Reject ambiguous segments rather than allowing two instances to share credentials.
+/// The private credential directory for this stage and instance.
 pub(super) fn auth_directory(
     data_dir: Option<&str>,
     home: Option<&str>,
     stage: &str,
     instance: Option<&str>,
 ) -> Result<Option<PathBuf>, EnvironmentError> {
+    Ok(namespace(data_dir, home, stage, instance)?
+        .map(|(root, relative)| root.join(relative).join("auth")))
+}
+
+/// Where this stage's gateway writes its log. The launchd definition redirects
+/// the service's stdout and stderr to `gateway.log` in here, so it is also
+/// where the server finds the file it is itself writing into.
+pub(super) fn log_directory(
+    data_dir: Option<&str>,
+    home: Option<&str>,
+    stage: &str,
+    instance: Option<&str>,
+) -> Result<Option<PathBuf>, EnvironmentError> {
+    Ok(namespace(data_dir, home, stage, instance)?
+        .map(|(root, relative)| root.join(relative).join("logs")))
+}
+
+pub(super) fn endpoint_storage(
+    data_dir: Option<&str>,
+    home: Option<&str>,
+    stage: &str,
+    instance: Option<&str>,
+) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
+    Ok(namespace(data_dir, home, stage, instance)?
+        .map(|(root, relative)| (root, relative.join("logs"))))
+}
+
+/// Resolve the stage/instance namespace beneath an absolute data root.
+/// Explicit roots support isolated CI runs; default local data lives in ~/.nessa.
+/// Reject ambiguous segments rather than allowing two instances to share credentials.
+fn namespace(
+    data_dir: Option<&str>,
+    home: Option<&str>,
+    stage: &str,
+    instance: Option<&str>,
+) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
     for segment in std::iter::once(stage).chain(instance) {
         if segment.is_empty()
             || segment == "."
@@ -33,16 +67,15 @@ pub(super) fn auth_directory(
         (None, Some(_)) => return Err(EnvironmentError::Backend("HOME must be an absolute path")),
         (None, None) => return Ok(None),
     };
-    let root = if stage == "prod" {
-        base
-    } else {
-        base.join(stage)
-    };
-    let root = match instance {
-        Some(value) => root.join("instances").join(value),
-        None => root,
-    };
-    Ok(Some(root.join("auth")))
+    let mut relative = PathBuf::new();
+    if stage != "prod" {
+        relative.push(stage);
+    }
+    if let Some(value) = instance {
+        relative.push("instances");
+        relative.push(value);
+    }
+    Ok(Some((base, relative)))
 }
 
 #[cfg(test)]
@@ -70,5 +103,32 @@ mod tests {
         }
         assert!(auth_directory(Some("relative"), None, "dev", None).is_err());
         assert_eq!(auth_directory(None, None, "dev", None).unwrap(), None);
+    }
+
+    /// Credentials and logs share one namespace and differ only in their leaf,
+    /// so the log the server bounds is the one its own launchd service writes.
+    #[test]
+    fn logs_sit_beside_credentials_in_the_same_namespace() {
+        let base = std::env::temp_dir().join("nessa-path-test");
+        let logs = |stage, instance| {
+            log_directory(base.to_str(), None, stage, instance)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(logs("prod", None), base.join("logs"));
+        assert_eq!(
+            logs("dev", Some("one")),
+            base.join("dev/instances/one/logs")
+        );
+        assert_eq!(
+            logs("dev", Some("one")).parent(),
+            auth_directory(base.to_str(), None, "dev", Some("one"))
+                .unwrap()
+                .unwrap()
+                .parent()
+        );
+        // The same rejected segments, because it is the same namespace.
+        assert!(log_directory(Some("/data"), None, "dev", Some("..")).is_err());
+        assert_eq!(log_directory(None, None, "dev", None).unwrap(), None);
     }
 }

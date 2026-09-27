@@ -1,7 +1,10 @@
 //! Provider-neutral credential lifecycle commands.
 
 use super::{
-    dto::{CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, PrincipalInputDto},
+    dto::{
+        CredentialGrantDto, CredentialMetadataDto, CredentialTransitionDto, MembershipInputDto,
+        PrincipalInputDto,
+    },
     ports::{AccessError, CredentialEvidence, PortFuture},
 };
 
@@ -29,6 +32,8 @@ pub struct IssueCredentialRequest {
 }
 
 /// The evidence variant is returned exactly once and cannot be serialized.
+/// Every variant carries the committed lifecycle transitions of the command, so
+/// a caller never observes success without the audit evidence that went with it.
 pub enum IssueCredentialOutcome {
     /// Newly committed credential and its sole secret delivery.
     Issued {
@@ -36,11 +41,15 @@ pub enum IssueCredentialOutcome {
         metadata: CredentialMetadataDto,
         /// One-time bearer evidence; this value is never persisted as plaintext.
         evidence: CredentialEvidence,
+        /// The issuance and any automatic supersessions committed with it.
+        transitions: Vec<CredentialTransitionDto>,
     },
     /// A matching command was already committed and its secret cannot be replayed.
     ExistingSecretUnavailable {
         /// Public metadata for explicit revoke-and-reissue recovery.
         metadata: CredentialMetadataDto,
+        /// The transitions the original command committed, unchanged.
+        transitions: Vec<CredentialTransitionDto>,
     },
 }
 
@@ -62,6 +71,23 @@ pub struct RevokeCredentialRequest {
     pub credential_id: String,
     /// Revocation time in Unix seconds.
     pub revoked_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// A committed revocation together with its evidence. A replayed or repeated
+/// revocation returns the original record; a credential is revoked once.
+pub struct RevokeCredentialOutcome {
+    /// Registry revision after this command.
+    pub revision: u64,
+    /// The one revocation transition recorded for this credential.
+    pub revocation: CredentialTransitionDto,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Query committed lifecycle transitions of credentials owned by one organization.
+pub struct ListTransitionsRequest {
+    /// Organization whose credential transitions may be listed after caller authorization.
+    pub organization_id: String,
 }
 
 /// Lifecycle failures distinguish rejected commands from unavailable storage.
@@ -95,11 +121,22 @@ pub trait CredentialAdmin: Send + Sync {
         &'a self,
         request: ListCredentialsRequest,
     ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError>;
-    /// Commit an idempotent revocation and return the registry revision.
+    /// Commit an idempotent revocation and return its evidence with the registry revision.
     fn revoke<'a>(
         &'a self,
         request: RevokeCredentialRequest,
-    ) -> PortFuture<'a, u64, CredentialAdminError>;
+    ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError>;
+}
+
+/// Application-owned read side of credential audit evidence. The adapter that
+/// commits a transition is the one that answers for it; nothing is reconstructed.
+pub trait CredentialTransitionReader: Send + Sync {
+    /// Return every committed transition of the organization's credentials, in
+    /// commit order.
+    fn list_transitions<'a>(
+        &'a self,
+        request: ListTransitionsRequest,
+    ) -> PortFuture<'a, Vec<CredentialTransitionDto>, CredentialAdminError>;
 }
 
 /// Read the current committed authorization revision without exposing storage.

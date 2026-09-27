@@ -1,5 +1,8 @@
 # 0006. Prove the session link with `server.ping` before chat RPCs
 
+> Historical decision: the development ping was later retired from the single
+> current gateway contract. The text below records the original decision.
+
 ## Purpose
 
 Prove that a client request can carry a payload through the server and return

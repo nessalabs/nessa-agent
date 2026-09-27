@@ -18,6 +18,10 @@ pub enum DomainError {
         issued_at: u64,
         revoked_at: u64,
     },
+    /// A recorded lifecycle transition does not match its stated cause.
+    InvalidTransition {
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for DomainError {
@@ -43,6 +47,9 @@ impl fmt::Display for DomainError {
                 formatter,
                 "credential revocation {revoked_at} precedes issuance {issued_at}"
             ),
+            Self::InvalidTransition { reason } => {
+                write!(formatter, "invalid credential transition: {reason}")
+            }
         }
     }
 }

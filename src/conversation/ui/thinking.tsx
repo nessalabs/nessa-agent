@@ -24,3 +24,16 @@ export function Thinking({ motion }: { motion: boolean }) {
     </div>
   )
 }
+
+/** Provider preparation is lifecycle work, before the model can be thinking. */
+export function Starting() {
+  return (
+    <div
+      role="status"
+      aria-label="Starting the agent"
+      className="self-start rounded-[1.125rem] bg-accent px-3.5 py-2.5 text-sm text-muted-foreground"
+    >
+      Starting the agent…
+    </div>
+  )
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dev-console",
+  "description": "The bundled panel and setup page may mirror development-only warnings and errors to the host terminal. Release builds register no handler.",
+  "windows": ["main", "setup"],
+  "permissions": ["dev-console:allow-forward-webview-console"]
+}

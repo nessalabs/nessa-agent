@@ -7,11 +7,13 @@ import process from "node:process"
 import { dirname } from "node:path"
 import { WebSocket } from "ws"
 
+import { gatewayPort } from "./gateway-port.mjs"
+
 globalThis.WebSocket ??= WebSocket
 
 function usage() {
   return `Usage:
-  pnpm auth:cli list --url ws://127.0.0.1:7420 --credential-file PATH
+  pnpm auth:cli list --url ws://127.0.0.1:${gatewayPort("dev")} --credential-file PATH
   pnpm auth:cli issue --url URL --credential-file PATH --input PATH --out PATH
   pnpm auth:cli revoke ID --url URL --credential-file PATH [--request-id ID]`
 }

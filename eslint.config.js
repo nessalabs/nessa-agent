@@ -3,6 +3,17 @@ import reactHooks from "eslint-plugin-react-hooks"
 import globals from "globals"
 import tseslint from "typescript-eslint"
 
+import { composerNotices } from "./scripts/eslint/composer-notices.mjs"
+import { inheritedLookups } from "./scripts/eslint/inherited-lookups.mjs"
+
+/** This repository's own rules. Each one is documented where it is written. */
+const nessa = {
+  rules: {
+    "composer-notices": composerNotices,
+    "inherited-lookups": inheritedLookups,
+  },
+}
+
 const tauriSeam = {
   "no-restricted-imports": [
     "error",
@@ -43,10 +54,16 @@ export default tseslint.config(
     },
     plugins: {
       "react-hooks": reactHooks,
+      nessa,
     },
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "error",
+      // `in` finds what a table inherits as well as what it holds, so a key
+      // that arrived from outside the process reads a function off
+      // `Object.prototype` and passes the guard. See the rule for why this is
+      // the one shape of #110 worth a rule.
+      "nessa/inherited-lookups": "error",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
@@ -86,6 +103,10 @@ export default tseslint.config(
           message: "app.tsx renders the panel chrome. Effects belong in a hook.",
         },
       ],
+      // The composer's notices have one box, and it owns both the room they
+      // take and the order they are said in. See the rule for why this is here
+      // rather than in `scripts/architecture`.
+      "nessa/composer-notices": "error",
     },
   },
 )

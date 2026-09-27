@@ -192,9 +192,7 @@ fn ensure_fixed(webview: &gtk::Widget) -> Result<gtk::Fixed, String> {
         return Err(String::from("the webview's parent has no window above it"));
     };
     let Ok(window) = window_widget.downcast::<gtk::Container>() else {
-        return Err(String::from(
-            "the webview's grandparent is not a container",
-        ));
+        return Err(String::from("the webview's grandparent is not a container"));
     };
 
     if let Ok(old) = parent.clone().downcast::<gtk::Container>() {

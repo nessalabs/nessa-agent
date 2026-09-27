@@ -72,7 +72,8 @@ export async function runProductHandshake(
       credential: options.auth.credential,
       client: { id: options.client.id },
     },
-    Math.min(options.config.requestTimeoutMs, remainingMs),
+    // The challenge expires; waiting past it proves nothing.
+    { atMostMs: remainingMs },
   )
   return assertProductSessionReady(payload)
 }

@@ -8,11 +8,12 @@ Implementation decisions and unfinished work are tracked in the ADR folders.
 | [Cedar primer](cedar-primer.md) | How policy evaluation works, with examples and links to the implementation |
 | [Scoped authentication design](scoped-authentication.md) | Original detailed plan and acceptance criteria, with current status and superseded assumptions identified |
 | [Identity, tenancy, and cloud](identity-tenancy-and-cloud.md) | Proposed identity/provider direction and supporting research; broader integrations remain unimplemented |
+| [Credential transition audit](credential-transition-audit.md) | Why every credential lifecycle change is committed with its before/after, cause, and initiator, and the decisions behind that design |
 
 ## Decisions and work tracking
 
 - [Done: ADR 0010 — local authentication](../../adr/done/0010-local-authentication.md).
-- [Todo: ADR 0007 — authentication delivery](../../adr/done/0007-authentication-delivery.md).
+- [Done: ADR 0007 — authentication readiness and operating bounds](../../adr/done/0007-authentication-delivery.md).
 - [Todo: ADR 0011 — session protocol and bindings](../../adr/todo/0011-nessa-session-protocol-and-authorities.md).
 - [Todo: ADR 0012 — harnesses and optional tools](../../adr/todo/0012-agent-harnesses-and-optional-tools.md).
 

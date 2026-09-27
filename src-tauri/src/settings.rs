@@ -7,28 +7,68 @@
 //!
 //! Global summon lives in `shortcuts.json` (ADR 0004), not here.
 
-use std::fs;
+mod repair;
+pub(crate) mod storage;
+
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
-
-use crate::local_data;
 
 /// `serde(default)` so a file written by an older build — or one a person has
 /// hand-edited down to a single key — still loads, with the missing keys
 /// filled from the defaults rather than failing the launch.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub panel: Panel,
+    /// Durable service identity and provider configuration.
+    pub service: Service,
+    /// Keep background agents running after quitting the desktop by default.
+    pub stop_agents_on_quit: bool,
+    /// How far first-run setup got. A file written before this key existed
+    /// loads as "not done", which is the same answer a first launch gives.
+    pub onboarding: Onboarding,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            panel: Panel::default(),
-        }
-    }
+/// Inputs that may intentionally change the packaged gateway registration.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Service {
+    pub data_root: Option<PathBuf>,
+    pub instance: Option<String>,
+    pub port: Option<u16>,
+    pub claude: ClaudeService,
+}
+
+/// Durable Claude settings shared by readiness and process launch.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeService {
+    pub configuration_directory: Option<PathBuf>,
+}
+
+/// What first-run setup has settled.
+///
+/// Two facts, and both are read back. Setup runs in a window of its own that is
+/// gone before the panel needs either, so what it decided is kept here rather
+/// than handed over.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Onboarding {
+    /// Whether first-run setup has been completed. A launch with this true
+    /// opens straight into the panel instead of the setup window.
+    pub completed: bool,
+    /// The agent setup chose, by the name the gateway knows it by. Absent where
+    /// nobody has chosen one, and a conversation then starts on whichever agent
+    /// the gateway is configured to default to — never on a guess made here.
+    /// Kept as written rather than parsed: which agents exist is the gateway's
+    /// to say, and a desktop that validated the name would have to be rebuilt
+    /// to learn a new one.
+    pub agent: Option<String>,
 }
 
 /// The panel's geometry, in logical pixels. It opens in the lower right of the
@@ -57,66 +97,291 @@ impl Default for Panel {
     }
 }
 
-/// `settings.json` under the stage-scoped config root ([`local_data`]).
-fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    local_data::config_root(app).map(|root| root.join("settings.json"))
+/// Where the desktop's settings are kept, as the rest of the host asks about
+/// them.
+///
+/// The host's own port, in the host's vocabulary: settings in, settings out,
+/// and no path, file, or serializer visible to a caller. The real
+/// implementation is [`SettingsFile`], built once in composition; a test
+/// substitutes one holding the file in memory, which is what lets the
+/// decisions that read and write settings — the first-run flag, the quit
+/// policy — be exercised without a disk or a running app.
+pub trait SettingsStore: Send + Sync {
+    /// The panel-preference read: defaults stand in for anything missing or
+    /// unreadable, because a launch that cannot read those preferences still
+    /// has to open a panel. See [`load_from`].
+    fn load(&self) -> Settings;
+
+    /// Read the durable inputs that own the packaged service and credential
+    /// namespace.
+    ///
+    /// An absent file is a first launch and therefore has the default service
+    /// inputs. A file that exists but cannot be read or parsed is an error: its
+    /// service identity is unknown, so defaults cannot safely stand in for it.
+    fn load_service(&self) -> io::Result<Service>;
+
+    /// Read, apply `change`, write the result back, and answer with what was
+    /// written. See [`update_in`] for what an unusable file does here.
+    ///
+    /// # Errors
+    ///
+    /// The typed read failure when the file is there but unusable, the write's
+    /// own failure when the replacement does not land, and `NotFound` when
+    /// there is no config root to write into.
+    fn update(&self, change: &mut dyn FnMut(&mut Settings)) -> io::Result<Settings>;
+}
+
+/// `settings.json` under the stage-scoped config root ([`crate::local_data`]).
+///
+/// The path is resolved once, in composition, rather than per call: it is
+/// derived from the process environment, which does not change while the app
+/// runs. `None` is a launch with no config root at all — there is nothing to
+/// read and nowhere to write, and the defaults are all it can have.
+pub struct SettingsFile {
+    path: Option<PathBuf>,
+    storage: Arc<dyn storage::Storage>,
+}
+
+impl SettingsFile {
+    /// The real file, under the config root composition resolved.
+    pub fn at(config_root: Option<PathBuf>) -> Self {
+        Self {
+            storage: Arc::new(
+                config_root
+                    .as_deref()
+                    .map(storage::FileStorage::repairing)
+                    .unwrap_or_default(),
+            ),
+            path: config_root.map(|root| root.join("settings.json")),
+        }
+    }
+}
+
+impl SettingsStore for SettingsFile {
+    fn load(&self) -> Settings {
+        match &self.path {
+            Some(path) => load_from(path, &*self.storage),
+            None => Settings::default(),
+        }
+    }
+
+    fn load_service(&self) -> io::Result<Service> {
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "settings directory unavailable")
+        })?;
+        match read_from(path, &*self.storage) {
+            Found::Settings(settings) => Ok(settings.service),
+            Found::Absent => Ok(Service::default()),
+            Found::Unusable(error) => Err(error),
+        }
+    }
+
+    fn update(&self, change: &mut dyn FnMut(&mut Settings)) -> io::Result<Settings> {
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "settings directory unavailable")
+        })?;
+        update_in(path, &*self.storage, change)
+    }
+}
+
+/// A [`SettingsFile`] whose file is a map in this process.
+///
+/// Built here, next to the rules it stands in for, so every module that makes a
+/// decision from settings substitutes the same one.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    pub(crate) struct InMemorySettings {
+        /// Hand this to whatever is under test.
+        pub(crate) store: SettingsFile,
+        /// The "disk", for seeding a file or reading back what landed.
+        pub(crate) storage: Arc<storage::MemoryStorage>,
+        /// The one path `store` reads and writes.
+        pub(crate) path: PathBuf,
+    }
+
+    pub(crate) fn in_memory() -> InMemorySettings {
+        let storage = Arc::new(storage::MemoryStorage::default());
+        let path = PathBuf::from("settings.json");
+        InMemorySettings {
+            store: SettingsFile {
+                path: Some(path.clone()),
+                storage: storage.clone(),
+            },
+            storage,
+            path,
+        }
+    }
+}
+
+/// What one read of the settings file found.
+///
+/// The three outcomes are kept apart because a reader that only wants to *carry
+/// on* and a reader that wants to *write back* need different answers from the
+/// same read. Both go through [`read_from`]; each decides for itself what an
+/// unusable file means.
+enum Found {
+    /// The file was read and is valid settings.
+    Settings(Settings),
+    /// There is no file yet. Defaults are a legitimate basis: this is the first
+    /// launch, and nothing of the person's can be lost by writing them.
+    Absent,
+    /// There is a file, but this build cannot make settings of it — malformed
+    /// JSON, or a read that failed for a reason other than its absence. The
+    /// contents are still on disk and still whatever the person meant, so the
+    /// defaults describe nobody's settings.
+    Unusable(io::Error),
+}
+
+/// The one read. Shared by the lenient [`load`] and the strict [`update`] so
+/// there is a single account of what the file says.
+fn read_from(path: &Path, store: &dyn storage::Storage) -> Found {
+    match store.read(path) {
+        Ok(raw) => match parse(&raw) {
+            Ok(settings) => Found::Settings(settings),
+            Err(error) => Found::Unusable(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} is not valid settings: {error}", path.display()),
+            )),
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Found::Absent,
+        Err(error) => Found::Unusable(io::Error::new(
+            error.kind(),
+            format!("could not read {}: {error}", path.display()),
+        )),
+    }
 }
 
 /// Reads the settings, falling back to the defaults for anything missing — and
 /// writes the file when it is absent, so there is something to edit. A
 /// malformed file is reported and ignored rather than replaced: overwriting
 /// would throw away whatever the person was in the middle of typing.
-pub fn load(app: &AppHandle) -> Settings {
-    let Some(path) = path(app) else {
-        return Settings::default();
-    };
-
-    match fs::read_to_string(&path) {
-        Ok(raw) => match parse(&raw) {
-            Ok(settings) => {
-                // Rewrite the merged result so keys added by a later build show
-                // up in the file. Values already in it survive, because they
-                // were parsed into `settings` first — this fills gaps, it does
-                // not reset anything.
-                write(&path, &settings);
-                settings
-            }
-            Err(error) => {
-                eprintln!("[nessa] {} is not valid settings: {error}", path.display());
-                Settings::default()
-            }
-        },
-        Err(_) => {
+///
+/// This is the *startup* read, and carrying on with defaults is the right
+/// answer for it: a launch that cannot read its settings still has to open a
+/// panel. It is the wrong basis for changing the file, which is what
+/// [`update_in`] is for.
+fn load_from(path: &Path, store: &dyn storage::Storage) -> Settings {
+    match read_from(path, store) {
+        Found::Settings(settings) => settings,
+        Found::Absent => {
             let settings = Settings::default();
-            write(&path, &settings);
+            if let Err(error) = write(path, &settings, store) {
+                eprintln!("[nessa] could not write {}: {error}", path.display());
+            }
             settings
         }
+        Found::Unusable(error) => {
+            eprintln!("[nessa] {error}");
+            Settings::default()
+        }
     }
+}
+
+/// Changes the settings on disk: read, apply `change`, write the result back.
+///
+/// Refuses — and writes nothing at all — when the file is there but cannot be
+/// read or parsed. Defaults are what a *launch* falls back to; saving them over
+/// a file that merely failed to parse would replace the person's real settings
+/// with a build's opinion of them, silently, because the write itself succeeds.
+/// An absent file is the one case where the defaults are nobody's loss, and is
+/// the first-launch materialisation this module is built around.
+///
+/// Returns what was written, for a caller that has to show the new value —
+/// a menu item's tick, say — without reading the file a second time and
+/// risking a different answer than the one it just saved.
+fn update_in(
+    path: &Path,
+    store: &dyn storage::Storage,
+    change: impl FnOnce(&mut Settings),
+) -> io::Result<Settings> {
+    let mut settings = match read_from(path, store) {
+        Found::Settings(settings) => settings,
+        Found::Absent => Settings::default(),
+        Found::Unusable(error) => return Err(error),
+    };
+    change(&mut settings);
+    write(path, &settings, store)?;
+    Ok(settings)
 }
 
 fn parse(raw: &str) -> Result<Settings, serde_json::Error> {
     serde_json::from_str(raw)
 }
 
-/// Best-effort: an unwritable config directory costs the file, not the launch.
-fn write(path: &std::path::Path, settings: &Settings) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(raw) = serde_json::to_string_pretty(settings) {
-        let _ = fs::write(path, format!("{raw}\n"));
-    }
+fn write(path: &Path, settings: &Settings, store: &dyn storage::Storage) -> io::Result<()> {
+    let raw = serde_json::to_string_pretty(settings).map_err(io::Error::other)?;
+    store.write(path, format!("{raw}\n").as_bytes())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use storage::MemoryStorage as FakeStorage;
 
     #[test]
     fn missing_keys_take_their_defaults() {
         let settings = parse("{}").unwrap();
         assert_eq!(settings.panel.width, 420.0);
+        assert!(!settings.stop_agents_on_quit);
         assert!(settings.panel.height.is_none());
+        // A settings file written before first-run setup was persisted has no
+        // such key, and says the same thing a first launch does: not done.
+        assert!(!settings.onboarding.completed);
+        // Nor does it name an agent, which is why the gateway's own default is
+        // what a conversation starts on rather than a guess made here.
+        assert_eq!(settings.onboarding.agent, None);
+    }
+
+    #[test]
+    fn the_agent_setup_chose_survives_a_reload() {
+        // Setup runs in a window that is gone by the time the panel asks, so
+        // this is the whole of how the choice reaches it.
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let mut settings = load_from(&path, &store);
+        settings.onboarding = Onboarding {
+            completed: true,
+            agent: Some("codex".into()),
+        };
+        write(&path, &settings, &store).unwrap();
+
+        assert_eq!(
+            load_from(&path, &store).onboarding.agent.as_deref(),
+            Some("codex")
+        );
+        let written = store.files.lock().unwrap().get(&path).unwrap().clone();
+        let raw = String::from_utf8(written).unwrap();
+        assert!(raw.contains(r#""agent": "codex""#), "{raw}");
+    }
+
+    #[test]
+    fn an_agent_name_this_build_does_not_know_is_kept_as_written() {
+        // Which agents exist is the gateway's to say. A desktop that rejected
+        // an unfamiliar name would have to be rebuilt to learn a new one, and
+        // would meanwhile throw away a choice somebody actually made.
+        let settings = parse(r#"{ "onboarding": { "agent": "gemini" } }"#).unwrap();
+        assert_eq!(settings.onboarding.agent.as_deref(), Some("gemini"));
+    }
+
+    #[test]
+    fn a_completed_first_run_survives_a_reload() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        assert!(!load_from(&path, &store).onboarding.completed);
+
+        let mut settings = load_from(&path, &store);
+        settings.onboarding.completed = true;
+        write(&path, &settings, &store).unwrap();
+
+        assert!(load_from(&path, &store).onboarding.completed);
+        // Written under the same camelCase convention as every other key, so
+        // the file stays the editable interface it is meant to be.
+        let written = store.files.lock().unwrap().get(&path).unwrap().clone();
+        let raw = String::from_utf8(written).unwrap();
+        assert!(raw.contains(r#""completed": true"#), "{raw}");
+        assert!(raw.contains(r#""onboarding""#), "{raw}");
     }
 
     #[test]
@@ -129,15 +394,291 @@ mod tests {
 
     #[test]
     fn legacy_toggle_shortcut_is_ignored() {
-        let settings = parse(
-            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480 } }"#,
-        )
-        .unwrap();
+        let settings =
+            parse(r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480 } }"#).unwrap();
         assert_eq!(settings.panel.width, 480.0);
     }
 
     #[test]
     fn a_malformed_file_is_an_error_not_a_default() {
         assert!(parse("{").is_err());
+    }
+
+    #[test]
+    fn unreadable_or_invalid_settings_are_never_replaced() {
+        let path = PathBuf::from("settings.json");
+        for bytes in [b"not utf8 \xff".to_vec(), b"{".to_vec()] {
+            let store = FakeStorage::default();
+            store
+                .files
+                .lock()
+                .unwrap()
+                .insert(path.clone(), bytes.clone());
+            assert_eq!(load_from(&path, &store).panel.width, 420.0);
+            assert_eq!(store.files.lock().unwrap().get(&path), Some(&bytes));
+        }
+        let store = FakeStorage::default();
+        store
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), b"original".to_vec());
+        *store.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+        load_from(&path, &store);
+        assert_eq!(store.files.lock().unwrap().get(&path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn service_identity_defaults_only_when_settings_are_absent() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let settings = SettingsFile {
+            path: Some(path.clone()),
+            storage: Arc::new(store),
+        };
+
+        assert_eq!(settings.load_service().unwrap().port, None);
+
+        settings
+            .storage
+            .write(&path, br#"{"service":{"instance":"one","port":7443}}"#)
+            .unwrap();
+        let service = settings.load_service().unwrap();
+        assert_eq!(service.instance.as_deref(), Some("one"));
+        assert_eq!(service.port, Some(7443));
+    }
+
+    #[test]
+    fn unreadable_or_malformed_settings_cannot_authorize_a_service_identity() {
+        let path = PathBuf::from("settings.json");
+        let malformed = Arc::new(FakeStorage::default());
+        malformed.put(&path, b"{");
+        let settings = SettingsFile {
+            path: Some(path.clone()),
+            storage: malformed.clone(),
+        };
+        assert_eq!(
+            settings
+                .load_service()
+                .expect_err("malformed authority must stop service composition")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(malformed.get(&path).as_deref(), Some(b"{".as_slice()));
+
+        let unreadable = Arc::new(FakeStorage::default());
+        let original = br#"{"service":{"instance":"one"}}"#;
+        unreadable.put(&path, original);
+        *unreadable.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+        let settings = SettingsFile {
+            path: Some(path.clone()),
+            storage: unreadable.clone(),
+        };
+        assert_eq!(
+            settings
+                .load_service()
+                .expect_err("unreadable authority must stop service composition")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(unreadable.get(&path).as_deref(), Some(original.as_slice()));
+    }
+
+    #[test]
+    fn missing_settings_initialize_but_failed_replacement_preserves_prior_file() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        load_from(&path, &store);
+        assert!(store.files.lock().unwrap().contains_key(&path));
+        let original = store.files.lock().unwrap().get(&path).unwrap().clone();
+        *store.write_error.lock().unwrap() = Some(io::ErrorKind::Interrupted);
+        let changed = Settings {
+            stop_agents_on_quit: true,
+            ..Settings::default()
+        };
+        assert!(write(&path, &changed, &store).is_err());
+        assert_eq!(store.files.lock().unwrap().get(&path), Some(&original));
+        assert!(!load_from(&path, &store).stop_agents_on_quit);
+    }
+
+    /// The case the bug destroyed: a file that cannot be parsed must not be
+    /// replaced by an update, and the original bytes must still be on disk —
+    /// atomic replacement only promises the file is never torn, not that it is
+    /// replaced with the right contents.
+    #[test]
+    fn an_update_refuses_a_malformed_file_and_leaves_its_bytes_alone() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let original = br#"{ "panel": { "width": 640 }, "#.to_vec();
+        store
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), original.clone());
+
+        let error = update_in(&path, &store, |settings| {
+            settings.onboarding.completed = true;
+        })
+        .expect_err("defaults are not a basis for replacing a file that failed to parse");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(store.files.lock().unwrap().get(&path), Some(&original));
+    }
+
+    /// A transient read failure with a writer that would happily succeed: the
+    /// update is still refused, because the defaults describe nobody's settings.
+    #[test]
+    fn an_update_refuses_an_unreadable_file_even_when_the_write_would_succeed() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let original = br#"{"stopAgentsOnQuit":true}"#.to_vec();
+        store
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), original.clone());
+        *store.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+
+        let error = update_in(&path, &store, |settings| {
+            settings.onboarding.completed = true;
+        })
+        .expect_err("a read that failed is not permission to write defaults");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(store.files.lock().unwrap().get(&path), Some(&original));
+    }
+
+    /// The loss the defect actually caused: settings that are readable and not
+    /// the defaults keep every key the change did not touch.
+    #[test]
+    fn an_update_keeps_the_keys_it_did_not_change() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        write(
+            &path,
+            &Settings {
+                panel: Panel {
+                    width: 640.0,
+                    height: Some(800.0),
+                    min_width: 500.0,
+                },
+                service: Service::default(),
+                stop_agents_on_quit: true,
+                onboarding: Onboarding::default(),
+            },
+            &store,
+        )
+        .unwrap();
+
+        update_in(&path, &store, |settings| {
+            settings.onboarding.completed = true;
+        })
+        .expect("a readable file takes the change");
+
+        let saved = load_from(&path, &store);
+        assert!(saved.onboarding.completed);
+        assert_eq!(saved.panel.width, 640.0);
+        assert_eq!(saved.panel.height, Some(800.0));
+        assert_eq!(saved.panel.min_width, 500.0);
+        assert!(saved.stop_agents_on_quit);
+    }
+
+    /// What the tray's quit-policy item ticks has to be what reached the disk,
+    /// not what the caller assumed it flipped: the value it toggled came from
+    /// the file this same call read.
+    #[test]
+    fn an_update_reports_the_value_it_wrote() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        write(
+            &path,
+            &Settings {
+                stop_agents_on_quit: true,
+                ..Settings::default()
+            },
+            &store,
+        )
+        .unwrap();
+
+        let written = update_in(&path, &store, |settings| {
+            settings.stop_agents_on_quit = !settings.stop_agents_on_quit;
+        })
+        .expect("a readable file takes the change");
+
+        assert!(!written.stop_agents_on_quit);
+        assert!(!load_from(&path, &store).stop_agents_on_quit);
+    }
+
+    /// No file yet is the one case where the defaults are nobody's loss.
+    #[test]
+    fn an_update_writes_over_an_absent_file() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+
+        update_in(&path, &store, |settings| {
+            settings.onboarding.completed = true;
+        })
+        .expect("defaults are a legitimate basis when there is nothing on disk");
+
+        assert!(load_from(&path, &store).onboarding.completed);
+    }
+
+    #[test]
+    fn loading_valid_settings_does_not_rewrite_unchanged_content() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let original = br#"{"stopAgentsOnQuit":true}"#.to_vec();
+        store
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), original.clone());
+        *store.write_error.lock().unwrap() = Some(io::ErrorKind::Other);
+        assert!(load_from(&path, &store).stop_agents_on_quit);
+        assert_eq!(store.files.lock().unwrap().get(&path), Some(&original));
+        assert_eq!(
+            *store.write_error.lock().unwrap(),
+            Some(io::ErrorKind::Other)
+        );
+    }
+
+    /// The port over a file: what a caller gets is the same lenient load and
+    /// strict update the functions above describe, reached without a path.
+    #[test]
+    fn the_store_loads_and_updates_the_file_under_its_root() {
+        let settings = testing::in_memory();
+
+        assert!(!settings.store.load().stop_agents_on_quit);
+        let written = settings
+            .store
+            .update(&mut |chosen| chosen.stop_agents_on_quit = true)
+            .expect("an absent file takes the change");
+
+        assert!(written.stop_agents_on_quit);
+        assert!(settings.store.load().stop_agents_on_quit);
+    }
+
+    /// No config root is not an empty settings file: the panel can use its
+    /// defaults, but there is no authority for service identity and nowhere to
+    /// write.
+    #[test]
+    fn a_launch_with_no_config_root_gets_the_defaults_and_refuses_to_write() {
+        let store = SettingsFile::at(None);
+
+        assert_eq!(store.load().panel.width, Panel::default().width);
+        assert_eq!(
+            store
+                .load_service()
+                .expect_err("there is no durable service authority")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            store
+                .update(&mut |chosen| chosen.onboarding.completed = true)
+                .expect_err("there is nowhere to write")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }

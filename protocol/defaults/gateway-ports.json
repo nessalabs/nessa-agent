@@ -1,0 +1,9 @@
+{
+  "note": "Loopback port the gateway listens on, by NESSA_STAGE. NESSA_PORT overrides it everywhere. 7420 is the product port: an installed Nessa owns it through a launchd background service that outlives the app, so a developer's checkout cannot have it. Only dev moves aside, and it moves next door — a packaged install and a dev server then run side by side. alpha and ci pin their own port explicitly in the harness that starts them.",
+  "stages": {
+    "dev": 7421,
+    "ci": 7420,
+    "alpha": 7420,
+    "prod": 7420
+  }
+}

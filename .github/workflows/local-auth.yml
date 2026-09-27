@@ -4,8 +4,258 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+
+# Nothing here writes anything. Said out loud because the default for a token is
+# whatever the repository's default happens to be, and `changes` below reaches
+# for the API rather than the working tree — the one job that asks GitHub for
+# anything at all.
+permissions:
+  contents: read
+
+# A pull request that is pushed to again does not need the run it just
+# superseded: six runs of this workflow for one branch is six times four
+# runners, and only the last of them gates anything. Pushes to `main` are left
+# to finish — they are what populates the build caches every later run reads,
+# and a cancelled one leaves the next pull request paying for a cold compile.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # A workflow that will not start reports a failure with no jobs in it: nothing
+  # to open, no log, no annotation. That is how a `secrets` reference in a step's
+  # `if` sat in the release workflow unnoticed — the only runs it could have
+  # broken were tag pushes, and the branch pushes that did fail looked like
+  # noise. This is the gate that reads the files before GitHub has to.
+  #
+  # Pinned, and installed from the release archive rather than an action, so the
+  # version doing the checking is the version named here.
+  #
+  # The version matters beyond reproducibility: actionlint carries its own list
+  # of GitHub-hosted runner labels, and 1.7.7 does not know macos-15-intel,
+  # which the release workflow builds on. A pin too old rejects a runner that
+  # exists, so this moves when a workflow names a newer one.
+  workflows:
+    name: Workflow files are valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        env:
+          VERSION: 1.7.12
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin actionlint
+      - run: actionlint
+
+  # Everything below this is `rustc`, and a change that edits prose cannot make
+  # any of it fail. This job is what lets such a change say so.
+  #
+  # It sits in front of four jobs, so its own cost is the thing to watch: a gate
+  # that saves thirty minutes on the rare pull request and adds twenty seconds
+  # to every other one is not obviously a gain. So it never checks out a working
+  # tree. The file list comes from the API, and the checkout is one file, at
+  # depth one, with no blobs — enough to run the rule and nothing more.
+  #
+  # The rule itself is `scripts/documentation-only.mjs`, tested in
+  # `documentation-only.test.mjs`, which is where the reasoning for it lives.
+  # Only pull requests are ever skipped. A push to `main` runs in full whatever
+  # it touched, because that is the run whose caches every later run reads.
+  #
+  # Every job that waits on this one asks `!cancelled() && ... != 'false'`
+  # rather than `== 'true'`, and the difference is the whole safety of the
+  # thing. A required check that is skipped counts as a required check that
+  # passed, so if this job could fail and take the others down as skipped, one
+  # bad API call would be indistinguishable from a green pull request. Written
+  # this way, only an explicit `false` from a job that ran to completion skips
+  # anything; a failure, an empty output or an error leaves `code` unset and
+  # everything runs, with this job red beside it.
+  changes:
+    name: What this change needs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/documentation-only.mjs
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          filter: blob:none
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            echo "$EVENT runs everything."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # `--paginate` because the default page is thirty files and a
+          # truncated list is a list that looks like documentation.
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/files" \
+            --jq '.[].filename' > changed.txt
+          echo "Changed:"
+          sed 's/^/  /' changed.txt
+          if [ "$(node scripts/documentation-only.mjs < changed.txt)" = true ]; then
+            echo "Documentation only; the compile-heavy jobs are skipped."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  gateway-contract:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      # Every job in this workflow compiled the same 600-crate dependency graph
+      # from nothing on every push, which was most of a thirty-minute run. The
+      # cache is only written from `main`, so a pull request reads the tip's
+      # artifacts and never evicts them: one entry per job, not one per branch,
+      # which is what keeps the repository under its ten-gigabyte ceiling.
+      #
+      # Nothing about what gets checked changes. Cargo decides what to rebuild
+      # from its own fingerprints; this only supplies artifacts it would
+      # otherwise regenerate, and `Cargo.lock` is part of the key.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check portable Rust dependency graphs
+        run: node scripts/check-runtime-dependencies.mjs --verify-fixture
+      - run: cargo fmt --all -- --check
+      # This pure shared domain is small enough to report denied warnings
+      # before its tests without paying a second workspace compile.
+      - run: cargo clippy -p nessa-agent-credentials --all-targets -- -D warnings
+      - run: cargo test -p nessa-agent-credentials
+      # Test before lint, here and in the matrix below, and it is worth saying
+      # why because the intuitive order is the other one. Reporting a
+      # `-D warnings` failure first would be better if it were free, and it is
+      # not: `cargo test` builds rlibs that a following `cargo clippy` reuses,
+      # so lint lands in about five seconds. Reversed, clippy builds metadata
+      # that `cargo test` cannot link against, and both compilations are paid
+      # in full. Measured on run 35678361232: +39s here, and minutes on each
+      # matrix leg. Green runs are the common case, so they set the order.
+      - run: cargo test -p nessa-mcp
+      - run: cargo clippy -p nessa-mcp --all-targets -- -D warnings
+      - run: cargo test -p nessa-images
+      - run: cargo clippy -p nessa-images --all-targets -- -D warnings
+      - run: node scripts/check-architecture.mjs
+      # The official client and protocol checks do not require the desktop UI's
+      # separate repository. Install only their tooling in an isolated harness.
+      - name: Prepare gateway contract harness
+        shell: python
+        run: |
+          import json, pathlib, shutil
+          root = pathlib.Path('.ci-gateway')
+          root.mkdir()
+          shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
+          shutil.copytree('protocol', root / 'protocol')
+          shutil.copytree('scripts', root / 'scripts')
+          shutil.copytree('crates/nessa-server/src/protocol', root / 'crates/nessa-server/src/protocol')
+          product = root / 'crates/nessa-server/src/product'
+          product.mkdir(parents=True)
+          shutil.copy2('crates/nessa-server/src/product/generated.rs', product / 'generated.rs')
+          shutil.copy2('vitest.config.ts', root / 'vitest.config.ts')
+          shutil.copy2('prettier.config.js', root / 'prettier.config.js')
+          shutil.copy2('.prettierignore', root / '.prettierignore')
+          package = json.loads(pathlib.Path('package.json').read_text())
+          dependencies = {
+              name: package['devDependencies'][name].lstrip('^~')
+              for name in ['@types/node', '@types/ws', 'ajv', 'ajv-formats', 'json-schema-to-typescript', 'prettier', 'typescript', 'vitest', 'ws']
+          }
+          (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'devDependencies': dependencies}))
+      - run: npm install --ignore-scripts
+        working-directory: .ci-gateway
+      - run: npm exec -- prettier --check packages/nessa-client scripts prettier.config.js
+        working-directory: .ci-gateway
+      - run: npm exec -- vitest run --config vitest.config.ts packages/nessa-client
+        working-directory: .ci-gateway
+      - run: npm exec -- tsc --noEmit -p packages/nessa-client/tsconfig.json
+        working-directory: .ci-gateway
+      - run: node scripts/check-protocol.mjs
+        working-directory: .ci-gateway
+      - run: node scripts/check-product-protocol.mjs
+        working-directory: .ci-gateway
+  # The desktop app compiled the way a release compiles it, and nothing more.
+  #
+  # `cfg(debug_assertions)` is off in the release profile, so code gated on it
+  # disappears and anything still naming it stops compiling. Every other job
+  # here builds in debug, so that break is invisible until a tag is pushed —
+  # which is exactly how v0.1.0 failed, twenty minutes into a signed macOS
+  # build, on `SIMULATED_UPDATE` being gated while its one release-profile
+  # reader was not.
+  #
+  # macOS is the one release-profile answer here. Linux compiles and exercises
+  # its systemd adapter in `local-auth` through `check-desktop.mjs`; this job
+  # catches code that disappears only when `cfg(debug_assertions)` is off.
+  # `cargo check`, not a build: this is about what compiles, and the release
+  # workflow remains the only thing that produces a bundle. The frontend is
+  # built first because `generate_context!` embeds `dist/`, which has to exist
+  # before the crate can be checked at all.
+  #
+  # `scripts/desktop/prepare.mjs` used to run here too, and was two thirds of
+  # this job: on macOS it builds `nessa-server` and `nessa-mcp` under the
+  # shipping profile — `lto = "fat"`, `codegen-units = 1` — downloads Node, and
+  # assembles `src-tauri/runtime`. Six to ten minutes of link-time optimisation
+  # whose output nothing here reads. It is gone because the tree it produces is
+  # not a compile-time input: `tauri.conf.json` declares no `bundle.resources`,
+  # and `runtime/` becomes a resource only through the `--config` override
+  # `scripts/desktop/build-command.mjs` passes to `tauri build`. `dist/` is the
+  # input `generate_context!` wants, and `pnpm build` is what produces it.
+  desktop-release-profile:
+    name: Desktop app compiles in release profile
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: cargo check -p nessa-app --release --all-targets
+  frontend:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      # `frontend:check` owns the repository's top-level script tests. Two of
+      # them execute the public launch recipes, so install their real command
+      # boundary here before the aggregate runs.
+      - uses: taiki-e/install-action@just
+      - run: pnpm frontend:check
   local-auth:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -15,15 +265,122 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server --all-targets -- -D warnings
-      - run: cargo test -p nessa-app surface_credential
+      - run: node --test scripts/product-protocol/rust-types.test.mjs
+      # Duplicated by `cargo fmt --all` in `gateway-contract`, and staying
+      # anyway. `scripts/desktop/ci-harness.test.mjs` requires this exact line,
+      # because what it is really holding together is that `pnpm check` and
+      # this workflow aggregate the same named checks — `check` runs
+      # `server:fmt:check`, `auth:fmt:check` and `sdk:fmt:check` per crate, so
+      # CI does too. Dropping it saved 28 seconds on Windows and cost that
+      # guarantee, which is not a trade worth making. `database:check`'s fmt is
+      # the exception: `cargo fmt --all` in `gateway-contract` covers it.
+      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
+      - run: node --test scripts/architecture/*.test.mjs
+      - run: node --test scripts/agents/*.test.mjs
+      - run: node scripts/check-architecture.mjs
+      # Endpoint file publication crosses the platform-specific local-storage
+      # adapters, so each OS gives a different answer. Lint this new crate before
+      # its tests; the existing package group below retains its measured order.
+      - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
+      - run: cargo test -p nessa-gateway-endpoint
+      # The database opener's privacy checks cross the same platform-specific
+      # adapters, so each OS gives its own answer to them too.
+      - run: cargo clippy -p nessa-local-database --all-targets -- -D warnings
+      - run: cargo test -p nessa-local-database
+      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
+      - run: node scripts/check-sdk-docs.mjs
+      # Not on Linux: `gateway-contract` is an ubuntu-latest job and already
+      # runs exactly what this script runs — fmt, clippy and test for
+      # nessa-mcp — so a Linux run here is a second cold compile of that crate
+      # for an answer already given. macOS is not covered there and is not the
+      # same answer: what this crate supervises is native processes. The script
+      # itself declines to run on Windows.
+      - run: node scripts/check-mcp.mjs
+        if: runner.os == 'macOS'
+      # The desktop host's tests are not macOS-only, and one of them asserted
+      # the opposite of what it said on Linux for want of ever running there:
+      # `Path` treats a backslash as an ordinary character, so a Windows-shaped
+      # fixture had no `target` component in it at all. check-desktop.mjs skips
+      # when WebKitGTK is absent, so without this the skip stays permanent.
+      - name: Install the desktop host's Linux build dependencies
+        if: runner.os == 'Linux'
+        # The WebDriver and virtual display are this job's own, for the native
+        # window smoke below.
+        run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
+      - run: node scripts/check-desktop.mjs
+      # Hosted Windows runners are administrators with UAC off, so this leg can
+      # prove the Task Scheduler identity and cleanup agreement only for an
+      # elevated caller, and declares that. The product's standard-user model
+      # (the script's default) still needs a non-elevated interactive session;
+      # #205 records that as open.
+      - name: Prove the Windows Task Scheduler gateway model
         if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/desktop/check-windows-task-scheduler.ps1 -CallerContext Administrator
+      - name: Exercise the disposable systemd user-manager lifecycle
+        if: runner.os == 'Linux'
+        run: bash scripts/desktop/check-systemd-user-service.sh
+      # This repeats a release build of nessa-server after the matrix's debug
+      # build below, and a release build of nessa-mcp after gateway-contract.
+      # It is intentionally unique: this is the shipping-profile evidence that
+      # the Linux assembler produces the complete fingerprinted resource tree.
+      # No other job assembles Linux or consumes this generated directory.
+      - name: Assemble the Linux desktop runtime
+        if: runner.os == 'Linux'
+        run: node scripts/desktop/prepare.mjs
+      # `cargo install` spent most of a minute building this tool from source
+      # on every run, to arrive at a binary its author already publishes. Taken
+      # from the release archive instead, pinned the same way actionlint is at
+      # the top of this file: the version doing the measuring is the version
+      # named here, and it arrives in seconds rather than being compiled.
+      - name: Install SDK domain coverage tools
+        if: runner.os == 'Linux'
+        env:
+          VERSION: 0.6.16
+        run: |
+          set -euo pipefail
+          rustup component add llvm-tools-preview
+          curl -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin cargo-llvm-cov
+      - name: Require complete SDK domain coverage
+        if: runner.os == 'Linux'
+        run: bash scripts/check-sdk-domain-coverage.sh
       - run: cargo build -p nessa-server
+      # This is the one platform where Tauri has a native WebDriver for the
+      # WebKit host. It drives the real embedded executable through a message
+      # and attachment, then proves the app, provider, gateway, and drivers are
+      # gone. macOS still gets the release-profile compile above; WKWebView has
+      # no corresponding WebDriver endpoint.
+      - name: Install native desktop WebDriver
+        if: runner.os == 'Linux'
+        run: cargo install tauri-driver --version 2.0.6 --locked
+      - name: Install native desktop smoke dependencies
+        if: runner.os == 'Linux'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Exercise the native desktop window
+        if: runner.os == 'Linux'
+        env:
+          NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
+        run: xvfb-run --auto-servernum pnpm desktop:smoke
+      - name: Upload native desktop smoke failure evidence
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-window-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nessa-native-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
       # Auth/SDK checks do not need the desktop UI's separate repository. Use an
       # isolated minimal npm harness so this job has no UI checkout credentials.
       - name: Prepare SDK integration harness
@@ -34,15 +391,34 @@ jobs:
           root.mkdir()
           shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
           shutil.copytree('scripts', root / 'scripts')
+          shutil.copytree('crates/nessa-sdk/data', root / 'crates/nessa-sdk/data')
+          # The scripts resolve stage defaults — the gateway port among them —
+          # from `protocol/`, relative to the tree they are in. Copied because
+          # the harness is that tree here, not the checkout beside it.
+          shutil.copytree('protocol/defaults', root / 'protocol/defaults')
           target = root / 'target/debug'
           target.mkdir(parents=True)
-          binary = 'nessa-server.exe' if '${{ runner.os }}' == 'Windows' else 'nessa-server'
+          binary = 'nessa.exe' if '${{ runner.os }}' == 'Windows' else 'nessa'
           shutil.copy2(pathlib.Path('target/debug') / binary, target / binary)
-          (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'dependencies': {'tsx': '^4.20.0', 'ws': '^8.18.0', '@nessa/client': 'file:./packages/nessa-client'}}))
-      - run: npm install --ignore-scripts
+          shutil.copy2('.github/harnesses/local-auth/package.json', root / 'package.json')
+          shutil.copy2('.github/harnesses/local-auth/package-lock.json', root / 'package-lock.json')
+      - run: npm ci --ignore-scripts
         working-directory: .ci-auth
+      - run: node --test scripts/conversation-smoke/*.test.mjs
+        working-directory: .ci-auth
+        if: runner.os == 'Linux'
+      - run: node --import tsx scripts/smoke-conversation.mjs
+        working-directory: .ci-auth
+        if: runner.os == 'Linux'
       - run: node --import tsx scripts/smoke-windows-private-files.ts
         working-directory: .ci-auth
         if: runner.os == 'Windows'
       - run: node --import tsx scripts/smoke-auth.mjs
+        working-directory: .ci-auth
+      # What `install-agent` writes to stdout is an interface the desktop reads,
+      # and only the real process can be held to it. On a runner Nessa pins a
+      # build for this also fetches that archive and checks it against the
+      # compiled-in digest, which is the one place those digests are verified
+      # against the registry rather than trusted.
+      - run: node --import tsx scripts/smoke-install-agent.mjs
         working-directory: .ci-auth

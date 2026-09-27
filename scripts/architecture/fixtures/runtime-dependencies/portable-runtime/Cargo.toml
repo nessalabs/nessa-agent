@@ -1,0 +1,13 @@
+[package]
+name = "portable-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "../empty.rs"
+
+[features]
+desktop = ["runtime-bridge/desktop"]
+
+[dependencies]
+runtime-bridge = { path = "../runtime-bridge" }

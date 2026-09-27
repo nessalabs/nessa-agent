@@ -65,11 +65,26 @@ export function resolveConnectOptions(
   }
 
   {
-    const credential = options.auth?.credential
+    const cookie = options.auth && "browserCookie" in options.auth
+    const localBrowser = loopback && (stage === "dev" || stage === "ci")
+    if (
+      cookie &&
+      ((new URL(url).protocol !== "wss:" && !localBrowser) ||
+        new URL(url).pathname !== "/browser/session")
+    )
+      throw new StageConfigError(
+        "Browser sessions require /browser/session and WSS, except numeric loopback in dev/ci",
+      )
+    const credential =
+      options.auth && "credential" in options.auth
+        ? options.auth.credential
+        : cookie
+          ? ""
+          : undefined
     const credentialBytes = new TextEncoder().encode(credential ?? "").byteLength
     if (
       credential === undefined ||
-      credentialBytes === 0 ||
+      (!cookie && credentialBytes === 0) ||
       credentialBytes > 16 * 1024
     ) {
       throw new StageConfigError(

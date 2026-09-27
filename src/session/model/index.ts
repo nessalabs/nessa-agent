@@ -1,4 +1,5 @@
 export {
+  canUseGateway,
   initialSessionState,
   statusLabel,
   type SessionPhase,

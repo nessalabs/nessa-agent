@@ -1,0 +1,354 @@
+//! Framing and exact outbound preflight through the shared JSON-RPC transport.
+use super::*;
+use crate::infrastructure::{
+    clock::{Clock, RuntimeClock},
+    json_rpc::RpcId,
+};
+use serde_json::json;
+#[cfg(unix)]
+use std::process::Stdio;
+use tokio::io::{duplex, AsyncReadExt};
+
+#[tokio::test]
+async fn returning_a_frame_retains_following_incomplete_frame_state() {
+    let bytes = b"{\"jsonrpc\":\"2.0\",\"method\":\"ready\"}\n   ";
+    let mut reader = Reader::new(bytes.as_slice(), 256);
+
+    assert_eq!(
+        reader.next().await.unwrap().method.as_deref(),
+        Some("ready")
+    );
+    assert!(reader.frame_in_progress());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn provider_pipe_probe_reads_flushed_bytes_before_reactor_notification() {
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("flushed");
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":17,\"result\":null}'; : > \"$1\"; sleep 30",
+            "probe",
+            marker.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut reader = Reader::new(child.stdout.take().unwrap(), 256);
+    while !marker.exists() {
+        tokio::task::yield_now().await;
+    }
+
+    assert!(reader.read_ready_os_bytes().unwrap());
+    assert_eq!(reader.next().await.unwrap().id, Some(RpcId::Number(17)));
+    child.kill().await.unwrap();
+    child.wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn fragmented_utf8_and_cancelled_reads_preserve_frame_boundaries() {
+    let (mut writer, input) = duplex(256);
+    let mut reader = Reader::new(input, 256);
+    writer
+        .write_all(b"\n \r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"\xce")
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), reader.next())
+            .await
+            .is_err()
+    );
+    writer
+        .write_all(b"\xb1\"}\r\n{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":null}\n")
+        .await
+        .unwrap();
+    let first = reader.next().await.unwrap();
+    assert_eq!(first.id, Some(RpcId::Number(1)));
+    assert_eq!(first.result, Some(json!("α")));
+    let second = reader.next().await.unwrap();
+    assert_eq!(second.id, Some(RpcId::Number(2)));
+    assert_eq!(second.result, Some(Value::Null));
+}
+
+#[tokio::test]
+async fn framing_enforces_exact_limits_and_rejects_truncated_input() {
+    let frame = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}";
+    let mut bytes = frame.to_vec();
+    bytes.push(b'\n');
+    assert!(Reader::new(bytes.as_slice(), frame.len())
+        .next()
+        .await
+        .is_ok());
+    assert!(matches!(
+        Reader::new(bytes.as_slice(), frame.len() - 1).next().await,
+        Err(AgentError::Protocol(_))
+    ));
+    assert!(matches!(
+        Reader::new(frame.as_slice(), 256).next().await,
+        Err(AgentError::Protocol(_))
+    ));
+    assert!(matches!(
+        Reader::new(b"".as_slice(), 256).next().await,
+        Err(AgentError::Transport(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_valid_frame_is_delivered_before_a_later_oversize_failure() {
+    let bytes = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}\n{}",
+        "x".repeat(128)
+    );
+    let mut reader = Reader::new(bytes.as_bytes(), 64);
+    assert_eq!(reader.next().await.unwrap().id, Some(RpcId::Number(1)));
+    assert!(matches!(reader.next().await, Err(AgentError::Protocol(_))));
+}
+
+#[tokio::test]
+async fn writes_are_bounded_and_round_trip_without_a_provider() {
+    let (mut writer, input) = duplex(128);
+    let mut reader = Reader::new(input, 128);
+    let value = json!({"jsonrpc":"2.0","id":5,"result":{}});
+    assert!(matches!(
+        encode(value.clone(), 1),
+        Err(AgentError::InvalidInput(_))
+    ));
+    send_encoded(
+        &RuntimeClock::new(),
+        &mut writer,
+        &encode(value.clone(), 128).unwrap(),
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reader.next().await.unwrap().id, Some(RpcId::Number(5)));
+    let (mut stalled, _unread) = duplex(1);
+    assert_eq!(
+        send_encoded(
+            &RuntimeClock::new(),
+            &mut stalled,
+            &encode(value, 128).unwrap(),
+            Duration::from_millis(10),
+            None
+        )
+        .await,
+        Err(AgentError::Deadline)
+    );
+}
+
+#[tokio::test]
+async fn outbound_preflight_counts_utf8_and_json_escapes_at_the_exact_byte_boundary() {
+    let value =
+        json!({"jsonrpc":"2.0", "id":8, "method":"session/prompt", "params":{"text":"é\n\u{0}\""}});
+    let expected = serde_json::to_vec(&value).unwrap();
+    assert!(matches!(
+        encode(value.clone(), expected.len() - 1),
+        Err(AgentError::InvalidInput(_))
+    ));
+    let encoded = encode(value, expected.len()).unwrap();
+    assert_eq!(&encoded[..expected.len()], expected);
+    assert_eq!(encoded.last(), Some(&b'\n'));
+    let mut output = Vec::new();
+    send_encoded(
+        &RuntimeClock::new(),
+        &mut output,
+        &encoded,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, encoded);
+}
+
+#[tokio::test]
+async fn duplicate_keys_are_rejected_at_every_depth_before_dispatch() {
+    for object in [
+        r#"{"currentModeId":"bypassPermissions","currentModeId":"default"}"#,
+        r#"{"currentModeId":"default","currentModeId":"bypassPermissions"}"#,
+        r#"{"currentModeId":"default","currentModeId":"default"}"#,
+        r#"{"currentModeId":"default","currentMode\u0049d":"default"}"#,
+        r#"{"options":[{"id":"a","id":"b"}]}"#,
+        r#"{"nested":{"deep":{"x":1,"x":2}}}"#,
+    ] {
+        let frame = format!(r#"{{"jsonrpc":"2.0","method":"session/update","params":{object}}}\n"#)
+            .replace("\\n", "\n");
+        assert!(
+            matches!(
+                Reader::new(frame.as_bytes(), 4096).next().await,
+                Err(AgentError::Protocol(_))
+            ),
+            "{object}"
+        );
+    }
+    let frame = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"a\":{\"id\":1},\"b\":{\"id\":2}}}\n";
+    assert!(Reader::new(frame.as_slice(), 4096).next().await.is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_writes_share_one_absolute_grace_under_backpressure() {
+    let (mut output, _unread) = duplex(1);
+    let frame = encode(
+        json!({"jsonrpc":"2.0", "method":"session/cancel", "params":{"sessionId":"context"}}),
+        1024,
+    )
+    .unwrap();
+    let clock = RuntimeClock::new();
+    let began = tokio::time::Instant::now();
+    let deadline = clock.now() + Duration::from_millis(20);
+    assert_eq!(
+        send_encoded(
+            &clock,
+            &mut output,
+            &frame,
+            Duration::from_secs(1),
+            Some(deadline)
+        )
+        .await,
+        Err(AgentError::Deadline)
+    );
+    let first = tokio::time::Instant::now();
+    assert!(first - began >= Duration::from_millis(20));
+    assert!(first - began <= Duration::from_millis(21));
+    assert_eq!(
+        send_encoded(
+            &clock,
+            &mut output,
+            &frame,
+            Duration::from_secs(1),
+            Some(deadline)
+        )
+        .await,
+        Err(AgentError::Deadline)
+    );
+    assert_eq!(
+        tokio::time::Instant::now(),
+        first,
+        "fallback must not restart shutdown grace"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_write_transport_bound_remains_earlier_than_long_shutdown_grace() {
+    let (mut output, _unread) = duplex(1);
+    let clock = RuntimeClock::new();
+    let began = clock.now();
+    let deadline = began + Duration::from_secs(5);
+    assert_eq!(
+        send_encoded(
+            &clock,
+            &mut output,
+            b"session/cancel",
+            Duration::from_secs(1),
+            Some(deadline)
+        )
+        .await,
+        Err(AgentError::Deadline)
+    );
+    let now = clock.now();
+    assert!(now < deadline);
+    assert!(now.saturating_duration_since(began) >= Duration::from_secs(1));
+    assert!(now.saturating_duration_since(began) <= Duration::from_millis(1001));
+}
+
+#[test]
+fn the_write_allowance_is_one_second_until_a_frame_reaches_a_mebibyte() {
+    const MIB: usize = 1024 * 1024;
+    for (frame_bytes, seconds) in [
+        (0, 1),
+        (8192, 1),
+        (MIB - 1, 1),
+        (MIB, 2),
+        (2 * MIB + 17, 3),
+        (16 * MIB, 17),
+    ] {
+        assert_eq!(
+            write_allowance(frame_bytes),
+            Duration::from_secs(seconds),
+            "{frame_bytes}"
+        );
+        assert_eq!(
+            large_frame_allowance(frame_bytes),
+            Duration::from_secs(seconds - 1)
+        );
+    }
+}
+
+#[test]
+fn a_length_no_frame_could_have_still_answers_a_duration() {
+    // No configured limit allows a frame of this length, and the allowance is
+    // total for every one: the answer saturates instead of overflowing the
+    // multiplication behind it, whatever the per-mebibyte constant becomes.
+    let saturated = Duration::from_secs(u64::from(u32::MAX));
+    assert_eq!(large_frame_allowance(usize::MAX), saturated);
+    assert_eq!(
+        write_allowance(usize::MAX),
+        saturated + Duration::from_secs(1)
+    );
+}
+
+/// Reads a mebibyte, then is busy for nine tenths of a second, as an agent
+/// that parses what it receives is. Slower than a pipe, faster than stalled.
+async fn read_slowly(mut input: tokio::io::DuplexStream) {
+    let mut chunk = vec![0_u8; 1024 * 1024];
+    while input.read_exact(&mut chunk).await.is_ok() {
+        tokio::time::sleep(Duration::from_millis(900)).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_frame_carrying_images_is_not_failed_by_the_bound_meant_for_small_frames() {
+    let frame = vec![b'x'; 4 * 1024 * 1024];
+    // The former fixed second fails a valid frame partway through its write.
+    let (mut output, input) = duplex(64 * 1024);
+    let reader = tokio::spawn(read_slowly(input));
+    assert_eq!(
+        send_encoded(
+            &RuntimeClock::new(),
+            &mut output,
+            &frame,
+            Duration::from_secs(1),
+            None
+        )
+        .await,
+        Err(AgentError::Deadline)
+    );
+    drop(output);
+    reader.await.unwrap();
+
+    // The same peer, given the time this frame's size allows.
+    let (mut output, input) = duplex(64 * 1024);
+    let reader = tokio::spawn(read_slowly(input));
+    let began = tokio::time::Instant::now();
+    assert_eq!(
+        send_encoded(
+            &RuntimeClock::new(),
+            &mut output,
+            &frame,
+            write_allowance(frame.len()),
+            None
+        )
+        .await,
+        Ok(())
+    );
+    assert!(began.elapsed() < write_allowance(frame.len()));
+    // An operation deadline still ends the write earlier.
+    let clock = RuntimeClock::new();
+    let deadline = clock.now() + Duration::from_millis(500);
+    assert_eq!(
+        send_encoded(
+            &clock,
+            &mut output,
+            &frame,
+            write_allowance(frame.len()),
+            Some(deadline)
+        )
+        .await,
+        Err(AgentError::Deadline)
+    );
+    drop(output);
+    reader.await.unwrap();
+}

@@ -14,6 +14,11 @@
 export type { EventHandler, NessaClientEvents } from "./events.js"
 export type { NessaClientConnectOptions, ProductConnectOptions } from "./options.js"
 export {
+  NessaEndpointDiscoveryError,
+  type GatewayEndpointContext,
+  type GatewayEndpointSource,
+} from "./gateway-endpoint.js"
+export {
   isLoopbackWebSocketUrl,
   resolveConnectOptions,
   type ResolvedProductConnectOptions,

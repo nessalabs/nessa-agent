@@ -45,20 +45,6 @@ pub enum ClientRole {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EchoParams {
-    /// User draft text to echo back.
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EchoResult {
-    /// Echo of EchoParams.text.
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayError {
     /// Machine-readable error identifier.
     pub code: String,
@@ -111,6 +97,10 @@ pub enum ShortcutAction {
     PanelCloseTab,
     #[serde(rename = "panel.activateTab")]
     PanelActivateTab,
+    #[serde(rename = "panel.previousTab")]
+    PanelPreviousTab,
+    #[serde(rename = "panel.nextTab")]
+    PanelNextTab,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

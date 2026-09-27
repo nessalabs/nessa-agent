@@ -1,0 +1,127 @@
+import type { ConversationCapabilities, ImageReference, LinkedFile } from "../model"
+import type { AgentPart } from "../model/types"
+/** Authorized bounded gateway projection. It does not own execution scheduling. */
+export type ConversationView = {
+  runtime?: { model: string; provider: string; workspace: string }
+  /**
+   * What the gateway calls the conversation — the one title rule, the one the
+   * Messages list shows — or null before anything was said in it.
+   */
+  title: string | null
+  conversationId: string
+  revision: string
+  queueComplete: boolean
+  truncated: boolean
+  messages: {
+    executionId: string
+    steeringTarget?: string
+    steeringOffset?: number
+    parts: AgentPart[]
+    userText: string
+    /** Images sent with this turn, by reference. The view never carries bytes. */
+    attachments: ImageReference[]
+    /** Files this turn pointed the agent at, by path. */
+    files: LinkedFile[]
+    error?: string
+    status: string
+  }[]
+  pending: {
+    executionId: string
+    text: string
+    attachments: ImageReference[]
+    files: LinkedFile[]
+    mode: "queued" | "steering"
+  }[]
+  permissions: {
+    executionId: string
+    permissionId: string
+    toolName: string
+    argumentsJson: string
+    toolId: string
+    title: string
+    options: { id: string; label: string }[]
+  }[]
+  /** Questions the agent is waiting on. Nothing is authorised by answering. */
+  questions: {
+    executionId: string
+    questionId: string
+    message: string
+    questions: {
+      key: string
+      prompt: string
+      header?: string | null
+      multiSelect: boolean
+      freeText: boolean
+      required: boolean
+      options: { value: string; label: string; description?: string | null }[]
+    }[]
+  }[]
+  tools: {
+    executionId: string
+    toolId: string
+    title: string
+    /** What the call does, as the provider categorised it; empty until it says. */
+    kind: string
+    status: string
+    input: string
+    details: string
+  }[]
+  capabilities: ConversationCapabilities
+  lifecycle: {
+    phase: "absent" | "starting" | "attached" | "failed"
+    failure?: {
+      code: "audit" | "provider" | "storage" | "cleanup"
+      message: string
+    }
+    evidenceFailure?: {
+      code: "audit"
+      message: string
+    }
+  }
+  permissionViewError?: string
+}
+
+/** Stable logical identities survive an uncertain acknowledgement and explicit retry. */
+export type Submission = {
+  runtime?: { model: string; provider: string; workspace: string }
+  conversationId: string
+  executionId: string
+  actionId: string
+  /** May be blank only when `attachments` or `files` is not empty. */
+  text: string
+  /** Images already staged into this conversation. A retry re-sends the same list. */
+  attachments: ImageReference[]
+  /**
+   * Files on this machine the message points the agent at, by path. Nothing
+   * was uploaded for these; a retry re-sends the same list.
+   */
+  files: LinkedFile[]
+}
+export type SubmissionReceipt = { executionId: string; disposition: string }
+
+/**
+ * One read of the list: its rows, and whether the gateway says they are every
+ * conversation under that filter — not so past its bound of 500, or while one
+ * of the caller's own records or summaries cannot be read back.
+ */
+export type ConversationListing = {
+  conversations: ConversationSummary[]
+  complete: boolean
+}
+
+/**
+ * One conversation as the gateway lists it: a row for the Messages list. The
+ * gateway reads these from what it has stored, so a closed conversation is
+ * listed too, and listing starts nothing.
+ */
+export type ConversationSummary = {
+  /** The gateway's identity for the conversation, not a tab id. */
+  conversationId: string
+  /** Derived by the gateway from the first message; null before anything was said. */
+  title: string | null
+  /** The last thing said, as one plain line; null when there is none on record. */
+  preview: string | null
+  updatedAtMs: number
+  running: boolean
+  archived: boolean
+}

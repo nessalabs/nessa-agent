@@ -2,8 +2,9 @@
 //! IDs describe ownership and linkage; callers resolve whether those records exist.
 //! All timestamps are Unix seconds. No model reads time or performs persistence.
 use super::{
-    Action, AudienceId, CredentialId, DomainError, MembershipId, OrganizationId, PrincipalId,
-    ResourceId,
+    Action, AudienceId, CredentialId, CredentialLifecycle, CredentialTransition, DomainError,
+    Initiator, IssuanceCause, MembershipId, OrganizationId, PrincipalId, ResourceId,
+    RevocationCause, Supersession, TransitionCause,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,13 +276,105 @@ impl Credential {
             && self.expires_at.is_none_or(|expiry| now < expiry)
     }
 
-    /// Record revocation at `revoked_at` (Unix seconds), including after expiry.
-    /// Repeated calls succeed without changing the original record. The initial
-    /// revocation cannot precede issuance. The caller must persist the change
-    /// before acknowledging it or publishing an invalidation.
-    pub fn revoke(&mut self, revoked_at: u64) -> Result<(), DomainError> {
+    /// The lifecycle fields a transition can change.
+    pub fn lifecycle(&self) -> CredentialLifecycle {
+        CredentialLifecycle {
+            issued_at: self.issued_at,
+            expires_at: self.expires_at,
+            revoked_at: self.revoked_at,
+        }
+    }
+
+    /// Evidence that this credential was created by `cause` on behalf of
+    /// `initiator`. Only a credential that has never been revoked can be issued.
+    pub fn issued(
+        &self,
+        cause: IssuanceCause,
+        initiator: Initiator,
+    ) -> Result<CredentialTransition, DomainError> {
+        CredentialTransition::new(
+            self.id.clone(),
+            None,
+            self.lifecycle(),
+            TransitionCause::Issued(cause),
+            initiator,
+            self.issued_at,
+        )
+    }
+
+    /// Restore a stored revocation time under the same rule as a live one.
+    /// Storage calls this while rebuilding a credential; it yields no evidence
+    /// because the change already happened.
+    pub fn restore_revoked_at(&mut self, revoked_at: u64) -> Result<(), DomainError> {
+        self.record_revocation(revoked_at).map(|_| ())
+    }
+
+    /// Deliberately revoke at `revoked_at` (Unix seconds), including after expiry,
+    /// on behalf of `initiator`. Repeated calls succeed without changing the
+    /// original record and return no new evidence. A first revocation cannot
+    /// precede issuance: the time is the caller's request, so the caller is told.
+    /// The caller must persist the change and its evidence together before
+    /// acknowledging it or publishing an invalidation.
+    pub fn revoke(
+        &mut self,
+        revoked_at: u64,
+        initiator: Initiator,
+    ) -> Result<Option<CredentialTransition>, DomainError> {
+        let before = self.lifecycle();
+        if !self.record_revocation(revoked_at)? {
+            return Ok(None);
+        }
+        Ok(Some(
+            CredentialTransition::new(
+                self.id.clone(),
+                Some(before),
+                self.lifecycle(),
+                TransitionCause::Revoked(RevocationCause::Explicit),
+                initiator,
+                revoked_at,
+            )
+            .expect("an accepted revocation satisfies the transition rule"),
+        ))
+    }
+
+    /// Retire this credential automatically because `by` replaces it, at the
+    /// later of `at` and this credential's own issuance. An automatic
+    /// supersession has no caller to correct an odd timestamp, so it is clamped
+    /// forward rather than rejected. Already-revoked credentials are unchanged
+    /// and yield no evidence.
+    pub fn supersede(
+        &mut self,
+        at: u64,
+        by: CredentialId,
+        kind: Supersession,
+        initiator: Initiator,
+    ) -> Option<CredentialTransition> {
+        let before = self.lifecycle();
+        let revoked_at = at.max(self.issued_at);
+        if !self
+            .record_revocation(revoked_at)
+            .expect("a clamped supersession never precedes issuance")
+        {
+            return None;
+        }
+        Some(
+            CredentialTransition::new(
+                self.id.clone(),
+                Some(before),
+                self.lifecycle(),
+                TransitionCause::Revoked(RevocationCause::Superseded { by, kind }),
+                initiator,
+                at,
+            )
+            .expect("an accepted supersession satisfies the transition rule"),
+        )
+    }
+
+    /// Keep the first recorded revocation; refuse one before issuance. Returns
+    /// whether the record changed.
+    fn record_revocation(&mut self, revoked_at: u64) -> Result<bool, DomainError> {
         if self.revoked_at.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         if revoked_at < self.issued_at {
             return Err(DomainError::RevokedBeforeIssued {
@@ -290,7 +383,7 @@ impl Credential {
             });
         }
         self.revoked_at = Some(revoked_at);
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -323,7 +416,7 @@ mod tests {
         assert!(!credential.is_valid_at(99));
         assert!(credential.is_valid_at(100 + 7 * 24 * 60 * 60));
         assert!(credential.is_valid_at(u64::MAX));
-        credential.revoke(150).unwrap();
+        credential.revoke(150, Initiator::LocalOperator).unwrap();
         assert!(!credential.is_valid_at(u64::MAX));
     }
 
@@ -335,16 +428,81 @@ mod tests {
         assert!(credential.is_valid_at(199));
         assert!(!credential.is_valid_at(200));
 
-        credential.revoke(150).unwrap();
+        credential.revoke(150, Initiator::LocalOperator).unwrap();
         assert!(!credential.is_valid_at(149));
     }
 
     #[test]
-    fn repeated_revocation_preserves_the_first_recorded_time() {
+    fn repeated_revocation_preserves_the_first_recorded_time_and_evidence() {
         let mut credential = credential("organization-1").unwrap();
-        credential.revoke(250).unwrap();
-        credential.revoke(0).unwrap();
+        let first = credential
+            .revoke(250, Initiator::LocalOperator)
+            .unwrap()
+            .expect("first revocation yields evidence");
+        assert_eq!(first.before().unwrap().revoked_at, None);
+        assert_eq!(first.after().revoked_at, Some(250));
+        assert_eq!(
+            first.cause(),
+            &TransitionCause::Revoked(RevocationCause::Explicit)
+        );
+        assert_eq!(first.at(), 250);
+        assert_eq!(credential.revoke(0, Initiator::LocalOperator), Ok(None));
         assert_eq!(credential.revoked_at(), Some(250));
+    }
+
+    #[test]
+    fn explicit_revocation_before_issuance_is_refused_with_the_request_time() {
+        let mut credential = credential("organization-1").unwrap();
+        assert_eq!(
+            credential.revoke(99, Initiator::LocalOperator),
+            Err(DomainError::RevokedBeforeIssued {
+                issued_at: 100,
+                revoked_at: 99
+            })
+        );
+        assert_eq!(credential.revoked_at(), None);
+    }
+
+    #[test]
+    fn supersession_clamps_forward_and_names_its_replacement() {
+        let mut credential = credential("organization-1").unwrap();
+        let by = CredentialId::new("credential-2").unwrap();
+        let initiator = Initiator::Principal(PrincipalId::new("owner").unwrap());
+        let evidence = credential
+            .supersede(50, by.clone(), Supersession::Provision, initiator.clone())
+            .expect("first supersession yields evidence");
+        assert_eq!(credential.revoked_at(), Some(100));
+        assert_eq!(evidence.after().revoked_at, Some(100));
+        assert_eq!(evidence.at(), 50);
+        assert_eq!(
+            evidence.cause(),
+            &TransitionCause::Revoked(RevocationCause::Superseded {
+                by,
+                kind: Supersession::Provision
+            })
+        );
+        assert_eq!(evidence.initiator(), &initiator);
+        let again = CredentialId::new("credential-3").unwrap();
+        assert!(credential
+            .supersede(300, again, Supersession::OwnerRecovery, initiator)
+            .is_none());
+        assert_eq!(credential.revoked_at(), Some(100));
+    }
+
+    #[test]
+    fn issuance_evidence_describes_the_fresh_credential() {
+        let credential = credential("organization-1").unwrap();
+        let evidence = credential
+            .issued(IssuanceCause::Bootstrap, Initiator::LocalOperator)
+            .unwrap();
+        assert_eq!(evidence.credential_id(), credential.id());
+        assert_eq!(evidence.before(), None);
+        assert_eq!(evidence.after(), &credential.lifecycle());
+        assert_eq!(
+            evidence.cause(),
+            &TransitionCause::Issued(IssuanceCause::Bootstrap)
+        );
+        assert_eq!(evidence.at(), 100);
     }
 
     #[test]

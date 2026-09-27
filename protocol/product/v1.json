@@ -32,12 +32,7 @@
           "description": "Challenge deadline as Unix seconds, rounded up from millisecond wall time. The server enforces one monotonic timeout including challenge delivery; expiry closes with retryable handshake_timeout."
         }
       },
-      "required": [
-        "minVersion",
-        "maxVersion",
-        "nonce",
-        "expiresAt"
-      ],
+      "required": ["minVersion", "maxVersion", "nonce", "expiresAt"],
       "description": "Server challenge received before authentication. The SDK checks version overlap, then returns the nonce with credential evidence; callers normally use NessaClient.connect instead of building this payload."
     },
     "ProductClientMetadata": {
@@ -51,9 +46,7 @@
           "description": "Identifier of the connecting client application or instance."
         }
       },
-      "required": [
-        "id"
-      ],
+      "required": ["id"],
       "description": "Caller identification sent during the product handshake. This metadata does not grant permissions."
     },
     "SessionAuthenticateParams": {
@@ -89,13 +82,7 @@
           "description": "Descriptive client metadata, separate from authenticated identity."
         }
       },
-      "required": [
-        "minVersion",
-        "maxVersion",
-        "nonce",
-        "credential",
-        "client"
-      ],
+      "required": ["minVersion", "maxVersion", "nonce", "credential", "client"],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {
@@ -144,10 +131,7 @@
           "description": "Gateway audience to which the credential is bound."
         },
         "expiresAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
@@ -198,10 +182,7 @@
           "description": "Category of actor; this alone does not grant access."
         }
       },
-      "required": [
-        "id",
-        "kind"
-      ],
+      "required": ["id", "kind"],
       "x-rust-type": "nessa_auth::application::dto::PrincipalInputDto",
       "description": "Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway."
     },
@@ -236,13 +217,7 @@
           "description": "Whether the membership is active or disabled."
         }
       },
-      "required": [
-        "id",
-        "principalId",
-        "organizationId",
-        "role",
-        "state"
-      ],
+      "required": ["id", "principalId", "organizationId", "role", "state"],
       "x-rust-type": "nessa_auth::application::dto::MembershipInputDto",
       "description": "Relationship between a principal and an organization. The role participates in authorization and disabled membership prevents access."
     },
@@ -263,10 +238,7 @@
           "description": "Resource identifier, such as the gateway ID for server operations."
         }
       },
-      "required": [
-        "organizationId",
-        "id"
-      ],
+      "required": ["organizationId", "id"],
       "x-rust-type": "nessa_auth::application::dto::ResourceDto",
       "description": "Organization-scoped authorization target used by ProductGrant. The gateway resolves the actual resource for each operation before checking policy."
     },
@@ -285,10 +257,7 @@
           "description": "Exact organization-scoped target on which this action is requested."
         }
       },
-      "required": [
-        "action",
-        "resource"
-      ],
+      "required": ["action", "resource"],
       "x-rust-type": "nessa_auth::application::dto::CredentialGrantDto",
       "description": "One action/resource restriction on a credential. Used in credential issuance, credential metadata, and authenticated session snapshots. A grant is not a standalone permission: current membership and server policy must also allow the operation.\n\nFor example, { action: \"server.read\", resource: { organizationId: \"personal\", id: \"gateway\" } } scopes server-read access to that gateway; use the actual organization and gateway identifiers from your installation."
     },
@@ -327,19 +296,13 @@
           "description": "Creation time in Unix seconds."
         },
         "expiresAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
         },
         "revokedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "description": "Revocation time in Unix seconds, or null if not revoked."
         },
@@ -384,10 +347,7 @@
           "description": "Organization membership associated with that principal."
         },
         "expiresAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
@@ -402,12 +362,7 @@
           "description": "Requested action/resource restrictions; at least one is required."
         }
       },
-      "required": [
-        "requestId",
-        "principal",
-        "membership",
-        "grants"
-      ],
+      "required": ["requestId", "principal", "membership", "grants"],
       "description": "Wire input for issuing a scoped credential. Prefer client.credentials.issue, whose IssueCredentialParams allows the SDK to generate requestId. Reuse the same ID and inputs when explicitly retrying an uncertain result."
     },
     "CredentialListParams": {
@@ -434,10 +389,7 @@
           "description": "Identifier of the credential to revoke."
         }
       },
-      "required": [
-        "requestId",
-        "credentialId"
-      ],
+      "required": ["requestId", "credentialId"],
       "description": "Wire input for credential.revoke. Prefer client.credentials.revoke to generate and preserve the request ID."
     },
     "IssuedCredentialResult": {
@@ -455,10 +407,7 @@
           "description": "One-time credential evidence accepted by product connect auth. It is not replayed on a duplicate request."
         }
       },
-      "required": [
-        "credential",
-        "secret"
-      ],
+      "required": ["credential", "secret"],
       "description": "First successful issuance response. Contains secret evidence only once; keep it in private storage before discarding the result."
     },
     "ExistingCredentialResult": {
@@ -475,10 +424,7 @@
           "description": "Always true: this response does not contain a usable secret."
         }
       },
-      "required": [
-        "credential",
-        "secretUnavailable"
-      ],
+      "required": ["credential", "secretUnavailable"],
       "description": "Response when the issuance request ID already completed. Metadata is returned, but the original secret cannot be recovered by retrying."
     },
     "CredentialListResult": {
@@ -494,9 +440,7 @@
           "description": "Non-secret credential records returned by the gateway."
         }
       },
-      "required": [
-        "credentials"
-      ],
+      "required": ["credentials"],
       "description": "Credentials visible to the authorized caller, without secret evidence."
     },
     "CredentialRevokeResult": {
@@ -516,10 +460,7 @@
           "description": "Authorization-state revision returned by the mutation."
         }
       },
-      "required": [
-        "credentialId",
-        "revision"
-      ],
+      "required": ["credentialId", "revision"],
       "description": "Acknowledgement of a credential revocation."
     },
     "SessionCloseReason": {
@@ -587,27 +528,17 @@
     },
     "PrincipalKind": {
       "type": "string",
-      "enum": [
-        "human",
-        "integration",
-        "agent"
-      ],
+      "enum": ["human", "integration", "agent"],
       "description": "Supported categories of authenticated actors: human users, integrations, and agents."
     },
     "MembershipRole": {
       "type": "string",
-      "enum": [
-        "admin",
-        "member"
-      ],
+      "enum": ["admin", "member"],
       "description": "Organization roles understood by product authorization policy."
     },
     "MembershipState": {
       "type": "string",
-      "enum": [
-        "active",
-        "disabled"
-      ],
+      "enum": ["active", "disabled"],
       "description": "Membership availability. Disabled membership prevents access even when credential evidence is valid."
     },
     "SessionTermination": {
@@ -629,11 +560,1627 @@
           "description": "Optional server delay hint in milliseconds, bounded to 60,000."
         }
       },
-      "required": [
-        "code",
-        "retryable"
-      ],
+      "required": ["code", "retryable"],
       "description": "Structured WebSocket close reason. The SDK derives retry policy from the numeric close code and accepts matching, bounded server delay hints."
+    },
+    "ConversationMessageStatus": {
+      "type": "string",
+      "description": "Current invocation status, including unresolved interrupted history.",
+      "enum": [
+        "queued",
+        "running",
+        "completed",
+        "cancelled",
+        "failed",
+        "injected",
+        "unresolved"
+      ]
+    },
+    "ConversationPendingMode": {
+      "type": "string",
+      "description": "How an admitted input waits for dispatch.",
+      "enum": ["queued", "steering"]
+    },
+    "ConversationDisposition": {
+      "type": "string",
+      "description": "How the gateway accepted or recovered this submission.",
+      "enum": ["queued", "injected", "settled"]
+    },
+    "ConversationLifecyclePhase": {
+      "type": "string",
+      "description": "Current provider attachment state. This is presentation state and grants no operation authority.",
+      "enum": ["absent", "starting", "attached", "failed"]
+    },
+    "ConversationStartupFailureCode": {
+      "type": "string",
+      "description": "Stable category for a provider attachment failure.",
+      "enum": ["audit", "provider", "storage", "cleanup"]
+    },
+    "ConversationStartupFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded presentation of the latest provider attachment failure. It carries no admission or cleanup authority.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ConversationStartupFailureCode",
+          "description": "Stable failure category."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound."
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "ConversationAttachmentEvidenceFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded late failure to acknowledge mandatory attachment audit evidence. It carries no lifecycle authority.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "const": "audit",
+          "description": "Mandatory attachment audit was not acknowledged."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic suitable for display, at most 2048 UTF-8 bytes. `x-utf8MaxBytes` is the authoritative byte bound; `maxLength` is a coarse code-point bound."
+        }
+      },
+      "required": ["code", "message"]
+    },
+    "ConversationLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Current provider attachment lifecycle for this conversation.",
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/ConversationLifecyclePhase",
+          "description": "Current provider attachment phase."
+        },
+        "failure": {
+          "$ref": "#/$defs/ConversationStartupFailure",
+          "description": "Present exactly when phase is failed."
+        },
+        "evidenceFailure": {
+          "$ref": "#/$defs/ConversationAttachmentEvidenceFailure",
+          "description": "Late mandatory attachment-audit failure retained independently of the current phase. It grants no lifecycle authority."
+        }
+      },
+      "required": ["phase"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "phase": { "const": "failed" } },
+            "required": ["phase"]
+          },
+          "then": { "required": ["failure"] },
+          "else": { "not": { "required": ["failure"] } }
+        }
+      ]
+    },
+    "PermissionDenialSupport": {
+      "type": "string",
+      "description": "Whether Nessa can deliver a deny choice offered by a provider permission review.",
+      "enum": ["unknown", "unsupported", "supported_for_offered_permission_reviews"]
+    },
+    "NativeHookSuppressionSupport": {
+      "type": "string",
+      "description": "Whether suppression of user-configured provider hooks has been verified.",
+      "enum": ["unknown", "unsupported", "supported_for_user_configured_hooks"]
+    },
+    "CompactionReportingSupport": {
+      "type": "string",
+      "description": "Whether Nessa reports provider compaction with invocation correlation.",
+      "enum": ["unsupported_not_implemented", "supported_with_invocation_correlation"]
+    },
+    "ModelSwitchReportingSupport": {
+      "type": "string",
+      "description": "Whether Nessa reports a provider model switch after validation.",
+      "enum": ["unsupported_not_implemented", "supported_after_validated_switch"]
+    },
+    "PermissionDeferralSupport": {
+      "type": "string",
+      "description": "Whether Nessa supports an explicit nonterminal defer outcome for a permission review.",
+      "enum": ["unsupported_not_implemented", "supported_with_nonterminal_outcome"]
+    },
+    "ElicitationForwardingSupport": {
+      "type": "string",
+      "description": "Whether the provider binding forwards one correlated elicitation round trip.",
+      "enum": ["unknown", "unsupported", "supported_with_correlated_round_trip"]
+    },
+    "PreToolPolicySupport": {
+      "type": "string",
+      "description": "Whether a configured Nessa policy can deny a tool held at a permission gate.",
+      "enum": ["unknown", "unsupported_not_implemented", "supported_at_permission_gate"]
+    },
+    "PolicyEndTurnSupport": {
+      "type": "string",
+      "description": "Whether a Nessa policy can end its correlated current invocation.",
+      "enum": [
+        "unknown",
+        "unsupported_not_implemented",
+        "supported_for_current_invocation"
+      ]
+    },
+    "PolicyCloseSessionSupport": {
+      "type": "string",
+      "description": "Whether a Nessa policy can close its correlated provider session.",
+      "enum": ["unknown", "unsupported_not_implemented", "supported_for_session"]
+    },
+    "IncomingElicitationSupport": {
+      "type": "string",
+      "description": "Whether the negotiated agent can ask and receive a correlated answer through Nessa.",
+      "enum": [
+        "unknown",
+        "unsupported",
+        "supported_with_correlated_round_trip"
+      ]
+    },
+    "ConversationAgentFeatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Scoped provider transport facts and effective Nessa policy integration support.",
+      "properties": {
+        "permissionDenial": {
+          "$ref": "#/$defs/PermissionDenialSupport",
+          "description": "Scoped delivery support for a rejecting option offered by a provider review."
+        },
+        "nativeHookSuppression": {
+          "$ref": "#/$defs/NativeHookSuppressionSupport",
+          "description": "Verified suppression state for user-configured provider hooks."
+        },
+        "compactionReporting": {
+          "$ref": "#/$defs/CompactionReportingSupport",
+          "description": "Effective Nessa support for correlated compaction reporting."
+        },
+        "modelSwitchReporting": {
+          "$ref": "#/$defs/ModelSwitchReportingSupport",
+          "description": "Effective Nessa support for validated model-switch reporting."
+        },
+        "permissionDeferral": {
+          "$ref": "#/$defs/PermissionDeferralSupport",
+          "description": "Effective Nessa support for an explicit nonterminal permission defer outcome."
+        },
+        "elicitationForwarding": {
+          "$ref": "#/$defs/ElicitationForwardingSupport",
+          "description": "Provider forwarding support for a correlated elicitation round trip."
+        },
+        "preToolPolicy": {
+          "$ref": "#/$defs/PreToolPolicySupport",
+          "description": "Effective Nessa support for enforcing configured policy before a held tool runs."
+        },
+        "policyEndTurn": {
+          "$ref": "#/$defs/PolicyEndTurnSupport",
+          "description": "Effective Nessa support for ending a current invocation from policy."
+        },
+        "policyCloseSession": {
+          "$ref": "#/$defs/PolicyCloseSessionSupport",
+          "description": "Effective Nessa support for closing a provider session from policy."
+        },
+        "incomingElicitation": {
+          "$ref": "#/$defs/IncomingElicitationSupport",
+          "description": "Effective Nessa support for receiving and resolving incoming elicitation."
+        }
+      },
+      "required": [
+        "permissionDenial",
+        "nativeHookSuppression",
+        "compactionReporting",
+        "modelSwitchReporting",
+        "permissionDeferral",
+        "elicitationForwarding",
+        "preToolPolicy",
+        "policyEndTurn",
+        "policyCloseSession",
+        "incomingElicitation"
+      ]
+    },
+    "ConversationCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operations supported by this configured agent.",
+      "properties": {
+        "queue": {
+          "type": "boolean",
+          "description": "Can queue input at invocation boundaries."
+        },
+        "steer": {
+          "type": "boolean",
+          "description": "Can submit supported steering input."
+        },
+        "resume": {
+          "type": "boolean",
+          "description": "Can restore the provider context."
+        },
+        "permissions": {
+          "type": "boolean",
+          "description": "Can review provider permission requests."
+        },
+        "imageInput": {
+          "type": "boolean",
+          "description": "The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none."
+        },
+        "agentFeatures": {
+          "$ref": "#/$defs/ConversationAgentFeatures",
+          "description": "Scoped transport and effective application support for agent features."
+        }
+      },
+      "required": [
+        "queue",
+        "steer",
+        "resume",
+        "permissions",
+        "imageInput",
+        "agentFeatures"
+      ]
+    },
+    "ImageAttachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message.",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of the image bytes: `sha256:` and 64 lowercase hexadecimal digits."
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"],
+          "description": "Image encoding."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5242880,
+          "description": "Image length in bytes, at most 5 MiB."
+        }
+      },
+      "required": ["digest", "mimeType", "size"]
+    },
+    "LinkedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One file a message points the agent at. The gateway, the agent and the panel run on one machine, so the path travels and the bytes never do; the agent opens the file itself, with the reader's approval, or does not open it at all.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "pattern": "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
+          "description": "Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown — the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's."
+        }
+      },
+      "required": ["path"]
+    },
+    "AttachmentBeginParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask to upload one file into a conversation. Repeating it for bytes the conversation already holds needs no upload.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it."
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+          "description": "Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "description": "Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long."
+        }
+      },
+      "required": ["conversationId", "requestId", "digest", "mimeType", "size"]
+    },
+    "AttachmentBeginResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The action this answers."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["stored", "upload_required"],
+          "description": "`stored` needs nothing further; `upload_required` carries a ticket."
+        },
+        "ticket": {
+          "type": ["string", "null"],
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Secret single-use upload ticket, sent as the `x-nessa-upload-ticket` header of one `PUT /attachments`. Null when stored. Do not log it."
+        },
+        "expiresAtMs": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Unix milliseconds after which the ticket is refused. Null when stored."
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required."
+        },
+        "mimeType": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 127,
+          "description": "When stored: media type of what the conversation holds. Null when an upload is required."
+        },
+        "size": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "When stored: length in bytes of what the conversation holds. Null when an upload is required."
+        }
+      },
+      "required": [
+        "requestId",
+        "state",
+        "ticket",
+        "expiresAtMs",
+        "digest",
+        "mimeType",
+        "size"
+      ]
+    },
+    "ConversationMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "userText": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32768,
+          "x-utf8MaxBytes": 32768,
+          "description": "User input text; empty for a message of images alone."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": {
+            "$ref": "#/$defs/ImageAttachment"
+          },
+          "description": "Images the user sent with this turn, in attachment order."
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/LinkedFile"
+          },
+          "description": "Files the user pointed this turn at, in attachment order. No bytes were ever carried for them."
+        },
+        "status": {
+          "$ref": "#/$defs/ConversationMessageStatus",
+          "description": "Current invocation state."
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Bounded diagnostic for this invocation."
+        },
+        "steeringTarget": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Execution that consumed this injected steering input; its shared reply answers this input."
+        },
+        "parts": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/ConversationPart"
+          },
+          "description": "Provider observations in execution order; offsets address the retained SDK event sequence."
+        },
+        "steeringOffset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Target event count when steering was admitted locally; does not imply provider consumption timing."
+        }
+      },
+      "required": ["executionId", "userText", "attachments", "files", "status", "parts"]
+    },
+    "ConversationPending": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A waiting input that may be removed before dispatch.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "Waiting user input; empty for a message of images alone."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": {
+            "$ref": "#/$defs/ImageAttachment"
+          },
+          "description": "Images waiting with this input, in attachment order."
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/LinkedFile"
+          },
+          "description": "Files the waiting input points at, in attachment order."
+        },
+        "mode": {
+          "$ref": "#/$defs/ConversationPendingMode",
+          "description": "Queue or steering admission."
+        }
+      },
+      "required": ["executionId", "text", "attachments", "files", "mode"]
+    },
+    "ConversationPermissionOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An exact option offered by the provider.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Opaque offered option identifier."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Provider label for this option."
+        }
+      },
+      "required": ["id", "label"]
+    },
+    "ConversationPermission": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A pending review with its complete offered choices.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "permissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Permission identity within the execution."
+        },
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Tool being reviewed."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Provider tool title."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationPermissionOption"
+          },
+          "maxItems": 64,
+          "description": "Complete offered choices; never silently shortened.",
+          "minItems": 1
+        },
+        "toolName": {
+          "type": "string",
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact reviewed tool name."
+        },
+        "argumentsJson": {
+          "type": "string",
+          "maxLength": 32768,
+          "x-utf8MaxBytes": 32768,
+          "description": "Exact original JSON input reviewed by the user; never truncated."
+        }
+      },
+      "required": [
+        "executionId",
+        "permissionId",
+        "toolId",
+        "title",
+        "options",
+        "toolName",
+        "argumentsJson"
+      ]
+    },
+    "ConversationTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded presentation of an observed tool call.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Tool call identity within the execution."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Provider tool title."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "",
+            "read",
+            "edit",
+            "search",
+            "fetch",
+            "execute",
+            "think",
+            "delete",
+            "move",
+            "switch_mode",
+            "other"
+          ],
+          "description": "What the call does, as the provider categorised it. Empty until the provider has said, which is why a panel counts kinds it knows rather than assuming the rest are reads."
+        },
+        "status": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "description": "Current provider tool status."
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 16384,
+          "x-utf8MaxBytes": 16384,
+          "description": "Bounded provider-observed tool output and file changes; omitted content is marked."
+        },
+        "input": {
+          "type": "string",
+          "maxLength": 32768,
+          "x-utf8MaxBytes": 32768,
+          "description": "Exact tool arguments observed through a permission request, or empty when unavailable."
+        }
+      },
+      "required": [
+        "executionId",
+        "toolId",
+        "title",
+        "kind",
+        "status",
+        "details",
+        "input"
+      ]
+    },
+    "ConversationView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Opaque revision; compare for equality, never numeric ordering."
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationMessage"
+          },
+          "maxItems": 128,
+          "description": "Recent turns with current streamed output."
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationPending"
+          },
+          "maxItems": 128,
+          "description": "Current removable queue entries."
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationPermission"
+          },
+          "maxItems": 64,
+          "description": "Actionable permission reviews."
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationTool"
+          },
+          "maxItems": 128,
+          "description": "Recent tool states."
+        },
+        "capabilities": {
+          "$ref": "#/$defs/ConversationCapabilities",
+          "description": "Agent operation support."
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ConversationLifecycle",
+          "description": "Current provider attachment lifecycle."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Some non-actionable history or text was omitted to bound this response."
+        },
+        "permissionViewError": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Why pending review choices cannot safely be shown; do not offer inferred choices."
+        },
+        "queueComplete": {
+          "type": "boolean",
+          "description": "All currently pending execution IDs are represented, so an exact reorder may be attempted."
+        },
+        "runtime": {
+          "$ref": "#/$defs/ConversationRuntime",
+          "description": "Configured provider, model and working directory for this conversation."
+        },
+        "title": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said."
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/ConversationQuestion"
+          },
+          "description": "Questions the agent is waiting on, oldest first."
+        }
+      },
+      "required": [
+        "conversationId",
+        "revision",
+        "messages",
+        "pending",
+        "permissions",
+        "tools",
+        "capabilities",
+        "lifecycle",
+        "truncated",
+        "queueComplete",
+        "title",
+        "questions"
+      ]
+    },
+    "ConversationCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Idempotently create or reopen one named conversation.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with."
+        }
+      },
+      "required": ["conversationId", "requestId"]
+    },
+    "ConversationCreateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Conversation ready for read and admission.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "ConversationReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read the current bounded projection.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "ConversationListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "type": "boolean",
+          "description": "List only archived conversations when true; only unarchived ones when false or absent."
+        }
+      },
+      "required": [],
+      "description": "Which of the caller's conversations to list: those not archived, unless archived ones are asked for."
+    },
+    "ConversationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One conversation as a list row: what it is called, the last thing said in it, and when. Read from stored summaries and live state; listing never opens or resumes a provider.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "title": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record."
+        },
+        "preview": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8MaxBytes": 512,
+          "description": "The last thing said in the conversation, as one line of plain text, or null when there is none on record."
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the conversation was created, in Unix milliseconds, as its creator requested it."
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When something was last said in the conversation, in Unix milliseconds; the creation time until then."
+        },
+        "running": {
+          "type": "boolean",
+          "description": "The conversation is open on this gateway and an invocation is in progress."
+        },
+        "archived": {
+          "type": "boolean",
+          "description": "Somebody archived the conversation and nothing has been said in it since."
+        }
+      },
+      "required": [
+        "conversationId",
+        "title",
+        "preview",
+        "createdAtMs",
+        "updatedAtMs",
+        "running",
+        "archived"
+      ]
+    },
+    "ConversationListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversationSummary"
+          },
+          "maxItems": 500,
+          "description": "The caller's conversations, most recently updated first. Ownership is applied before the bound, so another principal's conversations never take a place in it."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or when a stored record or summary of the caller's own cannot be read back, which lasts until an operator repairs it. Nobody else's conversations are read to answer a list, so nobody else's damage makes it false. A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written)."
+        }
+      },
+      "required": ["conversations", "complete"],
+      "description": "Conversations the authenticated caller owns, newest first, at most 500, and whether that is all of them."
+    },
+    "ConversationSendParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Submit one input; execution and request IDs stay fixed across retries.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "User message, at most 8 KiB UTF-8; gateway enforces the byte bound. May be blank only when attachments are present."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": {
+            "$ref": "#/$defs/ImageAttachment"
+          },
+          "description": "Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone."
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/LinkedFile"
+          },
+          "description": "Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none."
+        }
+      },
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "text",
+        "attachments",
+        "files"
+      ]
+    },
+    "ConversationRemoveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Remove an input that has not dispatched.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        }
+      },
+      "required": ["conversationId", "requestId", "executionId"]
+    },
+    "ConversationPermissionSelectionState": {
+      "type": "string",
+      "enum": ["pending", "consumed", "unknown"],
+      "description": "Whether a failed permission answer left the domain review pending, consumed it, or could not prove either state."
+    },
+    "ConversationPermissionAnswerErrorDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Typed review state attached to a failed conversation.answer response. This state is independent of the diagnostic error code.",
+      "properties": {
+        "selectionState": {
+          "$ref": "#/$defs/ConversationPermissionSelectionState",
+          "description": "Authoritative knowledge of whether the reviewed option was selected."
+        }
+      },
+      "required": ["selectionState"]
+    },
+    "ConversationAnswerParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Choose one option from the exact pending permission.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "permissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Pending permission identity."
+        },
+        "optionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact provider-offered option identity."
+        }
+      },
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "permissionId",
+        "optionId"
+      ]
+    },
+    "ConversationCancelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cancel one permission review with a caller reason.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "permissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Pending permission identity."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Reason recorded with authenticated caller attribution."
+        }
+      },
+      "required": ["conversationId", "requestId", "executionId", "permissionId", "reason"]
+    },
+    "ConversationCloseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Close the live provider context while retaining conversation history.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        }
+      },
+      "required": ["conversationId", "requestId"]
+    },
+    "ConversationArchiveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Archive or unarchive a conversation: whether conversation.list shows it by default. Nothing is stopped or removed, and a new message unarchives it.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        }
+      },
+      "required": ["conversationId", "requestId"]
+    },
+    "ConversationDeleteParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Delete a conversation permanently: stop it, ask its agent to delete the agent's own session, record who deleted it, and erase its history, uploads and summary. Audit evidence is retained. The identity is never reused: its owner's later commands on it answer conversation_deleted, except deleting it again, and anyone else is told conversation_not_found. A repeat of the deciding request — the same principal, surface and requestId — is answered applied true, any other delete by its owner applied false; either repeat first carries on an erasure that has not finished. conversation_erasure_incomplete and audit_unavailable mean the conversation is deleted and its erasure did not finish; deleting again, and each gateway start, tries again. Any other error from a delete means only that it is not known whether the conversation was deleted: list it, or delete again.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        }
+      },
+      "required": ["conversationId", "requestId"]
+    },
+    "ConversationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stable acknowledgement of one submitted input.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "disposition": {
+          "$ref": "#/$defs/ConversationDisposition",
+          "description": "Accepted or recovered submission state."
+        }
+      },
+      "required": ["executionId", "disposition"]
+    },
+    "ConversationMutationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Acknowledgement for a control action.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "Whether the requested change was applied or already acknowledged."
+        }
+      },
+      "required": ["requestId", "applied"]
+    },
+    "ConversationReorderParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Atomically replace the complete waiting order. All current waiting execution IDs must appear once; steering retains priority over ordinary queued input.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Identity of this deliberate control action; an uncertain acknowledgement requires a fresh read, not replay."
+        },
+        "executionIds": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "x-utf8MaxBytes": 256,
+            "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+          },
+          "description": "Exact desired full waiting order, including steering inputs. Running invocations are excluded."
+        }
+      },
+      "required": ["conversationId", "requestId", "executionIds"]
+    },
+    "ConversationReorderOutcome": {
+      "type": "string",
+      "enum": ["applied", "unchanged", "queue_changed", "priority_conflict"],
+      "description": "Applied or unchanged order, or a rejected stale queue/steering-priority conflict. Rejections leave the queue unchanged."
+    },
+    "ConversationReorderResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Acknowledgement of one atomic queue reorder control.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Identity of this deliberate control action; an uncertain acknowledgement requires a fresh read, not replay."
+        },
+        "outcome": {
+          "$ref": "#/$defs/ConversationReorderOutcome",
+          "description": "Whether the whole requested order was accepted."
+        }
+      },
+      "required": ["requestId", "outcome"]
+    },
+    "ConversationRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Configured model identifier."
+        },
+        "provider": {
+          "type": "string",
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Configured agent provider name."
+        },
+        "workspace": {
+          "type": "string",
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Working directory on the gateway host, not the client filesystem."
+        }
+      },
+      "required": ["model", "provider", "workspace"],
+      "description": "Runtime configuration selected by the gateway composition for this conversation."
+    },
+    "ConversationPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Zero-based SDK observation offset within the owning execution, used to preserve order."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["text", "thought", "tool", "local_notice"],
+          "description": "Text, exposed thought content, a tool observation, or a Nessa-owned runtime notice."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 32768,
+          "x-utf8MaxBytes": 32768,
+          "description": "Exact text fragment for text, thought, or local notice observations; empty for tool observations."
+        },
+        "toolId": {
+          "type": "string",
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Owning tool identity for a tool observation; empty otherwise."
+        },
+        "noticeId": {
+          "type": "string",
+          "maxLength": 20,
+          "x-utf8MaxBytes": 20,
+          "pattern": "^[1-9][0-9]{0,19}$|^$",
+          "description": "Stable execution-scoped declined-review identity for a local notice; empty otherwise."
+        },
+        "messageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Opaque provider message identity; only fragments with the same identity may be combined."
+        }
+      },
+      "required": ["offset", "kind", "text", "toolId", "noticeId"],
+      "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
+    },
+    "ConversationErrorCode": {
+      "type": "string",
+      "enum": [
+        "agent_not_configured",
+        "agent_unsupported",
+        "conversations_not_configured",
+        "unknown_method",
+        "invalid_request",
+        "conversation_not_found",
+        "conversation_capacity",
+        "conversation_closed",
+        "conversation_configuration_changed",
+        "conversation_state_unreadable",
+        "conversation_storage_unavailable",
+        "temporarily_unavailable",
+        "audit_unavailable",
+        "submission_conflict",
+        "submission_unresolved",
+        "stale_permission",
+        "agent_startup_deadline",
+        "agent_operation_failed",
+        "image_input_unsupported",
+        "attachment_not_found",
+        "attachment_unavailable",
+        "attachment_capacity",
+        "attachment_storage_unavailable",
+        "attachment_cleanup_unavailable",
+        "conversation_deleted",
+        "conversation_erasure_incomplete"
+      ],
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator."
+    },
+    "ConversationAnswerOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One answer a question offers: the value recorded, and the label read.",
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Exact value recorded when this option is chosen."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Text shown to whoever answers."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Secondary text, where the agent supplied any."
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "ConversationAsked": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question, and what may be answered to it.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Key the answer is correlated back under."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "What is being asked."
+        },
+        "header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Short label for the question, where the agent supplied one."
+        },
+        "multiSelect": {
+          "type": "boolean",
+          "description": "Whether several options may be chosen rather than one."
+        },
+        "freeText": {
+          "type": "boolean",
+          "description": "Whether an answer in the answerer's own words is accepted."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether an answer must choose at least one of this question's options; own words alone do not satisfy it. Declining the whole ask is still possible."
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/ConversationAnswerOption"
+          },
+          "description": "What may be chosen, in the order the agent offered it."
+        }
+      },
+      "required": [
+        "key",
+        "prompt",
+        "multiSelect",
+        "freeText",
+        "required",
+        "options"
+      ]
+    },
+    "ConversationQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Identity the answer names."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "The agent's own framing of why it is asking."
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ConversationAsked"
+          },
+          "description": "What is being asked, in the order the agent asked it."
+        }
+      },
+      "required": [
+        "executionId",
+        "questionId",
+        "message",
+        "questions"
+      ]
+    },
+    "ConversationQuestionChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What was chosen for one question. Both parts may be absent, which is how a question is skipped.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The question this answers."
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "x-utf8MaxBytes": 1024
+          },
+          "description": "Option values chosen, which the question must have offered."
+        },
+        "ownWords": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Words of the answerer's own, only where the question invited them."
+        }
+      },
+      "required": [
+        "key",
+        "values"
+      ]
+    },
+    "ConversationAnswerQuestionParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Answer one question the agent asked, or decline to answer it.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The ask being answered."
+        },
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ConversationQuestionChoice"
+          },
+          "description": "What was chosen. Null declines the question, which is an answer the agent is told."
+        }
+      },
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "questionId"
+      ]
     }
   }
 }

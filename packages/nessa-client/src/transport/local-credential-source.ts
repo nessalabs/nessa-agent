@@ -4,6 +4,7 @@ import {
   type CredentialSource,
 } from "../application/credential-source.js"
 import { isLoopbackWebSocketUrl } from "../application/resolve-options.js"
+import { readUnixPrivateFile } from "./node-private-file.js"
 
 /** Node-only private-file adapter. Native/browser hosts inject their own source. */
 export class LocalFileCredentialSource implements CredentialSource {
@@ -68,25 +69,18 @@ export class LocalFileCredentialSource implements CredentialSource {
           throw new Error("Invalid evidence")
         return credential
       }
-      const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try {
-        const stat = await handle.stat()
-        if (
-          !stat.isFile() ||
-          stat.nlink !== 1 ||
-          stat.uid !== this.options.uid ||
-          (stat.mode & 0o077) !== 0 ||
-          stat.size < 1 ||
-          stat.size > 16385
+      const credential = (
+        await readUnixPrivateFile(
+          { fs, path, constants },
+          this.options.file ? path.dirname(file) : base,
+          this.options.file ? path.basename(file) : path.relative(base, file),
+          this.options.uid as number,
+          16385,
         )
-          throw new Error("Invalid private credential file")
-        const credential = (await handle.readFile("utf8")).trim()
-        if (!credential || new TextEncoder().encode(credential).length > 16384)
-          throw new Error("Invalid evidence")
-        return credential
-      } finally {
-        await handle.close()
-      }
+      ).trim()
+      if (!credential || new TextEncoder().encode(credential).length > 16384)
+        throw new Error("Invalid evidence")
+      return credential
     } catch {
       throw new NessaCredentialUnavailableError()
     }

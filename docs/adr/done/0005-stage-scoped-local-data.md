@@ -57,6 +57,23 @@ Adding a new stage name must not need a code change to the path helper.
 
 New on-disk stores follow this by default.
 
+### The loopback port is stage-scoped too, but by a closed table
+
+Disk is cheap: any stage string can have a directory nobody else wants. A TCP
+port is not. Two stages cannot share 7420, and there is no way to derive a
+distinct free port from an arbitrary stage name.
+
+So the port comes from a named table,
+`protocol/defaults/gateway-ports.json`, keyed by the stages this codebase
+actually runs — deliberately the "policy table for known stages" this ADR allows,
+not a path rule. `prod` keeps 7420, the port a packaged install holds through its
+launchd background service; `dev` takes 7421 so a checkout and an installed app
+can both run. A stage the table does not name has no default port and must set
+`NESSA_PORT`, which overrides the table everywhere and in every stage.
+
+The table is one file read by `nessa-server`, the desktop host, the frontend and
+the Vite dev proxy, so the answer cannot differ between them.
+
 ## Alternatives considered
 
 - **Closed enum for paths (`dev` \| `alpha` \| `ci` only).** Blocks arbitrary

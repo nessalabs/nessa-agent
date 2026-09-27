@@ -27,6 +27,8 @@ export {
 export type {
   NessaClientConnectOptions,
   ProductConnectOptions,
+  GatewayEndpointContext,
+  GatewayEndpointSource,
 } from "./application/index.js"
 export type { NessaClientEvents } from "./application/index.js"
 export {
@@ -35,6 +37,7 @@ export {
   NessaRpcError,
   NessaProtocolCompatibilityError,
   NessaConnectionClosedError,
+  NessaEndpointDiscoveryError,
   resolveConnectOptions,
   stageAllowsDefaultUrl,
   StageConfigError,
@@ -43,8 +46,6 @@ export {
 } from "./application/index.js"
 export type {
   ClientInfo,
-  EchoParams,
-  EchoResult,
   EventFrame,
   Frame,
   GatewayError,
@@ -92,7 +93,6 @@ export const ConnectionProfile = { Product: "product" } as const
 export type { CommonConnectOptions } from "./application/options.js"
 export type { EventHandler } from "./application/events.js"
 export type { ClientEventMap } from "./protocol/types.js"
-export type { ConversationApi } from "./presentation/conversation-api.js"
 export type { ResolvedConnectRetryOptions } from "./application/connect-retry.js"
 export type {
   ResolvedConnectOptions,
@@ -123,3 +123,84 @@ export {
   type CredentialSource,
 } from "./application/credential-source.js"
 export { LocalFileCredentialSource } from "./transport/local-credential-source.js"
+
+export type {
+  ConversationApi,
+  ConversationActionOptions,
+  ConversationCreateOptions,
+  ConversationListOptions,
+  ConversationSendOptions,
+  ConversationSubmission,
+} from "./presentation/conversation-api.js"
+export type {
+  AttachmentApi,
+  AttachmentBeginning,
+  AttachmentDescription,
+} from "./presentation/attachment-api.js"
+export {
+  NessaAttachmentError,
+  type AttachmentBeginRefusal,
+  type AttachmentFailureCode,
+} from "./application/attachment-upload.js"
+export {
+  asImageAttachment,
+  imageAttachmentsProblem,
+  linkedFileProblem,
+  linkedFilesProblem,
+  IMAGE_ATTACHMENT_TYPES,
+  MAX_FILE_PATH_BYTES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_MESSAGE_FILES,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGES,
+  MAX_UPLOAD_BYTES,
+  type StoredAttachment,
+} from "./protocol/attachment-validate.js"
+export type {
+  ConversationView,
+  ConversationListResult,
+  ConversationSummary,
+  ConversationLifecycle,
+  ConversationLifecyclePhase,
+  ConversationStartupFailure,
+  ConversationStartupFailureCode,
+  ConversationAttachmentEvidenceFailure,
+  ImageAttachment,
+  LinkedFile,
+  ConversationMessage,
+  ConversationPart,
+  ConversationRuntime,
+  ConversationPending,
+  ConversationPermission,
+  ConversationPermissionOption,
+  ConversationTool,
+  ConversationCapabilities,
+  ConversationAgentFeatures,
+  PermissionDenialSupport,
+  NativeHookSuppressionSupport,
+  CompactionReportingSupport,
+  ModelSwitchReportingSupport,
+  PermissionDeferralSupport,
+  ElicitationForwardingSupport,
+  PreToolPolicySupport,
+  PolicyEndTurnSupport,
+  PolicyCloseSessionSupport,
+  IncomingElicitationSupport,
+  ConversationMessageStatus,
+  ConversationDisposition,
+  ConversationPendingMode,
+  ConversationMutationResult,
+  ConversationReorderResult,
+  ConversationReorderOutcome,
+  ConversationCreateResult,
+  ConversationReceipt,
+  ConversationPermissionSelectionState,
+} from "./generated/product.js"
+export { ConversationErrorCode } from "./generated/product.js"
+export { conversationErrorCode } from "./application/conversation-error-code.js"
+export {
+  NessaConversationMutationError,
+  NessaConversationControlError,
+} from "./application/conversation-mutation-error.js"
+
+export { isRetryableConnectionError } from "./application/connect-retry.js"

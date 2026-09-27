@@ -7,6 +7,7 @@ export function environmentFromVite() {
       VITE_NESSA_STAGE: import.meta.env.VITE_NESSA_STAGE,
       VITE_NESSA_CONVERSATION_BACKEND: import.meta.env.VITE_NESSA_CONVERSATION_BACKEND,
       VITE_NESSA_CONVERSATION_SCENARIO: import.meta.env.VITE_NESSA_CONVERSATION_SCENARIO,
+      VITE_NESSA_GATEWAY_URL: import.meta.env.VITE_NESSA_GATEWAY_URL,
     },
     import.meta.env.DEV,
   )

@@ -69,18 +69,43 @@ function processCwd(pid) {
 }
 
 /**
- * A leftover from this checkout: node running vite (or the pnpm wrapper) with
- * our tree on the argv or as cwd. Cursor Agents port-forwards are not ours.
+ * A leftover from this checkout: node running vite (or the pnpm wrapper) from
+ * our tree. Cursor Agents port-forwards are not ours.
  */
 function isNessaVite({ pid, command }) {
-  const cwd = processCwd(pid)
-  const underRoot =
-    command.includes(root) ||
-    cwd === root ||
-    cwd.startsWith(`${root}/`) ||
-    cwd.startsWith(`${root}\\`)
-  if (!underRoot) return false
+  if (!belongsToThisCheckout(pid, command)) return false
   return /\bvite\b/.test(command) || /node_modules[/\\]\.bin[/\\]vite/.test(command)
+}
+
+/**
+ * Whether a process belongs to this checkout.
+ *
+ * The working directory is the evidence, because a command line is not: a
+ * sibling checkout at `/work/nessa-agent-other` contains `/work/nessa-agent` as
+ * a substring.
+ *
+ * Windows has no cwd to read here (`lsof` is not there), so it falls back to a
+ * path-boundary check on the command. That is weaker, and it is said out loud
+ * rather than left to look the same as the Unix answer.
+ */
+/**
+ * Worktrees this repository keeps *inside* itself, which are not this checkout.
+ *
+ * `scripts/worktree.sh` makes siblings, and the prefix test below rules those
+ * out. Agent worktrees land under `.claude/worktrees/`, which is beneath this
+ * root, so the same test called them ours and a run from the main checkout
+ * would SIGTERM — then SIGKILL — a vite belonging to somebody else's session.
+ * Each nested checkout owns its process and build output independently.
+ */
+const NESTED_CHECKOUTS = `${root}/.claude/worktrees/`
+
+function belongsToThisCheckout(pid, command) {
+  const cwd = processCwd(pid)
+  if (cwd && cwd.startsWith(NESTED_CHECKOUTS)) return false
+  if (cwd)
+    return cwd === root || cwd.startsWith(`${root}/`) || cwd.startsWith(`${root}\\`)
+  if (process.platform !== "win32") return false
+  return command.includes(`${root}\\`) || command.includes(`${root}/`)
 }
 
 function killPid(pid) {

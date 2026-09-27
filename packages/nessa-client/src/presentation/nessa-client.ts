@@ -3,6 +3,11 @@ import type { ManagedSession, ConnectionState } from "../application/managed-ses
 import type { EventHandler, NessaClientEvents } from "../application/events.js"
 import type { NessaClientConnectOptions } from "../application/options.js"
 import { establishManagedSession } from "../composition/root.js"
+import type {
+  AttachmentUploadTransport,
+  UploadTimer,
+} from "../application/attachment-upload.js"
+import { createAttachmentApi, type AttachmentApi } from "./attachment-api.js"
 import { createConversationApi, type ConversationApi } from "./conversation-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
@@ -29,13 +34,28 @@ import { createAuthApi, type AuthApi } from "./auth-api.js"
  * ```
  */
 export class NessaClient {
-  /** Default development gateway address. Non-development stages require an explicit URL. */
-  static readonly defaultUrl = "ws://127.0.0.1:7420"
+  /**
+   * Default development gateway address. Non-development stages require an
+   * explicit URL.
+   *
+   * 7421 is the `dev` port in `protocol/defaults/gateway-ports.json`, not 7420:
+   * an installed Nessa owns 7420 through a launchd service that outlives the
+   * app, so the dev gateway listens next door rather than fighting it for the
+   * socket. This literal is checked against that table in `nessa-client.test.ts`
+   * — the package stays self-contained, and the number still cannot drift.
+   *
+   * When `url` is omitted, local Node clients first verify the gateway's private
+   * endpoint publication. This value remains the dev-only fallback when that
+   * publication is absent or unreadable.
+   */
+  static readonly defaultUrl = "ws://127.0.0.1:7421"
 
   /** Authorized gateway health. */
   readonly server: ServerApi
-  /** Authorized text round trip; currently returns the input without model generation. */
+  /** Authorized agent conversations, live views, and lifecycle controls. */
   readonly conversation: ConversationApi
+  /** Stage files into a conversation so a message can refer to them by digest. */
+  readonly attachments: AttachmentApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
@@ -46,9 +66,12 @@ export class NessaClient {
     /** Authenticated connection profile. */
     readonly profile: "product",
     newRequestId: () => string,
+    upload: AttachmentUploadTransport,
+    uploadTimer: UploadTimer,
   ) {
     this.server = createServerApi(wire)
-    this.conversation = createConversationApi(wire)
+    this.conversation = createConversationApi(wire, newRequestId)
+    this.attachments = createAttachmentApi(wire, upload, newRequestId, uploadTimer)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.auth = createAuthApi(wire)
   }
@@ -61,11 +84,9 @@ export class NessaClient {
    * @throws StageConfigError for invalid options, NessaProtocolCompatibilityError for
    * incompatible versions, or an RPC/transport error when setup fails. */
   static async connect(options: NessaClientConnectOptions): Promise<NessaClient> {
-    const { managed, profile, newRequestId } = await establishManagedSession(
-      options,
-      NessaClient.defaultUrl,
-    )
-    return new NessaClient(managed, profile, newRequestId)
+    const { managed, profile, newRequestId, upload, uploadTimer } =
+      await establishManagedSession(options, NessaClient.defaultUrl)
+    return new NessaClient(managed, profile, newRequestId, upload, uploadTimer)
   }
 
   /** Current authenticated handshake snapshot; available only while connected. */

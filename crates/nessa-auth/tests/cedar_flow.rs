@@ -303,7 +303,7 @@ fn authorization_reloads_state_after_login() {
     fixture.store.replace(stale);
     assert_eq!(
         fixture.authorize(&session, "credential.manage", target()),
-        Err(AccessError::Unavailable)
+        Err(AccessError::StaleRevision)
     );
 
     fixture.store.replace(snapshot(
@@ -341,7 +341,7 @@ fn authorization_reloads_state_after_login() {
         MembershipStatus::Active,
         vec![grant("credential.manage", "credential-a")],
     );
-    revoked.credential.revoke(150).unwrap();
+    revoked.credential.restore_revoked_at(150).unwrap();
     fixture.store.replace(revoked);
     assert_eq!(
         fixture.authorize(&session, "credential.manage", target()),

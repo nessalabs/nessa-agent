@@ -198,6 +198,18 @@
       "action": "panel.summon",
       "scope": "global",
       "surface": "*"
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+H",
+      "action": "panel.previousTab",
+      "scope": "focused",
+      "surface": "desktop"
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+L",
+      "action": "panel.nextTab",
+      "scope": "focused",
+      "surface": "desktop"
     }
   ]
 }

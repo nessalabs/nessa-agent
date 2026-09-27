@@ -3,6 +3,7 @@ import {
   type HealthResult,
   type ProductSessionReady,
   type CredentialSource,
+  type GatewayEndpointSource,
   type Stage,
 } from "@nessa/client"
 
@@ -28,7 +29,17 @@ export class SessionHealthError extends Error {
 export type ConnectDevSessionDeps = {
   connect?: typeof NessaClient.connect
   credentialSource?: CredentialSource
+  endpointSource?: GatewayEndpointSource
   stage?: Stage
+  clientId?: string
+  browserUrl?: string
+  gatewayBaseUrl?: string
+}
+
+function gatewaySessionUrl(baseUrl: string): string {
+  const url = new URL(baseUrl)
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+  return url.origin
 }
 
 /** Authenticate the chat surface and verify authorized gateway health. */
@@ -36,15 +47,20 @@ export async function connectDevSession(
   deps: ConnectDevSessionDeps = {},
 ): Promise<EstablishedDevSession> {
   const connect = deps.connect ?? NessaClient.connect.bind(NessaClient)
+  const stage = deps.stage ?? "dev"
   const client = await connect({
     profile: "product",
-    stage: deps.stage ?? "dev",
-    url: "ws://127.0.0.1:7420/session",
+    stage,
+    ...(deps.browserUrl
+      ? { url: deps.browserUrl, auth: { browserCookie: true as const } }
+      : deps.gatewayBaseUrl
+        ? { url: gatewaySessionUrl(deps.gatewayBaseUrl) }
+        : { endpointSource: deps.endpointSource }),
     credentialSource: deps.credentialSource,
     role: "surface",
     surface: { kind: "panel", instance: crypto.randomUUID() },
     client: {
-      id: "nessa-panel",
+      id: deps.clientId ?? "nessa-panel",
       version: "0.1.0",
       platform: host.kind,
     },

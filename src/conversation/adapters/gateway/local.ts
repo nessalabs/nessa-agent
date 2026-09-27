@@ -1,17 +1,27 @@
 import type { ConversationGateway } from "../../application/ports"
 import {
+  attachFiles,
+  changeUpload,
+  forgetStoredUploads,
+  removeFile,
   closeConversation,
   openConversation,
+  openListed,
   setActive,
+  moveActive,
   setDraft,
-  stopGenerating,
 } from "../../application/usecases"
 
-/** In-process UI-session gateway. Send uses the remote echo thunk, not this. */
+/** Local drafts and tabs; remote operations use ConversationEffects. */
 export const localConversationGateway: ConversationGateway = {
-  stopGenerating,
   openConversation,
+  openListed,
+  attachFiles,
+  changeUpload,
+  forgetStoredUploads,
+  removeFile,
   closeConversation,
   setDraft,
   setActive,
+  moveActive,
 }

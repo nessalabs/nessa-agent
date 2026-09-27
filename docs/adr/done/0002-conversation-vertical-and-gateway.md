@@ -11,6 +11,8 @@ are delivered by ADR 0008.
 - **Updated:** 2026-09-04 — `sendDraft` uses temporary `conversation.echo` via
   `NessaClient` (user turn + echoed assistant reply). Stop remains a no-op.
   Renamed domain "strip" → "tabs" (ubiquitous language).
+- **Historical note:** the temporary echo path described below was removed when
+  authenticated server-owned conversation commands landed.
 
 ## Context
 
