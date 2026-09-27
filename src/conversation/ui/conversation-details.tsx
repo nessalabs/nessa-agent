@@ -1,4 +1,4 @@
-import { useState, type ReactElement, type ReactNode } from "react"
+import { useId, useState, type ReactElement, type ReactNode } from "react"
 import { Info, Pencil } from "lucide-react"
 import {
   ContextMenu,
@@ -62,9 +62,16 @@ function tokens(count: number) {
 
 /** A group of facts on a soft fill. Space separates the rows, not rules. */
 function FactGroup({ title, children }: { title: string; children: ReactNode }) {
+  // An h3 under the sheet's own h2 title, and the section named by it.
+  const heading = useId()
   return (
-    <section aria-label={title} className="flex flex-col gap-2">
-      <h4 className="m-0 px-4 nessa-text-2 font-medium text-muted-foreground">{title}</h4>
+    <section aria-labelledby={heading} className="flex flex-col gap-2">
+      <h3
+        id={heading}
+        className="m-0 px-4 nessa-text-2 font-medium text-muted-foreground"
+      >
+        {title}
+      </h3>
       <div className="flex flex-col rounded-[18px] bg-muted/60 px-4 py-1.5">
         {children}
       </div>

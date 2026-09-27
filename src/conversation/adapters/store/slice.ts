@@ -1,5 +1,7 @@
 import {
   contentText,
+  effectiveModel,
+  type ApprovalMode,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
   messageImages,
@@ -7,6 +9,8 @@ import {
   type CommandFailure,
   type FileAttachment,
   type MessageContent,
+  type ModelCatalog,
+  type ModelChoice,
   type ReadFailure,
   type UploadFailure,
 } from "../../model"
@@ -514,8 +518,10 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      // Tabs come back from what was saved; the catalog is the gateway's current
+      // answer, not saved with them, so it outlives the restore.
+      return { ...restoreConversationTabs(action.payload), catalog: state.catalog }
     },
     cancellationChanged(
       state,
@@ -563,6 +569,15 @@ const conversationSlice = createSlice({
     openConversation(state) {
       return gateway.openConversation(state)
     },
+    chooseModel(state, action: PayloadAction<{ id: string; choice: ModelChoice }>) {
+      return gateway.chooseModel(state, action.payload)
+    },
+    chooseApproval(state, action: PayloadAction<{ id: string; mode: ApprovalMode }>) {
+      return gateway.chooseApproval(state, action.payload)
+    },
+    catalogLoaded(state, action: PayloadAction<ModelCatalog>) {
+      state.catalog = action.payload
+    },
     openListed(
       state,
       action: PayloadAction<{ serverConversationId: string; title: string | null }>,
@@ -574,8 +589,13 @@ const conversationSlice = createSlice({
     },
     bindConversation(state, action: PayloadAction<{ id: string; serverId: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current && !current.serverConversationId)
+      if (current && !current.serverConversationId) {
+        // Creation starts here, so the model it is created with is fixed here:
+        // the tab's choice while the catalog lists it, else the default. Read
+        // before binding, while the tab can still choose.
+        current.modelChoice = effectiveModel(current, state.catalog)
         current.serverConversationId = action.payload.serverId
+      }
     },
     conversationReady(state, action: PayloadAction<string>) {
       const current = state.conversations.find((item) => item.id === action.payload)
@@ -705,6 +725,9 @@ export const {
   moveActive,
   setDraft,
   openConversation,
+  chooseModel,
+  chooseApproval,
+  catalogLoaded,
   openListed,
   closeConversation,
   bindConversation,

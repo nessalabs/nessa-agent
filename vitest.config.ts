@@ -2,9 +2,7 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { defineConfig } from "vitest/config"
 
-const designSystemEditorDependencies = existsSync(
-  resolve("node_modules/@nessa-ui/react"),
-)
+const designSystemEditorDependencies = existsSync(resolve("node_modules/@nessa-ui/react"))
   ? [
       "@nessa-ui/react > @tiptap/core",
       "@nessa-ui/react > @tiptap/react",
@@ -53,8 +51,9 @@ export default defineConfig({
         // Radix resolves React through the vendored design system's own pnpm
         // store, so left to Node's resolver a component using `Slot` loads a
         // second React and every hook in it throws on a null dispatcher.
-        // Transformed here instead, it goes through the dedupe above.
-        inline: [/radix-ui/],
+        // Transformed here instead, it goes through the dedupe above. Floating UI
+        // is Radix's positioning for popovers and is held to the same rule.
+        inline: [/radix-ui/, /@floating-ui/],
       },
     },
   },

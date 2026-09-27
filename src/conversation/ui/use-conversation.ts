@@ -1,6 +1,11 @@
 import { pollConversation } from "../adapters/gateway/polling"
 import { useEffect, useEffectEvent, useState } from "react"
-import { type FileAttachment, type MessageContent } from "../model"
+import {
+  type ApprovalMode,
+  type FileAttachment,
+  type MessageContent,
+  type ModelChoice,
+} from "../model"
 import type { UploadChange, UploadedFile } from "../application/ports"
 import { activeConversation } from "../application/queries/active-conversation"
 import {
@@ -10,6 +15,8 @@ import {
   stageAttachment,
   takeUploadStep,
   closeTab,
+  chooseModel,
+  chooseApproval,
   openConversation,
   openListed,
   sendDraft,
@@ -129,6 +136,17 @@ export function useConversation() {
     openConversation: () => {
       dispatch(openConversation())
     },
+    /** What a model can be chosen from; undefined until something loads it. */
+    catalog: tabs.catalog,
+    /**
+     * Choose the active tab's model. A tab whose conversation already exists
+     * keeps its model, so the choice opens in a new tab.
+     */
+    chooseModel: (choice: ModelChoice) =>
+      dispatch(chooseModel({ id: active.id, choice })),
+    /** Choose the approval mode the active tab's conversation is created with. */
+    chooseApproval: (mode: ApprovalMode) =>
+      dispatch(chooseApproval({ id: active.id, mode })),
     closeConversation: (id: string) => {
       void dispatch(closeTab(id))
     },
