@@ -18,10 +18,21 @@ body {
  * over the panels, so each panel's content starts below it.
  */
 [data-surface] {
-  --desktop-titlebar-height: 48px;
-  --desktop-window-controls-inset: 14px;
   --desktop-gutter: 8px;
   --desktop-radius: 14px;
+  /*
+   * Corner controls sit the same distance from a pane's top and side edges,
+   * and their corners are concentric with the pane's: inner radius is the
+   * pane's radius minus that distance. Everything below derives from these.
+   */
+  --desktop-control-inset: 6px;
+  --desktop-control-size: 28px;
+  --desktop-control-radius: calc(var(--desktop-radius) - var(--desktop-control-inset));
+  --desktop-control-edge: calc(var(--desktop-gutter) + var(--desktop-control-inset));
+  --desktop-titlebar-height: calc(
+    2 * var(--desktop-control-edge) + var(--desktop-control-size)
+  );
+  --desktop-window-controls-inset: var(--desktop-control-edge);
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
   /* Dusk: a violet light above, a low ember below. One place to retune. */
   --desktop-light-high: oklch(0.52 0.15 295 / 42%);
@@ -30,9 +41,14 @@ body {
 }
 
 /* Native macOS window buttons remain host-owned and sit inside the sidebar. */
+/* Native macOS window buttons remain host-owned and sit inside the sidebar,
+   centred on the same row as the controls (see tauri.desktop.conf.json). */
 [data-host="macos"][data-surface="window"] {
-  --desktop-titlebar-height: 42px;
   --desktop-window-controls-inset: 79px;
+}
+
+.desktop-titlebar[data-slot="app-shell-titlebar"] {
+  padding-right: var(--desktop-control-edge);
 }
 
 .desktop-shell {
@@ -94,7 +110,7 @@ body {
 .desktop-titlebar-button,
 .desktop-titlebar [data-slot="app-shell-titlebar-navigation"] {
   color: color-mix(in oklab, var(--foreground) 55%, transparent);
-  border-radius: 8px;
+  border-radius: var(--desktop-control-radius);
   transition:
     color 120ms ease,
     background-color 120ms ease;
@@ -106,8 +122,8 @@ body {
 }
 
 .desktop-titlebar-button {
-  width: 32px;
-  height: 28px;
+  width: var(--desktop-control-size);
+  height: var(--desktop-control-size);
 }
 
 .desktop-titlebar-button svg {

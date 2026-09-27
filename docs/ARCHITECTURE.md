@@ -65,8 +65,13 @@ macOS) and the right-panel toggle at its trailing edge, and neither moves when a
 sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
 footer is the only identity. Both sidebars are inset, rounded panes of
 translucent glass over a faint ambient light; their content begins below the
-titlebar row (42px native macOS, 48px elsewhere), and closing one fades and
+titlebar row, and closing one fades and
 slides it toward its edge while the split view animates its width.
+Corner controls follow one geometry in `styles.css`: each sits the same
+distance from its pane's top and side edges, and its corner radius is the pane's
+radius minus that distance, so hover shapes are concentric with the pane. The
+titlebar's height derives from it (56px), and the native traffic lights are
+centred on the same row.
 Maximizing the right panel makes it the window rather than a floating card: no
 inset, rim, or corners, and the history arrows step aside; Esc restores it
 wherever focus is. The resize glow runs only along the straight part of a
