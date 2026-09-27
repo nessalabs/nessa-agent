@@ -64,7 +64,8 @@ view. The sidebar toggle sits at its leading edge (after the traffic lights on
 macOS) and the right-panel toggle at its trailing edge, and neither moves when a
 sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
 footer is the only identity. Both sidebars are inset, rounded panes of
-translucent glass over a faint ambient light; their content begins below the
+translucent glass in the window's own base colour, so the ambient light carries
+through them and the window reads as one surface marked only by their rims; their content begins below the
 titlebar row, and closing one fades and
 slides it toward its edge while the split view animates its width.
 Corner controls follow one geometry in `styles.css`: each sits the same
