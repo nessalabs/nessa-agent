@@ -1,6 +1,7 @@
 import {
   type ApprovalMode,
   contentText,
+  conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
   messageImages,
@@ -571,7 +572,7 @@ const conversationSlice = createSlice({
       action: PayloadAction<{ id: string; selection: ConversationSelection }>,
     ) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current && !current.serverConversationId) {
+      if (current && conversationSelectionOpen(current)) {
         current.selection = action.payload.selection
       }
     },

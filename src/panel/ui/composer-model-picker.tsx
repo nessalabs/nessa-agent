@@ -1,8 +1,10 @@
 import * as React from "react"
 import { ModelPicker, type ModelPickerGroup } from "@nessa-ui/react/model-picker"
-import type { ModelCatalog, ModelChoice } from "../../conversation"
+import type { AgentsListResult } from "@nessa/client"
 import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
+
+type ModelChoice = { agent: string; model: string }
 
 /** A context window as a short label: "1M", "1.05M", "512K". */
 function contextLabel(tokens: number) {
@@ -35,7 +37,7 @@ function agentMark(agent: string) {
  * the picker names what the conversation actually runs.
  */
 function groups(
-  catalog: ModelCatalog,
+  catalog: AgentsListResult,
   value: ModelChoice,
   valueName: string | undefined,
 ): ModelPickerGroup[] {
@@ -85,7 +87,7 @@ export function ComposerModelPicker({
   valueName,
   onChoose,
 }: {
-  catalog: ModelCatalog
+  catalog: AgentsListResult
   value: ModelChoice
   /** What the gateway calls `value`, for a model the catalog does not list. */
   valueName?: string

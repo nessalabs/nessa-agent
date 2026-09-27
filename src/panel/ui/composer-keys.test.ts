@@ -26,6 +26,7 @@ import {
 } from "../../conversation/testing"
 import { makeStore, type AppStore } from "../../store"
 import { sessionReady } from "../../session/adapters/store/slice"
+import { setSelection } from "../../conversation/adapters/store/slice"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { App } from "./app"
 import type { ConversationChoices } from "./use-agent-choices"
@@ -155,11 +156,31 @@ it("shows the catalog model beside the voice control on a new draft", async () =
   const picker = host.querySelector<HTMLButtonElement>(
     '[data-slot="model-picker-trigger"]',
   )
-  expect(picker?.getAttribute("aria-label")).toBe("Change model, currently Sonnet 5")
-  expect(picker?.classList.contains("nessa-model-picker-trigger")).toBe(true)
+  expect(picker?.getAttribute("aria-label")).toBe("Model: Sonnet 5")
+  expect(picker?.classList.contains("nessa-composer-model")).toBe(true)
   expect(picker?.parentElement?.nextElementSibling?.getAttribute("aria-label")).toBe(
     "Start voice input",
   )
+
+  act(() => {
+    store.dispatch(
+      setSelection({
+        id: "c0",
+        selection: {
+          agent: "claude",
+          model: "claude-retired-4",
+          approvalMode: "ask",
+        },
+      }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "saved" }))
+  })
+  await act(async () => root.render(panel(choices)))
+  expect(
+    host
+      .querySelector<HTMLButtonElement>('[data-slot="model-picker-trigger"]')
+      ?.getAttribute("aria-label"),
+  ).toBe("Model: claude-retired-4")
 })
 
 function chips() {

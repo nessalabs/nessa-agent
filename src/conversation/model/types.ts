@@ -1,8 +1,6 @@
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 
-import type { ModelChoice } from "./model-choice"
-
 export type AgentFeatures = {
   permissionDenial: "unknown" | "unsupported" | "supported_for_offered_permission_reviews"
   nativeHookSuppression: "unknown" | "unsupported" | "supported_for_user_configured_hooks"
@@ -56,6 +54,14 @@ export type ConversationSelection = {
   agent: string
   model: string
   approvalMode: ApprovalMode
+}
+
+/** Creation fixes the selection before the first send or attachment upload. */
+export function conversationSelectionOpen(conversation: {
+  serverConversationId?: string
+  turns: readonly unknown[]
+}): boolean {
+  return !conversation.serverConversationId && conversation.turns.length === 0
 }
 
 export type ConversationCapabilities = {
@@ -241,14 +247,6 @@ type ConversationState = {
   draftReset?: number
   /** Stable gateway identity; local tab closure does not close shared work. */
   serverConversationId?: string
-  /**
-   * The agent and model chosen for this tab before its conversation exists.
-   * Read only while `modelChoiceOpen`; once created, the view's runtime says
-   * what it runs on.
-   */
-  modelChoice?: ModelChoice
-  /** The approval mode chosen for this tab before its conversation exists. */
-  approvalChoice?: ApprovalMode
   serverReady?: boolean
   error?: string
   /**

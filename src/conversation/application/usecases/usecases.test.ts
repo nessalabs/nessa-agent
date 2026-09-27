@@ -120,6 +120,22 @@ describe("openConversation / closeConversation", () => {
     expect(next.activeId).toBe("c0")
   })
 
+  it("opens another tab once a turn has started, even before a server identity arrives", () => {
+    const pending = beginSend(emptyLocalTabs(), {
+      ...identity,
+      content: textContent("Already sending"),
+    })
+    const selection = {
+      agent: "codex",
+      model: "gpt-6-astra",
+      approvalMode: "ask" as const,
+    }
+    const next = chooseModel(pending, selection)
+    expect(next.conversations[0]?.turns).toHaveLength(1)
+    expect(next.conversations[0]?.selection).toBeUndefined()
+    expect(next.conversations[1]?.selection).toEqual(selection)
+  })
+
   it("never empties the tabs", () => {
     const only = closeConversation(emptyLocalTabs(), "c0")
     expect(only.conversations).toHaveLength(1)

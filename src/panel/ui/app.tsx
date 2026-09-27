@@ -20,7 +20,6 @@ import {
   SheetBody,
 } from "@nessa-ui/react/sheet"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
-import { ModelPicker } from "@nessa-ui/react/model-picker"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import {
@@ -35,8 +34,6 @@ import {
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
-import { AgentMark } from "../../onboarding/ui/agent-mark"
-import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { useColorScheme } from "../adapters/color-scheme"
 import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { useEdgeReveal } from "../adapters/edge-reveal"
@@ -67,6 +64,7 @@ import { useHostDrop } from "./use-host-drop"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { ComposerTray } from "./composer-tray"
+import { ComposerModelPicker } from "./composer-model-picker"
 import { useConversationChoices, type ConversationChoices } from "./use-agent-choices"
 import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
@@ -80,13 +78,6 @@ import { WaveformIcon } from "./waveform-icon"
 // Draft and stream updates must not reparse the unchanged pasted document.
 const AttachmentPreview = React.lazy(() => import("./attachment-preview"))
 const PastedMarkdown = React.memo(MessageMarkdown)
-
-function modelMark(agent: string): React.ReactNode {
-  if (agent === "claude" || agent === "codex" || agent === "opencode") {
-    return <AgentMark id={agent} name={agent} />
-  }
-  return <span aria-hidden="true">{agent.slice(0, 1)}</span>
-}
 
 /**
  * The panel's shape.
@@ -148,17 +139,30 @@ export function App({
     choices?.catalog.agents.find(
       (agent) => agent.agent === chat.active.selection?.agent,
     ) ??
-    choices?.catalog.agents.find((agent) => agent.agent === choices.chosenAgent) ??
-    choices?.catalog.agents[0]
+    (!chat.active.selection && !chat.active.serverConversationId
+      ? (choices?.catalog.agents.find((agent) => agent.agent === choices.chosenAgent) ??
+        choices?.catalog.agents[0])
+      : undefined)
   const selectedModel =
     selectedAgent?.models.find(
       (model) => model.modelId === chat.active.selection?.model,
     ) ??
-    selectedAgent?.models.find((model) => model.modelId === selectedAgent.defaultModel)
+    (!chat.active.selection
+      ? selectedAgent?.models.find(
+          (model) => model.modelId === selectedAgent.defaultModel,
+        )
+      : undefined)
   const selection = chat.active.selection
-  const catalogMatchesSelection =
-    selection?.agent === selectedAgent?.agent &&
-    selection?.model === selectedModel?.modelId
+  const modelValue = chat.active.remote?.runtime
+    ? {
+        agent: chat.active.remote.runtime.agent,
+        model: chat.active.remote.runtime.model,
+      }
+    : selection
+      ? { agent: selection.agent, model: selection.model }
+      : !chat.active.serverConversationId && selectedAgent && selectedModel
+        ? { agent: selectedAgent.agent, model: selectedModel.modelId }
+        : undefined
   const selectedApprovalMode =
     selection &&
     selection.agent === selectedAgent?.agent &&
@@ -823,41 +827,15 @@ export function App({
                   aria-label="Message"
                   maxHeight={240}
                 />
-                {choices &&
-                selectedAgent &&
-                selectedModel &&
-                (!chat.active.serverConversationId || catalogMatchesSelection) ? (
-                  <span title={selectedModel.displayName}>
-                    <ModelPicker
-                      groups={choices.catalog.agents.map((agent) => ({
-                        id: agent.agent,
-                        label:
-                          AGENT_CHOICES.find((choice) => choice.id === agent.agent)
-                            ?.name ?? agent.agent,
-                        icon: modelMark(agent.agent),
-                        models: agent.models.map((model) => ({
-                          id: model.modelId,
-                          label: model.displayName,
-                          icon: modelMark(agent.agent),
-                        })),
-                      }))}
-                      value={{
-                        providerId: selectedAgent.agent,
-                        modelId: selectedModel.modelId,
-                      }}
-                      onValueChange={({ providerId, modelId }) => {
-                        if (
-                          providerId === selectedAgent.agent &&
-                          modelId === selectedModel.modelId
-                        )
-                          return
-                        showConversation(() => chat.chooseModel(providerId, modelId))
-                      }}
-                      className="nessa-composer-control nessa-model-picker-trigger"
-                      side="top"
-                      align="end"
-                    />
-                  </span>
+                {choices && modelValue ? (
+                  <ComposerModelPicker
+                    catalog={choices.catalog}
+                    value={modelValue}
+                    valueName={chat.active.remote?.runtime?.modelName}
+                    onChoose={({ agent, model }) =>
+                      showConversation(() => chat.chooseModel(agent, model))
+                    }
+                  />
                 ) : null}
                 {/* Enter sends; Shift+Enter starts a new Markdown block.
                   Voice stays visible while typing and remains inert until wired. */}

@@ -1,4 +1,8 @@
-import { conversation, type ConversationSelection } from "../../model"
+import {
+  conversation,
+  conversationSelectionOpen,
+  type ConversationSelection,
+} from "../../model"
 import type { LocalTabs } from "../local-tabs"
 import { takeConversationId } from "../internal"
 
@@ -20,7 +24,8 @@ export function chooseModel(
   selection: ConversationSelection,
 ): LocalTabs {
   const active = tabs.conversations.find((item) => item.id === tabs.activeId)
-  if (active?.serverConversationId) return openConversation(tabs, selection)
+  if (active && !conversationSelectionOpen(active))
+    return openConversation(tabs, selection)
   return {
     ...tabs,
     conversations: tabs.conversations.map((item) =>
