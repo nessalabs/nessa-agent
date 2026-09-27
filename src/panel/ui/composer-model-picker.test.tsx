@@ -108,11 +108,11 @@ it("offers a tab per agent the gateway runs, naming an unlisted one by its id", 
   ])
 })
 
-it("says each model's context in short", () => {
+it("labels the published maximum instead of implying it is Nessa's budget", () => {
   render()
   open()
 
-  expect(document.body.textContent).toContain("Opus 51M context")
+  expect(document.body.textContent).toContain("Opus 51M model max")
   expect(document.body.textContent).not.toContain("1.1M")
 })
 

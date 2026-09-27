@@ -129,7 +129,7 @@ it("names the model and its agent once the gateway reports them", () => {
   expect(group("Approvals")).toContain("Tool callsAutomatic review")
   expect(group("Workspace")).toBe("Workspace/work/nessa")
   expect(group("Model")).toBe(
-    "ModelContext window1 million tokensReasoningOnImagesNot supported",
+    "ModelModel max context1 million tokensReasoningOnImagesNot supported",
   )
 })
 
@@ -149,7 +149,7 @@ it("writes a context window that is not a round million as a plain count", () =>
   )
 
   expect(group("Model")).toBe(
-    "ModelContext window1,050,000 tokensReasoningOffImagesNot supported",
+    "ModelModel max context1,050,000 tokensReasoningOffImagesNot supported",
   )
 })
 

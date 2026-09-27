@@ -220,6 +220,14 @@ fixed profile; new OpenCode mode switching and paid-provider probes are deferred
   discovered fallbacks and recover as in §4. Do not maintain a second model/mode
   capability table in the panel. Unknown support stays unavailable until the
   binding has verified it; classifier outcomes themselves are provider-owned.
+- **Follow-up model verification (2026-09-27).** With the pinned Claude ACP
+  0.76.0 and Codex ACP 1.12.0 adapters, changing the model and then each mode
+  returned the selected effective mode for Claude Sonnet 5, Opus 5, Fable 5.1
+  and Codex Astra, Sol, Terra, Luna. Claude Haiku 4.5 returned `acceptEdits`
+  after `auto`, so it offers `ask` and `full` only. Isolated live native-edit
+  turns succeeded on Opus 5 in `auto` and `bypassPermissions`, and Luna in
+  `agent` and `agent-full-access`. This extends the binding-owned choices;
+  it does not certify every classifier decision for every model.
 - **Newly enabled presets require behaviour tests**, not
   just a configuration acknowledgement. Exercise reads, edits, shell, network,
   MCP and denied tools where the binding exposes them, using the complete Nessa

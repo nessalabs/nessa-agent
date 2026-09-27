@@ -8,13 +8,19 @@ use crate::domain::agent_execution::tools::ToolContent;
 #[tokio::test]
 async fn codex_verified_presets_are_selected_on_open_and_resume() {
     let _process_slot = process_test_slot().await;
-    for (fixture, choice) in [
-        ("approval-auto", ApprovalMode::Auto),
-        ("approval-full", ApprovalMode::Full),
+    for (model_id, fixture, choice) in [
+        ("gpt-6-astra", "approval-auto", ApprovalMode::Auto),
+        ("gpt-5.6-sol", "approval-auto", ApprovalMode::Auto),
+        ("gpt-5.6-terra", "approval-auto", ApprovalMode::Auto),
+        ("gpt-5.6-luna", "approval-auto", ApprovalMode::Auto),
+        ("gpt-6-astra", "approval-full", ApprovalMode::Full),
+        ("gpt-5.6-sol", "approval-full", ApprovalMode::Full),
+        ("gpt-5.6-terra", "approval-full", ApprovalMode::Full),
+        ("gpt-5.6-luna", "approval-full", ApprovalMode::Full),
     ] {
         let (root, config, fixture_model) = codex_configuration(fixture, 16);
         let mut metadata = ModelMetadataDto::from(&fixture_model);
-        metadata.model_id = "gpt-6-astra".into();
+        metadata.model_id = model_id.into();
         let model = ModelMetadata::try_from(metadata).unwrap();
         let binding = CodexAcpProvider::new(
             config,

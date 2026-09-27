@@ -99,4 +99,23 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
     }
     assert_eq!(offered.agents[0].agent, "claude");
     assert_eq!(offered.agents[1].agent, "codex");
+    for agent in &offered.agents {
+        for model in &agent.models {
+            let ids: Vec<_> = model
+                .approval_modes
+                .iter()
+                .map(|choice| choice.id)
+                .collect();
+            let expected = if model.model_id == "claude-haiku-4-5-20251001" {
+                vec![WireApprovalMode::Ask, WireApprovalMode::Full]
+            } else {
+                vec![
+                    WireApprovalMode::Ask,
+                    WireApprovalMode::Auto,
+                    WireApprovalMode::Full,
+                ]
+            };
+            assert_eq!(ids, expected, "{} {}", agent.agent, model.model_id);
+        }
+    }
 }
