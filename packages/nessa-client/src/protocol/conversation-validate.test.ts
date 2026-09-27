@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -76,7 +77,7 @@ function view() {
         preToolPolicy: "unsupported_not_implemented",
         policyEndTurn: "unsupported_not_implemented",
         policyCloseSession: "unsupported_not_implemented",
-        incomingElicitation: "unsupported_not_implemented",
+        incomingElicitation: "unsupported",
       },
     },
     lifecycle: { phase: "attached" },
@@ -84,6 +85,18 @@ function view() {
 }
 
 describe("conversation view agreement", () => {
+  it("keeps the product fixture's question attached to a running turn", () => {
+    const fixtures = JSON.parse(
+      readFileSync(
+        new URL("../../../../protocol/product/fixtures.json", import.meta.url),
+        "utf8",
+      ),
+    )
+    const sample = fixtures.ConversationView
+    const parsed = conversationView(sample, sample.conversationId)
+    expect(parsed.questions[0]?.executionId).toBe(parsed.messages[0]?.executionId)
+  })
+
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
   })

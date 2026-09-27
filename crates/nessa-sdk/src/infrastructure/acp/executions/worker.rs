@@ -984,6 +984,7 @@ impl<P: AcpProfile> Worker<P> {
                 session_resume: init
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
+                supports_questions: self.profile.supports_questions(),
                 ..profile_capabilities
             });
         Ok(())

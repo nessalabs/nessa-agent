@@ -11,12 +11,13 @@ fn every_provider_feature_supported(negotiated: bool) -> ProviderOperationCapabi
             ProviderModelSwitchReportingCapability::SupportedAfterValidatedSwitch,
         permission_deferral: ProviderPermissionDeferralCapability::SupportedWithNonterminalOutcome,
         elicitation_forwarding: ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip,
+        supports_questions: true,
         ..ProviderOperationCapabilities::default()
     }
 }
 
 #[test]
-fn application_absences_cannot_be_enabled_by_provider_advertisements() {
+fn application_absences_stay_disabled_while_questions_follow_the_verified_binding() {
     let capabilities = OperationCapabilities::resolve(every_provider_feature_supported(true));
     assert_eq!(
         capabilities.permission_denial(),
@@ -48,7 +49,7 @@ fn application_absences_cannot_be_enabled_by_provider_advertisements() {
     );
     assert_eq!(
         capabilities.incoming_elicitation(),
-        IncomingElicitationCapability::UnsupportedNotImplemented
+        IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip
     );
 }
 
@@ -79,6 +80,10 @@ fn provider_features_are_unknown_until_negotiation_completes() {
         capabilities.elicitation_forwarding(),
         ElicitationForwardingCapability::Unknown
     );
+    assert_eq!(
+        capabilities.incoming_elicitation(),
+        IncomingElicitationCapability::Unknown
+    );
 }
 
 #[test]
@@ -87,6 +92,7 @@ fn negotiated_provider_unsupported_is_preserved() {
         negotiated: true,
         permission_denial: PermissionDenialCapability::Unsupported,
         permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
+        elicitation_forwarding: ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip,
         ..ProviderOperationCapabilities::default()
     });
     assert_eq!(
@@ -96,5 +102,13 @@ fn negotiated_provider_unsupported_is_preserved() {
     assert_eq!(
         capabilities.permission_deferral(),
         PermissionDeferralCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        capabilities.incoming_elicitation(),
+        IncomingElicitationCapability::Unsupported
+    );
+    assert_eq!(
+        capabilities.elicitation_forwarding(),
+        ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip
     );
 }

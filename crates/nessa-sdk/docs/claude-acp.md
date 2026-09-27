@@ -86,10 +86,11 @@ cleanup. An already-settled invocation keeps its earlier result.
   So are effects on services beyond this machine: Artifact, PushNotification,
   RemoteTrigger and SendFeedback. Reviewing a tool is not the same as owning
   what it does.
-- Form elicitation, terminal/filesystem client RPCs, provider-side hooks, plugin/settings-source
+- This profile advertises form elicitation to the pinned Claude harness, which
+  offers AskUserQuestion and sends its form to Nessa for a correlated answer.
+  Terminal/filesystem client RPCs, provider-side hooks, plugin/settings-source
   loading, explicit reasoning controls and extended context remain unsupported.
-  Claude omits tools that require unadvertised client capabilities, such as
-  AskUserQuestion. Unsupported incoming client requests receive a protocol error.
+  Unsupported incoming client requests receive a protocol error.
 - Binding ceilings of **200,000 context tokens and 64,000 output tokens**, further
   narrowed by model facts and the host's explicit limits. These are this profile's
   limits, not new metadata or inferred provider defaults. The fixed output limit

@@ -79,7 +79,16 @@
   "ConversationView": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "revision": "1",
-    "messages": [],
+    "messages": [
+      {
+        "executionId": "execution-1",
+        "userText": "Prepare a deployment",
+        "attachments": [],
+        "files": [],
+        "status": "running",
+        "parts": []
+      }
+    ],
     "pending": [],
     "permissions": [],
     "tools": [],
@@ -99,7 +108,7 @@
         "preToolPolicy": "unsupported_not_implemented",
         "policyEndTurn": "unsupported_not_implemented",
         "policyCloseSession": "unsupported_not_implemented",
-        "incomingElicitation": "unsupported_not_implemented"
+        "incomingElicitation": "unsupported"
       }
     },
     "lifecycle": {

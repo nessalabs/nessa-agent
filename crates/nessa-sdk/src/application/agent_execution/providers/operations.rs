@@ -124,6 +124,8 @@ pub struct ProviderOperationCapabilities {
     pub permission_deferral: ProviderPermissionDeferralCapability,
     /// Correlated provider forwarding of MCP elicitation.
     pub elicitation_forwarding: ElicitationForwardingCapability,
+    /// The verified agent can ask through ACP form elicitation on this binding.
+    pub supports_questions: bool,
 }
 
 /// Whether a configured Nessa policy can deny a tool before execution.
@@ -162,10 +164,10 @@ pub enum PolicyCloseSessionCapability {
 /// Whether Nessa can receive and resolve an incoming elicitation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IncomingElicitationCapability {
-    /// The application path has not been established.
+    /// The provider connection has not completed negotiation.
     Unknown,
-    /// The incoming elicitation use case is not implemented.
-    UnsupportedNotImplemented,
+    /// This binding does not offer an agent question path.
+    Unsupported,
     /// Nessa accepts one request and returns its correlated result.
     SupportedWithCorrelatedRoundTrip,
 }
@@ -244,7 +246,13 @@ impl OperationCapabilities {
             pre_tool_policy: PreToolPolicyCapability::UnsupportedNotImplemented,
             policy_end_turn: PolicyEndTurnCapability::UnsupportedNotImplemented,
             policy_close_session: PolicyCloseSessionCapability::UnsupportedNotImplemented,
-            incoming_elicitation: IncomingElicitationCapability::UnsupportedNotImplemented,
+            incoming_elicitation: if !provider.negotiated {
+                IncomingElicitationCapability::Unknown
+            } else if provider.supports_questions {
+                IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip
+            } else {
+                IncomingElicitationCapability::Unsupported
+            },
         }
     }
 

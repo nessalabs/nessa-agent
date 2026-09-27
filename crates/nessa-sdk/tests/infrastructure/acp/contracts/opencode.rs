@@ -273,6 +273,13 @@ async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime(
         .await
         .unwrap();
     assert_eq!(
+        opened
+            .session
+            .operation_capabilities()
+            .incoming_elicitation(),
+        IncomingElicitationCapability::Unsupported
+    );
+    assert_eq!(
         opened.session.capabilities().model().model_id(),
         "exact-fixture-model"
     );

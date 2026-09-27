@@ -12,7 +12,7 @@ const agentFeatures: AgentFeatures = {
   preToolPolicy: "unsupported_not_implemented",
   policyEndTurn: "unsupported_not_implemented",
   policyCloseSession: "unsupported_not_implemented",
-  incomingElicitation: "unsupported_not_implemented",
+  incomingElicitation: "unsupported",
 }
 
 it("shows a late bounded startup failure from the replacement view", () => {

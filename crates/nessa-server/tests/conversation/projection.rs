@@ -87,7 +87,7 @@ fn application_absences_project_as_not_implemented() {
     assert_eq!(value["preToolPolicy"], "unsupported_not_implemented");
     assert_eq!(value["policyEndTurn"], "unsupported_not_implemented");
     assert_eq!(value["policyCloseSession"], "unsupported_not_implemented");
-    assert_eq!(value["incomingElicitation"], "unsupported_not_implemented");
+    assert_eq!(value["incomingElicitation"], "unknown");
 }
 
 #[test]

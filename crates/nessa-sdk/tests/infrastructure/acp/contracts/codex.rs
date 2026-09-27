@@ -357,6 +357,10 @@ async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
     // steering queues a prompt instead — see `codex_acp/sessions/profile.rs`.
     let capabilities = opened.session.operation_capabilities();
     assert!(capabilities.negotiated());
+    assert_eq!(
+        capabilities.incoming_elicitation(),
+        IncomingElicitationCapability::Unsupported
+    );
     assert!(!capabilities.native_steering());
     assert!(capabilities.session_resume());
     // The fixture binding is given no image source, so this connection carries
