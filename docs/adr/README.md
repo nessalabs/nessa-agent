@@ -35,6 +35,9 @@ it by.
 
 ## Done
 
+[233 — Responsive gateway startup](done/233-responsive-gateway-startup.md) records
+the Interactive macOS policy, local timing logs, and deferred follow-up work.
+
 | ADR | Implemented scope |
 | --- | --- |
 | [0001 — Redux product state](done/0001-redux-toolkit-for-product-state.md) | Product state and dispatchable conversation actions |

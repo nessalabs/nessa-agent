@@ -163,6 +163,8 @@ fn interruption(readiness: &Result<DispatchReadiness, WorkerFailure>) -> Option<
     }
 }
 struct ActiveExecution {
+    // Consumed by the first accepted, nonempty answer chunk; diagnostic only.
+    first_response_started: Option<ClockInstant>,
     id: i64,
     execution_id: ExecutionId,
     reply: ExecutionReply,
@@ -401,11 +403,17 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         failure_cause: ObservationFailureCause::ExecutionFailed,
     };
     let mut execution = None;
+    let startup_started = worker.config.clock.now();
     let startup = catch_worker_panic(worker.startup(restore, &mut execution)).await;
+    tracing::info!(target: "nessa_sdk::timing", phase = "protocol_startup",
+        elapsed_ms = worker.config.clock.now().saturating_duration_since(startup_started).as_secs_f64() * 1000.0,
+        outcome = if startup.is_ok() { "success" } else { "error" },
+        "agent protocol startup finished");
     let mut ready = Some(ready);
     let result = match startup {
         Ok(()) => {
             let execution = execution.as_mut().expect("startup established a context");
+            tracing::info!(target: "nessa_sdk::timing", session_id = execution.id().as_str(), "agent protocol ready");
             if ready
                 .take()
                 .expect("startup sender")
@@ -789,6 +797,23 @@ impl<P: AcpProfile> Worker<P> {
     }
 
     async fn rpc(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: ClockInstant,
+        execution: Option<&mut ExecutionController>,
+    ) -> Result<Value, AgentError> {
+        let started = self.config.clock.now();
+        tracing::info!(target: "nessa_sdk::timing", phase = method, "agent startup phase started");
+        let result = self.rpc_exchange(method, params, deadline, execution).await;
+        tracing::info!(target: "nessa_sdk::timing", phase = method,
+            elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
+            outcome = if result.is_ok() { "success" } else { "error" },
+            "agent startup phase finished");
+        result
+    }
+
+    async fn rpc_exchange(
         &mut self,
         method: &str,
         params: Value,
@@ -1353,7 +1378,10 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         }
         self.sequence = id;
+        tracing::info!(target: "nessa_sdk::timing", session_id = execution.id().as_str(),
+            execution_id = execution_id.as_str(), "agent prompt dispatch started");
         self.active = Some(ActiveExecution {
+            first_response_started: Some(self.config.clock.now()),
             id,
             execution_id,
             reply,
@@ -1933,6 +1961,7 @@ impl<P: AcpProfile> Worker<P> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| json_rpc::protocol("invalid text content"))?
                 .to_owned();
+            let is_answer = kind == "agent_message_chunk" && !text.is_empty();
             let mut chunk = if kind == "agent_message_chunk" {
                 MessageChunk::text(text)
             } else {
@@ -1946,7 +1975,21 @@ impl<P: AcpProfile> Worker<P> {
                     .map_err(|_| json_rpc::protocol("invalid message identity"))?;
                 chunk = chunk.with_message_id(id);
             }
-            self.emit(execution.message_event(&target, chunk)?)
+            self.emit(execution.message_event(&target, chunk)?)?;
+            if is_answer {
+                if let Some(started) = self
+                    .active
+                    .as_mut()
+                    .and_then(|active| active.first_response_started.take())
+                {
+                    tracing::info!(target: "nessa_sdk::timing",
+                        metric = "agent_first_text_response_ms",
+                        session_id = execution.id().as_str(), execution_id = target.as_str(),
+                        elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
+                        "agent first text response");
+                }
+            }
+            Ok(())
         } else {
             if !self.config.tools_enabled {
                 return Err(json_rpc::protocol("tool event in a text-only binding"));

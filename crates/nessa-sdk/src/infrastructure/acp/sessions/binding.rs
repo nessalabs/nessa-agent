@@ -35,10 +35,18 @@ use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::clock::ClockInstant;
 use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
-    sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex as ControlMutex,
+    },
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore};
+
+use tracing::Instrument;
+
+// Diagnostic correlation only; never used for admission or lifecycle decisions.
+static NEXT_LAUNCH_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) type ProcessFactory =
     Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
@@ -146,11 +154,20 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         &self,
         restore: Option<ExecutionSessionId>,
     ) -> Result<(Generation, EventStream), ProviderOpenError> {
+        let span = tracing::info_span!(target: "nessa_sdk::timing", "agent_launch",
+            launch_id = NEXT_LAUNCH_ID.fetch_add(1, Ordering::Relaxed),
+            restored = restore.is_some());
+        let _entered = span.enter();
+        let started = self.config.clock.now();
+        tracing::info!(target: "nessa_sdk::timing", phase = "process_start", "agent startup started");
         self.operation_capabilities
             .send_replace(ProviderOperationCapabilities::default());
         let mut executable_use = match self.config.executable.admit() {
             Ok(guard) => guard,
             Err(failure) => {
+                tracing::info!(target: "nessa_sdk::timing", phase = "executable_admission", outcome = "error",
+                    elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
+                    "agent process startup failed");
                 let (error, owner) = failure.into_parts();
                 let cause =
                     AgentError::Configuration(format!("executable use admission failed: {error}"));
@@ -169,6 +186,9 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let scope = match (self.process)() {
             Ok(scope) => scope,
             Err(failure) => {
+                tracing::info!(target: "nessa_sdk::timing", phase = "process_start", outcome = "error",
+                    elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
+                    "agent process startup failed");
                 let (cause, recovery) = failure.into_parts();
                 return Err(match recovery {
                     Some(directory) => ProviderOpenError::with_cleanup(
@@ -192,6 +212,9 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 });
             }
         };
+        tracing::info!(target: "nessa_sdk::timing", phase = "process_start",
+            elapsed_ms = self.config.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0,
+            "agent process started");
         let (commands, receiver) = mpsc::channel(16);
         let (close_requested, close_receiver) = watch::channel(None);
         let (finished, completion) = watch::channel(None);
@@ -199,23 +222,26 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         let (ready, startup) = oneshot::channel();
         let observations = Arc::new(ControlMutex::new(GenerationObservations::default()));
         let recovery = Arc::new(ProcessCleanup::new(self.config.clone(), executable_use));
-        tokio::spawn(worker::run(
-            scope,
-            self.profile.clone(),
-            self.config.clone(),
-            self.capabilities.clone(),
-            receiver,
-            close_receiver,
-            finished,
-            events,
-            ready,
-            self.audit.clone(),
-            restore,
-            self.permission_sequence.clone(),
-            self.question_sequence.clone(),
-            self.operation_capabilities.clone(),
-            recovery.clone(),
-        ));
+        tokio::spawn(
+            worker::run(
+                scope,
+                self.profile.clone(),
+                self.config.clone(),
+                self.capabilities.clone(),
+                receiver,
+                close_receiver,
+                finished,
+                events,
+                ready,
+                self.audit.clone(),
+                restore,
+                self.permission_sequence.clone(),
+                self.question_sequence.clone(),
+                self.operation_capabilities.clone(),
+                recovery.clone(),
+            )
+            .in_current_span(),
+        );
         Ok((
             Generation {
                 recovery,

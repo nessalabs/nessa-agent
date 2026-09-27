@@ -2,7 +2,8 @@ use super::super::control::{
     classify, Health, ManagedRuntime, Registration, RetirementEvidence, ServiceState,
 };
 use super::{select_generation, service_generation};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use std::path::Path;
 const FINGERPRINT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OLD: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const NEW: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
@@ -59,6 +60,31 @@ fn reverting_configuration_gets_fresh_generation_and_failed_bootstrap_retry_reus
     assert_eq!(
         select_generation(&configuration_a, Some(&published), None, || panic!(
             "retry must reuse published generation"
+        ))
+        .unwrap(),
+        NEW
+    );
+}
+#[test]
+fn interactive_policy_replaces_background_registration_then_reuses_its_generation() {
+    let interactive = super::super::launch_definition(
+        "service",
+        &json!(["nessa", "server"]),
+        Path::new("/data"),
+        &Map::from_iter([("NESSA_RUNTIME_FINGERPRINT".into(), json!(FINGERPRINT))]),
+        Path::new("/data/logs/gateway.log"),
+    );
+    assert_eq!(interactive["ProcessType"], "Interactive");
+    let mut background = interactive.clone();
+    background["ProcessType"] = json!("Background");
+    let current = installed(&background, OLD);
+    let selected =
+        select_generation(&interactive, Some(&current), None, || Ok(NEW.into())).unwrap();
+    assert_eq!(selected, NEW);
+    let published = installed(&interactive, &selected);
+    assert_eq!(
+        select_generation(&interactive, Some(&published), None, || panic!(
+            "unchanged interactive policy must reuse its generation"
         ))
         .unwrap(),
         NEW

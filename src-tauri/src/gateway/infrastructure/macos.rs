@@ -14,7 +14,7 @@ use crate::gateway::domain::value_objects::{
 };
 use nessa_local_storage::{OpenMode, PrivateDirectory};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{
     fmt::{self, Display, Formatter},
     fs::{self, OpenOptions},
@@ -1286,6 +1286,38 @@ fn bootstrap_service(
     Ok(())
 }
 
+fn launch_definition(
+    label: &str,
+    arguments: &Value,
+    data: &Path,
+    environment: &Map<String, Value>,
+    log: &Path,
+) -> Value {
+    // `KeepAlive: true` restarts the service whatever it did, so a server that
+    // could never start was relaunched every five seconds for as long as the
+    // user was logged in. `SuccessfulExit: false` restarts it only when the
+    // process ended unsuccessfully, which still covers every crash and every
+    // failure the server thinks retrying can fix — those keep their non-zero
+    // exit code from `protocol/defaults/gateway-exit-codes.json`. A failure
+    // retrying cannot fix exits zero on purpose and is left alone, with its
+    // reason in `logs/gateway-startup-failure.json` for this host to read.
+    //
+    // Verified against launchd on macOS 26 (Darwin 25.6) rather than assumed:
+    // a job exiting 0 under this dictionary runs once and stops, one exiting 1
+    // is respawned every ThrottleInterval, and one killed by SIGSEGV is
+    // respawned too — launchd prints no `last exit code` for that at all, only
+    // the terminating signal.
+    // The gateway serves user requests, and its agents inherit its scheduling
+    // policy. Keep the independent service responsive with app-level resources.
+    serde_json::json!({
+        "Label":label, "ProgramArguments":arguments,
+        "WorkingDirectory":data, "EnvironmentVariables": environment, "RunAtLoad":true,
+        "KeepAlive":{"SuccessfulExit":false},
+        "ThrottleInterval":5,"ExitTimeOut":30,"ProcessType":"Interactive",
+        "StandardOutPath":log,"StandardErrorPath":log
+    })
+}
+
 fn register(
     host: &Launchd,
     runtime: &Path,
@@ -1339,27 +1371,7 @@ fn register(
     let installed = read_definition(&path).ok();
     let agent_path = registered_agent_path(agent_path, installed.as_ref(), runtime_for_definition);
     let environment = service_environment(configuration, home, &agent_path, &fingerprint);
-    // `KeepAlive: true` restarts the service whatever it did, so a server that
-    // could never start was relaunched every five seconds for as long as the
-    // user was logged in. `SuccessfulExit: false` restarts it only when the
-    // process ended unsuccessfully, which still covers every crash and every
-    // failure the server thinks retrying can fix — those keep their non-zero
-    // exit code from `protocol/defaults/gateway-exit-codes.json`. A failure
-    // retrying cannot fix exits zero on purpose and is left alone, with its
-    // reason in `logs/gateway-startup-failure.json` for this host to read.
-    //
-    // Verified against launchd on macOS 26 (Darwin 25.6) rather than assumed:
-    // a job exiting 0 under this dictionary runs once and stops, one exiting 1
-    // is respawned every ThrottleInterval, and one killed by SIGSEGV is
-    // respawned too — launchd prints no `last exit code` for that at all, only
-    // the terminating signal.
-    let mut definition = serde_json::json!({
-        "Label":label, "ProgramArguments":arguments,
-        "WorkingDirectory":data, "EnvironmentVariables": environment, "RunAtLoad":true,
-        "KeepAlive":{"SuccessfulExit":false},
-        "ThrottleInterval":5,"ExitTimeOut":30,"ProcessType":"Background",
-        "StandardOutPath":log,"StandardErrorPath":log
-    });
+    let mut definition = launch_definition(&label, &arguments, &data, &environment, &log);
     let installed_data = installed
         .as_ref()
         .and_then(|definition| definition.get("WorkingDirectory"))

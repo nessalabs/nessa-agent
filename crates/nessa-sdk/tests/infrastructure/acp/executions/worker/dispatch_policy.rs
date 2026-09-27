@@ -25,7 +25,7 @@ use std::sync::{
     Mutex,
 };
 
-struct PolicyProfile {
+pub(super) struct PolicyProfile {
     inner: TestAcpProfile,
     updates: AtomicU64,
     close_after: Option<(u64, watch::Sender<Option<SessionCloseRequest>>)>,
@@ -138,7 +138,7 @@ impl AcpProfile for PolicyProfile {
         self.inner.permission_input(request)
     }
 }
-fn request() -> ExecutionRequest {
+pub(super) fn request() -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new("next").unwrap(),
         user_message: UserMessage::text_only(PromptText::new("read file").unwrap()),
@@ -149,7 +149,7 @@ fn request() -> ExecutionRequest {
 fn notification(update: Value) -> Value {
     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"context","update":update}})
 }
-async fn worker_with_ready_frames(
+pub(super) async fn worker_with_ready_frames(
     frames: &[Value],
     prefix: &str,
 ) -> (
@@ -300,6 +300,7 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
         execution.begin_execution(execution_id.clone()).unwrap();
         let (reply, _result) = oneshot::channel();
         worker.active = Some(ActiveExecution {
+            first_response_started: None,
             id: 7,
             execution_id: execution_id.clone(),
             reply,
@@ -415,6 +416,7 @@ async fn saturated_worker_audit_retains_late_finished_failure_as_audit() {
     controller.begin_execution(execution_id.clone()).unwrap();
     let (reply, _result) = oneshot::channel();
     worker.active = Some(ActiveExecution {
+        first_response_started: None,
         id: 8,
         execution_id: execution_id.clone(),
         reply,
@@ -542,6 +544,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                         .begin_execution(ExecutionId::new("active").unwrap())
                         .unwrap();
                     worker.active = Some(ActiveExecution {
+                        first_response_started: None,
                         id: 99,
                         execution_id: ExecutionId::new("active").unwrap(),
                         reply,
@@ -791,6 +794,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
                 .begin_execution(ExecutionId::new("active").unwrap())
                 .unwrap();
             worker.active = Some(ActiveExecution {
+                first_response_started: None,
                 id: 99,
                 execution_id: ExecutionId::new("active").unwrap(),
                 reply,
@@ -871,6 +875,7 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
         .unwrap();
     let (active_reply, completed) = oneshot::channel();
     worker.active = Some(ActiveExecution {
+        first_response_started: None,
         id: 99,
         execution_id: ExecutionId::new("active").unwrap(),
         reply: active_reply,
@@ -917,6 +922,7 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
                 .unwrap();
             let (reply, _result) = oneshot::channel();
             worker.active = Some(ActiveExecution {
+                first_response_started: None,
                 id: 99,
                 execution_id: ExecutionId::new("active").unwrap(),
                 reply,

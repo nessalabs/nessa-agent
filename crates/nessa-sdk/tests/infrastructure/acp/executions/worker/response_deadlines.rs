@@ -100,6 +100,7 @@ async fn blocked_worker(
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
         active: Some(ActiveExecution {
+            first_response_started: None,
             id: 1,
             execution_id,
             reply,
@@ -325,6 +326,7 @@ async fn successful_completion_releases_its_temporary_shutdown_deadline() {
     let began = clock.now();
     let deadline = began + Duration::from_millis(60);
     worker.active = Some(ActiveExecution {
+        first_response_started: None,
         id: 2,
         execution_id: id,
         reply,

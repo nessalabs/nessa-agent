@@ -953,3 +953,26 @@ delete `~/.config/systemd/user/nessa-gateway-prod.service`, and run
 runs from its staged copy under `~/.local/share/nessa/gateway-runtimes/`, which
 can be deleted once the unit is stopped. Do not delete user data to uninstall
 the service.
+
+
+## Startup and first-response timing logs
+
+The macOS gateway remains a separate launchd service and uses `ProcessType=Interactive`
+so its request handling and child agents receive app-level scheduling.
+
+The default gateway log includes `nessa_sdk::timing` at info level while other
+SDK info logs remain disabled. A custom `RUST_LOG` overrides this default.
+Look for `agent_launch` with its process-local `launch_id` to follow process
+startup, `initialize`, `session/new` or `session/resume`, configuration, and
+protocol readiness. Startup exchanges report `elapsed_ms` and `outcome`;
+a started phase without its finished line can indicate interrupted work or lost logs.
+Protocol readiness precedes the SDK's durable context publication.
+
+`metric="agent_first_text_response_ms"` reports milliseconds from the start of
+prompt dispatch to the first accepted, nonempty agent text chunk. It excludes
+queueing and agent startup, may include permission waits, and does not measure
+when the UI paints. Thought chunks, tool events and empty chunks do not count.
+The event is logged once per dispatched execution, with provider `session_id`
+and `execution_id`; executions that end without answer text emit no such metric.
+These are local diagnostic lines, not a metrics service or durable audit records.
+Message text, tool arguments and credentials are not included in these timing lines.
