@@ -52,6 +52,8 @@ const pickerGroups: ModelPickerGroup[] = composerProviders.map((provider) => ({
   models: provider.models.map((model) => ({
     id: model.modelId,
     label: model.displayName,
+    // Set per model, not only per provider, so the picker's trigger shows it too.
+    icon: <ProviderMark id={provider.id} label={provider.label} />,
     description: contextLabel(model.maxContextWindowTokens),
   })),
 }))

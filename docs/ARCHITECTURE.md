@@ -55,13 +55,18 @@ so its Open folder item is shown disabled), and the model, in the design
 system's ModelPicker, from the SDK's `crates/nessa-sdk/data/models.json`
 grouped by provider (`model/composer-options.ts`, read from that file rather
 than retyped), each provider marked on a glass tile by its agent's `AgentMark`
-from onboarding; on the right how — the design system's access mode, as its shield alone, and
+from onboarding, and the chip showing the selected model's mark without its
+tile; on the right how — the design system's access mode, as its shield alone,
+redrawn in `styles.css` as Lucide outlines (shield, shield-check, shield-off) masked over
+its own icon so nothing in `nessa_ui` changes, and
 beside send the thinking level, as a brain icon whose slider names the level,
 offered only to a reasoning model, with the control's Fast toggle on models
 `fastModeFor` lists (the catalog does not record Fast yet) and a small bolt
 beside the brain while Fast is on. They rest as quiet
-text chips in one colour, open frosted menus, and hold no state beyond the page
-yet. In a narrow composer the project shows only its folder, so the model keeps
+text chips in one colour, open frosted menus that spring into place, and hold
+no state beyond the page yet. The composer has no rim or focus ring: focused,
+its surface brightens and lifts on a deeper shadow, and its text area grows
+with what is typed up to 40% of the window. In a narrow composer the project shows only its folder, so the model keeps
 its name. The app controls SidebarProvider from its shared layout; the
 provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
 Cmd/Ctrl+Alt+B for the right one.

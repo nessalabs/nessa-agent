@@ -35,6 +35,8 @@ body {
   --desktop-window-controls-inset: var(--desktop-control-edge);
   --desktop-pane-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Settles with a slight overshoot, like a spring, for things that appear. */
+  --desktop-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
 }
 
 /*
@@ -393,8 +395,7 @@ body {
 }
 
 .desktop-greeting {
-  margin: 0 0 32px;
-  text-align: center;
+  margin: 0 0 28px 22px;
   font-size: 30px;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -428,7 +429,13 @@ body {
   container-type: inline-size;
   border-radius: 24px;
   padding: 18px 14px 12px 22px;
+  /* Lit from above: a faint glow across the top, the way light sits on glass. */
   background:
+    radial-gradient(
+      120% 70% at 50% -10%,
+      color-mix(in oklab, var(--foreground) 6%, transparent),
+      transparent 60%
+    ),
     linear-gradient(
       color-mix(in oklab, var(--foreground) 5%, transparent),
       color-mix(in oklab, var(--foreground) 3%, transparent)
@@ -439,6 +446,32 @@ body {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 20%),
     0 32px 80px -32px rgb(0 0 0 / 75%);
+  transition:
+    background 280ms var(--desktop-ease),
+    box-shadow 280ms var(--desktop-ease),
+    transform 280ms var(--desktop-ease);
+}
+
+/*
+ * Focus is felt rather than outlined: the surface brightens a touch and lifts
+ * on a deeper shadow. No ring, no rim.
+ */
+.desktop-composer:focus-within {
+  background:
+    radial-gradient(
+      120% 70% at 50% -10%,
+      color-mix(in oklab, var(--foreground) 8%, transparent),
+      transparent 60%
+    ),
+    linear-gradient(
+      color-mix(in oklab, var(--foreground) 7%, transparent),
+      color-mix(in oklab, var(--foreground) 4%, transparent)
+    ),
+    color-mix(in oklab, var(--card, var(--sidebar)) 62%, transparent);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 22%),
+    0 40px 90px -30px rgb(0 0 0 / 85%);
+  transform: translateY(-1px);
 }
 
 .desktop-composer textarea {
@@ -454,6 +487,9 @@ body {
   letter-spacing: -0.005em;
   line-height: 1.55;
   min-height: 72px;
+  /* Grows with what is typed, then scrolls. */
+  field-sizing: content;
+  max-height: 40vh;
 }
 
 .desktop-composer textarea::placeholder {
@@ -472,7 +508,7 @@ body {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 
 /* Thinking and send, at the trailing edge: never squeezed by the choices. */
@@ -529,6 +565,7 @@ body {
   width: 15px;
   height: 15px;
   flex-shrink: 0;
+  stroke-width: 1.75;
 }
 
 .desktop-chip-model > svg:last-child {
@@ -559,6 +596,35 @@ body {
   .desktop-chip-project > span {
     display: none;
   }
+}
+
+/*
+ * The access-mode icons, redrawn as outlines to match the rest of the row. The
+ * design system's filled glyph is kept in the page but not painted; its svg
+ * element becomes a mask of the matching Lucide shield, filled with the
+ * text colour, so the trigger and the menu both change and Full access keeps
+ * its warning colour.
+ */
+[data-access-mode-icon] {
+  background: currentColor;
+  -webkit-mask: var(--access-icon) center / contain no-repeat;
+  mask: var(--access-icon) center / contain no-repeat;
+}
+
+[data-access-mode-icon] > * {
+  visibility: hidden;
+}
+
+[data-access-mode-icon="ask-approval"] {
+  --access-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'/%3E%3C/svg%3E");
+}
+
+[data-access-mode-icon="auto-approval"] {
+  --access-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'/%3E%3Cpath d='m9 12 2 2 4-4'/%3E%3C/svg%3E");
+}
+
+[data-access-mode-icon="full-access"] {
+  --access-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M5 5a1 1 0 0 0-1 1v7c0 5 3.5 7.5 7.67 8.94a1 1 0 0 0 .67.01c2.35-.82 4.48-1.97 5.9-3.71'/%3E%3Cpath d='M9.309 3.652A12.252 12.252 0 0 0 11.24 2.28a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v7a9.784 9.784 0 0 1-.08 1.264'/%3E%3C/svg%3E");
 }
 
 /* Full access keeps the design system's warning colour, even at rest. */
@@ -604,7 +670,7 @@ body {
 }
 
 .desktop-popover[data-state="open"] {
-  animation: desktop-pop 220ms var(--desktop-ease);
+  animation: desktop-pop 320ms var(--desktop-spring);
 }
 
 @keyframes desktop-pop {
@@ -706,6 +772,18 @@ body {
   font-size: 0.8em;
   font-weight: 650;
   line-height: 1;
+}
+
+/* In the model chip the mark stands alone, without its tile. */
+[data-slot="model-picker-trigger"] .desktop-provider-mark {
+  background: none;
+  box-shadow: none;
+  font-size: 11px;
+}
+
+[data-slot="model-picker-trigger"] .desktop-provider-mark svg {
+  width: 100%;
+  height: 100%;
 }
 
 /* A monogram mark takes the tile's size, not the one it brings from onboarding. */
@@ -817,7 +895,8 @@ body {
   .desktop-split[data-settled] > [data-slot="split-view-panel"],
   .desktop-sidebar-edge[data-slot="split-view-separator"]::before,
   .desktop-glass[data-slot="sidebar"],
-  .desktop-peek {
+  .desktop-peek,
+  .desktop-composer {
     transition: none;
   }
 
