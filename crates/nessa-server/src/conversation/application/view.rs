@@ -284,7 +284,7 @@ support_enum!(PolicyCloseSessionSupport {
 });
 support_enum!(IncomingElicitationSupport {
     Unknown,
-    UnsupportedNotImplemented,
+    Unsupported,
     SupportedWithCorrelatedRoundTrip
 });
 
@@ -369,8 +369,8 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
             },
             incoming_elicitation: match value.incoming_elicitation() {
                 IncomingElicitationCapability::Unknown => IncomingElicitationSupport::Unknown,
-                IncomingElicitationCapability::UnsupportedNotImplemented => {
-                    IncomingElicitationSupport::UnsupportedNotImplemented
+                IncomingElicitationCapability::Unsupported => {
+                    IncomingElicitationSupport::Unsupported
                 }
                 IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip => {
                     IncomingElicitationSupport::SupportedWithCorrelatedRoundTrip

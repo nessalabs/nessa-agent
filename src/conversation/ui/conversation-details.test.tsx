@@ -50,7 +50,7 @@ function attached(
         preToolPolicy: "unsupported_not_implemented",
         policyEndTurn: "unsupported_not_implemented",
         policyCloseSession: "unsupported_not_implemented",
-        incomingElicitation: "unsupported_not_implemented",
+        incomingElicitation: "supported_with_correlated_round_trip",
       },
     },
     lifecycle: { phase: "attached" },

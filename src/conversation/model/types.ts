@@ -15,8 +15,7 @@ export type AgentFeatures = {
   policyEndTurn:
     "unknown" | "unsupported_not_implemented" | "supported_for_current_invocation"
   policyCloseSession: "unknown" | "unsupported_not_implemented" | "supported_for_session"
-  incomingElicitation:
-    "unknown" | "unsupported_not_implemented" | "supported_with_correlated_round_trip"
+  incomingElicitation: "unknown" | "unsupported" | "supported_with_correlated_round_trip"
 }
 
 /**

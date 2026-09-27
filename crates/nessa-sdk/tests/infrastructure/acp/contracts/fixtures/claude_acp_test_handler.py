@@ -90,6 +90,8 @@ for line in sys.stdin:
         if mode == "startup-update-before-initialize":
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
         assert msg["params"]["clientCapabilities"]["terminal"] is False
+        if mode == "questions-disabled":
+            assert "elicitation" not in msg["params"]["clientCapabilities"]
         result(msg["id"], {"protocolVersion": 1, "agentInfo": {"version": "wrong" if mode == "wrong-version" else "0.76.0"}, "agentCapabilities": {"promptCapabilities": {"image": "image" in mode}, "sessionCapabilities": {} if (mode == "resume-unsupported" or (mode == "steering-resume-removed" and (root / "saved-session").exists())) else {"resume": {}}}, "_meta": {"steering": {"supported": mode.startswith("steering") and mode != "steering-unsupported" and not (mode == "steering-capabilities-change" and (root / "saved-session").exists())}}})
     elif method in ("session/new", "session/resume"):
         if mode == "startup-update-before-session":
@@ -131,7 +133,7 @@ for line in sys.stdin:
         options = msg["params"]["_meta"]["claudeCode"]["options"]
         assert options["model"] == model
         assert options["settingSources"] == []
-        assert options["tools"] == {"type": "preset", "preset": "claude_code"}
+        assert options["tools"] == ([] if mode == "questions-disabled" else {"type": "preset", "preset": "claude_code"})
         assert "Bash" in options["disallowedTools"]
         assert "Bash" in options["settings"]["permissions"]["deny"]
         for canonical in ("TaskOutput", "TaskStop"):

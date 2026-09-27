@@ -99,7 +99,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
               preToolPolicy: "unsupported_not_implemented",
               policyEndTurn: "unsupported_not_implemented",
               policyCloseSession: "unsupported_not_implemented",
-              incomingElicitation: "unsupported_not_implemented",
+              incomingElicitation: "unsupported",
             },
           },
           lifecycle: { phase: "attached" },

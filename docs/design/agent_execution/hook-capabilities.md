@@ -334,22 +334,20 @@ global `negotiated` bit cannot turn a native API declaration into support.
 
 | Evidence owner | Exact scope | What it establishes |
 | --- | --- | --- |
-| Reviewed Nessa baseline | `1b244f9be4cdc64c1298633422596a1a1e00fc6c`, SDK source | No question/elicitation advertisement or incoming question implementation. Provider handler capabilities do not make this baseline accept questions. |
-| External unmerged `agent-questions` branch | [`73b826cf`, worker initialization](https://github.com/nessalabs/nessa-agent/blob/73b826cf0461d3aab8081869235b7f480fae52a1/crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs#L679-L680) | Sends `elicitation.form: true`; this is external branch behavior, not baseline behavior or merged support. |
+| Historical Nessa baseline | `1b244f9be4cdc64c1298633422596a1a1e00fc6c`, SDK source | Had no question/elicitation advertisement or incoming question implementation. |
+| Merged question path | [PR #215](https://github.com/nessalabs/nessa-agent/pull/215), ACP subprocess and gateway/panel tests | With tools enabled, the pinned Claude ACP profile advertises `elicitation.form: {}`. Its agent question reaches the conversation and a correlated answer returns. Codex and Opencode do not advertise questions. |
 | Historical WS7 isolated probes | Claude ACP 0.76.0 / Codex ACP 1.12.0 handlers and installed ACP 1.4.0 schema, controlled connection | Tests malformed boolean and valid object inputs, field forwarding and correlated handler return only. No model/MCP/app-server/panel end-to-end proof. |
 
 The probe report says both pinned schema readers discard boolean `form: true`;
 `form: {}` is the valid advertisement. Claude forwards form fields and accepts
 correlated content in its direct handler probe; Codex forwards and returns
 accepted content with the object capability. This is a historical probe report,
-not a test of the reviewed Nessa baseline or evidence that the external branch's
-other defects are repaired. Opencode's pinned
+not a test of the historical baseline. Opencode's pinned
 [MCP initialization](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/opencode/src/mcp/index.ts#L38-L82)
-does not enable elicitation. No current whole-path support claim follows from
-the isolated probes. Incoming schema/free-text acceptance and prerequisite repair
-are tracked under [#151](https://github.com/nessalabs/nessa-agent/issues/151) within
-#130. The external `agent-questions` owner supplies implementation evidence;
-WS6 owns this matrix and defers question-dependent integration. The outbound
+does not enable elicitation. The merged question path establishes incoming agent
+questions for Claude, not MCP server elicitation forwarding. The latter remains
+unknown until a configured server's request completes the correlated path.
+The outbound
 MCP ask proposal [#146](https://github.com/nessalabs/nessa-agent/issues/146) is
 closed as not planned and deferred; it is not part of this implementation plan.
 
@@ -361,14 +359,13 @@ closed as not planned and deferred; it is not part of this implementation plan.
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |
 | Compaction reporting | Native source evidence; Nessa mapping unverified | Actual correlated event from the selected binding; otherwise unsupported. |
 | Model-switch reporting | Config facts are not necessarily switch lifecycle | Validate actual event/phase and current model together. |
-| MCP elicitation forwarding | Nessa incoming path absent in baseline; full provider path unverified | A configured server's request must reach the question path and return correlated accept/decline/cancel; declarations alone insufficient. No Nessa-originated ask tool is implied. |
+| MCP elicitation forwarding | Incoming agent questions are implemented for Claude; MCP server forwarding remains unverified | A configured server's request must reach the question path and return correlated accept/decline/cancel; declarations alone insufficient. No Nessa-originated ask tool is implied. |
 | Permission deferral | Unsupported on these third-party bindings | No steering workaround; future own-loop harness outside scope. |
 
 Test obligations for implementation include unsupported/unknown rejection before
 effects; renegotiation/restoration; causal-context lag and truncation; mixed hook
 verdict precedence; native suppression with zero configured hooks; once-only
 remembered decisions with revocation; late provider outcomes; caller loss; and
-audit-sink failure while cleanup still runs. These are required tests, not tests
-claimed to have run. #151's external owner supplies incoming-question evidence;
-#141 approval work and question-dependent integration require a coordinated
-handoff. The deferred outbound proposal supplies no implementation or support claim.
+audit-sink failure while cleanup still runs. These are requirements for the
+proposed policy-hook integration, not tests claimed to have run. The deferred
+outbound proposal supplies no implementation or support claim.

@@ -1,0 +1,4058 @@
+{
+  "date": "2026-09-26",
+  "platform": "macOS",
+  "harnessCheckoutHead": "6a21ad7c7fc89b0381524ed1d32aa19bc29b0c81",
+  "versions": {
+    "claudeAcp": "0.76.0",
+    "claudeSdk": "0.3.257",
+    "codexAcp": "1.12.0",
+    "codex": "0.154.0"
+  },
+  "scope": "Direct harness probes, not Nessa Rust integration or fault-injection tests. Permission cancellation and reject_once used; no persistent approvals granted. Paths normalized. Raw logs retained locally, hashes identify them.",
+  "sources": [
+    {
+      "path": "crates/nessa-sdk/harnesses/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js",
+      "sha256": "c1635f643ceff71c906011b85f33f1b135a4a07aeaa5546d44fb6c5fad11c96d"
+    },
+    {
+      "path": "crates/nessa-sdk/harnesses/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/session-mode.js",
+      "sha256": "0efc6f6fb78df0122145270f36d01aa7dc73d3f80b71065f830d9b41adcea0bc"
+    },
+    {
+      "path": "crates/nessa-sdk/harnesses/codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+      "sha256": "f45a64dc3a994556ebdb688dc8d59b86945a9b2f940a3e3e545739dd265a7cc5"
+    }
+  ],
+  "runs": [
+    {
+      "name": "claude-blanket",
+      "rawSha256": "3fdd7c8fd149d2f2ae69be20c476ef685d7530f9635a62c115de2f7cd34ff616",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-default": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 0-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/0-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "ToolSearch",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "ToolSearch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "1-acceptEdits": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "acceptEdits"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 1-acceptEdits.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/1-acceptEdits.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "ToolSearch",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "ToolSearch"
+            }
+          ],
+          "modeNotifications": [
+            "acceptEdits"
+          ],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "acceptEdits",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "2-bypassPermissions": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "bypassPermissions"
+            },
+            {
+              "id": 8,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 2-bypassPermissions.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/2-bypassPermissions.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "ToolSearch",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "ToolSearch"
+            }
+          ],
+          "modeNotifications": [
+            "bypassPermissions"
+          ],
+          "responses": [
+            {
+              "id": 7,
+              "config": {
+                "mode": "bypassPermissions",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 8,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "3-default": {
+          "requests": [
+            {
+              "id": 9,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 10,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 3-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/3-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "ToolSearch",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "ToolSearch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 9,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 10,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 11,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 12,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 11,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Invalid value for config option mode: not-a-mode"
+                }
+              }
+            },
+            {
+              "id": 12,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Unknown config option: permissions"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "1-acceptEdits",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "2-bypassPermissions",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "3-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ]
+    },
+    {
+      "name": "claude-native-auto",
+      "rawSha256": "ac5d60126f52644197885ff6818000cf1d0269d0a057d66b84280c1223789031",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-auto": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "auto"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "completed",
+              "name": "ToolSearch"
+            },
+            {
+              "status": "completed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "completed",
+              "name": "ToolSearch"
+            },
+            {
+              "status": "completed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "auto"
+          ],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "auto",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "1-default": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "edit",
+              "title": "Write 1-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/1-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 8,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 7,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Invalid value for config option mode: not-a-mode"
+                }
+              }
+            },
+            {
+              "id": 8,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Unknown config option: permissions"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-auto",
+          "workspaceWrite": true,
+          "externalWrite": true,
+          "promptError": null
+        },
+        {
+          "phase": "1-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ],
+      "mcpMarkers": [
+        "0-auto"
+      ]
+    },
+    {
+      "name": "claude-native-tools",
+      "rawSha256": "34726c49ab63a880e2c3876c2ba5e5c498760fe3d4d626f7f1ea83030733d78b",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-default": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "ToolSearch"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "1-acceptEdits": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "acceptEdits"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "acceptEdits"
+          ],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "acceptEdits",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "2-bypassPermissions": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "bypassPermissions"
+            },
+            {
+              "id": 8,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "completed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "bypassPermissions"
+          ],
+          "responses": [
+            {
+              "id": 7,
+              "config": {
+                "mode": "bypassPermissions",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 8,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "3-default": {
+          "requests": [
+            {
+              "id": 9,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 10,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 9,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 10,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 11,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 12,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 11,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Invalid value for config option mode: not-a-mode"
+                }
+              }
+            },
+            {
+              "id": 12,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Unknown config option: permissions"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "1-acceptEdits",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "2-bypassPermissions",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "3-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ],
+      "mcpMarkers": [
+        "2-bypassPermissions"
+      ]
+    },
+    {
+      "name": "claude-native",
+      "rawSha256": "d2e21f2ed542798bed707d237c1cc550fa151b1f5a158920f3255eac35d85842",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-default": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 0-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/0-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "ToolSearch"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "1-acceptEdits": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "acceptEdits"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/1-acceptEdits.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "acceptEdits"
+          ],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "acceptEdits",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "2-bypassPermissions": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "bypassPermissions"
+            },
+            {
+              "id": 8,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "completed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "completed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "bypassPermissions"
+          ],
+          "responses": [
+            {
+              "id": 7,
+              "config": {
+                "mode": "bypassPermissions",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 8,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "3-default": {
+          "requests": [
+            {
+              "id": 9,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 10,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 3-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/3-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 9,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 10,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 11,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 12,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 11,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Invalid value for config option mode: not-a-mode"
+                }
+              }
+            },
+            {
+              "id": 12,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Unknown config option: permissions"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "1-acceptEdits",
+          "workspaceWrite": true,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "2-bypassPermissions",
+          "workspaceWrite": true,
+          "externalWrite": true,
+          "promptError": null
+        },
+        {
+          "phase": "3-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ],
+      "mcpMarkers": [
+        "2-bypassPermissions"
+      ]
+    },
+    {
+      "name": "claude-pending-change",
+      "rawSha256": "7221746604729b00751eba55a89bc1e1fa2d86029810a03f0ef4553b7cf39bc2",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/resume"
+            },
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            },
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "bypassPermissions"
+            },
+            {
+              "id": 6,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "edit",
+              "title": "Write pending-change.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Write"
+            }
+          ],
+          "modeNotifications": [
+            "default",
+            "bypassPermissions",
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 3,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 5,
+              "config": {
+                "mode": "bypassPermissions",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            },
+            {
+              "id": 6,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "file": "pending-change.txt",
+          "exists": false
+        }
+      ]
+    },
+    {
+      "name": "claude-restore-1",
+      "rawSha256": "f83f900e84230ff6cdbf3bafd4dff714fff42ed04df07291a817cc0ddd6261cf",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/resume"
+            },
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 3,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "file": "workspace/restore-1.txt",
+          "exists": false
+        }
+      ]
+    },
+    {
+      "name": "claude-restore-2",
+      "rawSha256": "ed3ccd6401a36a7bd5fe7f7984645ce1f9188b7b70003e67b319a0cbe1fdc155",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/resume"
+            },
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "acceptEdits"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            }
+          ],
+          "modeNotifications": [
+            "acceptEdits"
+          ],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 3,
+              "config": {
+                "mode": "acceptEdits",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "file": "workspace/restore-2.txt",
+          "exists": true
+        }
+      ]
+    },
+    {
+      "name": "claude-targeted",
+      "rawSha256": "6d4ea9e9066d11a1b030f14ae42f88dad45549b68eb1287cf9e3ba8e534bf40b",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-default": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 0-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/0-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "completed",
+              "name": "ToolSearch"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "1-acceptEdits": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "acceptEdits"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/1-acceptEdits.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "acceptEdits"
+          ],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "acceptEdits",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "2-bypassPermissions": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "bypassPermissions"
+            },
+            {
+              "id": 8,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "completed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "bypassPermissions"
+          ],
+          "responses": [
+            {
+              "id": 7,
+              "config": {
+                "mode": "bypassPermissions",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 8,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "3-default": {
+          "requests": [
+            {
+              "id": 9,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "default"
+            },
+            {
+              "id": 10,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "read",
+              "title": "Read read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write 3-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "read",
+              "title": "Read $OUTSIDE/read.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "edit",
+              "title": "Write $OUTSIDE/3-default.txt",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow-with-updates",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "other",
+              "title": "mcp__spike__record_probe",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "fetch",
+              "title": "Fetch https://example.com",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow-once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "reject",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "Read"
+            },
+            {
+              "status": "failed",
+              "name": "Write"
+            },
+            {
+              "status": "failed",
+              "name": "mcp__spike__record_probe"
+            },
+            {
+              "status": "failed",
+              "name": "WebFetch"
+            }
+          ],
+          "modeNotifications": [
+            "default"
+          ],
+          "responses": [
+            {
+              "id": 9,
+              "config": {
+                "mode": "default",
+                "model": "sonnet",
+                "effort": "default"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 10,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 11,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 12,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 11,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Invalid value for config option mode: not-a-mode"
+                }
+              }
+            },
+            {
+              "id": 12,
+              "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                  "details": "Unknown config option: permissions"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "1-acceptEdits",
+          "workspaceWrite": true,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "2-bypassPermissions",
+          "workspaceWrite": true,
+          "externalWrite": true,
+          "promptError": null
+        },
+        {
+          "phase": "3-default",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ]
+    },
+    {
+      "name": "codex-native-tools",
+      "rawSha256": "36f1d4d04e762a0dcc8f12f2f4df2a1c3aae3d8c5e57b1c125045fe5d64852e2",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-read-only": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "execute",
+              "title": null,
+              "mcp": true,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow_session",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "allow_always",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "execute",
+              "title": "Run command",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "accept_execpolicy_amendment",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "READ_CANARY_231\nEXTERNAL_READ_CANARY_231\n"
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "SHELL_CANARY_231"
+            },
+            {
+              "status": "failed",
+              "name": "exec_command",
+              "exitCode": 6,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: example.com\n"
+            },
+            {
+              "status": "failed",
+              "name": null,
+              "exitCode": null,
+              "output": ""
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "cancelled"
+            }
+          ]
+        },
+        "1-agent": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "agent"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "READ_CANARY_231\nEXTERNAL_READ_CANARY_231\n"
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "SHELL_CANARY_231"
+            },
+            {
+              "status": "failed",
+              "name": "exec_command",
+              "exitCode": 6,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: example.com\n"
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\nHTTP/2 200 \r\ndate: Sun, 27 Sep 2026 02:39:40 GMT\r\ncontent-type: text/html\r\nserver: cloudflare\r\nlast-modified: Sat, 26 Sep 2026 09:09:07 GMT\r\nallow: GET, HEAD\r\naccept-ranges: bytes\r\nage: 13662\r\ncf-cache-status: HIT\r\ncf-ray: a41723a93907fe54-YVR\r\n\r\n"
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "agent",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "2-agent-full-access": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "agent-full-access"
+            },
+            {
+              "id": 8,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "READ_CANARY_231\nEXTERNAL_READ_CANARY_231\n"
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "SHELL_CANARY_231"
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\nHTTP/2 200 \r\ndate: Sun, 27 Sep 2026 02:39:59 GMT\r\ncontent-type: text/html\r\nserver: cloudflare\r\nlast-modified: Sat, 26 Sep 2026 09:09:07 GMT\r\nallow: GET, HEAD\r\naccept-ranges: bytes\r\nage: 13680\r\ncf-cache-status: HIT\r\ncf-ray: a417241ac82e5a49-YVR\r\n\r\n"
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 7,
+              "config": {
+                "mode": "agent-full-access",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 8,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "3-read-only": {
+          "requests": [
+            {
+              "id": 9,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            },
+            {
+              "id": 10,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "execute",
+              "title": null,
+              "mcp": true,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow_session",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "allow_always",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            },
+            {
+              "kind": "execute",
+              "title": "Run command",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "accept_execpolicy_amendment",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "READ_CANARY_231\nEXTERNAL_READ_CANARY_231\n"
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "SHELL_CANARY_231"
+            },
+            {
+              "status": "failed",
+              "name": "exec_command",
+              "exitCode": 6,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: example.com\n"
+            },
+            {
+              "status": "failed",
+              "name": null,
+              "exitCode": null,
+              "output": ""
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 9,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 10,
+              "config": {},
+              "stopReason": "cancelled"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 11,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 12,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 11,
+              "error": {
+                "code": -32602,
+                "message": "Invalid params"
+              }
+            },
+            {
+              "id": 12,
+              "error": {
+                "code": -32602,
+                "message": "Invalid params"
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-read-only",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "1-agent",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "2-agent-full-access",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "3-read-only",
+          "workspaceWrite": false,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ],
+      "mcpMarkers": [
+        "1-agent",
+        "2-agent-full-access"
+      ]
+    },
+    {
+      "name": "codex-native",
+      "rawSha256": "107c241c53b93fd2c53a1d537f3c6661c306a489d7188d3c79cbd06ecfcca64c",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/new"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            }
+          ]
+        },
+        "0-read-only": {
+          "requests": [
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "edit",
+              "title": "Edit files",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow_for_session",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": null
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 3,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "cancelled"
+            }
+          ]
+        },
+        "1-agent": {
+          "requests": [
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "agent"
+            },
+            {
+              "id": 6,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "SHELL_CANARY_231"
+            },
+            {
+              "status": "failed",
+              "name": "exec_command",
+              "exitCode": 6,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: example.com\n"
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\nHTTP/2 200 \r\ndate: Sun, 27 Sep 2026 02:38:38 GMT\r\ncontent-type: text/html\r\nserver: cloudflare\r\nlast-modified: Sat, 26 Sep 2026 09:09:07 GMT\r\nallow: GET, HEAD\r\naccept-ranges: bytes\r\nage: 13599\r\ncf-cache-status: HIT\r\ncf-ray: a417221fdbbb464b-YVR\r\n\r\n"
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 5,
+              "config": {
+                "mode": "agent",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 6,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "2-agent-full-access": {
+          "requests": [
+            {
+              "id": 7,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "agent-full-access"
+            },
+            {
+              "id": 8,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": null
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "SHELL_CANARY_231"
+            },
+            {
+              "status": "completed",
+              "name": "exec_command",
+              "exitCode": 0,
+              "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0HTTP/2 200 \r\ndate: Sun, 27 Sep 2026 02:38:54 GMT\r\ncontent-type: text/html\r\nserver: cloudflare\r\nlast-modified: Sat, 26 Sep 2026 09:09:07 GMT\r\nallow: GET, HEAD\r\naccept-ranges: bytes\r\nage: 13615\r\ncf-cache-status: HIT\r\ncf-ray: a41722837a7b89d5-YVR\r\n\r\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\n"
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 7,
+              "config": {
+                "mode": "agent-full-access",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 8,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        },
+        "3-read-only": {
+          "requests": [
+            {
+              "id": 9,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            },
+            {
+              "id": 10,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "edit",
+              "title": "Edit files",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow_for_session",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": null
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 9,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 10,
+              "config": {},
+              "stopReason": "cancelled"
+            }
+          ]
+        },
+        "invalid-config": {
+          "requests": [
+            {
+              "id": 11,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "not-a-mode"
+            },
+            {
+              "id": 12,
+              "method": "session/set_config_option",
+              "configId": "permissions",
+              "value": "{}"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "failed",
+              "name": null
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 11,
+              "error": {
+                "code": -32602,
+                "message": "Invalid params"
+              }
+            },
+            {
+              "id": 12,
+              "error": {
+                "code": -32602,
+                "message": "Invalid params"
+              }
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "phase": "0-read-only",
+          "workspaceWrite": true,
+          "externalWrite": false,
+          "promptError": null
+        },
+        {
+          "phase": "1-agent",
+          "workspaceWrite": true,
+          "externalWrite": true,
+          "promptError": null
+        },
+        {
+          "phase": "2-agent-full-access",
+          "workspaceWrite": true,
+          "externalWrite": true,
+          "promptError": null
+        },
+        {
+          "phase": "3-read-only",
+          "workspaceWrite": true,
+          "externalWrite": false,
+          "promptError": null
+        }
+      ],
+      "mcpMarkers": [
+        "1-agent",
+        "2-agent-full-access"
+      ]
+    },
+    {
+      "name": "codex-pending-change",
+      "rawSha256": "a8479937ac5149db41ab73f88b345559821e4d5bafe4c393e5582a15f3a0052d",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/resume"
+            },
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            },
+            {
+              "id": 5,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "agent-full-access"
+            },
+            {
+              "id": 6,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            }
+          ],
+          "permissions": [
+            {
+              "kind": "edit",
+              "title": "Edit files",
+              "mcp": false,
+              "options": [
+                {
+                  "id": "allow_once",
+                  "kind": "allow_once"
+                },
+                {
+                  "id": "allow_for_session",
+                  "kind": "allow_always"
+                },
+                {
+                  "id": "cancel",
+                  "kind": "reject_once"
+                }
+              ]
+            }
+          ],
+          "toolResults": [],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 3,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 5,
+              "config": {
+                "mode": "agent-full-access",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "cancelled"
+            },
+            {
+              "id": 6,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "file": "pending-change.txt",
+          "exists": false
+        }
+      ]
+    },
+    {
+      "name": "codex-restore-1",
+      "rawSha256": "1d0d838353f10b6b3601a63ba7a4a6cd5c1535057babf98e9feb1277201e7411",
+      "phases": {
+        "startup": {
+          "requests": [
+            {
+              "id": 1,
+              "method": "initialize"
+            },
+            {
+              "id": 2,
+              "method": "session/resume"
+            },
+            {
+              "id": 3,
+              "method": "session/set_config_option",
+              "configId": "mode",
+              "value": "read-only"
+            },
+            {
+              "id": 4,
+              "method": "session/prompt"
+            }
+          ],
+          "permissions": [],
+          "toolResults": [
+            {
+              "status": "completed",
+              "name": null
+            }
+          ],
+          "modeNotifications": [],
+          "responses": [
+            {
+              "id": 1,
+              "config": {},
+              "stopReason": null
+            },
+            {
+              "id": 2,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 3,
+              "config": {
+                "mode": "read-only",
+                "collaboration_mode": "default",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "low",
+                "fast-mode": "off"
+              },
+              "stopReason": null
+            },
+            {
+              "id": 4,
+              "config": {},
+              "stopReason": "end_turn"
+            }
+          ]
+        }
+      },
+      "fileChecks": [
+        {
+          "file": "workspace/restore-1.txt",
+          "exists": true
+        }
+      ]
+    }
+  ],
+  "claudeModelFallback": {
+    "rawSha256": "cac03da293cd1a2b6aa279e0b6a6e6f3719c5b71b6e316cdaed07bc720bfb520",
+    "exchange": [
+      {
+        "request": {
+          "configId": "mode",
+          "value": "auto"
+        }
+      },
+      {
+        "response": {
+          "mode": "auto",
+          "model": "sonnet",
+          "effort": "default"
+        }
+      },
+      {
+        "request": {
+          "configId": "model",
+          "value": "haiku"
+        }
+      },
+      {
+        "response": {
+          "mode": "acceptEdits",
+          "model": "haiku"
+        }
+      },
+      {
+        "request": {
+          "configId": "mode",
+          "value": "auto"
+        }
+      },
+      {
+        "response": {
+          "mode": "acceptEdits",
+          "model": "haiku"
+        }
+      }
+    ]
+  }
+}

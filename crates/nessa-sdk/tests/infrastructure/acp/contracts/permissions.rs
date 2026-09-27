@@ -980,6 +980,13 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
+    assert_eq!(
+        opened
+            .session
+            .operation_capabilities()
+            .incoming_elicitation(),
+        IncomingElicitationCapability::SupportedWithCorrelatedRoundTrip
+    );
     let active = start(&opened, "write").await;
 
     let ExecutionUpdate::QuestionAsked { id, question } = next(&mut opened).await else {

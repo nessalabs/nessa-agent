@@ -454,14 +454,14 @@ impl PolicyCloseSessionSupport {
 #[serde(rename_all = "snake_case")]
 pub enum IncomingElicitationSupport {
     Unknown,
-    UnsupportedNotImplemented,
+    Unsupported,
     SupportedWithCorrelatedRoundTrip,
 }
 impl IncomingElicitationSupport {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
-            Self::UnsupportedNotImplemented => "unsupported_not_implemented",
+            Self::Unsupported => "unsupported",
             Self::SupportedWithCorrelatedRoundTrip => "supported_with_correlated_round_trip",
         }
     }

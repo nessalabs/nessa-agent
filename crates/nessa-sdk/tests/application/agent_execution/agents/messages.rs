@@ -325,6 +325,7 @@ const AGENT_TAKES_IMAGES: ProviderOperationCapabilities = ProviderOperationCapab
     model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
     permission_deferral: ProviderPermissionDeferralCapability::Unknown,
     elicitation_forwarding: ElicitationForwardingCapability::Unknown,
+    supports_questions: false,
 };
 const AGENT_TAKES_NO_IMAGES: ProviderOperationCapabilities = ProviderOperationCapabilities {
     image_input: false,
@@ -386,7 +387,7 @@ async fn provider_advertisements_cannot_enable_missing_application_integrations(
     );
     assert_eq!(
         capabilities.incoming_elicitation(),
-        IncomingElicitationCapability::UnsupportedNotImplemented
+        IncomingElicitationCapability::Unsupported
     );
 }
 
