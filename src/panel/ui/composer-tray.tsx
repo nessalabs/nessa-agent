@@ -18,9 +18,9 @@ type Page = "root" | "approval" | "confirm-full"
  * consequences, not a policy: the person decides with these in front of them.
  */
 const FULL_ACCESS_RISKS = [
-  "Edits and deletes files in your workspace without asking.",
-  "Runs any command, including ones that reach the internet.",
-  "You see what it did afterwards, not before.",
+  "Edits and deletes files without asking",
+  "Runs any command, online too",
+  "You only see it afterwards",
 ] as const
 
 const ROW =
@@ -269,9 +269,14 @@ export function ComposerTray({
               >
                 Turn on full access?
               </p>
-              <ul className="m-0 flex flex-col gap-1.5 rounded-[16px] bg-muted/60 px-4 py-3 nessa-text-3 text-muted-foreground">
+              {/* Tinted red, so the card says "risk" before a word is read. */}
+              <ul className="m-0 flex flex-col gap-2 rounded-[16px] border border-destructive/25 bg-destructive/10 px-4 py-3 nessa-text-3 text-foreground">
                 {FULL_ACCESS_RISKS.map((risk) => (
-                  <li key={risk} className="list-none">
+                  <li key={risk} className="flex list-none items-center gap-2.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full bg-destructive"
+                    />
                     {risk}
                   </li>
                 ))}
